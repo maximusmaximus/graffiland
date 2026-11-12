@@ -10,6 +10,7 @@ export default function SculptureModal({ sculpture, onClose }) {
   const geo = pol.geoInfo || {};
   const sensors = pol.sensors || {};
   const solar = pol.solar || {};
+  const elevation = sculpture.elevation || pol.elevation || {};
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -65,19 +66,47 @@ export default function SculptureModal({ sculpture, onClose }) {
                 <tr>
                   <th>GPS Accuracy / Alt</th>
                   <td className="mono">
-                    ±{sculpture.accuracy ?? '—'}m · {sculpture.altitude !== null ? `${Math.round(sculpture.altitude)}m alt` : 'n/a'}
+                    ±{sculpture.accuracy ?? '—'}m ·{' '}
+                    {elevation.anchorAltitudeMeters != null
+                      ? `${Math.round(elevation.anchorAltitudeMeters * 10) / 10}m alt`
+                      : sculpture.altitude != null
+                        ? `${Math.round(sculpture.altitude)}m alt`
+                        : 'n/a'}
+                    {elevation.altitudeAccuracyMeters != null
+                      ? ` (±${Math.round(elevation.altitudeAccuracyMeters)}m)`
+                      : ''}
                   </td>
                 </tr>
+                {(elevation.terrainElevationMeters != null ||
+                  elevation.heightAboveGroundMeters != null ||
+                  elevation.sculptureVerticalMaxM > elevation.sculptureVerticalMinM) && (
+                  <tr>
+                    <th>Elevation / Span</th>
+                    <td className="mono">
+                      {elevation.terrainElevationMeters != null
+                        ? `${Math.round(elevation.terrainElevationMeters)}m ground`
+                        : elevation.altitudeSource || 'sensor'}
+                      {elevation.heightAboveGroundMeters != null
+                        ? ` · ${elevation.heightAboveGroundMeters >= 0 ? '+' : ''}${elevation.heightAboveGroundMeters}m AGL`
+                        : ''}
+                      {Number.isFinite(elevation.sculptureVerticalMinM) &&
+                      Number.isFinite(elevation.sculptureVerticalMaxM)
+                        ? ` · ${elevation.sculptureVerticalMinM}m..${elevation.sculptureVerticalMaxM}m Y`
+                        : ''}
+                    </td>
+                  </tr>
+                )}
                 <tr>
                   <th>Compass / Timezone</th>
                   <td className="mono">
-                    {sculpture.heading !== null ? `${Math.round(sculpture.heading)}°` : 'n/a'} · {sculpture.timezone}
+                    {sculpture.heading != null ? `${Math.round(sculpture.heading)}°` : 'n/a'} · {sculpture.timezone}
                   </td>
                 </tr>
                 <tr>
                   <th>Solar Regime</th>
                   <td className="mono">
-                    {solar.regime || '—'} ({solar.solarAltitudeDeg ?? '—'}°)
+                    {solar.regime || '—'} ({solar.solarAltitudeDeg ?? '—'}° el
+                    {solar.solarAzimuthDeg != null ? ` / ${solar.solarAzimuthDeg}° az` : ''})
                   </td>
                 </tr>
               </tbody>

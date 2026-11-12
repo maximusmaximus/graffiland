@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
+import { buildIpfsMetadata } from '../../shared/sculpture.mjs';
 import { CONFIG } from '../config.mjs';
 
 async function computeRawCid(buffer) {
@@ -156,67 +157,19 @@ export async function pinSculptureToIpfs({
     modelPin = await pinBufferToLocal(modelBuffer, 'application/json');
   }
 
-  const metadata = {
-    name: title,
+  const metadata = buildIpfsMetadata({
+    sculptureId,
+    title,
     description,
-    image: imagePin.uri,
-    animation_url: modelPin.uri,
-    external_url: `${CONFIG.publicUrl}/?sculpture=${sculptureId}`,
-    seller_fee_basis_points: royaltyBps,
-    fee_recipient: royaltyReceiver,
-    royalty: {
-      standard: 'ERC-2981',
-      resale_fee_bps: royaltyBps,
-      resale_fee_percent: royaltyBps / 100,
-      recipient: royaltyReceiver
-    },
-    virtual_land: {
-      parcel_id: locationBundle.parcelId,
-      geohash: locationBundle.geohash,
-      bounds: locationBundle.parcelBounds,
-      claimant: creatorAddress
-    },
-    location: {
-      latitude: locationBundle.lat,
-      longitude: locationBundle.lng,
-      altitude_meters: locationBundle.altitude,
-      gps_accuracy_meters: locationBundle.accuracy,
-      compass_heading_deg: locationBundle.heading,
-      timezone: locationBundle.timezone,
-      place_name: locationBundle.geoInfo.placeName,
-      neighborhood: locationBundle.geoInfo.neighborhood,
-      road: locationBundle.geoInfo.road,
-      city: locationBundle.geoInfo.city,
-      state: locationBundle.geoInfo.state,
-      country: locationBundle.geoInfo.country,
-      country_code: locationBundle.geoInfo.countryCode,
-      postcode: locationBundle.geoInfo.postcode,
-      display_name: locationBundle.geoInfo.displayName,
-      solar_altitude_deg: locationBundle.solar.solarAltitudeDeg,
-      solar_regime: locationBundle.solar.regime
-    },
-    proof_of_location: {
-      hash: locationBundle.proofHash,
-      score: locationBundle.score,
-      verified: locationBundle.verified,
-      ...locationBundle.proofBundle
-    },
-    attributes: [
-      { trait_type: 'Virtual Land Parcel', value: locationBundle.parcelId },
-      { trait_type: 'Geohash', value: locationBundle.geohash },
-      { trait_type: 'City', value: locationBundle.geoInfo.city || 'Unknown' },
-      { trait_type: 'Country', value: locationBundle.geoInfo.country || 'Unknown' },
-      { trait_type: 'Voxel Count', display_type: 'number', value: voxels.length },
-      { trait_type: 'Proof of Location Score', display_type: 'number', value: locationBundle.score },
-      {
-        trait_type: 'Camera-Gyro Flow Match',
-        display_type: 'boost_percentage',
-        value: Math.round((locationBundle.proofBundle.sensors.opticalFlowCorrelation || 0) * 100)
-      },
-      { trait_type: 'Solar Regime', value: locationBundle.solar.regime },
-      { trait_type: 'Resale Fee', value: `${royaltyBps / 100}%` }
-    ]
-  };
+    imageUri: imagePin.uri,
+    modelUri: modelPin.uri,
+    publicUrl: CONFIG.publicUrl,
+    voxels,
+    locationBundle,
+    creatorAddress,
+    royaltyBps,
+    royaltyReceiver
+  });
 
   let metadataPin;
   if (CONFIG.pinataJwt) {

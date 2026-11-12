@@ -52,6 +52,137 @@ export function latLngOffsetMeters(originLat, originLng, targetLat, targetLng) {
   return { east, north };
 }
 
+/**
+ * Computes directional light vector in local East (+X), Up (+Y), South (+Z) meters
+ * matching the physical solar azimuth & elevation at (lat, lng).
+ */
+export function computeSolarLightVector(lat, lng, date = new Date()) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { x: 4, y: 8, z: 3, isDaylight: true, solarAltitudeDeg: 55, solarAzimuthDeg: 145 };
+  }
+  const start = new Date(Date.UTC(date.getUTCFullYear(), 0, 0));
+  const dayOfYear = Math.floor((date - start) / 86400000);
+  const utcHours =
+    date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+  const gamma = ((2 * Math.PI) / 365) * (dayOfYear - 1 + (utcHours - 12) / 24);
+  const decl =
+    0.006918 -
+    0.399912 * Math.cos(gamma) +
+    0.070257 * Math.sin(gamma) -
+    0.006758 * Math.cos(2 * gamma) +
+    0.000907 * Math.sin(2 * gamma);
+
+  const solarTimeHours = (((utcHours + lng / 15) % 24) + 24) % 24;
+  const hourAngle = ((solarTimeHours - 12) * 15 * Math.PI) / 180;
+  const latRad = (lat * Math.PI) / 180;
+  const sinAlt =
+    Math.sin(latRad) * Math.sin(decl) +
+    Math.cos(latRad) * Math.cos(decl) * Math.cos(hourAngle);
+  const altRad = Math.asin(Math.max(-1, Math.min(1, sinAlt)));
+  const altDeg = (altRad * 180) / Math.PI;
+
+  const cosAltLat = Math.cos(latRad) * Math.cos(altRad);
+  let azDeg = 180;
+  if (Math.abs(cosAltLat) > 1e-5) {
+    const cosAz = (Math.sin(decl) - Math.sin(latRad) * Math.sin(altRad)) / cosAltLat;
+    let az = (Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180) / Math.PI;
+    if (Math.sin(hourAngle) > 0) az = 360 - az;
+    azDeg = az;
+  }
+
+  // If nighttime/deep twilight, use an elevated moonlight/streetlight shadow angle
+  const clampedAltRad = THREE.MathUtils.degToRad(Math.max(24, altDeg));
+  const azRad = THREE.MathUtils.degToRad(azDeg);
+  const dist = 12;
+  const horiz = Math.cos(clampedAltRad) * dist;
+  return {
+    x: Math.sin(azRad) * horiz,
+    y: Math.sin(clampedAltRad) * dist,
+    z: -Math.cos(azRad) * horiz,
+    isDaylight: altDeg > 2,
+    solarAltitudeDeg: Math.round(altDeg * 10) / 10,
+    solarAzimuthDeg: Math.round(azDeg * 10) / 10
+  };
+}
+
+/**
+ * Generates live camera equirectangular reflections (PMREM) + matching sky/ground ambient colors.
+ */
+export function createLiveEnvUpdater(renderer) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  let currentTarget = null;
+
+  function update(videoEl) {
+    if (!videoEl || videoEl.readyState < 2 || !ctx) return null;
+
+    // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness)
+    ctx.drawImage(videoEl, 0, 0, 128, 64);
+    ctx.save();
+    ctx.translate(256, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(videoEl, 0, 0, 128, 64);
+    ctx.restore();
+
+    // Lower hemisphere: softly darkened flipped ground bounce
+    ctx.save();
+    ctx.translate(0, 128);
+    ctx.scale(1, -1);
+    ctx.filter = 'blur(4px) brightness(0.65)';
+    ctx.drawImage(canvas, 0, 0, 256, 64, 0, 0, 256, 64);
+    ctx.restore();
+    ctx.filter = 'none';
+
+    tex.needsUpdate = true;
+    const nextTarget = pmrem.fromEquirectangular(tex);
+    if (currentTarget) currentTarget.dispose();
+    currentTarget = nextTarget;
+
+    // Sample sky (top band) and ground (bottom band) average colors
+    const skyPx = ctx.getImageData(64, 8, 32, 8).data;
+    const groundPx = ctx.getImageData(64, 108, 32, 8).data;
+    const avgHex = (px) => {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      const n = px.length / 4;
+      for (let i = 0; i < px.length; i += 4) {
+        r += px[i];
+        g += px[i + 1];
+        b += px[i + 2];
+      }
+      return (
+        ((Math.round(r / n) & 0xff) << 16) |
+        ((Math.round(g / n) & 0xff) << 8) |
+        (Math.round(b / n) & 0xff)
+      );
+    };
+
+    return {
+      envTexture: nextTarget.texture,
+      skyColor: avgHex(skyPx),
+      groundColor: avgHex(groundPx)
+    };
+  }
+
+  function dispose() {
+    if (currentTarget) currentTarget.dispose();
+    tex.dispose();
+    pmrem.dispose();
+  }
+
+  return { update, dispose };
+}
+
 export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
   const group = new THREE.Group();
   const unitGeo = new THREE.BoxGeometry(VOXEL_STEP * 0.96, VOXEL_STEP * 0.96, VOXEL_STEP * 0.96);
@@ -66,25 +197,31 @@ export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
         mat = new THREE.MeshStandardMaterial({
           color,
           emissive: color,
-          emissiveIntensity: 0.75,
-          roughness: 0.25,
-          metalness: 0.1,
+          emissiveIntensity: 0.85,
+          roughness: 0.16,
+          metalness: 0.35,
+          envMapIntensity: 1.5,
           transparent: opacity < 1,
           opacity
         });
       } else if (v.material === 'glass') {
         mat = new THREE.MeshPhysicalMaterial({
           color,
-          roughness: 0.1,
-          metalness: 0.05,
+          roughness: 0.06,
+          metalness: 0.1,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.05,
+          reflectivity: 0.95,
+          envMapIntensity: 1.9,
           transparent: true,
-          opacity: Math.min(0.68, opacity)
+          opacity: Math.min(0.72, opacity)
         });
       } else {
         mat = new THREE.MeshStandardMaterial({
           color,
-          roughness: 0.45,
-          metalness: 0.15,
+          roughness: 0.35,
+          metalness: 0.24,
+          envMapIntensity: 1.3,
           transparent: opacity < 1,
           opacity
         });
@@ -96,6 +233,8 @@ export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
     mesh.position.set(v.x * scale, v.y * scale, v.z * scale);
     const vScale = (v.scale ?? 1) * scale;
     mesh.scale.setScalar(vScale);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     mesh.userData.voxel = v;
     group.add(mesh);
   }

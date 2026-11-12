@@ -63,7 +63,12 @@ Every `(lat, lng)` coordinate encodes into an **8-character Geohash** (e.g., `GL
   - Sets `RESALE_FEE_BPS = 500` (**5.00%**) across default and per-token `royaltyInfo`.
   - The platform's sponsored relayer calls `mintSculpture(recipient, metadataURI, landParcelId, proofOfLocationHash, latE6, lngE6)` on **Robinhood Chain Testnet (`46630`)** or **Mainnet (`4663`)** so minted NFTs belong directly to the artist immediately upon minting.
 
-### 4. Xero Emoji UI System
+### 4. Elevation Anchoring, Occlusion, Reflections & Real Shadows
+- **Elevation & Altitude Lock (`shared/sculpture.mjs`, `server/services/pol.mjs`)**: Captures browser GPS `altitude` + `altitudeAccuracy`, cross-checks terrain elevation to compute height above ground (`AGL`), and records vertical voxel bounds (`sculptureVerticalMinM..MaxM`) in IPFS metadata so sky-high or multi-story sculptures stay locked to their vertical level in AR Preview.
+- **Foreground Occlusion (`ForegroundOcclusion.js`)**: Uses gyro-compensated optical residual masking on mobile cameras so hands and real objects passing in front of the lens naturally occlude anchored sculptures.
+- **Live Location Reflections & Solar Shadows (`VoxelEngine3D.js`, `MobileStudio.jsx`)**: Generates equirectangular `PMREMGenerator` environment maps from the live camera feed (`PBR` clearcoat glass, metallic neon, matte reflections) paired with astronomical solar-azimuth directional lights and invisible `ShadowMaterial` shadow catchers.
+
+### 5. Xero Emoji UI System
 Every icon across mobile HUD triggers, map pins, desktop tabs, and modals is rendered using [`xeroemoji`](https://github.com/maximusmaximus/xeroemoji) via [`XeroIcon.jsx`](client/src/components/XeroIcon.jsx) (with automatic PNG and glyph fallback).
 
 ---

@@ -157,7 +157,8 @@ describe('GRAFFILAND Full-Stack Verification', () => {
           lat: 37.808,
           lng: -122.4177,
           accuracy: 8.5,
-          altitude: 12,
+          altitude: 42.5,
+          altitudeAccuracy: 3.2,
           heading: 42,
           timezone: 'America/Los_Angeles'
         },
@@ -184,9 +185,19 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.ok(res.body.sculpture.id);
     assert.ok(res.body.sculpture.parcelId.startsWith('GLAND-'));
     assert.ok(res.body.sculpture.polScore >= 75);
+    assert.equal(res.body.sculpture.altitude, 42.5);
+    assert.equal(res.body.sculpture.elevation.deviceAltitudeMeters, 42.5);
+    assert.equal(res.body.sculpture.elevation.altitudeAccuracyMeters, 3.2);
+    assert.equal(res.body.sculpture.elevation.altitudeSource, 'device-sensor');
+    assert.equal(res.body.sculpture.elevation.anchorAltitudeMeters, 42.5);
+    assert.equal(res.body.sculpture.elevation.sculptureVerticalMinM, 0);
+    assert.equal(res.body.sculpture.elevation.sculptureVerticalMaxM, 0.2);
+    assert.equal(typeof res.body.sculpture.proofOfLocation.solar.solarAzimuthDeg, 'number');
     assert.equal(res.body.sculpture.chain.royaltyBps, 500);
     assert.equal(res.body.ipfs.metadata.royalty.resale_fee_bps, 500);
     assert.equal(res.body.ipfs.metadata.location.latitude, 37.808);
+    assert.equal(res.body.ipfs.metadata.location.altitude_meters, 42.5);
+    assert.equal(res.body.ipfs.metadata.virtual_land.anchor_elevation_meters, 42.5);
     createdSculptureId = res.body.sculpture.id;
     createdParcelId = res.body.sculpture.parcelId;
 
@@ -196,6 +207,13 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const ipfsJson = await ipfsRes.json();
     assert.equal(ipfsJson.name, 'Neon Pier Totem');
     assert.equal(ipfsJson.seller_fee_basis_points, 500);
+    assert.equal(ipfsJson.location.altitude_meters, 42.5);
+    assert.equal(ipfsJson.location.altitude_accuracy_meters, 3.2);
+    assert.equal(ipfsJson.location.altitude_source, 'device-sensor');
+    assert.equal(ipfsJson.location.sculpture_vertical_min_m, 0);
+    assert.equal(ipfsJson.location.sculpture_vertical_max_m, 0.2);
+    assert.equal(typeof ipfsJson.location.solar_azimuth_deg, 'number');
+    assert.equal(ipfsJson.virtual_land.anchor_elevation_meters, 42.5);
 
     // Verify AR Preview proximity search finds it
     const nearby = await apiJson('/api/sculptures?lat=37.80805&lng=-122.41775&radiusMeters=100');

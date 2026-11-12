@@ -4,9 +4,12 @@ import { api } from '../utils/api.js';
 import { getWsUrl } from '../utils/device.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import { ForegroundOcclusionCompositor } from './ForegroundOcclusion.js';
 import { ProofOfLocationTracker } from './ProofOfLocation.js';
 import {
   buildVoxelGroup,
+  computeSolarLightVector,
+  createLiveEnvUpdater,
   deviceOrientationToQuaternion,
   GRAFFITI_PALETTE,
   latLngOffsetMeters,
@@ -18,6 +21,7 @@ import XeroIcon from './XeroIcon.jsx';
 
 export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const videoRef = useRef(null);
+  const occlusionCanvasRef = useRef(null);
   const canvasHostRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
@@ -25,6 +29,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const draftGroupRef = useRef(null);
   const nearbyGroupRef = useRef(null);
   const ghostMeshRef = useRef(null);
+  const shadowPlaneRef = useRef(null);
+  const dirLightRef = useRef(null);
+  const hemiLightRef = useRef(null);
+  const occlusionWallRef = useRef(null);
+  const envUpdaterRef = useRef(null);
+  const occlusionRef = useRef(new ForegroundOcclusionCompositor());
   const polRef = useRef(new ProofOfLocationTracker());
   const wsRef = useRef(null);
 
@@ -40,6 +50,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   // Minimal HUD visibility: starts ultra-clean with "i" + compact trigger; expands tool dock on demand
   const [dockOpen, setDockOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [occlusionEnabled, setOcclusionEnabled] = useState(true);
   const [infoOpen, setInfoOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [pairOpen, setPairOpen] = useState(false);
@@ -71,13 +82,23 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const colorRef = useRef(color);
   const materialRef = useRef(material);
   const reachRef = useRef(reachMeters);
+  const occlusionEnabledRef = useRef(occlusionEnabled);
   const userRef = useRef(user);
+  const locationRef = useRef(location);
   const paintingRef = useRef(false);
   const lastPaintPosRef = useRef(null);
 
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  useEffect(() => {
+    occlusionEnabledRef.current = occlusionEnabled;
+  }, [occlusionEnabled]);
+
+  useEffect(() => {
+    locationRef.current = location;
+  }, [location]);
 
   // Publish state
   const [title, setTitle] = useState('');
@@ -178,11 +199,19 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
           altitude: pos.coords.altitude,
+          altitudeAccuracy: pos.coords.altitudeAccuracy,
           heading: pos.coords.heading,
           speed: pos.coords.speed,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         };
         setLocation(loc);
+
+        // Align directional sunlight shadow vector to real-world solar azimuth & elevation
+        if (dirLightRef.current) {
+          const sun = computeSolarLightVector(loc.lat, loc.lng, new Date());
+          dirLightRef.current.position.set(sun.x, sun.y, sun.z);
+          dirLightRef.current.intensity = sun.isDaylight ? 1.55 : 0.95;
+        }
 
         const now = Date.now();
         if (now - lastFetchAt > 12000) {
@@ -265,7 +294,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     rebuildDraftMesh(voxels);
   }, [voxels, rebuildDraftMesh]);
 
-  // Build nearby sculptures in AR Preview mode
+  // Build nearby sculptures in AR Preview mode (honoring horizontal GPS offset + vertical elevation)
   useEffect(() => {
     const group = nearbyGroupRef.current;
     if (!group) return;
@@ -273,13 +302,40 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
     if (mode !== 'preview' || !location) return;
 
+    const viewerElev =
+      location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
+        ? location.altitude
+        : null;
+
     for (const sc of nearbySculptures) {
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const sub = buildVoxelGroup(sc.voxels || []);
       // Clamp super distant previews visually within 35m so distant same-block art remains visible
       const dist = Math.hypot(offset.east, offset.north);
       const clampFactor = dist > 35 ? 35 / dist : 1;
-      sub.position.set(offset.east * clampFactor, 0, -offset.north * clampFactor);
+
+      // Vertical elevation placement: keep high-sky & upper-level pieces anchored at their real altitude
+      const scElev =
+        sc.elevation?.anchorAltitudeMeters ??
+        (sc.altitude !== null && sc.altitude !== undefined ? sc.altitude : null);
+      let deltaY = 0;
+      if (viewerElev !== null && scElev !== null) {
+        deltaY = Math.max(-35, Math.min(65, scElev - viewerElev));
+      } else if (sc.elevation?.heightAboveGroundMeters) {
+        deltaY = Math.max(-10, Math.min(65, sc.elevation.heightAboveGroundMeters));
+      }
+
+      // Grounded AR shadow catcher disc beneath each nearby sculpture
+      const catcher = new THREE.Mesh(
+        new THREE.CircleGeometry(1.6, 24),
+        new THREE.ShadowMaterial({ opacity: 0.36 })
+      );
+      catcher.rotation.x = -Math.PI / 2;
+      catcher.position.y = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
+      catcher.receiveShadow = true;
+      sub.add(catcher);
+
+      sub.position.set(offset.east * clampFactor, deltaY, -offset.north * clampFactor);
       group.add(sub);
     }
   }, [mode, location, nearbySculptures]);
@@ -372,18 +428,50 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setClearColor(0x000000, 0);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
     host.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.9);
-    scene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
-    dirLight.position.set(3, 6, 4);
+    const envUpdater = createLiveEnvUpdater(renderer);
+    envUpdaterRef.current = envUpdater;
+
+    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x334155, 0.85);
+    scene.add(hemiLight);
+    hemiLightRef.current = hemiLight;
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.45);
+    dirLight.position.set(4, 8, 3);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 36;
+    const shadowBound = 9;
+    dirLight.shadow.camera.left = -shadowBound;
+    dirLight.shadow.camera.right = shadowBound;
+    dirLight.shadow.camera.top = shadowBound;
+    dirLight.shadow.camera.bottom = -shadowBound;
+    dirLight.shadow.bias = -0.0005;
     scene.add(dirLight);
+    dirLightRef.current = dirLight;
+
+    // Invisible AR shadow catcher plane projecting real directional shadows onto the street/floor
+    const shadowCatcher = new THREE.Mesh(
+      new THREE.PlaneGeometry(24, 24),
+      new THREE.ShadowMaterial({ opacity: 0.44 })
+    );
+    shadowCatcher.rotation.x = -Math.PI / 2;
+    shadowCatcher.position.y = -0.8;
+    shadowCatcher.receiveShadow = true;
+    scene.add(shadowCatcher);
+    shadowPlaneRef.current = shadowCatcher;
 
     const grid = new THREE.GridHelper(6, 30, 0x00f5d4, 0x26324d);
-    grid.position.y = -0.8;
+    grid.position.y = -0.805;
     grid.material.transparent = true;
-    grid.material.opacity = 0.28;
+    grid.material.opacity = 0.2;
     scene.add(grid);
 
     const draftGroup = new THREE.Group();
@@ -413,11 +501,18 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       camera.aspect = host.clientWidth / host.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(host.clientWidth, host.clientHeight);
+      if (occlusionCanvasRef.current) {
+        occlusionCanvasRef.current.width = host.clientWidth;
+        occlusionCanvasRef.current.height = host.clientHeight;
+      }
     };
+    handleResize();
     window.addEventListener('resize', handleResize);
 
     let rafId = 0;
     let lastWsPush = 0;
+    let lastEnvPush = 0;
+    let lastOcclusionPush = 0;
 
     const animate = () => {
       rafId = requestAnimationFrame(animate);
@@ -468,6 +563,26 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       }
 
       const now = performance.now();
+      if (now - lastEnvPush > 950 && videoRef.current && envUpdaterRef.current) {
+        lastEnvPush = now;
+        const envData = envUpdaterRef.current.update(videoRef.current);
+        if (envData) {
+          scene.environment = envData.envTexture;
+          hemiLight.color.setHex(envData.skyColor);
+          hemiLight.groundColor.setHex(envData.groundColor);
+        }
+      }
+
+      if (now - lastOcclusionPush > 65 && occlusionCanvasRef.current) {
+        lastOcclusionPush = now;
+        occlusionRef.current.processFrame(
+          videoRef.current,
+          occlusionCanvasRef.current,
+          rawOrientationRef.current,
+          occlusionEnabledRef.current
+        );
+      }
+
       if (wsRef.current?.readyState === 1 && now - lastWsPush > 45) {
         lastWsPush = now;
         wsRef.current.send(
@@ -490,6 +605,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
+      envUpdaterRef.current?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === host) {
         host.removeChild(renderer.domElement);
@@ -694,6 +810,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         onPointerMove={handleCanvasPointerMove}
         onPointerUp={handleCanvasPointerUp}
       />
+      <canvas ref={occlusionCanvasRef} className="occlusion-overlay" />
 
       {mode === 'draw' && <div className="reticle" />}
 
@@ -717,6 +834,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                 ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
                 : 'Acquiring GPS'}
             </span>
+            {location?.altitude != null && (
+              <>
+                <span>|</span>
+                <XeroIcon emoji="⛰️" size={14} />
+                <span>{Math.round(location.altitude)}m</span>
+              </>
+            )}
             <span>|</span>
             <XeroIcon emoji="🧱" size={14} />
             <span>{voxels.length}</span>
@@ -874,6 +998,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="🧭" size={19} />
             </button>
             <button
+              className={`dock-btn ${occlusionEnabled ? 'active' : ''}`}
+              onClick={() => setOcclusionEnabled((v) => !v)}
+              title="Toggle Foreground Occlusion"
+              aria-label="Toggle Foreground Occlusion"
+            >
+              <XeroIcon emoji="🪞" size={19} />
+            </button>
+            <button
               className={`dock-btn ${mode === 'preview' ? 'active' : ''}`}
               onClick={() => setMode((m) => (m === 'preview' ? 'draw' : 'preview'))}
               title="AR Preview Nearby Sculptures"
@@ -1008,6 +1140,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   <span className="badge gold">
                     <XeroIcon emoji="📷" size={13} /> {polStats.frames} frames / {polStats.flow}% flow
                   </span>
+                  {location?.altitude != null && (
+                    <span className="badge teal">
+                      <XeroIcon emoji="⛰️" size={13} /> {Math.round(location.altitude)}m alt
+                    </span>
+                  )}
                   <span className="badge">
                     <XeroIcon emoji="🪙" size={13} /> Gas Free · 5% Resale Fee
                   </span>

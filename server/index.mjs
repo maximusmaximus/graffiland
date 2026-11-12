@@ -26,67 +26,10 @@ import {
   haversineMeters,
   verifyAndEnrichLocation
 } from './services/pol.mjs';
+import { computeVerticalBounds, serializeSculptureRow } from '../shared/sculpture.mjs';
 import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-function serializeSculptureRow(row, { includeAdminFields = false, includeVoxels = true } = {}) {
-  const pol = JSON.parse(row.pol_json || '{}');
-  const item = {
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    creatorSub: row.creator_sub,
-    creatorName: row.creator_name,
-    ...(includeAdminFields ? { creatorEmail: row.creator_email } : {}),
-    recipientAddress: row.recipient_address,
-    lat: row.lat,
-    lng: row.lng,
-    altitude: row.altitude,
-    accuracy: row.accuracy,
-    heading: row.heading,
-    parcelId: row.parcel_id,
-    geohash: row.geohash,
-    parcelBounds: decodeGeohashBounds(row.geohash),
-    placeName: row.place_name,
-    country: row.country,
-    timezone: row.timezone,
-    voxelCount: row.voxel_count,
-    ...(includeVoxels ? { voxels: JSON.parse(row.voxels_json || '[]') } : {}),
-    polScore: row.pol_score,
-    proofOfLocation: pol,
-    proofHash: row.proof_hash,
-    previewDataUrl: row.preview_data_url,
-    ipfs: {
-      metadataCid: row.ipfs_metadata_cid,
-      modelCid: row.ipfs_model_cid,
-      imageCid: row.ipfs_image_cid,
-      metadataUri: `ipfs://${row.ipfs_metadata_cid}`,
-      gatewayUrl: row.ipfs_gateway_url
-    },
-    chain: {
-      chainId: row.chain_id,
-      chainName: row.chain_name,
-      contractAddress: row.contract_address,
-      tokenId: row.token_id,
-      txHash: row.tx_hash,
-      simulated: Boolean(row.simulated_chain),
-      royaltyBps: row.royalty_bps,
-      royaltyPercent: row.royalty_bps / 100,
-      royaltyReceiver: row.royalty_receiver
-    },
-    hidden: Boolean(row.hidden),
-    ...(includeAdminFields
-      ? {
-          hiddenReason: row.hidden_reason || '',
-          hiddenBy: row.hidden_by || ''
-        }
-      : {}),
-    termsAcceptedVersion: row.terms_accepted_version,
-    createdAt: row.created_at
-  };
-  return item;
-}
 
 export function createAppServer() {
   const db = getDb();
@@ -263,8 +206,13 @@ export function createAppServer() {
         return res.status(400).json({ error: validation.errors.join(' '), errors: validation.errors });
       }
 
+      const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
       const locationBundle = await verifyAndEnrichLocation(
-        req.body?.location,
+        {
+          ...(req.body?.location || {}),
+          sculptureVerticalMinM: verticalBounds.minY,
+          sculptureVerticalMaxM: verticalBounds.maxY
+        },
         req.body?.proofOfLocation,
         req.user.id
       );

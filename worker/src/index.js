@@ -3,6 +3,11 @@ import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { POLICY, ROBINHOOD_NETWORKS } from '../../shared/constants.mjs';
+import {
+  buildIpfsMetadata,
+  computeVerticalBounds,
+  serializeSculptureRow
+} from '../../shared/sculpture.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   decodeGeohashBounds,
@@ -98,63 +103,6 @@ function sanitizeUser(row) {
     customPayoutAddress: row.custom_payout_address || '',
     activeMintRecipient: row.custom_payout_address || row.wallet_address,
     isAdmin: Boolean(row.is_admin),
-    createdAt: row.created_at
-  };
-}
-
-function serializeSculptureRow(row, { includeAdminFields = false, includeVoxels = true } = {}) {
-  const pol = JSON.parse(row.pol_json || '{}');
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    creatorSub: row.creator_sub,
-    creatorName: row.creator_name,
-    ...(includeAdminFields ? { creatorEmail: row.creator_email } : {}),
-    recipientAddress: row.recipient_address,
-    lat: row.lat,
-    lng: row.lng,
-    altitude: row.altitude,
-    accuracy: row.accuracy,
-    heading: row.heading,
-    parcelId: row.parcel_id,
-    geohash: row.geohash,
-    parcelBounds: decodeGeohashBounds(row.geohash),
-    placeName: row.place_name,
-    country: row.country,
-    timezone: row.timezone,
-    voxelCount: row.voxel_count,
-    ...(includeVoxels ? { voxels: JSON.parse(row.voxels_json || '[]') } : {}),
-    polScore: row.pol_score,
-    proofOfLocation: pol,
-    proofHash: row.proof_hash,
-    previewDataUrl: row.preview_data_url,
-    ipfs: {
-      metadataCid: row.ipfs_metadata_cid,
-      modelCid: row.ipfs_model_cid,
-      imageCid: row.ipfs_image_cid,
-      metadataUri: `ipfs://${row.ipfs_metadata_cid}`,
-      gatewayUrl: row.ipfs_gateway_url
-    },
-    chain: {
-      chainId: row.chain_id,
-      chainName: row.chain_name,
-      contractAddress: row.contract_address,
-      tokenId: row.token_id,
-      txHash: row.tx_hash,
-      simulated: Boolean(row.simulated_chain),
-      royaltyBps: row.royalty_bps,
-      royaltyPercent: row.royalty_bps / 100,
-      royaltyReceiver: row.royalty_receiver
-    },
-    hidden: Boolean(row.hidden),
-    ...(includeAdminFields
-      ? {
-          hiddenReason: row.hidden_reason || '',
-          hiddenBy: row.hidden_by || ''
-        }
-      : {}),
-    termsAcceptedVersion: row.terms_accepted_version,
     createdAt: row.created_at
   };
 }
@@ -320,62 +268,19 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
     modelPin = await pinToKv(modelBytes, 'application/json', requestOrigin, env);
   }
 
-  const metadata = {
-    name: params.title,
+  const metadata = buildIpfsMetadata({
+    sculptureId: params.sculptureId,
+    title: params.title,
     description: params.description,
-    image: imagePin.uri,
-    animation_url: modelPin.uri,
-    external_url: `${cfg.publicUrl}/?sculpture=${params.sculptureId}`,
-    seller_fee_basis_points: cfg.resaleFeeBps,
-    fee_recipient: cfg.royaltyReceiver,
-    royalty: {
-      standard: 'ERC-2981',
-      resale_fee_bps: cfg.resaleFeeBps,
-      resale_fee_percent: cfg.resaleFeePercent,
-      recipient: cfg.royaltyReceiver
-    },
-    virtual_land: {
-      parcel_id: params.locationBundle.parcelId,
-      geohash: params.locationBundle.geohash,
-      bounds: params.locationBundle.parcelBounds,
-      claimant: params.creatorAddress
-    },
-    location: {
-      latitude: params.locationBundle.lat,
-      longitude: params.locationBundle.lng,
-      altitude_meters: params.locationBundle.altitude,
-      gps_accuracy_meters: params.locationBundle.accuracy,
-      compass_heading_deg: params.locationBundle.heading,
-      timezone: params.locationBundle.timezone,
-      place_name: params.locationBundle.geoInfo.placeName,
-      neighborhood: params.locationBundle.geoInfo.neighborhood,
-      road: params.locationBundle.geoInfo.road,
-      city: params.locationBundle.geoInfo.city,
-      state: params.locationBundle.geoInfo.state,
-      country: params.locationBundle.geoInfo.country,
-      country_code: params.locationBundle.geoInfo.countryCode,
-      postcode: params.locationBundle.geoInfo.postcode,
-      display_name: params.locationBundle.geoInfo.displayName,
-      solar_altitude_deg: params.locationBundle.solar.solarAltitudeDeg,
-      solar_regime: params.locationBundle.solar.regime
-    },
-    proof_of_location: {
-      hash: params.locationBundle.proofHash,
-      score: params.locationBundle.score,
-      verified: params.locationBundle.verified,
-      ...params.locationBundle.proofBundle
-    },
-    attributes: [
-      { trait_type: 'Virtual Land Parcel', value: params.locationBundle.parcelId },
-      { trait_type: 'Geohash', value: params.locationBundle.geohash },
-      { trait_type: 'City', value: params.locationBundle.geoInfo.city || 'Unknown' },
-      { trait_type: 'Country', value: params.locationBundle.geoInfo.country || 'Unknown' },
-      { trait_type: 'Voxel Count', display_type: 'number', value: params.voxels.length },
-      { trait_type: 'Proof of Location Score', display_type: 'number', value: params.locationBundle.score },
-      { trait_type: 'Solar Regime', value: params.locationBundle.solar.regime },
-      { trait_type: 'Resale Fee', value: `${cfg.resaleFeePercent}%` }
-    ]
-  };
+    imageUri: imagePin.uri,
+    modelUri: modelPin.uri,
+    publicUrl: cfg.publicUrl,
+    voxels: params.voxels,
+    locationBundle: params.locationBundle,
+    creatorAddress: params.creatorAddress,
+    royaltyBps: cfg.resaleFeeBps,
+    royaltyReceiver: cfg.royaltyReceiver
+  });
 
   let metadataPin;
   if (env.PINATA_JWT) {
@@ -788,8 +693,13 @@ export default {
           );
         }
 
+        const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
         const locationBundle = await verifyAndEnrichLocation(
-          body?.location,
+          {
+            ...(body?.location || {}),
+            sculptureVerticalMinM: verticalBounds.minY,
+            sculptureVerticalMaxM: verticalBounds.maxY
+          },
           body?.proofOfLocation,
           user.id
         );

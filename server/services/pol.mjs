@@ -106,7 +106,17 @@ export function computeSolarPosition(lat, lng, date = new Date()) {
   const sinAlt =
     Math.sin(latRad) * Math.sin(decl) +
     Math.cos(latRad) * Math.cos(decl) * Math.cos(hourAngle);
-  const altitudeDeg = (Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180) / Math.PI;
+  const altRad = Math.asin(Math.max(-1, Math.min(1, sinAlt)));
+  const altitudeDeg = (altRad * 180) / Math.PI;
+
+  const cosAltLat = Math.cos(latRad) * Math.cos(altRad);
+  let azimuthDeg = 180;
+  if (Math.abs(cosAltLat) > 1e-5) {
+    const cosAz = (Math.sin(decl) - Math.sin(latRad) * Math.sin(altRad)) / cosAltLat;
+    let az = (Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180) / Math.PI;
+    if (Math.sin(hourAngle) > 0) az = 360 - az;
+    azimuthDeg = az;
+  }
 
   let regime = 'daylight';
   if (altitudeDeg < -6) regime = 'night';
@@ -114,9 +124,28 @@ export function computeSolarPosition(lat, lng, date = new Date()) {
 
   return {
     solarAltitudeDeg: Math.round(altitudeDeg * 100) / 100,
+    solarAzimuthDeg: Math.round(azimuthDeg * 100) / 100,
     solarTimeHours: Math.round(solarTimeHours * 100) / 100,
     regime
   };
+}
+
+export async function fetchTerrainElevation(lat, lng) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    const url = `https://api.open-meteo.com/v1/elevation?latitude=${encodeURIComponent(
+      lat
+    )}&longitude=${encodeURIComponent(lng)}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const val = Array.isArray(data?.elevation) ? Number(data.elevation[0]) : Number(data?.elevation);
+    return Number.isFinite(val) ? Math.round(val * 100) / 100 : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function reverseGeocode(lat, lng) {
@@ -183,10 +212,38 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
   }
 
   const accuracy = Number.isFinite(Number(locationInput?.accuracy)) ? Number(locationInput.accuracy) : 50;
-  const altitude = Number.isFinite(Number(locationInput?.altitude)) ? Number(locationInput.altitude) : null;
-  const heading = Number.isFinite(Number(locationInput?.heading)) ? Number(locationInput.heading) : null;
-  const speed = Number.isFinite(Number(locationInput?.speed)) ? Number(locationInput.speed) : null;
+  const deviceAltitudeMeters =
+    locationInput?.altitude !== null &&
+    locationInput?.altitude !== undefined &&
+    Number.isFinite(Number(locationInput.altitude))
+      ? Math.round(Number(locationInput.altitude) * 100) / 100
+      : null;
+  const altitudeAccuracyMeters =
+    locationInput?.altitudeAccuracy !== null &&
+    locationInput?.altitudeAccuracy !== undefined &&
+    Number.isFinite(Number(locationInput.altitudeAccuracy))
+      ? Math.round(Number(locationInput.altitudeAccuracy) * 100) / 100
+      : null;
+  const heading =
+    locationInput?.heading !== null &&
+    locationInput?.heading !== undefined &&
+    Number.isFinite(Number(locationInput.heading))
+      ? Number(locationInput.heading)
+      : null;
+  const speed =
+    locationInput?.speed !== null &&
+    locationInput?.speed !== undefined &&
+    Number.isFinite(Number(locationInput.speed))
+      ? Number(locationInput.speed)
+      : null;
   const timezone = String(locationInput?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+
+  const sculptureVerticalMinM = Number.isFinite(Number(locationInput?.sculptureVerticalMinM))
+    ? Math.round(Number(locationInput.sculptureVerticalMinM) * 1000) / 1000
+    : 0;
+  const sculptureVerticalMaxM = Number.isFinite(Number(locationInput?.sculptureVerticalMaxM))
+    ? Math.round(Number(locationInput.sculptureVerticalMaxM) * 1000) / 1000
+    : 0;
 
   const geohash = encodeGeohash(lat, lng, 8);
   const parcelBounds = decodeGeohashBounds(geohash);
@@ -242,7 +299,34 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
   const score = Math.min(100, gpsScore + trajectoryBonus + cameraScore + gyroFlowScore + solarMatchScore);
   const verified = gpsTrajectoryValid && score >= 45;
 
-  const geoInfo = await reverseGeocode(lat, lng);
+  const [geoInfo, terrainElevationMeters] = await Promise.all([
+    reverseGeocode(lat, lng),
+    fetchTerrainElevation(lat, lng)
+  ]);
+
+  const altitudeSource =
+    deviceAltitudeMeters !== null
+      ? 'device-sensor'
+      : terrainElevationMeters !== null
+      ? 'terrain-dem'
+      : 'unavailable';
+  const anchorAltitudeMeters =
+    deviceAltitudeMeters !== null ? deviceAltitudeMeters : terrainElevationMeters;
+  const heightAboveGroundMeters =
+    deviceAltitudeMeters !== null && terrainElevationMeters !== null
+      ? Math.round((deviceAltitudeMeters - terrainElevationMeters) * 100) / 100
+      : null;
+
+  const elevation = {
+    deviceAltitudeMeters,
+    altitudeAccuracyMeters,
+    altitudeSource,
+    terrainElevationMeters,
+    anchorAltitudeMeters,
+    heightAboveGroundMeters,
+    sculptureVerticalMinM,
+    sculptureVerticalMaxM
+  };
 
   const proofBundle = {
     version: 'pol-v1',
@@ -251,7 +335,8 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
     parcelBounds,
     lat: Math.round(lat * 1e6) / 1e6,
     lng: Math.round(lng * 1e6) / 1e6,
-    altitude,
+    altitude: anchorAltitudeMeters,
+    elevation,
     accuracy,
     heading,
     speed,
@@ -288,7 +373,8 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
     parcelBounds,
     lat: proofBundle.lat,
     lng: proofBundle.lng,
-    altitude,
+    altitude: anchorAltitudeMeters,
+    elevation,
     accuracy,
     heading,
     timezone,
