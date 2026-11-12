@@ -1,0 +1,28 @@
+name = "graffiland-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+PUBLIC_URL = "https://maximusmaximus.github.io/graffiland"
+ALLOW_DEV_GOOGLE_AUTH = "true"
+ROBINHOOD_NETWORK = "testnet"
+ROBINHOOD_RESALE_FEE_BPS = "500"
+IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "graffiland-db"
+database_id = "5f48edef-dde6-4412-ba81-0c6016b9c320"
+
+[[kv_namespaces]]
+binding = "IPFS_KV"
+id = "11c207aac8364895a0e5d927738a75c7"
+
+[[durable_objects.bindings]]
+name = "PAIR_COORDINATOR"
+class_name = "PairCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PairCoordinator"]

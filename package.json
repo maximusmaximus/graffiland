@@ -1,0 +1,45 @@
+{
+  "name": "graffiland",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GRAFFILAND — Location-bound 3D AR voxel graffiti & Virtual Land NFTs on IPFS and Robinhood Chain",
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c cyan,magenta \"node server/index.mjs\" \"vite --host\"",
+    "dev:server": "node server/index.mjs",
+    "dev:client": "vite --host",
+    "build": "vite build",
+    "build:pages": "node scripts/build-pages.mjs",
+    "deploy:pages": "node scripts/deploy-pages.mjs",
+    "start": "node server/index.mjs --prod",
+    "contract:compile": "node contracts/compile.mjs",
+    "contract:deploy": "node contracts/deploy.mjs",
+    "deploy:worker": "npx wrangler deploy --config worker/wrangler.toml",
+    "deploy:worker:db": "npx wrangler d1 execute graffiland-db --remote --config worker/wrangler.toml --file=worker/schema.sql --yes",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "express": "^4.21.2",
+    "google-auth-library": "^9.15.1",
+    "jsonwebtoken": "^9.0.2",
+    "leaflet": "^1.9.4",
+    "multiformats": "^13.3.1",
+    "qrcode": "^1.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.174.0",
+    "ws": "^8.18.1",
+    "xeroemoji": "^1.0.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "solc": "^0.8.28",
+    "vite": "^6.2.0"
+  }
+}
