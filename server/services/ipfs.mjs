@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
+import { buildSculptureGlb } from '../../shared/glb.mjs';
 import { buildIpfsMetadata } from '../../shared/sculpture.mjs';
 import { CONFIG } from '../config.mjs';
 
@@ -127,34 +128,30 @@ export async function pinSculptureToIpfs({
   royaltyReceiver
 }) {
   const preview = decodePreviewDataUrl(previewDataUrl);
-  const modelJson = {
-    schema: 'graffiland.voxel.v1',
+  const glbBytes = buildSculptureGlb(voxels, {
     id: sculptureId,
     title,
-    voxelCount: voxels.length,
-    voxels,
-    virtualLandParcel: locationBundle.parcelId,
-    geohash: locationBundle.geohash,
-    createdAt: new Date().toISOString()
-  };
-  const modelBuffer = Buffer.from(JSON.stringify(modelJson, null, 2), 'utf8');
+    parcelId: locationBundle.parcelId,
+    geohash: locationBundle.geohash
+  });
+  const modelBuffer = Buffer.from(glbBytes);
 
   let imagePin;
   let modelPin;
 
   if (CONFIG.pinataJwt) {
-    imagePin = await pinBufferToPinata(
+    imagePin = await pinFileToPinata(
       preview.buffer,
       `${sculptureId}-preview.${preview.mime.includes('svg') ? 'svg' : 'png'}`,
       preview.mime
     );
-    modelPin = await pinBufferToPinata(modelBuffer, `${sculptureId}-model.json`, 'application/json');
+    modelPin = await pinFileToPinata(modelBuffer, `${sculptureId}-model.glb`, 'model/gltf-binary');
   } else if (CONFIG.ipfsApiUrl) {
     imagePin = await pinBufferToKubo(preview.buffer, `${sculptureId}-preview.png`);
-    modelPin = await pinBufferToKubo(modelBuffer, `${sculptureId}-model.json`);
+    modelPin = await pinBufferToKubo(modelBuffer, `${sculptureId}-model.glb`);
   } else {
     imagePin = await pinBufferToLocal(preview.buffer, preview.mime);
-    modelPin = await pinBufferToLocal(modelBuffer, 'application/json');
+    modelPin = await pinBufferToLocal(modelBuffer, 'model/gltf-binary');
   }
 
   const metadata = buildIpfsMetadata({

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { ethers } from 'ethers';
 import { WebSocket } from 'ws';
 
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-test-'));
@@ -11,6 +12,7 @@ process.env.GRAFFILAND_IPFS_DIR = path.join(testTmpDir, 'ipfs');
 
 const { compileContract } = await import('../contracts/compile.mjs');
 const { createAppServer } = await import('../server/index.mjs');
+const { buildTransferAuthMessage } = await import('../shared/transferMessage.mjs');
 const chatCrypto = await import('../client/src/utils/chatCrypto.js');
 
 let server;
@@ -65,6 +67,20 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.ok(mintFn, 'mintSculpture function present in ABI');
     const royaltyFn = artifact.abi.find((item) => item.name === 'royaltyInfo');
     assert.ok(royaltyFn, 'ERC-2981 royaltyInfo function present in ABI');
+    for (const fnName of [
+      'safeTransferFrom',
+      'transferFrom',
+      'ownerOf',
+      'contractURI',
+      'setContractURI',
+      'tokensOfOwner',
+      'tokenOfOwnerByIndex'
+    ]) {
+      assert.ok(
+        artifact.abi.some((item) => item.name === fnName),
+        `${fnName} present in compiled ABI`
+      );
+    }
   });
 
   test('Public config exposes Robinhood Chain, 5% royalty, and Limited Terms policy', async () => {
@@ -215,6 +231,18 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(ipfsJson.location.sculpture_vertical_max_m, 0.2);
     assert.equal(typeof ipfsJson.location.solar_azimuth_deg, 'number');
     assert.equal(ipfsJson.virtual_land.anchor_elevation_meters, 42.5);
+    assert.equal(ipfsJson.animation_mime_type, 'model/gltf-binary');
+    assert.equal(ipfsJson.properties?.category, '3d-model');
+
+    // Verify local IPFS model CID is genuine binary glTF 2.0 (.glb)
+    const modelCidRes = await fetch(`${baseUrl}/ipfs/${res.body.ipfs.modelCid}`);
+    assert.equal(modelCidRes.status, 200);
+    assert.ok(modelCidRes.headers.get('content-type')?.includes('model/gltf-binary'));
+    const glbBuf = new Uint8Array(await modelCidRes.arrayBuffer());
+    const dv = new DataView(glbBuf.buffer, glbBuf.byteOffset, glbBuf.byteLength);
+    assert.equal(dv.getUint32(0, true), 0x46546c67, 'GLB magic header');
+    assert.equal(dv.getUint32(4, true), 2, 'glTF version 2');
+    assert.equal(dv.getUint32(8, true), glbBuf.byteLength, 'GLB length matches');
 
     // Verify AR Preview proximity search finds it
     const nearby = await apiJson('/api/sculptures?lat=37.80805&lng=-122.41775&radiusMeters=100');
@@ -632,5 +660,101 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(singleSc.body.sculpture.chatSummary.messageCount, 2);
     assert.equal(JSON.stringify(singleSc.body).includes(secretText1), false);
     assert.equal(JSON.stringify(singleSc.body).includes(secretText2), false);
+  });
+
+  test('NFT platform metadata, 3D GLB export & wallet-to-wallet transferability', async () => {
+    // 1. EIP-7572 Collection Contract Metadata
+    const contractMeta = await apiJson('/api/contract/metadata.json');
+    assert.equal(contractMeta.status, 200);
+    assert.equal(contractMeta.body.symbol, 'GLAND');
+    assert.equal(contractMeta.body.seller_fee_basis_points, 500);
+    assert.ok(contractMeta.body.contract.standards.includes('ERC-721'));
+    assert.ok(contractMeta.body.contract.standards.includes('EIP-7572'));
+
+    // 2. Dynamic .GLB export & ERC-721 / OpenSea Token Metadata
+    const glbRes = await fetch(`${baseUrl}/api/sculptures/${createdSculptureId}/model.glb`);
+    assert.equal(glbRes.status, 200);
+    assert.ok(glbRes.headers.get('content-type')?.includes('model/gltf-binary'));
+    const glbBytes = new Uint8Array(await glbRes.arrayBuffer());
+    const dv = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
+    assert.equal(dv.getUint32(0, true), 0x46546c67);
+    assert.equal(dv.getUint32(4, true), 2);
+    const jsonChunkLen = dv.getUint32(12, true);
+    const gltfJson = JSON.parse(new TextDecoder().decode(glbBytes.slice(20, 20 + jsonChunkLen)));
+    assert.equal(gltfJson.asset.version, '2.0');
+    assert.ok(gltfJson.meshes[0].primitives.length >= 1);
+
+    const scDetail = await apiJson(`/api/sculptures/${createdSculptureId}`);
+    assert.equal(scDetail.status, 200);
+    const tokenId = scDetail.body.sculpture.chain.tokenId;
+    const origOwner = scDetail.body.sculpture.recipientAddress;
+
+    const tokenMeta = await apiJson(`/api/sculptures/${createdSculptureId}/metadata.json`);
+    assert.equal(tokenMeta.status, 200);
+    assert.equal(tokenMeta.body.animation_mime_type, 'model/gltf-binary');
+    assert.ok(tokenMeta.body.animation_url.endsWith(`/api/sculptures/${createdSculptureId}/model.glb`));
+    assert.equal(tokenMeta.body.seller_fee_basis_points, 500);
+
+    const byTokenId = await apiJson(`/api/tokens/${tokenId}.json`);
+    assert.equal(byTokenId.status, 200);
+    assert.equal(byTokenId.body.token_id, tokenId);
+
+    // 3. Reject unauthorized transfer from non-owner (admin cannot steal artist's NFT)
+    const externalWallet = ethers.Wallet.createRandom();
+    const unauthorized = await apiJson(`/api/sculptures/${createdSculptureId}/transfer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ toAddress: externalWallet.address })
+    });
+    assert.equal(unauthorized.status, 403);
+
+    // 4. Embedded-wallet owner transfers NFT to external MetaMask / cold wallet
+    const t1 = await apiJson(`/api/sculptures/${createdSculptureId}/transfer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}` },
+      body: JSON.stringify({ toAddress: externalWallet.address })
+    });
+    assert.equal(t1.status, 200);
+    assert.equal(t1.body.transfer.fromAddress, origOwner);
+    assert.equal(t1.body.transfer.toAddress, externalWallet.address);
+    assert.equal(t1.body.sculpture.recipientAddress, externalWallet.address);
+    assert.equal(t1.body.sculpture.transfers.length, 1);
+
+    // 5. Previous embedded-wallet owner can no longer re-transfer it
+    const replay = await apiJson(`/api/sculptures/${createdSculptureId}/transfer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}` },
+      body: JSON.stringify({ toAddress: origOwner })
+    });
+    assert.equal(replay.status, 403);
+
+    // 6. New external wallet owner authorizes onward transfer using EIP-191 personal_sign
+    const secondWallet = ethers.Wallet.createRandom();
+    const authMessage = buildTransferAuthMessage({
+      sculptureId: createdSculptureId,
+      tokenId,
+      fromAddress: externalWallet.address,
+      toAddress: secondWallet.address,
+      contractAddress: scDetail.body.sculpture.chain.contractAddress,
+      chainId: scDetail.body.sculpture.chain.chainId
+    });
+    const sig = await externalWallet.signMessage(authMessage);
+    const t2 = await apiJson(`/api/sculptures/${createdSculptureId}/transfer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ toAddress: secondWallet.address, signature: sig })
+    });
+    assert.equal(t2.status, 200);
+    assert.equal(t2.body.transfer.method, 'external-signed-sim');
+    assert.equal(t2.body.sculpture.recipientAddress, secondWallet.address);
+    assert.equal(t2.body.sculpture.transfers.length, 2);
+
+    // 7. Ownership sync endpoint reports current owner cleanly
+    const syncRes = await apiJson(`/api/sculptures/${createdSculptureId}/sync-ownership`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    assert.equal(syncRes.status, 200);
+    assert.equal(syncRes.body.ownerAddress, secondWallet.address);
   });
 });

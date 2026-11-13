@@ -26,7 +26,18 @@ import {
   haversineMeters,
   verifyAndEnrichLocation
 } from './services/pol.mjs';
-import { computeVerticalBounds, serializeSculptureRow } from '../shared/sculpture.mjs';
+import { buildSculptureGlb } from '../shared/glb.mjs';
+import {
+  buildContractMetadata,
+  computeVerticalBounds,
+  formatMarketplaceTokenMetadata,
+  serializeSculptureRow
+} from '../shared/sculpture.mjs';
+import {
+  listSculptureTransfers,
+  syncSculptureOwnership,
+  transferSculptureNft
+} from '../shared/transferService.mjs';
 import {
   claimClueUnlockedGrant,
   enterChatBoard,
@@ -64,6 +75,33 @@ export function createAppServer() {
         ? 'kubo'
         : 'local-cid'
     });
+  });
+
+  // EIP-7572 / OpenSea Collection Metadata
+  app.get('/api/contract/metadata.json', (req, res) => {
+    const chain = getChainStatus();
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json(
+      buildContractMetadata({
+        publicUrl: CONFIG.publicUrl,
+        apiOrigin,
+        royaltyBps: chain.resaleFeeBps,
+        royaltyReceiver: chain.royaltyReceiver,
+        contractAddress: chain.contractAddress,
+        chain: chain.network
+      })
+    );
+  });
+
+  // ERC-721 Token ID Metadata endpoint (for marketplaces resolving by tokenId)
+  app.get('/api/tokens/:tokenId.json', (req, res) => {
+    const tokenId = String(req.params.tokenId || '').trim();
+    const row = db
+      .prepare('SELECT * FROM sculptures WHERE token_id = ? AND hidden = 0 ORDER BY created_at DESC LIMIT 1')
+      .get(tokenId);
+    if (!row) return res.status(404).json({ error: 'Token not found' });
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json(formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl: CONFIG.publicUrl }));
   });
 
   // Google Auth Only
@@ -147,7 +185,7 @@ export function createAppServer() {
     res.json({ sculptures: items });
   });
 
-  app.get('/api/sculptures/:id', (req, res) => {
+  app.get('/api/sculptures/:id', async (req, res) => {
     const row = db
       .prepare(
         `SELECT s.*,
@@ -163,12 +201,79 @@ export function createAppServer() {
     if (row.hidden && !caller?.is_admin) {
       return res.status(404).json({ error: 'Sculpture not available' });
     }
+    const transfers = await listSculptureTransfers(chatDb, req.params.id);
     res.json({
       sculpture: serializeSculptureRow(row, {
         includeAdminFields: Boolean(caller?.is_admin),
-        includeVoxels: true
+        includeVoxels: true,
+        transfers
       })
     });
+  });
+
+  app.get('/api/sculptures/:id/model.glb', (req, res) => {
+    const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Sculpture not found' });
+    const caller = getAuthUserFromRequest(req);
+    if (row.hidden && !caller?.is_admin) {
+      return res.status(404).json({ error: 'Sculpture not available' });
+    }
+    const voxels = JSON.parse(row.voxels_json || '[]');
+    const glb = buildSculptureGlb(voxels, {
+      id: row.id,
+      title: row.title,
+      parcelId: row.parcel_id,
+      geohash: row.geohash
+    });
+    res.setHeader('Content-Type', 'model/gltf-binary');
+    res.setHeader('Content-Disposition', `inline; filename="graffiland-${row.id}.glb"`);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(glb));
+  });
+
+  app.get('/api/sculptures/:id/metadata.json', (req, res) => {
+    const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Sculpture not found' });
+    const caller = getAuthUserFromRequest(req);
+    if (row.hidden && !caller?.is_admin) {
+      return res.status(404).json({ error: 'Sculpture not available' });
+    }
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json(formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl: CONFIG.publicUrl }));
+  });
+
+  app.post('/api/sculptures/:id/transfer', requireAuth, async (req, res) => {
+    try {
+      const result = await transferSculptureNft(chatDb, {
+        sculptureId: req.params.id,
+        callerUser: req.user,
+        toAddress: req.body?.toAddress,
+        txHash: req.body?.txHash,
+        signature: req.body?.signature,
+        decryptEmbeddedPrivateKey: async (u) => decryptPrivateKey(u.encrypted_wallet_json),
+        chainCfg: getChainStatus()
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'Transfer failed',
+        ...(err?.extra || {})
+      });
+    }
+  });
+
+  app.post('/api/sculptures/:id/sync-ownership', async (req, res) => {
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const result = await syncSculptureOwnership(chatDb, {
+        sculptureId: req.params.id,
+        chainCfg: getChainStatus(),
+        callerUser: caller
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Ownership sync failed' });
+    }
   });
 
   // Server-Blind Location-Locked E2EE Sculpture Chat Routes

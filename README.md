@@ -55,13 +55,13 @@ Instead of trusting raw GPS coordinates alone (which can be mocked), GRAFFILAND 
 Every `(lat, lng)` coordinate encodes into an **8-character Geohash** (e.g., `GLAND-9Q8YYK8D`), partitioning Earth into ~12m × 12m spatial cells.
 - Publishing a sculpture binds the NFT to that `landParcelId` on-chain (`bytes32`), tracks the parcel claimant history in D1 (`land_parcels`), and renders the exact decoded bounding box rectangle on the desktop map.
 
-### 3. Google Sign-In, Embedded Wallets & Gas-Sponsored Robinhood Minting
+### 3. Google Sign-In, Portable Wallets & Marketplace-Ready Robinhood NFTs
 - **Google-Only Auth**: Users sign in via Google Identity Services (`GOOGLE_CLIENT_ID`, with an optional local dev fallback when unset).
-- **Zero-Friction Wallet Ownership**: On first sign-in, the backend generates an EVM wallet encrypted with **AES-256-GCM** (`WALLET_ENCRYPTION_KEY`) per Google account. Users can also export their private key or link a custom payout EVM address in the **`ℹ️` Account & Wallet** tab.
-- **ERC-721 + 5% Resale Fee ([GraffilandNFT.sol](contracts/GraffilandNFT.sol))**:
-  - Inherits OpenZeppelin `ERC721`, `ERC721URIStorage`, `ERC721Royalty` (**ERC-2981**), and `Ownable`.
-  - Sets `RESALE_FEE_BPS = 500` (**5.00%**) across default and per-token `royaltyInfo`.
-  - The platform's sponsored relayer calls `mintSculpture(recipient, metadataURI, landParcelId, proofOfLocationHash, latE6, lngE6)` on **Robinhood Chain Testnet (`46630`)** or **Mainnet (`4663`)** so minted NFTs belong directly to the artist immediately upon minting.
+- **Zero-Friction Custodial & Self-Custody Wallets**: On first sign-in, the backend generates an EVM wallet encrypted with **AES-256-GCM** (`WALLET_ENCRYPTION_KEY`) per Google account. Users can mint directly to a custom payout EVM wallet, export their private key, **import into MetaMask (`wallet_watchAsset`)**, or **transfer** any sculpture NFT (`POST /api/sculptures/:id/transfer`) to any external `0x...` wallet or marketplace.
+- **Standard ERC-721 + 3D `.glb` + 5% Resale Royalty ([GraffilandNFT.sol](contracts/GraffilandNFT.sol))**:
+  - Inherits OpenZeppelin `ERC721`, `ERC721Enumerable`, `ERC721URIStorage` (**IERC-4906** metadata updates), `ERC721Royalty` (**ERC-2981**), `Ownable`, and **EIP-7572** `contractURI()` collection metadata (`/api/contract/metadata.json`).
+  - Exports every voxel sculpture as a standard **glTF 2.0 binary (`.glb`)** model (`/api/sculptures/:id/model.glb` + pinned to IPFS as `animation_url` in ERC-721 metadata at `/api/sculptures/:id/metadata.json` & `/api/tokens/:tokenId.json`) so sculptures render interactively on OpenSea, Rarible, Blockscout, MetaMask, and 3D viewers.
+  - Enforces `RESALE_FEE_BPS = 500` (**5.00%**) across default and per-token `royaltyInfo`, plus live `ownerOf(tokenId)` **ownership sync** (`POST /api/sculptures/:id/sync-ownership`) so secondary marketplace sales reflect immediately.
 
 ### 4. Elevation Anchoring, Occlusion, Reflections & Real Shadows
 - **Elevation & Altitude Lock (`shared/sculpture.mjs`, `server/services/pol.mjs`)**: Captures browser GPS `altitude` + `altitudeAccuracy`, cross-checks terrain elevation to compute height above ground (`AGL`), and records vertical voxel bounds (`sculptureVerticalMinM..MaxM`) in IPFS metadata so sky-high or multi-story sculptures stay locked to their vertical level in AR Preview.

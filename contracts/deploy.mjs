@@ -41,6 +41,12 @@ async function main() {
   await contract.waitForDeployment();
   const address = await contract.getAddress();
 
+  if (process.env.ROBINHOOD_CONTRACT_URI) {
+    const uriTx = await contract.setContractURI(process.env.ROBINHOOD_CONTRACT_URI);
+    await uriTx.wait();
+    console.log(`Set EIP-7572 contractURI -> ${process.env.ROBINHOOD_CONTRACT_URI}`);
+  }
+
   console.log(`GraffilandNFT deployed at: ${address}`);
   console.log(`Explorer: ${net.explorer}/address/${address}`);
   console.log(`\nAdd to .env:\nROBINHOOD_CONTRACT_ADDRESS=${address}`);

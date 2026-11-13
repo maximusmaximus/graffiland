@@ -3,11 +3,19 @@ import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { POLICY, ROBINHOOD_NETWORKS } from '../../shared/constants.mjs';
+import { buildSculptureGlb } from '../../shared/glb.mjs';
 import {
+  buildContractMetadata,
   buildIpfsMetadata,
   computeVerticalBounds,
+  formatMarketplaceTokenMetadata,
   serializeSculptureRow
 } from '../../shared/sculpture.mjs';
+import {
+  listSculptureTransfers,
+  syncSculptureOwnership,
+  transferSculptureNft
+} from '../../shared/transferService.mjs';
 import {
   claimClueUnlockedGrant,
   enterChatBoard,
@@ -244,17 +252,12 @@ async function pinToPinataJson(obj, name, env, cfg) {
 
 async function pinSculptureBundle(params, requestOrigin, env, cfg) {
   const preview = decodePreviewDataUrl(params.previewDataUrl);
-  const modelJson = {
-    schema: 'graffiland.voxel.v1',
+  const glbBytes = buildSculptureGlb(params.voxels, {
     id: params.sculptureId,
     title: params.title,
-    voxelCount: params.voxels.length,
-    voxels: params.voxels,
-    virtualLandParcel: params.locationBundle.parcelId,
-    geohash: params.locationBundle.geohash,
-    createdAt: new Date().toISOString()
-  };
-  const modelBytes = new TextEncoder().encode(JSON.stringify(modelJson, null, 2));
+    parcelId: params.locationBundle.parcelId,
+    geohash: params.locationBundle.geohash
+  });
 
   let imagePin;
   let modelPin;
@@ -267,23 +270,24 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
       cfg
     );
     modelPin = await pinToPinataFile(
-      modelBytes,
-      `${params.sculptureId}-model.json`,
-      'application/json',
+      glbBytes,
+      `${params.sculptureId}-model.glb`,
+      'model/gltf-binary',
       env,
       cfg
     );
   } else {
     imagePin = await pinToKv(preview.bytes, preview.mime, requestOrigin, env);
-    modelPin = await pinToKv(modelBytes, 'application/json', requestOrigin, env);
+    modelPin = await pinToKv(glbBytes, 'model/gltf-binary', requestOrigin, env);
   }
 
+  const publicIpfsAvailable = Boolean(env.PINATA_JWT);
   const metadata = buildIpfsMetadata({
     sculptureId: params.sculptureId,
     title: params.title,
     description: params.description,
-    imageUri: imagePin.uri,
-    modelUri: modelPin.uri,
+    imageUri: publicIpfsAvailable ? imagePin.uri : imagePin.gatewayUrl,
+    modelUri: publicIpfsAvailable ? modelPin.uri : modelPin.gatewayUrl,
     publicUrl: cfg.publicUrl,
     voxels: params.voxels,
     locationBundle: params.locationBundle,
@@ -519,6 +523,39 @@ export default {
           },
           ipfsProvider: env.PINATA_JWT ? 'pinata' : 'cloudflare-cid'
         },
+        200,
+        request
+      );
+    }
+
+    // EIP-7572 / OpenSea Collection Metadata
+    if (pathname === '/api/contract/metadata.json' && request.method === 'GET') {
+      return jsonResponse(
+        buildContractMetadata({
+          publicUrl: cfg.publicUrl,
+          apiOrigin: url.origin,
+          royaltyBps: cfg.resaleFeeBps,
+          royaltyReceiver: cfg.royaltyReceiver,
+          contractAddress: cfg.contractAddress,
+          chain: cfg.network
+        }),
+        200,
+        request
+      );
+    }
+
+    // ERC-721 Token ID Metadata endpoint
+    const tokenMetaMatch = pathname.match(/^\/api\/tokens\/([^/]+)\.json$/);
+    if (tokenMetaMatch && request.method === 'GET') {
+      const tokenId = decodeURIComponent(tokenMetaMatch[1]);
+      const row = await env.DB.prepare(
+        'SELECT * FROM sculptures WHERE token_id = ? AND hidden = 0 ORDER BY created_at DESC LIMIT 1'
+      )
+        .bind(tokenId)
+        .first();
+      if (!row) return jsonResponse({ error: 'Token not found' }, 404, request);
+      return jsonResponse(
+        formatMarketplaceTokenMetadata(row, { apiOrigin: url.origin, publicUrl: cfg.publicUrl }),
         200,
         request
       );
@@ -973,6 +1010,97 @@ export default {
       }
     }
 
+    // Sculpture 3D GLB Export & ERC-721 Marketplace Metadata
+    const glbMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/model\.glb$/);
+    if (glbMatch && request.method === 'GET') {
+      const id = decodeURIComponent(glbMatch[1]);
+      const row = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?').bind(id).first();
+      if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
+      const caller = await getAuthUser(request, env, cfg);
+      if (row.hidden && !caller?.is_admin) {
+        return jsonResponse({ error: 'Sculpture not available' }, 404, request);
+      }
+      const voxels = JSON.parse(row.voxels_json || '[]');
+      const glb = buildSculptureGlb(voxels, {
+        id: row.id,
+        title: row.title,
+        parcelId: row.parcel_id,
+        geohash: row.geohash
+      });
+      return new Response(glb, {
+        status: 200,
+        headers: {
+          'Content-Type': 'model/gltf-binary',
+          'Content-Disposition': `inline; filename="graffiland-${row.id}.glb"`,
+          'Cache-Control': 'public, max-age=86400',
+          ...corsHeaders(request)
+        }
+      });
+    }
+
+    const metaMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/metadata\.json$/);
+    if (metaMatch && request.method === 'GET') {
+      const id = decodeURIComponent(metaMatch[1]);
+      const row = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?').bind(id).first();
+      if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
+      const caller = await getAuthUser(request, env, cfg);
+      if (row.hidden && !caller?.is_admin) {
+        return jsonResponse({ error: 'Sculpture not available' }, 404, request);
+      }
+      return jsonResponse(
+        formatMarketplaceTokenMetadata(row, { apiOrigin: url.origin, publicUrl: cfg.publicUrl }),
+        200,
+        request
+      );
+    }
+
+    const transferMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/transfer$/);
+    if (transferMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      const id = decodeURIComponent(transferMatch[1]);
+      const body = await request.json().catch(() => ({}));
+      try {
+        const result = await transferSculptureNft(chatDb, {
+          sculptureId: id,
+          callerUser: user,
+          toAddress: body?.toAddress,
+          txHash: body?.txHash,
+          signature: body?.signature,
+          decryptEmbeddedPrivateKey: async (u) =>
+            decryptWalletPrivateKey(u.encrypted_wallet_json, cfg.walletEncryptionKey),
+          chainCfg: cfg
+        });
+        return jsonResponse(result, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Transfer failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const syncMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/sync-ownership$/);
+    if (syncMatch && request.method === 'POST') {
+      const id = decodeURIComponent(syncMatch[1]);
+      const caller = await getAuthUser(request, env, cfg);
+      try {
+        const result = await syncSculptureOwnership(chatDb, {
+          sculptureId: id,
+          chainCfg: cfg,
+          callerUser: caller
+        });
+        return jsonResponse(result, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Ownership sync failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
     // Single sculpture GET
     const scMatch = pathname.match(/^\/api\/sculptures\/([^/]+)$/);
     if (scMatch && request.method === 'GET') {
@@ -992,11 +1120,13 @@ export default {
       if (row.hidden && !caller?.is_admin) {
         return jsonResponse({ error: 'Sculpture not available' }, 404, request);
       }
+      const transfers = await listSculptureTransfers(chatDb, id);
       return jsonResponse(
         {
           sculpture: serializeSculptureRow(row, {
             includeAdminFields: Boolean(caller?.is_admin),
-            includeVoxels: true
+            includeVoxels: true,
+            transfers
           })
         },
         200,

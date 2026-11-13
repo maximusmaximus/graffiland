@@ -209,7 +209,20 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
         </div>
       )}
 
-      {selected && <SculptureModal sculpture={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <SculptureModal
+          sculpture={selected}
+          user={user}
+          config={config}
+          onSculptureUpdated={(updated) => {
+            setSelected(updated);
+            setSculptures((prev) =>
+              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+            );
+          }}
+          onClose={() => setSelected(null)}
+        />
+      )}
 
       {infoOpen && (
         <InfoTermsModal

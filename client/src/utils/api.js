@@ -54,6 +54,17 @@ export const api = {
     return request(`/api/sculptures${suffix}`);
   },
   getSculpture: (id) => request(`/api/sculptures/${encodeURIComponent(id)}`),
+  transferSculpture: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  syncSculptureOwnership: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/sync-ownership`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  getContractMetadata: () => request('/api/contract/metadata.json'),
   listParcels: () => request('/api/parcels'),
   publishSculpture: (payload) =>
     request('/api/sculptures/publish', { method: 'POST', body: JSON.stringify(payload) }),

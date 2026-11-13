@@ -19,7 +19,10 @@ export function computeVerticalBounds(voxels = []) {
   };
 }
 
-export function serializeSculptureRow(row, { includeAdminFields = false, includeVoxels = true } = {}) {
+export function serializeSculptureRow(
+  row,
+  { includeAdminFields = false, includeVoxels = true, transfers } = {}
+) {
   const pol = JSON.parse(row.pol_json || '{}');
   const elevation = pol.elevation || {
     deviceAltitudeMeters: row.altitude ?? null,
@@ -40,6 +43,9 @@ export function serializeSculptureRow(row, { includeAdminFields = false, include
     creatorName: row.creator_name,
     ...(includeAdminFields ? { creatorEmail: row.creator_email } : {}),
     recipientAddress: row.recipient_address,
+    ownerAddress: row.recipient_address,
+    modelGlbUrl: `/api/sculptures/${row.id}/model.glb`,
+    metadataUrl: `/api/sculptures/${row.id}/metadata.json`,
     lat: row.lat,
     lng: row.lng,
     altitude: row.altitude,
@@ -63,8 +69,11 @@ export function serializeSculptureRow(row, { includeAdminFields = false, include
       modelCid: row.ipfs_model_cid,
       imageCid: row.ipfs_image_cid,
       metadataUri: `ipfs://${row.ipfs_metadata_cid}`,
+      modelUri: `ipfs://${row.ipfs_model_cid}`,
+      imageUri: `ipfs://${row.ipfs_image_cid}`,
       gatewayUrl: row.ipfs_gateway_url
     },
+    ...(Array.isArray(transfers) ? { transfers } : {}),
     chain: {
       chainId: row.chain_id,
       chainName: row.chain_name,
@@ -103,6 +112,7 @@ export function buildIpfsMetadata({
   description,
   imageUri,
   modelUri,
+  voxelJsonUri,
   publicUrl,
   voxels,
   locationBundle,
@@ -147,9 +157,18 @@ export function buildIpfsMetadata({
     description,
     image: imageUri,
     animation_url: modelUri,
+    animation_mime_type: 'model/gltf-binary',
+    ...(voxelJsonUri ? { voxel_model_uri: voxelJsonUri } : {}),
     external_url: `${publicUrl}/?sculpture=${sculptureId}`,
     seller_fee_basis_points: royaltyBps,
     fee_recipient: royaltyReceiver,
+    properties: {
+      category: '3d-model',
+      files: [
+        { uri: modelUri, type: 'model/gltf-binary' },
+        { uri: imageUri, type: 'image/png' }
+      ]
+    },
     royalty: {
       standard: 'ERC-2981',
       resale_fee_bps: royaltyBps,
@@ -195,6 +214,116 @@ export function buildIpfsMetadata({
       verified: locationBundle.verified,
       ...locationBundle.proofBundle
     },
+    attributes: attrs
+  };
+}
+
+export function buildContractMetadata({
+  publicUrl,
+  apiOrigin,
+  royaltyBps = 500,
+  royaltyReceiver,
+  contractAddress,
+  chain
+}) {
+  return {
+    name: 'GRAFFILAND 3D',
+    symbol: 'GLAND',
+    description:
+      'Location-anchored 3D voxel graffiti sculptures and Geohash Virtual Land deeds verified by Camera + GPS Proof of Location on Robinhood Chain.',
+    image: `${publicUrl}/icon-512.png`,
+    external_link: publicUrl,
+    seller_fee_basis_points: royaltyBps,
+    fee_recipient: royaltyReceiver,
+    royalties: {
+      standard: 'ERC-2981',
+      bps: royaltyBps,
+      percent: royaltyBps / 100,
+      recipient: royaltyReceiver
+    },
+    contract: {
+      address: contractAddress || null,
+      chainId: chain?.chainId || 46630,
+      chainName: chain?.name || 'Robinhood Chain Testnet',
+      standards: ['ERC-721', 'ERC-721Enumerable', 'ERC-721URIStorage', 'ERC-4906', 'ERC-2981', 'EIP-7572'],
+      tokenMetadataEndpoint: `${apiOrigin}/api/tokens/{id}.json`
+    }
+  };
+}
+
+export function formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl }) {
+  const s = serializeSculptureRow(row, { includeVoxels: false });
+  const glbUrl = `${apiOrigin}/api/sculptures/${s.id}/model.glb`;
+  const imageUrl = s.ipfs?.imageCid
+    ? `${apiOrigin}/ipfs/${s.ipfs.imageCid}`
+    : `${publicUrl}/icon-512.png`;
+  const pol = s.proofOfLocation || {};
+  const elev = s.elevation || {};
+  const geo = pol.geoInfo || {};
+  const attrs = [
+    { trait_type: 'Virtual Land Parcel', value: s.parcelId },
+    { trait_type: 'Geohash', value: s.geohash },
+    { trait_type: 'City', value: geo.city || s.placeName || 'Unknown' },
+    { trait_type: 'Country', value: s.country || geo.country || 'Unknown' },
+    { trait_type: 'Voxel Count', display_type: 'number', value: s.voxelCount },
+    { trait_type: 'Proof of Location Score', display_type: 'number', value: s.polScore },
+    { trait_type: 'Resale Fee', value: `${s.chain.royaltyPercent}%` }
+  ];
+  if (elev.anchorAltitudeMeters !== null && elev.anchorAltitudeMeters !== undefined) {
+    attrs.push({
+      trait_type: 'Anchor Elevation (m)',
+      display_type: 'number',
+      value: elev.anchorAltitudeMeters
+    });
+  }
+  return {
+    name: s.title,
+    description: s.description,
+    image: imageUrl,
+    animation_url: glbUrl,
+    animation_mime_type: 'model/gltf-binary',
+    external_url: `${publicUrl}/?sculpture=${s.id}`,
+    seller_fee_basis_points: s.chain.royaltyBps,
+    fee_recipient: s.chain.royaltyReceiver,
+    owner: s.recipientAddress,
+    token_id: s.chain.tokenId,
+    contract_address: s.chain.contractAddress,
+    chain_id: s.chain.chainId,
+    properties: {
+      category: '3d-model',
+      files: [
+        { uri: glbUrl, type: 'model/gltf-binary' },
+        { uri: imageUrl, type: 'image/png' }
+      ]
+    },
+    royalty: {
+      standard: 'ERC-2981',
+      resale_fee_bps: s.chain.royaltyBps,
+      resale_fee_percent: s.chain.royaltyPercent,
+      recipient: s.chain.royaltyReceiver
+    },
+    virtual_land: {
+      parcel_id: s.parcelId,
+      geohash: s.geohash,
+      bounds: s.parcelBounds,
+      current_owner: s.recipientAddress,
+      anchor_elevation_meters: elev.anchorAltitudeMeters ?? null
+    },
+    location: {
+      latitude: s.lat,
+      longitude: s.lng,
+      altitude_meters: s.altitude,
+      altitude_accuracy_meters: elev.altitudeAccuracyMeters ?? null,
+      altitude_source: elev.altitudeSource || 'unavailable',
+      terrain_elevation_meters: elev.terrainElevationMeters ?? null,
+      height_above_ground_meters: elev.heightAboveGroundMeters ?? null,
+      sculpture_vertical_min_m: elev.sculptureVerticalMinM ?? 0,
+      sculpture_vertical_max_m: elev.sculptureVerticalMaxM ?? 0,
+      place_name: s.placeName || geo.placeName || '',
+      country: s.country || geo.country || '',
+      timezone: s.timezone || ''
+    },
+    proof_of_location_hash: s.proofHash,
     attributes: attrs
   };
 }

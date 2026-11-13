@@ -139,6 +139,21 @@ export function getDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_chat_msgs_sculpture_time ON sculpture_chat_messages(sculpture_id, key_epoch, created_at);
+
+    CREATE TABLE IF NOT EXISTS sculpture_transfers (
+      id TEXT PRIMARY KEY,
+      sculpture_id TEXT NOT NULL,
+      from_address TEXT NOT NULL,
+      to_address TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      tx_hash TEXT NOT NULL,
+      simulated INTEGER NOT NULL DEFAULT 0,
+      method TEXT NOT NULL,
+      transferred_by_sub TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_transfers_sculpture_time ON sculpture_transfers(sculpture_id, created_at);
   `);
 
   dbInstance = db;

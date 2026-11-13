@@ -121,11 +121,13 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🪙" size={18} /> Gas-Sponsored Minting &amp; 5% Resale Fee
+                <XeroIcon emoji="🪙" size={18} /> Portable ERC-721 + 3D GLB + 5% Resale Fee
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 We cover minting gas fees on <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong>.
-                Minted ERC-721 NFTs go straight to your wallet and enforce a <strong>5% (500 bps) ERC-2981</strong> secondary resale royalty.
+                Minted sculptures export as standard <strong>ERC-721</strong> NFTs with genuine <strong>glTF 2.0 (.glb)</strong> 3D models,
+                <strong>EIP-7572</strong> collection metadata, and a <strong>5% (500 bps) ERC-2981</strong> secondary resale royalty —
+                ready to transfer to external wallets (MetaMask / hardware wallets) and use across OpenSea, Rarible, Blockscout, or 3D viewers.
               </p>
             </div>
 
@@ -179,7 +181,10 @@ export default function InfoTermsModal({
 
                 <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="field-label">
-                    <span>Optional Custom EVM Payout Address (receives new mints)</span>
+                    <span>Optional Custom EVM Payout Address (for new mints &amp; external wallets)</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Already minted an NFT into your embedded wallet? Open any sculpture you own in Desktop Map/Gallery to transfer it to an external wallet or export its 3D <code>.glb</code> asset.
                   </div>
                   <input
                     className="input mono"

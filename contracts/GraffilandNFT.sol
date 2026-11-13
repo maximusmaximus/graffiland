@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import {ERC721Royalty} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Royalty.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -9,14 +10,16 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 /**
  * @title GraffilandNFT
  * @notice Location-anchored 3D graffiti sculptures & Virtual Land deeds on Robinhood Chain.
- *         Enforces ERC-2981 secondary resale royalty fixed at 5% (500 bps).
+ *         Supports standard ERC-721 transfers, ERC-721 Enumerable, ERC-4906 metadata events,
+ *         EIP-7572 collection contractURI, and ERC-2981 secondary resale royalty fixed at 5% (500 bps).
  */
-contract GraffilandNFT is ERC721, ERC721URIStorage, ERC721Royalty, Ownable {
+contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Royalty, Ownable {
     uint96 public constant RESALE_FEE_BPS = 500; // 5.00%
 
     uint256 private _nextTokenId = 1;
     address public relayer;
     address public defaultRoyaltyReceiver;
+    string private _contractMetadataURI = "https://graffiland-api.maxinfeld-artshow.workers.dev/api/contract/metadata.json";
 
     struct VirtualLandRecord {
         bytes32 landParcelId;
@@ -41,6 +44,7 @@ contract GraffilandNFT is ERC721, ERC721URIStorage, ERC721Royalty, Ownable {
     );
     event RelayerUpdated(address indexed previousRelayer, address indexed newRelayer);
     event RoyaltyReceiverUpdated(address indexed previousReceiver, address indexed newReceiver);
+    event ContractURIUpdated();
 
     modifier onlyRelayerOrOwner() {
         require(msg.sender == relayer || msg.sender == owner(), "GraffilandNFT: unauthorized minter");
@@ -69,6 +73,15 @@ contract GraffilandNFT is ERC721, ERC721URIStorage, ERC721Royalty, Ownable {
         emit RoyaltyReceiverUpdated(defaultRoyaltyReceiver, newReceiver);
         defaultRoyaltyReceiver = newReceiver;
         _setDefaultRoyalty(newReceiver, RESALE_FEE_BPS);
+    }
+
+    function contractURI() external view returns (string memory) {
+        return _contractMetadataURI;
+    }
+
+    function setContractURI(string calldata newContractURI) external onlyOwner {
+        _contractMetadataURI = newContractURI;
+        emit ContractURIUpdated();
     }
 
     /**
@@ -117,8 +130,27 @@ contract GraffilandNFT is ERC721, ERC721URIStorage, ERC721Royalty, Ownable {
         return _parcelTokens[landParcelId];
     }
 
-    function totalSupply() external view returns (uint256) {
-        return _nextTokenId - 1;
+    function tokensOfOwner(address ownerAddr) external view returns (uint256[] memory tokenIds) {
+        uint256 count = balanceOf(ownerAddr);
+        tokenIds = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            tokenIds[i] = tokenOfOwnerByIndex(ownerAddr, i);
+        }
+    }
+
+    function _update(address to, uint256 tokenId, address auth)
+        internal
+        override(ERC721, ERC721Enumerable)
+        returns (address)
+    {
+        return super._update(to, tokenId, auth);
+    }
+
+    function _increaseBalance(address account, uint128 value)
+        internal
+        override(ERC721, ERC721Enumerable)
+    {
+        super._increaseBalance(account, value);
     }
 
     function tokenURI(uint256 tokenId)
@@ -133,7 +165,7 @@ contract GraffilandNFT is ERC721, ERC721URIStorage, ERC721Royalty, Ownable {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(ERC721, ERC721URIStorage, ERC721Royalty)
+        override(ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Royalty)
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
