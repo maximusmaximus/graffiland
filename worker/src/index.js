@@ -3,6 +3,12 @@ import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { POLICY, ROBINHOOD_NETWORKS } from '../../shared/constants.mjs';
+import {
+  buildAgentSpec,
+  createAgentSession,
+  getAgentSession,
+  submitAgentSculpture
+} from '../../shared/agentService.mjs';
 import { buildSculptureGlb } from '../../shared/glb.mjs';
 import {
   buildContractMetadata,
@@ -559,6 +565,74 @@ export default {
         200,
         request
       );
+    }
+
+    const d1Adapter = {
+      get: (sql, params = []) => env.DB.prepare(sql).bind(...params).first(),
+      all: async (sql, params = []) => {
+        const res = await env.DB.prepare(sql).bind(...params).all();
+        return res.results || [];
+      },
+      run: (sql, params = []) => env.DB.prepare(sql).bind(...params).run()
+    };
+
+    // Agent Sculpture Handoff Spec & Location-Anchored Session Routes
+    if (pathname === '/api/agent/spec' && request.method === 'GET') {
+      return jsonResponse(buildAgentSpec(url.origin), 200, request);
+    }
+
+    if (pathname === '/api/agent/sessions' && request.method === 'POST') {
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const body = await request.json().catch(() => ({}));
+        const out = await createAgentSession(d1Adapter, {
+          callerUser: caller,
+          location: body?.location,
+          apiOrigin: url.origin
+        });
+        return jsonResponse(out, 201, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to create agent session' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const agentSubmitMatch = pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/sculpture$/);
+    if (agentSubmitMatch && request.method === 'POST') {
+      try {
+        const code = decodeURIComponent(agentSubmitMatch[1]);
+        const body = await request.json().catch(() => ({}));
+        const out = await submitAgentSculpture(d1Adapter, {
+          code,
+          body,
+          apiOrigin: url.origin
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to stage agent sculpture', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const agentGetMatch = pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/);
+    if (agentGetMatch && request.method === 'GET') {
+      try {
+        const code = decodeURIComponent(agentGetMatch[1]);
+        const out = await getAgentSession(d1Adapter, { code, apiOrigin: url.origin });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to fetch agent session' },
+          err?.statusCode || 400,
+          request
+        );
+      }
     }
 
     // Google Login

@@ -5,6 +5,16 @@ import {
   haversineMeters
 } from '../../../shared/chatPolicy.mjs';
 import { api } from '../utils/api.js';
+import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
+
+const KEY_TOOLS = [
+  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
+  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Aim face & tap to stack' },
+  { id: 'erase', emoji: '🗑️', label: 'Erase', hint: 'Aim block & tap to remove' },
+  { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
+  { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
+  { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
+];
 import {
   computeRoomPossessionProof,
   generateRoomKeyB64,
@@ -87,6 +97,23 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [location, setLocation] = useState(null);
   const [polStats, setPolStats] = useState({ frames: 0, gyro: 0, flow: 0 });
   const [painting, setPainting] = useState(false);
+  const [activeKeyTool, setActiveKeyTool] = useState('brush');
+  const [swipeDragPx, setSwipeDragPx] = useState(0);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentCopied, setAgentCopied] = useState(false);
+  const [agentError, setAgentError] = useState('');
+  const [agentSession, setAgentSession] = useState(null);
+  const keyGestureRef = useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    swiped: false,
+    holdStarted: false
+  });
+  const paintHoldTimerRef = useRef(null);
+  const lastAppliedAgentTsRef = useRef('');
 
   // Orientation & fallback pan
   const yawOffsetRef = useRef(0);
@@ -217,8 +244,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+            width: { ideal: 3840 },
+            height: { ideal: 2160 }
           },
           audio: false
         });
@@ -480,15 +507,59 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
   const applyVoxelAction = useCallback((target) => {
     if (!target) return;
+    if (target.action === 'add') {
+      const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
+      if (
+        Math.abs(target.x) > halfSpan ||
+        Math.abs(target.y) > halfSpan ||
+        Math.abs(target.z) > halfSpan
+      ) {
+        setSensorBanner(
+          `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
+        );
+        return;
+      }
+    }
     setVoxels((prev) => {
       if (target.action === 'erase' && target.voxel) {
         const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
         return prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey);
       }
       if (target.action === 'add') {
-        if (prev.length >= (config?.policy?.maxVoxels || 512)) return prev;
+        const maxVoxels = config?.policy?.maxVoxels || 4096;
+        if (prev.length >= maxVoxels) {
+          setSensorBanner(`Sculpture voxel limit (${maxVoxels}) reached`);
+          return prev;
+        }
         const k = voxelKey(target.x, target.y, target.z);
         if (prev.some((v) => voxelKey(v.x, v.y, v.z) === k)) return prev;
+
+        if (prev.length > 0) {
+          let minX = target.x;
+          let maxX = target.x;
+          let minY = target.y;
+          let maxY = target.y;
+          let minZ = target.z;
+          let maxZ = target.z;
+          for (const v of prev) {
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y < minY) minY = v.y;
+            if (v.y > maxY) maxY = v.y;
+            if (v.z < minZ) minZ = v.z;
+            if (v.z > maxZ) maxZ = v.z;
+          }
+          const spanX = Math.round((maxX - minX) / VOXEL_STEP) + 1;
+          const spanY = Math.round((maxY - minY) / VOXEL_STEP) + 1;
+          const spanZ = Math.round((maxZ - minZ) / VOXEL_STEP) + 1;
+          if (spanX > AREA_LIMIT_BLOCKS || spanY > AREA_LIMIT_BLOCKS || spanZ > AREA_LIMIT_BLOCKS) {
+            setSensorBanner(
+              `Area span exceeds ${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks`
+            );
+            return prev;
+          }
+        }
+
         return [
           ...prev,
           {
@@ -503,7 +574,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       }
       return prev;
     });
-  }, [config?.policy?.maxVoxels]);
+  }, [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels]);
 
   // Initialize Three.js transparent AR WebGL scene
   useEffect(() => {
@@ -519,7 +590,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       antialias: true,
       preserveDrawingBuffer: true
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = true;
@@ -802,6 +873,283 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     } else {
       fallbackEulerRef.current = { yaw: 0, pitch: 0 };
     }
+  }
+
+  const prevSyncStateRef = useRef({ mode: 'draw', tool: 'brush' });
+  useEffect(() => {
+    const prev = prevSyncStateRef.current;
+    if (mode !== prev.mode) {
+      if (mode === 'preview' || mode === 'publish') {
+        setActiveKeyTool(mode);
+      } else if (mode === 'draw') {
+        setActiveKeyTool(tool);
+      }
+    } else if (tool !== prev.tool && mode === 'draw') {
+      setActiveKeyTool(tool);
+    }
+    prevSyncStateRef.current = { mode, tool };
+  }, [mode, tool]);
+
+  async function copyToClipboard(text) {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fallback below
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  const applyAgentSessionDraft = useCallback(
+    (sess) => {
+      if (!sess || !Array.isArray(sess.draftVoxels) || sess.draftVoxels.length === 0) return;
+      if (sess.updatedAt && lastAppliedAgentTsRef.current === sess.updatedAt) return;
+      lastAppliedAgentTsRef.current = sess.updatedAt || String(Date.now());
+      setVoxels(sess.draftVoxels);
+      if (sess.draftTitle) {
+        setTitle((prev) => (prev.trim() ? prev : sess.draftTitle));
+      }
+      if (sess.draftDescription) {
+        setDescription((prev) => (prev.trim() ? prev : sess.draftDescription));
+      }
+      setSensorBanner(
+        `Agent staged ${sess.draftVoxels.length} voxels (${sess.agentName || 'AI Agent'}) — inspect in AR & publish on your phone.`
+      );
+    },
+    []
+  );
+
+  async function openAgentHandoff() {
+    setAgentOpen(true);
+    setAgentError('');
+    setAgentCopied(false);
+
+    let activeLoc = locationRef.current || location;
+    if (!activeLoc && navigator.geolocation?.getCurrentPosition) {
+      activeLoc = await new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) =>
+            resolve({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              altitude: pos.coords.altitude,
+              accuracy: pos.coords.accuracy,
+              heading: pos.coords.heading
+            }),
+          () => resolve(null),
+          { enableHighAccuracy: true, timeout: 4500 }
+        );
+      });
+    }
+
+    if (!activeLoc) {
+      setAgentError('Enable GPS location permission first so the agent code locks onto your physical spot.');
+      return;
+    }
+
+    setAgentBusy(true);
+    try {
+      const created = await api.createAgentSession({ location: activeLoc });
+      setAgentSession(created);
+      lastAppliedAgentTsRef.current = '';
+      const ok = await copyToClipboard(created.clipboardText);
+      setAgentCopied(ok);
+      setSensorBanner(
+        ok
+          ? `Copied Agent Code ${created.code} — send it to your agent to stage blocks here.`
+          : `Agent Code ${created.code} ready — tap Copy inside the sheet.`
+      );
+    } catch (err) {
+      setAgentError(err.message);
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function refreshAgentDraft() {
+    if (!agentSession?.code) return;
+    setAgentError('');
+    try {
+      const res = await api.getAgentSession(agentSession.code);
+      if (res?.session) {
+        setAgentSession((prev) => ({
+          ...(prev || {}),
+          ...res.session,
+          spec: res.spec || prev?.spec
+        }));
+        if (res.session.status === 'ready' && res.session.draftVoxels?.length) {
+          applyAgentSessionDraft(res.session);
+        }
+      }
+    } catch (err) {
+      setAgentError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    const code = agentSession?.code;
+    if (!code) return undefined;
+    const poll = async () => {
+      try {
+        const res = await api.getAgentSession(code);
+        if (res?.session) {
+          setAgentSession((prev) => ({
+            ...(prev || {}),
+            ...res.session,
+            spec: res.spec || prev?.spec
+          }));
+          if (res.session.status === 'ready' && res.session.draftVoxels?.length) {
+            applyAgentSessionDraft(res.session);
+          }
+        }
+      } catch {
+        // retry on next tick
+      }
+    };
+    const id = setInterval(poll, 2500);
+    return () => clearInterval(id);
+  }, [agentSession?.code, applyAgentSessionDraft]);
+
+  function selectKeyTool(toolId) {
+    setActiveKeyTool(toolId);
+    if (toolId === 'brush' || toolId === 'stack' || toolId === 'erase') {
+      setMode('draw');
+      setTool(toolId);
+    } else if (toolId === 'preview') {
+      setMode('preview');
+    } else if (toolId === 'agent' || toolId === 'publish') {
+      setMode('draw');
+    }
+  }
+
+  function stepKeyTool(delta) {
+    const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyTool);
+    const current = idx >= 0 ? idx : 0;
+    const nextIdx = (current + delta + KEY_TOOLS.length) % KEY_TOOLS.length;
+    selectKeyTool(KEY_TOOLS[nextIdx].id);
+  }
+
+  function stopBrushPainting() {
+    if (paintHoldTimerRef.current) {
+      clearTimeout(paintHoldTimerRef.current);
+      paintHoldTimerRef.current = null;
+    }
+    paintingRef.current = false;
+    setPainting(false);
+    lastPaintPosRef.current = null;
+  }
+
+  function triggerActiveKeyTool() {
+    enterFullscreen();
+    if (activeKeyTool === 'brush' || activeKeyTool === 'stack' || activeKeyTool === 'erase') {
+      setMode('draw');
+      setTool(activeKeyTool);
+      toolRef.current = activeKeyTool;
+      applyVoxelAction(computeTargetVoxel());
+    } else if (activeKeyTool === 'preview') {
+      setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
+    } else if (activeKeyTool === 'agent') {
+      openAgentHandoff();
+    } else if (activeKeyTool === 'publish') {
+      openPublishSheet();
+    }
+  }
+
+  function handleKeyPointerDown(e) {
+    if (e.button && e.button !== 0) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore if synthetic pointer
+    }
+    stopBrushPainting();
+    keyGestureRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      swiped: false,
+      holdStarted: false
+    };
+    setSwipeDragPx(0);
+
+    if (activeKeyTool === 'brush') {
+      paintHoldTimerRef.current = setTimeout(() => {
+        if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
+        enterFullscreen();
+        keyGestureRef.current.holdStarted = true;
+        setMode('draw');
+        setTool('brush');
+        toolRef.current = 'brush';
+        paintingRef.current = true;
+        setPainting(true);
+        const t = computeTargetVoxel();
+        if (t) {
+          lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
+          applyVoxelAction(t);
+        }
+      }, 120);
+    }
+  }
+
+  function handleKeyPointerMove(e) {
+    const g = keyGestureRef.current;
+    if (!g.active || g.pointerId !== e.pointerId) return;
+    const dx = e.clientX - g.startX;
+    if (!g.swiped && Math.abs(dx) >= 26) {
+      g.swiped = true;
+      stopBrushPainting();
+      stepKeyTool(dx > 0 ? 1 : -1);
+      setSwipeDragPx(0);
+      return;
+    }
+    if (!g.swiped && Math.abs(dx) > 4) {
+      setSwipeDragPx(Math.max(-34, Math.min(34, dx)));
+    }
+  }
+
+  function handleKeyPointerUp(e) {
+    const g = keyGestureRef.current;
+    if (!g.active) return;
+    const wasSwiped = g.swiped;
+    const wasHold = g.holdStarted;
+    keyGestureRef.current.active = false;
+    keyGestureRef.current.swiped = false;
+    keyGestureRef.current.holdStarted = false;
+    setSwipeDragPx(0);
+    stopBrushPainting();
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    if (!wasSwiped && !wasHold) {
+      triggerActiveKeyTool();
+    }
+  }
+
+  function handleKeyPointerCancel() {
+    keyGestureRef.current.active = false;
+    keyGestureRef.current.swiped = false;
+    keyGestureRef.current.holdStarted = false;
+    setSwipeDragPx(0);
+    stopBrushPainting();
   }
 
   function handlePaintStart() {
@@ -1168,22 +1516,60 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           </div>
         )}
 
-        {/* Paint / Stack Trigger Button */}
-        {mode === 'draw' && (
-          <button
-            className={`paint-action-pill ${painting ? 'painting' : ''}`}
-            onPointerDown={handlePaintStart}
-            onPointerUp={handlePaintEnd}
-            onPointerCancel={handlePaintEnd}
-            onPointerLeave={handlePaintEnd}
-            aria-label="Draw or stack voxel"
-          >
-            <XeroIcon
-              emoji={tool === 'stack' ? '🧱' : tool === 'erase' ? '🗑️' : '🖌️'}
-              size={28}
-            />
-          </button>
-        )}
+        {/* Centered Swipeable Key Button */}
+        {(() => {
+          const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyTool);
+          const safeIdx = idx >= 0 ? idx : 0;
+          const activeItem = KEY_TOOLS[safeIdx];
+          const prevItem = KEY_TOOLS[(safeIdx - 1 + KEY_TOOLS.length) % KEY_TOOLS.length];
+          const nextItem = KEY_TOOLS[(safeIdx + 1) % KEY_TOOLS.length];
+          return (
+            <div className="key-carousel hud-interactive">
+              <div className="key-tool-caption">
+                <XeroIcon emoji="🔑" size={12} />
+                <span>{activeItem.label}</span>
+                <span className="key-tool-hint">· Swipe ◀️ ▶️</span>
+              </div>
+              <div className="key-carousel-row">
+                <button
+                  type="button"
+                  className="key-step-btn"
+                  onClick={() => stepKeyTool(-1)}
+                  aria-label="Previous tool"
+                  title={`Previous: ${prevItem.label}`}
+                >
+                  <XeroIcon emoji={prevItem.emoji} size={16} />
+                  <XeroIcon emoji="◀️" size={12} />
+                </button>
+
+                <button
+                  type="button"
+                  className={`key-action-btn ${painting ? 'painting' : ''} tool-${activeItem.id}`}
+                  style={{ transform: `translateX(${swipeDragPx}px)` }}
+                  onPointerDown={handleKeyPointerDown}
+                  onPointerMove={handleKeyPointerMove}
+                  onPointerUp={handleKeyPointerUp}
+                  onPointerCancel={handleKeyPointerCancel}
+                  aria-label={`${activeItem.label} key button (swipe left or right to switch tool)`}
+                  title={activeItem.hint}
+                >
+                  <XeroIcon emoji={activeItem.emoji} size={30} />
+                </button>
+
+                <button
+                  type="button"
+                  className="key-step-btn"
+                  onClick={() => stepKeyTool(1)}
+                  aria-label="Next tool"
+                  title={`Next: ${nextItem.label}`}
+                >
+                  <XeroIcon emoji="▶️" size={12} />
+                  <XeroIcon emoji={nextItem.emoji} size={16} />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Floating Toggle for Ultra-Minimal vs Active Dock */}
         <button
@@ -1299,6 +1685,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="🔗" size={19} />
             </button>
             <button
+              className={`dock-btn ${agentOpen || agentSession?.code ? 'active' : ''}`}
+              onClick={openAgentHandoff}
+              title="Copy Agent Code"
+              aria-label="Copy Agent Code"
+            >
+              <XeroIcon emoji="📋" size={19} />
+            </button>
+            <button
               className={`dock-btn ${mode === 'publish' ? 'active' : ''}`}
               onClick={openPublishSheet}
               title="Publish & Mint"
@@ -1371,6 +1765,119 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             )}
             {pairError && (
               <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 12 }}>{pairError}</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Agent Location Handoff Modal */}
+      {agentOpen && (
+        <div className="modal-backdrop" onClick={() => setAgentOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">
+                <XeroIcon emoji="🤖" size={22} /> Agent Sculpture Code
+              </h3>
+              <button className="btn" onClick={() => setAgentOpen(false)}>
+                <XeroIcon emoji="❌" size={15} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
+              Give this location-locked code to your AI agent so it can read our 4x voxel tools,
+              12 colors, and 3 block types to build a 3D sculpture here. You must inspect and tap{' '}
+              <strong>Publish</strong> on your phone to mint.
+            </p>
+
+            {agentBusy && (
+              <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
+                Generating location code...
+              </div>
+            )}
+
+            {agentError && (
+              <div style={{ color: '#ffb3c1', fontSize: 12, marginBottom: 8 }}>
+                <XeroIcon emoji="⚠️" size={14} /> {agentError}
+              </div>
+            )}
+
+            {agentSession?.code && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span className="mono" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.06em' }}>
+                      {agentSession.code}
+                    </span>
+                    <span className={`badge ${agentSession.status === 'ready' ? 'teal' : 'gold'}`}>
+                      {agentSession.status === 'ready'
+                        ? `Loaded ${agentSession.voxelCount || agentSession.draftVoxels?.length || 0} voxels`
+                        : 'Waiting for agent build...'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Parcel <span className="mono">{agentSession.parcelId}</span> · 4x (0.05m/block) · 10000×10000×10000 limit
+                  </div>
+                  {agentSession.endpoints?.spec && (
+                    <div style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>
+                      Spec: <span className="mono">{agentSession.endpoints.spec}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={async () => {
+                      const ok = await copyToClipboard(agentSession.clipboardText);
+                      setAgentCopied(ok);
+                    }}
+                  >
+                    <XeroIcon emoji="📋" size={15} />{' '}
+                    {agentCopied ? 'Copied Prompt & Code!' : 'Copy Agent Prompt & Code'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={async () => {
+                      const ok = await copyToClipboard(agentSession.code);
+                      setAgentCopied(ok);
+                    }}
+                  >
+                    Copy Code Only
+                  </button>
+                  <button type="button" className="btn" onClick={refreshAgentDraft}>
+                    <XeroIcon emoji="🔄" size={15} /> Check Draft
+                  </button>
+                </div>
+
+                {agentSession.status === 'ready' && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        applyAgentSessionDraft(agentSession);
+                        setAgentOpen(false);
+                        setMode('draw');
+                      }}
+                    >
+                      <XeroIcon emoji="👁️" size={15} /> Inspect in AR
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-pink"
+                      onClick={() => {
+                        applyAgentSessionDraft(agentSession);
+                        setAgentOpen(false);
+                        openPublishSheet();
+                      }}
+                    >
+                      <XeroIcon emoji="🚀" size={15} /> Publish on Phone
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>

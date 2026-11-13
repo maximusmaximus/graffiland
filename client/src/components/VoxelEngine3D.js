@@ -1,28 +1,14 @@
 import * as THREE from 'three';
+import { GRAFFITI_PALETTE, VOXEL_STEP } from '../../../shared/constants.mjs';
 
-export const VOXEL_STEP = 0.2;
-
-export const GRAFFITI_PALETTE = [
-  '#00f5d4',
-  '#ff3e7f',
-  '#ffd166',
-  '#7b2cbf',
-  '#00bbf9',
-  '#ff6b35',
-  '#80ff72',
-  '#ffffff',
-  '#ff0054',
-  '#3a86ff',
-  '#f15bb5',
-  '#1b263b'
-];
+export { GRAFFITI_PALETTE, VOXEL_STEP };
 
 export function snapCoord(val, step = VOXEL_STEP) {
-  return Math.round(val / step) * step;
+  return Math.round(Math.round(val / step) * step * 1000) / 1000;
 }
 
 export function voxelKey(x, y, z) {
-  return `${Math.round(x * 100)}:${Math.round(y * 100)}:${Math.round(z * 100)}`;
+  return `${Math.round(x * 1000)}:${Math.round(y * 1000)}:${Math.round(z * 1000)}`;
 }
 
 /**
@@ -113,8 +99,8 @@ export function createLiveEnvUpdater(renderer) {
   pmrem.compileEquirectangularShader();
 
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 128;
+  canvas.width = 512;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const tex = new THREE.CanvasTexture(canvas);
   tex.mapping = THREE.EquirectangularReflectionMapping;
@@ -125,20 +111,20 @@ export function createLiveEnvUpdater(renderer) {
   function update(videoEl) {
     if (!videoEl || videoEl.readyState < 2 || !ctx) return null;
 
-    // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness)
-    ctx.drawImage(videoEl, 0, 0, 128, 64);
+    // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness, 4x resolution)
+    ctx.drawImage(videoEl, 0, 0, 256, 128);
     ctx.save();
-    ctx.translate(256, 0);
+    ctx.translate(512, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(videoEl, 0, 0, 128, 64);
+    ctx.drawImage(videoEl, 0, 0, 256, 128);
     ctx.restore();
 
     // Lower hemisphere: softly darkened flipped ground bounce
     ctx.save();
-    ctx.translate(0, 128);
+    ctx.translate(0, 256);
     ctx.scale(1, -1);
-    ctx.filter = 'blur(4px) brightness(0.65)';
-    ctx.drawImage(canvas, 0, 0, 256, 64, 0, 0, 256, 64);
+    ctx.filter = 'blur(6px) brightness(0.65)';
+    ctx.drawImage(canvas, 0, 0, 512, 128, 0, 0, 512, 128);
     ctx.restore();
     ctx.filter = 'none';
 
@@ -148,8 +134,8 @@ export function createLiveEnvUpdater(renderer) {
     currentTarget = nextTarget;
 
     // Sample sky (top band) and ground (bottom band) average colors
-    const skyPx = ctx.getImageData(64, 8, 32, 8).data;
-    const groundPx = ctx.getImageData(64, 108, 32, 8).data;
+    const skyPx = ctx.getImageData(128, 16, 64, 16).data;
+    const groundPx = ctx.getImageData(128, 216, 64, 16).data;
     const avgHex = (px) => {
       let r = 0;
       let g = 0;

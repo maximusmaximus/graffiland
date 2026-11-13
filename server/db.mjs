@@ -154,6 +154,25 @@ export function getDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_transfers_sculpture_time ON sculpture_transfers(sculpture_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      code TEXT PRIMARY KEY,
+      creator_sub TEXT DEFAULT '',
+      location_json TEXT NOT NULL,
+      parcel_id TEXT NOT NULL,
+      geohash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'waiting',
+      agent_name TEXT DEFAULT '',
+      draft_title TEXT DEFAULT '',
+      draft_description TEXT DEFAULT '',
+      draft_voxels_json TEXT DEFAULT '[]',
+      voxel_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_expires ON agent_sessions(expires_at);
   `);
 
   dbInstance = db;

@@ -14,9 +14,10 @@ GRAFFILAND splits into two purpose-built interfaces depending on the device you 
 ### 1. Mobile Full-Screen AR Sculpting Studio
 Sculpting and publishing **require a mobile device** with a camera, gyroscope, and GPS:
 - **Ultra-Minimal `"i"` Canvas**: Opens directly into a full-screen (`100vw × 100dvh`) rear-camera view with a transparent Three.js WebGL layer and only an **`ℹ️` Info & Terms** button plus a compact tool toggle (`🎨`) so the artwork owns the screen.
-- **Phone-as-a-3D-Brush (`🖌️`)**: Hold the paint trigger and sweep your phone in mid-air. Your gyroscope steers a `0.2m`-grid 3D cursor in front of you, extruding continuous voxel strokes in **matte**, **neon**, or **glass** finishes (up to `512` voxels per sculpture).
+- **Phone-as-a-3D-Brush (`🖌️`)**: Use the centered **Key Button** at the bottom of your fullscreen camera HUD and **swipe left/right** across it to switch tools (`Brush → Stack → Erase → Preview → Agent Code → Publish`). Hold/tap the key button to spray **4x resolution (`0.05m` grid)** voxel strokes in **matte**, **neon**, or **glass** finishes (up to `4,096` blocks within a **`10,000 × 10,000 × 10,000` block** area per sculpture).
 - **Face-Snapping Voxel Stacker (`🧱`)**: Raycasts directly from your reticle onto existing voxels in your sculpture, projecting a wireframe ghost block onto the targeted face so you can stack towers, arches, and pixel sculptures block-by-block.
 - **Location AR Preview Mode (`👁️`)**: Queries nearby published (non-hidden) sculptures within `300m` of your GPS fix and projects every phone-made 3D sculpture at its real east/north spatial offset around you so you can walk around street graffiti left at that spot.
+- **Copy Agent Sculpture Code (`📋`, Final Tool Before Publish)**: Generate and copy a location-anchored code (`GRF-...`) from your live GPS spot. Any external AI agent (e.g. Grok Bot) can inspect all available 4x grid tools, 12 colors, and block finishes via `/api/agent/spec`, build a 3D voxel draft via `POST /api/agent/sessions/:code/sculpture`, and stream it straight to your phone — while requiring **you** to review in AR and tap Publish on your own mobile device.
 - **Gas-Free Publish (`🚀`)**: Sign in with **Google**, add a limited-terms title (`3–48` chars) and description (`10–240` chars, max `45` words), accept the Virtual Land Terms, and publish directly to IPFS + Robinhood Chain. You receive the minted ERC-721 NFT straight in your wallet at zero gas cost.
 
 ### 2. Desktop Explorer, Map, 3D Pair Studio & Admin
@@ -74,7 +75,11 @@ Every `(lat, lng)` coordinate encodes into an **8-character Geohash** (e.g., `GL
 - **Hybrid Key Distribution**: Creators and admitted visitors automatically wrap `K_room` to incoming physical viewers via ephemeral **`ECDH P-256` + `HKDF-SHA256`**, plus an optional creator **On-Site Visual Clue (`PBKDF2-SHA256`, 210k iterations)** for 24/7 solo unlocking without exposing clue answers to the server.
 - Read the full cryptographic specification in [`docs/ENCRYPTED_LOCATION_CHAT.md`](docs/ENCRYPTED_LOCATION_CHAT.md).
 
-### 6. Xero Emoji UI System
+### 6. Agent Sculpture Staging & 4x Voxel Resolution (`📋`)
+- **4x High-Density Sculptures (`shared/constants.mjs`)**: Voxel grid resolution is `0.05m` (`4x` sharper than `0.2m`, supporting up to `4,096` blocks) inside a strict `10,000 × 10,000 × 10,000` block area cap (`±250m`), backed by 4x live camera capture, reflection cubemaps (`512×256`), foreground occlusion (`160×120`), and DPR-4 rendering.
+- **Location-Anchored Agent Handoff (`shared/agentService.mjs`)**: Selecting the final **Copy Agent Code (`📋`)** tool before Publish creates an expiring `GRF-...` session anchored to your GPS coordinates (`POST /api/agent/sessions`). Agents read full tool/color/block specs at `GET /api/agent/spec` and `GET /api/agent/sessions/:code`, stage structured geometry via `POST /api/agent/sessions/:code/sculpture`, and push it live to your phone for final human AR inspection & mobile-only minting (`agentCanStageOnly: true`).
+
+### 7. Xero Emoji UI System
 Every icon across mobile HUD triggers, map pins, desktop tabs, and modals is rendered using [`xeroemoji`](https://github.com/maximusmaximus/xeroemoji) via [`XeroIcon.jsx`](client/src/components/XeroIcon.jsx) (with automatic PNG and glyph fallback).
 
 ---

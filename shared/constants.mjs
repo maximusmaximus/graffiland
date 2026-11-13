@@ -1,3 +1,29 @@
+export const VOXEL_RESOLUTION_SCALE = 4;
+export const VOXEL_STEP = 0.05; // 4x resolution vs original 0.2m block size
+export const AREA_LIMIT_BLOCKS = 10000; // 10000 x 10000 x 10000 blocks max area per axis
+export const AREA_HALF_SPAN_METERS = (AREA_LIMIT_BLOCKS / 2) * VOXEL_STEP; // 250m from origin -> 500m total span
+
+export const GRAFFITI_PALETTE = [
+  '#00f5d4',
+  '#ff3e7f',
+  '#ffd166',
+  '#7b2cbf',
+  '#00bbf9',
+  '#ff6b35',
+  '#80ff72',
+  '#ffffff',
+  '#ff0054',
+  '#3a86ff',
+  '#f15bb5',
+  '#1b263b'
+];
+
+export const VOXEL_MATERIALS = [
+  { id: 'matte', label: 'Matte Pigment', roughness: 0.35, metalness: 0.24 },
+  { id: 'neon', label: 'Neon Glow', roughness: 0.16, metalness: 0.35, emissiveIntensity: 0.85 },
+  { id: 'glass', label: 'Reflective Glass', roughness: 0.06, metalness: 0.1, opacity: 0.72 }
+];
+
 export const ROBINHOOD_NETWORKS = {
   testnet: {
     key: 'testnet',
@@ -24,8 +50,12 @@ export const POLICY = {
   descriptionMin: 10,
   descriptionMax: 240,
   descriptionMaxWords: 45,
-  maxVoxels: 512,
+  maxVoxels: 4096,
   minVoxels: 1,
+  resolutionScale: VOXEL_RESOLUTION_SCALE,
+  voxelStepMeters: VOXEL_STEP,
+  areaHalfSpanMeters: AREA_HALF_SPAN_METERS,
+  areaLimitBlocks: [AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS],
   resaleFeePercent: 5,
   resaleFeeBps: 500,
   prohibitedTerms: [

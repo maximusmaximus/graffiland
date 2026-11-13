@@ -26,6 +26,12 @@ import {
   haversineMeters,
   verifyAndEnrichLocation
 } from './services/pol.mjs';
+import {
+  buildAgentSpec,
+  createAgentSession,
+  getAgentSession,
+  submitAgentSculpture
+} from '../shared/agentService.mjs';
 import { buildSculptureGlb } from '../shared/glb.mjs';
 import {
   buildContractMetadata,
@@ -102,6 +108,60 @@ export function createAppServer() {
     if (!row) return res.status(404).json({ error: 'Token not found' });
     const apiOrigin = `${req.protocol}://${req.get('host')}`;
     res.json(formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl: CONFIG.publicUrl }));
+  });
+
+  const sharedDb = {
+    get: async (sql, params = []) => db.prepare(sql).get(...params),
+    all: async (sql, params = []) => db.prepare(sql).all(...params),
+    run: async (sql, params = []) => db.prepare(sql).run(...params)
+  };
+
+  // Agent Sculpture Handoff Spec & Location-Anchored Session Routes
+  app.get('/api/agent/spec', (req, res) => {
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json(buildAgentSpec(apiOrigin));
+  });
+
+  app.post('/api/agent/sessions', async (req, res) => {
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const apiOrigin = `${req.protocol}://${req.get('host')}`;
+      const out = await createAgentSession(sharedDb, {
+        callerUser: caller,
+        location: req.body?.location,
+        apiOrigin
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to create agent session' });
+    }
+  });
+
+  app.get('/api/agent/sessions/:code', async (req, res) => {
+    try {
+      const apiOrigin = `${req.protocol}://${req.get('host')}`;
+      const out = await getAgentSession(sharedDb, { code: req.params.code, apiOrigin });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to fetch agent session' });
+    }
+  });
+
+  app.post('/api/agent/sessions/:code/sculpture', async (req, res) => {
+    try {
+      const apiOrigin = `${req.protocol}://${req.get('host')}`;
+      const out = await submitAgentSculpture(sharedDb, {
+        code: req.params.code,
+        body: req.body || {},
+        apiOrigin
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'Failed to stage agent sculpture',
+        ...(err?.extra || {})
+      });
+    }
   });
 
   // Google Auth Only

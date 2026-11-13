@@ -111,5 +111,10 @@ export const api = {
     request(`/api/sculptures/${encodeURIComponent(id)}/chat/messages`, {
       method: 'POST',
       body: JSON.stringify(payload)
-    })
+    }),
+  getAgentSpec: () => request('/api/agent/spec'),
+  createAgentSession: (payload) =>
+    request('/api/agent/sessions', { method: 'POST', body: JSON.stringify(payload) }),
+  getAgentSession: (code) =>
+    request(`/api/agent/sessions/${encodeURIComponent(code)}`)
 };

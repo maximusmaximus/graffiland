@@ -83,18 +83,27 @@ export default function InfoTermsModal({
                 <XeroIcon emoji="📱" size={18} /> Phone as a 3D Brush &amp; Stacker
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Hold the main brush trigger (or touch) and move your phone through physical space.
-                Your gyroscope steers the 3D cursor in front of the live camera:
+                Use the centered <strong>Key Button</strong> at the bottom of your screen — swipe{' '}
+                <strong>left or right</strong> across it to switch tools (Brush → Stack → Erase →
+                Preview → Agent Code → Publish). Your gyroscope aims the 4x high-precision{' '}
+                <strong>0.05m voxel</strong> cursor inside a{' '}
+                <strong>10,000 × 10,000 × 10,000 block</strong> area limit:
               </p>
               <ul style={{ margin: '8px 0 0 18px', padding: 0, color: 'var(--text)' }}>
                 <li>
-                  <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous 3D graffiti voxels along your phone&apos;s path.
+                  <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous 4x resolution 3D graffiti voxels along your phone&apos;s path (up to 4,096 blocks).
                 </li>
                 <li>
                   <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode:</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it.
                 </li>
                 <li>
-                  <XeroIcon emoji="👁️" size={14} /> <strong>AR Preview Mode:</strong> See nearby sculptures built by real phones anchored at their exact physical coordinates and altitude, complete with solar shadows, live camera reflections, and real-time foreground occlusion.
+                  <XeroIcon emoji="🗑️" size={14} /> <strong>Erase Mode:</strong> Aim at any placed block and tap the Key Button to remove it.
+                </li>
+                <li>
+                  <XeroIcon emoji="👁️" size={14} /> <strong>AR Preview Mode:</strong> See nearby sculptures built by real phones anchored at their exact physical coordinates and altitude, complete with solar shadows, 4x live camera reflections, and real-time foreground occlusion.
+                </li>
+                <li>
+                  <XeroIcon emoji="📋" size={14} /> <strong>Agent Sculpture Code (Final Tool Before Publish):</strong> Generate and copy a location-anchored code (<code>GRF-...</code>) so an AI agent can read <code>/api/agent/spec</code> (colors, blocks, 4x limits) and stage a 3D draft at your exact GPS spot — then inspect it in AR and tap Publish on your phone to mint.
                 </li>
                 <li>
                   <XeroIcon emoji="💬" size={14} /> <strong>Camera-Locked Encrypted Chat Boards:</strong> Tap any sculpture you see through your live AR camera to enter its private location chat &amp; past history. Secured client-side with AES-256-GCM &amp; ECDH P-256 — neither desktop browsers nor our server can read any chat messages.

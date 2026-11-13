@@ -1,4 +1,5 @@
-const VOXEL_STEP = 0.2;
+import { VOXEL_STEP } from './constants.mjs';
+
 const BASE_HALF = (VOXEL_STEP * 0.96) / 2;
 
 // 6 faces of a cube, CCW outer winding, 4 vertices each -> 24 vertices, 36 indices

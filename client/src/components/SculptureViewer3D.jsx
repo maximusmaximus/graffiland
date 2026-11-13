@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { buildVoxelGroup, computeCenteredBounds } from './VoxelEngine3D.js';
+import { buildVoxelGroup, computeCenteredBounds, VOXEL_STEP } from './VoxelEngine3D.js';
 
 export default function SculptureViewer3D({
   voxels = [],
@@ -31,7 +31,7 @@ export default function SculptureViewer3D({
     camera.position.set(2.4, 1.8, 3.0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
     renderer.setSize(host.clientWidth, height);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -85,7 +85,7 @@ export default function SculptureViewer3D({
     scene.add(voxelContainer);
 
     const cursorMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.22, 0.22),
+      new THREE.BoxGeometry(VOXEL_STEP * 1.1, VOXEL_STEP * 1.1, VOXEL_STEP * 1.1),
       new THREE.MeshBasicMaterial({ color: 0xff3e7f, wireframe: true })
     );
     cursorMesh.visible = false;
@@ -140,7 +140,7 @@ export default function SculptureViewer3D({
     if (voxels.length > 0 && controlsRef.current) {
       let minY = Infinity;
       for (const v of voxels) {
-        const halfH = 0.1 * (v.scale ?? 1);
+        const halfH = (VOXEL_STEP / 2) * (v.scale ?? 1);
         if (Number.isFinite(v.y) && v.y - halfH < minY) minY = v.y - halfH;
       }
       const { center, radius } = computeCenteredBounds(voxels);

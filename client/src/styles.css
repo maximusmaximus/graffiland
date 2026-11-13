@@ -136,13 +136,15 @@ select {
 
 .floating-dock {
   position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 104px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
   border-radius: 999px;
   background: rgba(8, 11, 20, 0.76);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -180,7 +182,7 @@ select {
 
 .palette-strip {
   position: absolute;
-  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 64px);
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 166px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -232,27 +234,91 @@ select {
   background: #fff;
 }
 
-.paint-action-pill {
+.key-carousel {
   position: absolute;
-  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 74px);
-  right: max(16px, env(safe-area-inset-right));
-  width: 64px;
-  height: 64px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 25;
+  touch-action: none;
+  user-select: none;
+}
+
+.key-tool-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
   border-radius: 999px;
-  border: 2px solid var(--accent);
-  background: rgba(0, 245, 212, 0.2);
+  background: rgba(8, 12, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   backdrop-filter: blur(10px);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.key-tool-hint {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.key-carousel-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 28px rgba(0, 245, 212, 0.35);
+  gap: 10px;
+}
+
+.key-step-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(8, 12, 22, 0.68);
+  backdrop-filter: blur(10px);
+  color: var(--text);
   cursor: pointer;
 }
 
-.paint-action-pill:active,
-.paint-action-pill.painting {
-  transform: scale(0.94);
-  background: rgba(255, 62, 127, 0.35);
+.key-action-btn {
+  width: 68px;
+  height: 68px;
+  border-radius: 999px;
+  border: 2px solid var(--accent);
+  background: rgba(0, 245, 212, 0.2);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: none;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 20px rgba(0, 245, 212, 0.25);
+}
+
+.key-action-btn.tool-agent {
+  border-color: var(--accent-gold);
+  background: rgba(255, 209, 102, 0.2);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 20px rgba(255, 209, 102, 0.25);
+}
+
+.key-action-btn.tool-publish {
+  border-color: var(--accent-pink);
+  background: rgba(255, 62, 127, 0.24);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 20px rgba(255, 62, 127, 0.28);
+}
+
+.key-action-btn:active,
+.key-action-btn.painting {
+  background: rgba(255, 62, 127, 0.36);
   border-color: var(--accent-pink);
 }
 

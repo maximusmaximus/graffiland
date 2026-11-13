@@ -6,8 +6,9 @@
  */
 export class ForegroundOcclusionCompositor {
   constructor() {
-    this.width = 80;
-    this.height = 60;
+    // 4x mask resolution (160x120 vs 80x60) for crisp foreground occluder edges
+    this.width = 160;
+    this.height = 120;
 
     this.sampleCanvas = document.createElement('canvas');
     this.sampleCanvas.width = this.width;

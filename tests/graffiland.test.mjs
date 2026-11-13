@@ -9,6 +9,10 @@ import { WebSocket } from 'ws';
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-test-'));
 process.env.GRAFFILAND_DB_PATH = path.join(testTmpDir, 'test.sqlite');
 process.env.GRAFFILAND_IPFS_DIR = path.join(testTmpDir, 'ipfs');
+process.env.PINATA_JWT = '';
+process.env.ROBINHOOD_CONTRACT_ADDRESS = '';
+process.env.ROBINHOOD_RELAYER_PRIVATE_KEY = '';
+process.env.ROBINHOOD_ROYALTY_RECEIVER = '';
 
 const { compileContract } = await import('../contracts/compile.mjs');
 const { createAppServer } = await import('../server/index.mjs');
@@ -756,5 +760,125 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     });
     assert.equal(syncRes.status, 200);
     assert.equal(syncRes.body.ownerAddress, secondWallet.address);
+  });
+
+  test('4x resolution policy and 10000x10000x10000 area bounds enforcement', async () => {
+    const cfg = await apiJson('/api/config');
+    assert.equal(cfg.status, 200);
+    assert.equal(cfg.body.policy.resolutionScale, 4);
+    assert.equal(cfg.body.policy.voxelStepMeters, 0.05);
+    assert.equal(cfg.body.policy.maxVoxels, 4096);
+    assert.equal(cfg.body.policy.areaHalfSpanMeters, 250);
+    assert.deepEqual(cfg.body.policy.areaLimitBlocks, [10000, 10000, 10000]);
+
+    const spec = await apiJson('/api/agent/spec');
+    assert.equal(spec.status, 200);
+    assert.equal(spec.body.resolution.scaleFactor, 4);
+    assert.equal(spec.body.resolution.voxelStepMeters, 0.05);
+    assert.deepEqual(spec.body.areaLimits.maxBlocksPerAxis, [10000, 10000, 10000]);
+    assert.equal(spec.body.availableColors.length, 12);
+    assert.deepEqual(
+      spec.body.availableBlocks.map((b) => b.material),
+      ['matte', 'neon', 'glass']
+    );
+    assert.equal(spec.body.rules.agentCanStageOnly, true);
+    assert.equal(spec.body.rules.userMustPublishOnDevice, true);
+
+    const login = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: {
+          email: 'bounds-tester@graffiland.test',
+          name: 'Bounds Tester'
+        }
+      })
+    });
+    assert.equal(login.status, 200);
+    const bearer = login.body.token;
+
+    const outOfBounds = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        title: 'Too Tall Spire',
+        description: 'Testing bounds exceeding ten thousand blocks tall.',
+        termsAccepted: true,
+        location: { lat: 37.7749, lng: -122.4194, altitude: 10, accuracy: 8 },
+        pol: {
+          frameCount: 6,
+          gyroSamples: 8,
+          cameraFingerprint: 'ok',
+          skyLuminance: 0.5,
+          flowScore: 0.7
+        },
+        voxels: [
+          { x: 0, y: -250, z: 0, color: '#00f5d4', material: 'matte' },
+          { x: 0, y: 250, z: 0, color: '#ff3e7f', material: 'neon' }
+        ]
+      })
+    });
+    assert.equal(outOfBounds.status, 400);
+    assert.match(outOfBounds.body.error, /10000x10000x10000|bounds/i);
+  });
+
+  test('Agent Sculpture Code stages 3D build without auto-publishing', async () => {
+    const createRes = await apiJson('/api/agent/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        location: { lat: 37.7791, lng: -122.4192, altitude: 22.4, accuracy: 6 }
+      })
+    });
+    assert.equal(createRes.status, 201);
+    assert.match(createRes.body.code, /^GRF-[A-Z2-9]+$/);
+    assert.ok(createRes.body.clipboardText.includes(createRes.body.code));
+    assert.ok(createRes.body.endpoints.spec.includes('/api/agent/spec'));
+
+    const code = createRes.body.code;
+    const beforePoll = await apiJson(`/api/agent/sessions/${code}`);
+    assert.equal(beforePoll.status, 200);
+    assert.equal(beforePoll.body.session.status, 'waiting');
+    assert.equal(beforePoll.body.spec.availableColors.length, 12);
+
+    const invalidBounds = await apiJson(`/api/agent/sessions/${code}/sculpture`, {
+      method: 'POST',
+      body: JSON.stringify({
+        agentName: 'GrokBot',
+        voxels: [{ x: 300, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(invalidBounds.status, 400);
+
+    const stageRes = await apiJson(`/api/agent/sessions/${code}/sculpture`, {
+      method: 'POST',
+      body: JSON.stringify({
+        agentName: 'GrokBot',
+        title: 'Agent Neon Crown',
+        description: 'Four-times finer crown floating above Civic Plaza.',
+        voxels: [
+          { x: 0.05, y: 0.1, z: -0.05, color: '#00f5d4', material: 'neon' },
+          { x: 0.1, y: 0.15, z: -0.05, color: '#ff3e7f', material: 'glass', scale: 1 }
+        ]
+      })
+    });
+    assert.equal(stageRes.status, 200);
+    assert.equal(stageRes.body.ok, true);
+    assert.equal(stageRes.body.session.status, 'ready');
+    assert.equal(stageRes.body.session.voxelCount, 2);
+    assert.equal(stageRes.body.session.agentName, 'GrokBot');
+
+    const afterPoll = await apiJson(`/api/agent/sessions/${code}`);
+    assert.equal(afterPoll.status, 200);
+    assert.equal(afterPoll.body.session.status, 'ready');
+    assert.equal(afterPoll.body.session.draftVoxels.length, 2);
+
+    const list = await apiJson('/api/sculptures');
+    assert.equal(list.status, 200);
+    assert.equal(
+      list.body.sculptures.some((s) => s.title === 'Agent Neon Crown'),
+      false
+    );
   });
 });
