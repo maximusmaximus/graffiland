@@ -99,52 +99,60 @@ export function createLiveEnvUpdater(renderer) {
   pmrem.compileEquirectangularShader();
 
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
   const tex = new THREE.CanvasTexture(canvas);
   tex.mapping = THREE.EquirectangularReflectionMapping;
   tex.colorSpace = THREE.SRGBColorSpace;
+
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 8;
+  sampleCanvas.height = 4;
+  const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
 
   let currentTarget = null;
 
   function update(videoEl) {
     if (!videoEl || videoEl.readyState < 2 || !ctx) return null;
 
-    // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness, 4x resolution)
-    ctx.drawImage(videoEl, 0, 0, 256, 128);
+    // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness, no CPU blur)
+    ctx.drawImage(videoEl, 0, 0, 128, 64);
     ctx.save();
-    ctx.translate(512, 0);
+    ctx.translate(256, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(videoEl, 0, 0, 256, 128);
+    ctx.drawImage(videoEl, 0, 0, 128, 64);
     ctx.restore();
 
-    // Lower hemisphere: softly darkened flipped ground bounce
+    // Lower hemisphere: fast flipped & tinted ground bounce
     ctx.save();
-    ctx.translate(0, 256);
+    ctx.translate(0, 128);
     ctx.scale(1, -1);
-    ctx.filter = 'blur(6px) brightness(0.65)';
-    ctx.drawImage(canvas, 0, 0, 512, 128, 0, 0, 512, 128);
+    ctx.drawImage(canvas, 0, 0, 256, 64, 0, 0, 256, 64);
     ctx.restore();
-    ctx.filter = 'none';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+    ctx.fillRect(0, 64, 256, 64);
 
     tex.needsUpdate = true;
     const nextTarget = pmrem.fromEquirectangular(tex);
     if (currentTarget) currentTarget.dispose();
     currentTarget = nextTarget;
 
-    // Sample sky (top band) and ground (bottom band) average colors
-    const skyPx = ctx.getImageData(128, 16, 64, 16).data;
-    const groundPx = ctx.getImageData(128, 216, 64, 16).data;
-    const avgHex = (px) => {
+    // Sample sky (top band) and ground (bottom band) average colors from tiny 8x4 buffer
+    sampleCtx.drawImage(canvas, 0, 0, 8, 4);
+    const px = sampleCtx.getImageData(0, 0, 8, 4).data;
+    const avgBandHex = (startRow, rows) => {
       let r = 0;
       let g = 0;
       let b = 0;
-      const n = px.length / 4;
-      for (let i = 0; i < px.length; i += 4) {
-        r += px[i];
-        g += px[i + 1];
-        b += px[i + 2];
+      const n = rows * 8;
+      for (let y = startRow; y < startRow + rows; y++) {
+        for (let x = 0; x < 8; x++) {
+          const i = (y * 8 + x) * 4;
+          r += px[i];
+          g += px[i + 1];
+          b += px[i + 2];
+        }
       }
       return (
         ((Math.round(r / n) & 0xff) << 16) |
@@ -155,8 +163,8 @@ export function createLiveEnvUpdater(renderer) {
 
     return {
       envTexture: nextTarget.texture,
-      skyColor: avgHex(skyPx),
-      groundColor: avgHex(groundPx)
+      skyColor: avgBandHex(0, 1),
+      groundColor: avgBandHex(3, 1)
     };
   }
 
@@ -169,6 +177,43 @@ export function createLiveEnvUpdater(renderer) {
   return { update, dispose };
 }
 
+export function createVoxelMaterial(colorHex = '#00f5d4', material = 'matte', opacity = 1) {
+  const color = new THREE.Color(colorHex || '#00f5d4');
+  if (material === 'neon') {
+    return new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.85,
+      roughness: 0.16,
+      metalness: 0.35,
+      envMapIntensity: 1.5,
+      transparent: opacity < 1,
+      opacity
+    });
+  }
+  if (material === 'glass') {
+    return new THREE.MeshPhysicalMaterial({
+      color,
+      roughness: 0.06,
+      metalness: 0.1,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+      reflectivity: 0.95,
+      envMapIntensity: 1.9,
+      transparent: true,
+      opacity: Math.min(0.72, opacity)
+    });
+  }
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.35,
+    metalness: 0.24,
+    envMapIntensity: 1.3,
+    transparent: opacity < 1,
+    opacity
+  });
+}
+
 export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
   const group = new THREE.Group();
   const unitGeo = new THREE.BoxGeometry(VOXEL_STEP * 0.96, VOXEL_STEP * 0.96, VOXEL_STEP * 0.96);
@@ -178,40 +223,7 @@ export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
     const key = `${v.color}|${v.material || 'matte'}|${opacity}`;
     let mat = matCache.get(key);
     if (!mat) {
-      const color = new THREE.Color(v.color || '#00f5d4');
-      if (v.material === 'neon') {
-        mat = new THREE.MeshStandardMaterial({
-          color,
-          emissive: color,
-          emissiveIntensity: 0.85,
-          roughness: 0.16,
-          metalness: 0.35,
-          envMapIntensity: 1.5,
-          transparent: opacity < 1,
-          opacity
-        });
-      } else if (v.material === 'glass') {
-        mat = new THREE.MeshPhysicalMaterial({
-          color,
-          roughness: 0.06,
-          metalness: 0.1,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.05,
-          reflectivity: 0.95,
-          envMapIntensity: 1.9,
-          transparent: true,
-          opacity: Math.min(0.72, opacity)
-        });
-      } else {
-        mat = new THREE.MeshStandardMaterial({
-          color,
-          roughness: 0.35,
-          metalness: 0.24,
-          envMapIntensity: 1.3,
-          transparent: opacity < 1,
-          opacity
-        });
-      }
+      mat = createVoxelMaterial(v.color, v.material || 'matte', opacity);
       matCache.set(key, mat);
     }
 

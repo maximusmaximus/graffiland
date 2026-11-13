@@ -34,6 +34,7 @@ import {
   buildVoxelGroup,
   computeSolarLightVector,
   createLiveEnvUpdater,
+  createVoxelMaterial,
   deviceOrientationToQuaternion,
   GRAFFITI_PALETTE,
   latLngOffsetMeters,
@@ -54,6 +55,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const nearbyGroupRef = useRef(null);
   const ghostMeshRef = useRef(null);
   const shadowPlaneRef = useRef(null);
+  const gridHelperRef = useRef(null);
+  const surfaceMarkerRef = useRef(null);
+  const draftMeshMapRef = useRef(new Map());
+  const draftUnitGeoRef = useRef(null);
+  const draftMatCacheRef = useRef(new Map());
   const dirLightRef = useRef(null);
   const hemiLightRef = useRef(null);
   const occlusionWallRef = useRef(null);
@@ -117,6 +123,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     hint: ''
   });
   const [painting, setPainting] = useState(false);
+  const [surfaceAnchor, setSurfaceAnchor] = useState(null);
+  const surfaceAnchorRef = useRef(null);
+  useEffect(() => {
+    surfaceAnchorRef.current = surfaceAnchor;
+  }, [surfaceAnchor]);
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -264,8 +275,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 3840 },
-            height: { ideal: 2160 }
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
           },
           audio: false
         });
@@ -408,16 +419,54 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
-  // Build & sync Three.js draft voxels
+  // Incrementally sync Three.js draft voxel meshes (O(1) per block, zero rebuild stutter)
   const rebuildDraftMesh = useCallback((nextVoxels) => {
     const group = draftGroupRef.current;
     if (!group) return;
-    while (group.children.length > 0) {
-      const child = group.children[0];
-      group.remove(child);
+    if (!draftUnitGeoRef.current) {
+      draftUnitGeoRef.current = new THREE.BoxGeometry(
+        VOXEL_STEP * 0.96,
+        VOXEL_STEP * 0.96,
+        VOXEL_STEP * 0.96
+      );
     }
-    const built = buildVoxelGroup(nextVoxels);
-    group.add(built);
+    const unitGeo = draftUnitGeoRef.current;
+    const matCache = draftMatCacheRef.current;
+    const meshMap = draftMeshMapRef.current;
+
+    const wanted = new Map();
+    for (const v of nextVoxels) {
+      wanted.set(voxelKey(v.x, v.y, v.z), v);
+    }
+
+    for (const [k, mesh] of meshMap.entries()) {
+      if (!wanted.has(k)) {
+        group.remove(mesh);
+        meshMap.delete(k);
+      }
+    }
+
+    for (const [k, v] of wanted.entries()) {
+      if (meshMap.has(k)) {
+        const existing = meshMap.get(k);
+        existing.userData.voxel = v;
+        continue;
+      }
+      const matKey = `${v.color}|${v.material || 'matte'}|1`;
+      let mat = matCache.get(matKey);
+      if (!mat) {
+        mat = createVoxelMaterial(v.color, v.material || 'matte', 1);
+        matCache.set(matKey, mat);
+      }
+      const mesh = new THREE.Mesh(unitGeo, mat);
+      mesh.position.set(v.x, v.y, v.z);
+      mesh.scale.setScalar(v.scale ?? 1);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.voxel = v;
+      group.add(mesh);
+      meshMap.set(k, mesh);
+    }
   }, []);
 
   useEffect(() => {
@@ -502,11 +551,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
     if (toolRef.current === 'stack' || toolRef.current === 'erase') {
       const raycaster = new THREE.Raycaster(origin, dir, 0.1, 14);
-      const targets = [];
-      draftGroup?.traverse((obj) => {
-        if (obj.isMesh) targets.push(obj);
-      });
-      const hits = raycaster.intersectObjects(targets, false);
+      const targets = draftGroup ? draftGroup.children : [];
+      const hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
       if (hits.length > 0) {
         const hit = hits[0];
         if (toolRef.current === 'erase') {
@@ -527,6 +573,39 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       if (toolRef.current === 'erase') return null;
     }
 
+    const anchor = surfaceAnchorRef.current;
+    if (anchor && anchor.locked) {
+      const normal = new THREE.Vector3(anchor.nx, anchor.ny, anchor.nz).normalize();
+      const denom = normal.dot(dir);
+      if (Math.abs(denom) > 0.08) {
+        const t =
+          ((anchor.x - origin.x) * normal.x +
+            (anchor.y - origin.y) * normal.y +
+            (anchor.z - origin.z) * normal.z) /
+          denom;
+        if (t >= 0.4 && t <= 6.5) {
+          const hitPt = origin
+            .clone()
+            .addScaledVector(dir, t)
+            .addScaledVector(normal, VOXEL_STEP * 0.5);
+          return {
+            action: 'add',
+            x: snapCoord(hitPt.x),
+            y: snapCoord(hitPt.y),
+            z: snapCoord(hitPt.z)
+          };
+        }
+      }
+      const fallbackDepth = Math.min(4.5, Math.max(0.5, anchor.depthM || reachRef.current));
+      const fallbackPt = origin.addScaledVector(dir, fallbackDepth);
+      return {
+        action: 'add',
+        x: snapCoord(fallbackPt.x),
+        y: snapCoord(fallbackPt.y),
+        z: snapCoord(fallbackPt.z)
+      };
+    }
+
     const pt = origin.addScaledVector(dir, reachRef.current);
     return {
       action: 'add',
@@ -536,76 +615,135 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     };
   }, []);
 
-  const applyVoxelAction = useCallback((target) => {
-    if (!target) return;
-    if (target.action === 'add') {
+  const applyVoxelBatch = useCallback(
+    (targets) => {
+      if (!Array.isArray(targets) || targets.length === 0) return;
       const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
-      if (
-        Math.abs(target.x) > halfSpan ||
-        Math.abs(target.y) > halfSpan ||
-        Math.abs(target.z) > halfSpan
-      ) {
+      const maxVoxels = config?.policy?.maxVoxels || 4096;
+
+      const uniqueAdds = [];
+      const seenBatch = new Set();
+      let hadOutOfBounds = false;
+
+      for (const t of targets) {
+        if (!t || t.action !== 'add') continue;
+        if (
+          Math.abs(t.x) > halfSpan ||
+          Math.abs(t.y) > halfSpan ||
+          Math.abs(t.z) > halfSpan
+        ) {
+          hadOutOfBounds = true;
+          continue;
+        }
+        const k = voxelKey(t.x, t.y, t.z);
+        if (!seenBatch.has(k)) {
+          seenBatch.add(k);
+          uniqueAdds.push({ x: t.x, y: t.y, z: t.z, key: k });
+        }
+      }
+
+      if (hadOutOfBounds && uniqueAdds.length === 0) {
         setSensorBanner(
           `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
         );
         return;
       }
-    }
-    setVoxels((prev) => {
-      if (target.action === 'erase' && target.voxel) {
-        const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
-        return prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey);
-      }
-      if (target.action === 'add') {
-        const maxVoxels = config?.policy?.maxVoxels || 4096;
+      if (uniqueAdds.length === 0) return;
+
+      let limitNotice = '';
+      setVoxels((prev) => {
         if (prev.length >= maxVoxels) {
-          setSensorBanner(`Sculpture voxel limit (${maxVoxels}) reached`);
+          limitNotice = `Sculpture voxel limit (${maxVoxels}) reached`;
           return prev;
         }
-        const k = voxelKey(target.x, target.y, target.z);
-        if (prev.some((v) => voxelKey(v.x, v.y, v.z) === k)) return prev;
 
-        if (prev.length > 0) {
-          let minX = target.x;
-          let maxX = target.x;
-          let minY = target.y;
-          let maxY = target.y;
-          let minZ = target.z;
-          let maxZ = target.z;
-          for (const v of prev) {
-            if (v.x < minX) minX = v.x;
-            if (v.x > maxX) maxX = v.x;
-            if (v.y < minY) minY = v.y;
-            if (v.y > maxY) maxY = v.y;
-            if (v.z < minZ) minZ = v.z;
-            if (v.z > maxZ) maxZ = v.z;
-          }
-          const spanX = Math.round((maxX - minX) / VOXEL_STEP) + 1;
-          const spanY = Math.round((maxY - minY) / VOXEL_STEP) + 1;
-          const spanZ = Math.round((maxZ - minZ) / VOXEL_STEP) + 1;
-          if (spanX > AREA_LIMIT_BLOCKS || spanY > AREA_LIMIT_BLOCKS || spanZ > AREA_LIMIT_BLOCKS) {
-            setSensorBanner(
-              `Area span exceeds ${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks`
-            );
-            return prev;
-          }
+        const existingKeys = new Set();
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        let minZ = Infinity;
+        let maxZ = -Infinity;
+
+        for (const v of prev) {
+          existingKeys.add(voxelKey(v.x, v.y, v.z));
+          if (v.x < minX) minX = v.x;
+          if (v.x > maxX) maxX = v.x;
+          if (v.y < minY) minY = v.y;
+          if (v.y > maxY) maxY = v.y;
+          if (v.z < minZ) minZ = v.z;
+          if (v.z > maxZ) maxZ = v.z;
         }
 
-        return [
-          ...prev,
-          {
-            x: target.x,
-            y: target.y,
-            z: target.z,
+        const additions = [];
+        for (const cand of uniqueAdds) {
+          if (prev.length + additions.length >= maxVoxels) {
+            limitNotice = `Sculpture voxel limit (${maxVoxels}) reached`;
+            break;
+          }
+          if (existingKeys.has(cand.key)) continue;
+
+          const nMinX = Math.min(minX, cand.x);
+          const nMaxX = Math.max(maxX, cand.x);
+          const nMinY = Math.min(minY, cand.y);
+          const nMaxY = Math.max(maxY, cand.y);
+          const nMinZ = Math.min(minZ, cand.z);
+          const nMaxZ = Math.max(maxZ, cand.z);
+
+          const spanX = Math.round((nMaxX - nMinX) / VOXEL_STEP) + 1;
+          const spanY = Math.round((nMaxY - nMinY) / VOXEL_STEP) + 1;
+          const spanZ = Math.round((nMaxZ - nMinZ) / VOXEL_STEP) + 1;
+          if (spanX > AREA_LIMIT_BLOCKS || spanY > AREA_LIMIT_BLOCKS || spanZ > AREA_LIMIT_BLOCKS) {
+            limitNotice = `Area span exceeds ${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks`;
+            continue;
+          }
+
+          minX = nMinX;
+          maxX = nMaxX;
+          minY = nMinY;
+          maxY = nMaxY;
+          minZ = nMinZ;
+          maxZ = nMaxZ;
+          existingKeys.add(cand.key);
+          additions.push({
+            x: cand.x,
+            y: cand.y,
+            z: cand.z,
             color: colorRef.current,
             material: materialRef.current,
             scale: 1
-          }
-        ];
+          });
+        }
+
+        return additions.length > 0 ? [...prev, ...additions] : prev;
+      });
+
+      if (limitNotice || hadOutOfBounds) {
+        queueMicrotask(() => {
+          setSensorBanner(
+            limitNotice ||
+              `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
+          );
+        });
       }
-      return prev;
-    });
-  }, [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels]);
+    },
+    [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels]
+  );
+
+  const applyVoxelAction = useCallback(
+    (target) => {
+      if (!target) return;
+      if (target.action === 'erase' && target.voxel) {
+        const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
+        setVoxels((prev) => prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey));
+        return;
+      }
+      if (target.action === 'add') {
+        applyVoxelBatch([target]);
+      }
+    },
+    [applyVoxelBatch]
+  );
 
   // Initialize Three.js transparent AR WebGL scene
   useEffect(() => {
@@ -621,7 +759,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       antialias: true,
       preserveDrawingBuffer: true
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = true;
@@ -640,8 +778,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.45);
     dirLight.position.set(4, 8, 3);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 0.5;
     dirLight.shadow.camera.far = 36;
     const shadowBound = 9;
@@ -667,8 +805,55 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     const grid = new THREE.GridHelper(6, 30, 0x00f5d4, 0x26324d);
     grid.position.y = -0.805;
     grid.material.transparent = true;
-    grid.material.opacity = 0.2;
+    grid.material.opacity = 0.16;
     scene.add(grid);
+    gridHelperRef.current = grid;
+
+    // Surface start-anchor marker (ring + center dot + normal tick + 5cm base voxel outline)
+    const surfaceMarker = new THREE.Group();
+    const ringGeo = new THREE.RingGeometry(0.13, 0.165, 36);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x00f5d4,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.92
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.position.z = 0.004;
+    surfaceMarker.add(ringMesh);
+
+    const dotGeo = new THREE.CircleGeometry(0.026, 20);
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0xffd166,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.95
+    });
+    const dotMesh = new THREE.Mesh(dotGeo, dotMat);
+    dotMesh.position.z = 0.005;
+    surfaceMarker.add(dotMesh);
+
+    const footGeo = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(VOXEL_STEP * 1.06, VOXEL_STEP * 1.06, VOXEL_STEP * 1.06)
+    );
+    const footMat = new THREE.LineBasicMaterial({
+      color: 0x00f5d4,
+      transparent: true,
+      opacity: 0.85
+    });
+    const footWire = new THREE.LineSegments(footGeo, footMat);
+    footWire.position.z = VOXEL_STEP * 0.53;
+    surfaceMarker.add(footWire);
+
+    const stemGeo = new THREE.CylinderGeometry(0.004, 0.004, 0.09, 8);
+    const stemMesh = new THREE.Mesh(stemGeo, ringMat);
+    stemMesh.rotation.x = Math.PI / 2;
+    stemMesh.position.z = 0.045;
+    surfaceMarker.add(stemMesh);
+
+    surfaceMarker.visible = false;
+    scene.add(surfaceMarker);
+    surfaceMarkerRef.current = surfaceMarker;
 
     const draftGroup = new THREE.Group();
     const nearbyGroup = new THREE.Group();
@@ -698,8 +883,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       camera.updateProjectionMatrix();
       renderer.setSize(host.clientWidth, host.clientHeight);
       if (occlusionCanvasRef.current) {
-        occlusionCanvasRef.current.width = host.clientWidth;
-        occlusionCanvasRef.current.height = host.clientHeight;
+        const occW = Math.min(280, Math.max(96, host.clientWidth));
+        const occH = Math.max(
+          96,
+          Math.round((occW * host.clientHeight) / Math.max(1, host.clientWidth))
+        );
+        occlusionCanvasRef.current.width = occW;
+        occlusionCanvasRef.current.height = occH;
       }
     };
     handleResize();
@@ -749,12 +939,29 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
           if (paintingRef.current && toolRef.current === 'brush') {
             const prev = lastPaintPosRef.current;
-            if (
-              !prev ||
-              Math.hypot(target.x - prev.x, target.y - prev.y, target.z - prev.z) >= VOXEL_STEP * 0.8
-            ) {
+            if (!prev) {
               lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-              applyVoxelAction(target);
+              applyVoxelBatch([{ action: 'add', x: target.x, y: target.y, z: target.z }]);
+            } else {
+              const dx = target.x - prev.x;
+              const dy = target.y - prev.y;
+              const dz = target.z - prev.z;
+              const dist = Math.hypot(dx, dy, dz);
+              if (dist >= VOXEL_STEP * 0.75) {
+                const steps = Math.min(28, Math.max(1, Math.ceil(dist / VOXEL_STEP)));
+                const batch = [];
+                for (let i = 1; i <= steps; i += 1) {
+                  const t = i / steps;
+                  batch.push({
+                    action: 'add',
+                    x: snapCoord(prev.x + dx * t),
+                    y: snapCoord(prev.y + dy * t),
+                    z: snapCoord(prev.z + dz * t)
+                  });
+                }
+                lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
+                applyVoxelBatch(batch);
+              }
             }
           }
         } else if (target && target.action === 'erase' && target.voxel) {
@@ -795,8 +1002,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         }
       }
 
-      const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 950 : 360;
-      if (now - lastEnvPush > envRefreshMs && videoRef.current && envUpdaterRef.current) {
+      const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
+      if (!paintingRef.current && now - lastEnvPush > envRefreshMs && videoRef.current && envUpdaterRef.current) {
         lastEnvPush = now;
         const envData = envUpdaterRef.current.update(videoRef.current);
         if (envData) {
@@ -806,13 +1013,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         }
       }
 
-      if (now - lastOcclusionPush > 65 && occlusionCanvasRef.current) {
+      if (now - lastOcclusionPush > 120 && occlusionCanvasRef.current) {
         lastOcclusionPush = now;
         occlusionRef.current.processFrame(
           videoRef.current,
           occlusionCanvasRef.current,
           rawOrientationRef.current,
-          occlusionEnabledRef.current
+          occlusionEnabledRef.current,
+          paintingRef.current
         );
       }
 
@@ -863,12 +1071,56 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
       envUpdaterRef.current?.dispose();
+      ringGeo.dispose();
+      ringMat.dispose();
+      dotGeo.dispose();
+      dotMat.dispose();
+      footGeo.dispose();
+      footMat.dispose();
+      stemGeo.dispose();
+      ghostGeo.dispose();
+      ghostMat.dispose();
+      draftUnitGeoRef.current?.dispose();
+      draftUnitGeoRef.current = null;
+      for (const mat of draftMatCacheRef.current.values()) mat.dispose();
+      draftMatCacheRef.current.clear();
+      draftMeshMapRef.current.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === host) {
         host.removeChild(renderer.domElement);
       }
     };
-  }, [applyVoxelAction, computeTargetVoxel]);
+  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel]);
+
+  // Keep visible 3D surface anchor ring, shadow catcher plane, and ground grid aligned
+  useEffect(() => {
+    const marker = surfaceMarkerRef.current;
+    const shadowPlane = shadowPlaneRef.current;
+    const grid = gridHelperRef.current;
+    if (!marker || !shadowPlane || !grid) return;
+
+    if (!surfaceAnchor) {
+      marker.visible = false;
+      shadowPlane.position.set(0, -0.8, 0);
+      shadowPlane.rotation.set(-Math.PI / 2, 0, 0);
+      grid.position.set(0, -0.805, 0);
+      grid.rotation.set(0, 0, 0);
+      return;
+    }
+
+    const pos = new THREE.Vector3(surfaceAnchor.x, surfaceAnchor.y, surfaceAnchor.z);
+    const normal = new THREE.Vector3(surfaceAnchor.nx, surfaceAnchor.ny, surfaceAnchor.nz).normalize();
+
+    marker.visible = mode === 'draw';
+    marker.position.copy(pos);
+    marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+
+    shadowPlane.position.copy(pos).addScaledVector(normal, -0.002);
+    shadowPlane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+
+    grid.position.copy(pos).addScaledVector(normal, -0.004);
+    grid.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+  }, [surfaceAnchor, mode]);
 
   // WebSocket Pairing connection
   const connectPairCode = useCallback((codeToJoin) => {
@@ -1220,14 +1472,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   function handlePaintStart() {
     enterFullscreen();
     if (mode !== 'draw') return;
+    const target = computeTargetVoxel();
     if (tool === 'brush') {
       paintingRef.current = true;
       setPainting(true);
-      lastPaintPosRef.current = null;
-      const target = computeTargetVoxel();
+      lastPaintPosRef.current =
+        target && target.action === 'add' ? { x: target.x, y: target.y, z: target.z } : null;
       applyVoxelAction(target);
     } else {
-      const target = computeTargetVoxel();
       applyVoxelAction(target);
     }
   }
@@ -1304,14 +1556,138 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     );
   }
 
+  function selectSurfaceAtScreenPoint(clientX, clientY) {
+    const host = canvasHostRef.current;
+    const cam = cameraRef.current;
+    if (!host || !cam) return;
+
+    const rect = host.getBoundingClientRect();
+    const px = clientX ?? rect.left + rect.width * 0.5;
+    const py = clientY ?? rect.top + rect.height * 0.5;
+    const normX = Math.max(0.05, Math.min(0.95, (px - rect.left) / Math.max(1, rect.width)));
+    const normY = Math.max(0.05, Math.min(0.95, (py - rect.top) / Math.max(1, rect.height)));
+    const ndc = new THREE.Vector2(normX * 2 - 1, -(normY * 2 - 1));
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, cam);
+    const dir = raycaster.ray.direction.clone().normalize();
+    const origin = raycaster.ray.origin.clone();
+
+    const draftTargets = draftGroupRef.current ? draftGroupRef.current.children : [];
+    const voxelHits = draftTargets.length ? raycaster.intersectObjects(draftTargets, false) : [];
+    if (voxelHits.length > 0) {
+      const hit = voxelHits[0];
+      const worldNormal = hit.face.normal
+        .clone()
+        .transformDirection(hit.object.matrixWorld)
+        .normalize();
+      const depthM = Math.max(0.45, Math.min(4.5, hit.distance));
+      setReachMeters(Number(depthM.toFixed(2)));
+      setSurfaceAnchor({
+        x: hit.point.x,
+        y: hit.point.y,
+        z: hit.point.z,
+        nx: worldNormal.x,
+        ny: worldNormal.y,
+        nz: worldNormal.z,
+        depthM: Number(depthM.toFixed(2)),
+        label: 'Sculpture Face',
+        source: 'voxel',
+        sharpnessScore: 1,
+        locked: true
+      });
+      showTemporaryHint(`Start locked to sculpture face (${depthM.toFixed(1)}m)`);
+      return;
+    }
+
+    const patch = polRef.current.analyzeSurfacePatch(normX, normY);
+    const sharpness = patch ? patch.sharpnessScore : 0.35;
+    let label = 'Mid-Air Spot';
+    let depthM = reachRef.current;
+    let nx = -dir.x;
+    let ny = -dir.y;
+    let nz = -dir.z;
+
+    if (dir.y < -0.36) {
+      label = 'Floor';
+      nx = 0;
+      ny = 1;
+      nz = 0;
+      depthM = Math.max(0.75, Math.min(4.0, 1.25 / -dir.y));
+    } else if (dir.y < -0.12) {
+      label = 'Table / Ledge';
+      nx = 0;
+      ny = 1;
+      nz = 0;
+      depthM = Math.max(0.7, Math.min(3.2, 0.65 / -dir.y));
+    } else if (sharpness >= 0.22) {
+      label = 'Wall / Surface';
+      const horizLen = Math.hypot(dir.x, dir.z);
+      if (horizLen > 0.15) {
+        nx = -dir.x / horizLen;
+        ny = 0;
+        nz = -dir.z / horizLen;
+      }
+      depthM = Math.max(0.85, Math.min(3.2, 2.2 - sharpness * 0.7));
+    } else {
+      const len = Math.hypot(nx, ny, nz) || 1;
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    }
+
+    const pt = origin.addScaledVector(dir, depthM);
+    setReachMeters(Number(depthM.toFixed(2)));
+    setSurfaceAnchor({
+      x: pt.x,
+      y: pt.y,
+      z: pt.z,
+      nx,
+      ny,
+      nz,
+      depthM: Number(depthM.toFixed(2)),
+      label,
+      source: 'surface',
+      sharpnessScore: Number(sharpness.toFixed(2)),
+      locked: true
+    });
+    showTemporaryHint(`Start surface set: ${label} (${depthM.toFixed(1)}m)`);
+  }
+
+  function seedVoxelAtAnchor() {
+    if (!surfaceAnchor) return;
+    const normal = new THREE.Vector3(surfaceAnchor.nx, surfaceAnchor.ny, surfaceAnchor.nz).normalize();
+    const p = new THREE.Vector3(surfaceAnchor.x, surfaceAnchor.y, surfaceAnchor.z).addScaledVector(
+      normal,
+      VOXEL_STEP * 0.5
+    );
+    applyVoxelBatch([
+      {
+        action: 'add',
+        x: snapCoord(p.x),
+        y: snapCoord(p.y),
+        z: snapCoord(p.z)
+      }
+    ]);
+  }
+
   function handleCanvasPointerUp(e) {
     dragStartRef.current = null;
     const start = tapStartRef.current;
     tapStartRef.current = null;
-    if (!start || modeRef.current !== 'preview') return;
+    if (!start) return;
 
     const moveDist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
     if (moveDist > 14) return;
+
+    if (modeRef.current === 'draw') {
+      if (!paintingRef.current && !keyGestureRef.current.active) {
+        selectSurfaceAtScreenPoint(e.clientX, e.clientY);
+      }
+      return;
+    }
+
+    if (modeRef.current !== 'preview') return;
 
     const host = canvasHostRef.current;
     const cam = cameraRef.current;
@@ -1506,6 +1882,56 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           </div>
         )}
 
+        {mode === 'draw' && (
+          <div className={`surface-pill hud-interactive ${dockOpen ? 'under-pol' : ''}`}>
+            {surfaceAnchor ? (
+              <>
+                <XeroIcon emoji="📌" size={13} />
+                <span className="surface-pill-label">
+                  {surfaceAnchor.label} · {surfaceAnchor.depthM.toFixed(1)}m
+                </span>
+                <button
+                  type="button"
+                  className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
+                  onClick={() =>
+                    setSurfaceAnchor((prev) => (prev ? { ...prev, locked: !prev.locked } : prev))
+                  }
+                  title="Toggle start surface plane lock vs Free 3D air drawing"
+                >
+                  <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
+                  <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="surface-pill-btn"
+                  onClick={seedVoxelAtAnchor}
+                  title="Place first block flush on the selected surface"
+                >
+                  + Seed
+                </button>
+                <button
+                  type="button"
+                  className="surface-pill-btn clear"
+                  onClick={() => setSurfaceAnchor(null)}
+                  aria-label="Clear start surface"
+                  title="Clear start surface"
+                >
+                  <XeroIcon emoji="✖️" size={11} />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="surface-pill-prompt"
+                onClick={() => selectSurfaceAtScreenPoint()}
+              >
+                <XeroIcon emoji="👆" size={13} />
+                <span>Tap scene to set start surface</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {needsGyroTap && (
           <button
             className="btn btn-primary"
@@ -1526,7 +1952,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           <div
             style={{
               position: 'absolute',
-              top: 64,
+              top: mode === 'draw' ? 98 : 64,
               left: 14,
               right: 70,
               padding: '7px 10px',

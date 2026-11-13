@@ -28,6 +28,43 @@ export class ProofOfLocationTracker {
     this.anchorYawDeg = null;
     this.latestPose = null;
     this.sceneContrast = 0;
+    this.latestGray = null;
+  }
+
+  analyzeSurfacePatch(normX = 0.5, normY = 0.5) {
+    const gray = this.latestGray;
+    if (!gray) {
+      return {
+        localContrast: 0,
+        horizEdgeRatio: 1,
+        brightness: 128,
+        sharpnessScore: 0.5
+      };
+    }
+    const w = 48;
+    const h = 36;
+    const cx = Math.max(4, Math.min(w - 5, Math.round(normX * w)));
+    const cy = Math.max(4, Math.min(h - 5, Math.round(normY * h)));
+    let gxSum = 0;
+    let gySum = 0;
+    let lumaSum = 0;
+    let count = 0;
+    for (let y = cy - 3; y <= cy + 3; y++) {
+      for (let x = cx - 3; x <= cx + 3; x++) {
+        const c = gray[y * w + x];
+        gxSum += Math.abs(c - gray[y * w + x + 1]);
+        gySum += Math.abs(c - gray[(y + 1) * w + x]);
+        lumaSum += c;
+        count++;
+      }
+    }
+    const avgGx = gxSum / count;
+    const avgGy = gySum / count;
+    const localContrast = avgGx + avgGy;
+    const horizEdgeRatio = avgGx > 0.2 ? avgGy / avgGx : 1;
+    const brightness = lumaSum / count;
+    const sharpnessScore = Math.max(0.1, Math.min(1, localContrast / 22));
+    return { localContrast, horizEdgeRatio, brightness, sharpnessScore };
   }
 
   recordGps(pos) {
@@ -250,6 +287,7 @@ export class ProofOfLocationTracker {
       }
     }
     this.sceneContrast = edgeSamples ? edgeSum / edgeSamples : 0;
+    this.latestGray = gray;
     if (this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
       this.scanSectors[this.latestPose.row * this.scanCols + this.latestPose.col] = true;
     } else if (!this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {

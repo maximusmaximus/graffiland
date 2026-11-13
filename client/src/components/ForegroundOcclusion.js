@@ -6,9 +6,10 @@
  */
 export class ForegroundOcclusionCompositor {
   constructor() {
-    // 4x mask resolution (160x120 vs 80x60) for crisp foreground occluder edges
-    this.width = 160;
-    this.height = 120;
+    // Compact analysis resolution for fast zero-jank foreground silhouettes
+    this.width = 128;
+    this.height = 96;
+    const len = this.width * this.height;
 
     this.sampleCanvas = document.createElement('canvas');
     this.sampleCanvas.width = this.width;
@@ -19,10 +20,13 @@ export class ForegroundOcclusionCompositor {
     this.maskCanvas.width = this.width;
     this.maskCanvas.height = this.height;
     this.maskCtx = this.maskCanvas.getContext('2d');
+    this.maskImgData = this.maskCtx.createImageData(this.width, this.height);
 
     this.prevLuma = null;
+    this.currLuma = new Float32Array(len);
+    this.rawForeground = new Uint8Array(len);
+    this.persistedMask = new Float32Array(len);
     this.prevGyro = null;
-    this.persistedMask = new Float32Array(this.width * this.height);
   }
 
   reset() {
@@ -31,21 +35,25 @@ export class ForegroundOcclusionCompositor {
     this.persistedMask.fill(0);
   }
 
-  processFrame(videoEl, outputCanvas, gyro, enabled = true) {
+  processFrame(videoEl, outputCanvas, gyro, enabled = true, suppress = false) {
     if (!outputCanvas) return;
     const outCtx = outputCanvas.getContext('2d');
     if (!outCtx) return;
 
-    if (!enabled || !videoEl || videoEl.readyState < 2) {
+    if (!enabled || suppress || !videoEl || videoEl.readyState < 2) {
+      if (this.persistedMask[0] !== 0 || suppress) {
+        this.persistedMask.fill(0);
+      }
       outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       return;
     }
 
     const { width: w, height: h } = this;
+    const len = w * h;
     this.sampleCtx.drawImage(videoEl, 0, 0, w, h);
     const frame = this.sampleCtx.getImageData(0, 0, w, h).data;
-    const luma = new Float32Array(w * h);
-    for (let i = 0; i < w * h; i++) {
+    const luma = this.currLuma;
+    for (let i = 0; i < len; i++) {
       const p = i * 4;
       luma[i] = 0.299 * frame[p] + 0.587 * frame[p + 1] + 0.114 * frame[p + 2];
     }
@@ -59,7 +67,7 @@ export class ForegroundOcclusionCompositor {
       if (dYaw > 180) dYaw -= 360;
       if (dYaw < -180) dYaw += 360;
       const dPitch = gyro.beta - this.prevGyro.beta;
-      if (Math.abs(dYaw) + Math.abs(dPitch) > 4.5) {
+      if (Math.abs(dYaw) + Math.abs(dPitch) > 2.2) {
         fastPan = true;
       } else {
         shiftX = Math.round((dYaw / 62) * w);
@@ -67,7 +75,7 @@ export class ForegroundOcclusionCompositor {
       }
     }
 
-    const rawForeground = new Uint8Array(w * h);
+    this.rawForeground.fill(0);
     let activeCount = 0;
 
     if (this.prevLuma && !fastPan) {
@@ -77,63 +85,71 @@ export class ForegroundOcclusionCompositor {
           const py = y - shiftY;
           if (px < 0 || px >= w || py < 0 || py >= h) continue;
           const diff = Math.abs(luma[y * w + x] - this.prevLuma[py * w + px]);
-          if (diff > 26) {
-            rawForeground[y * w + x] = 1;
+          if (diff > 30) {
+            this.rawForeground[y * w + x] = 1;
           }
         }
       }
 
-      // 3x3 morphological cleanup to keep solid foreground silhouettes and drop sensor grain
+      // Fast cleanup with immediate ghost-free decay (eliminates onion-skinning trails)
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
-          let neighbors = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              neighbors += rawForeground[(y + dy) * w + (x + dx)];
-            }
-          }
-          const idx = y * w + x;
+          const row = y * w;
+          const neighbors =
+            this.rawForeground[row - w + x - 1] +
+            this.rawForeground[row - w + x] +
+            this.rawForeground[row - w + x + 1] +
+            this.rawForeground[row + x - 1] +
+            this.rawForeground[row + x] +
+            this.rawForeground[row + x + 1] +
+            this.rawForeground[row + w + x - 1] +
+            this.rawForeground[row + w + x] +
+            this.rawForeground[row + w + x + 1];
+          const idx = row + x;
           if (neighbors >= 5) {
-            this.persistedMask[idx] = Math.min(1, this.persistedMask[idx] + 0.45);
+            this.persistedMask[idx] = Math.min(1, this.persistedMask[idx] + 0.65);
           } else {
-            this.persistedMask[idx] = Math.max(0, this.persistedMask[idx] - 0.14);
+            const faded = this.persistedMask[idx] * 0.35 - 0.12;
+            this.persistedMask[idx] = faded > 0.15 ? faded : 0;
           }
-          if (this.persistedMask[idx] > 0.25) activeCount++;
+          if (this.persistedMask[idx] > 0.5) activeCount++;
         }
       }
     } else {
-      for (let i = 0; i < w * h; i++) {
-        this.persistedMask[i] = Math.max(0, this.persistedMask[i] - 0.25);
-      }
+      // Clear mask immediately on camera rotation instead of leaving onion-skin trails
+      this.persistedMask.fill(0);
     }
 
-    this.prevLuma = luma;
+    if (!this.prevLuma) this.prevLuma = new Float32Array(len);
+    this.prevLuma.set(luma);
     if (gyro) this.prevGyro = { ...gyro };
 
-    const coverage = activeCount / (w * h);
+    const coverage = activeCount / len;
     outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-    // Reject full-screen exposure flashes (>55% coverage) or noise-only frames (<1.2%)
-    if (coverage < 0.012 || coverage > 0.55) {
+    // Reject full-screen shifts (>48% coverage) or sensor grain (<1.5%)
+    if (fastPan || coverage < 0.015 || coverage > 0.48) {
       return;
     }
 
-    const maskImg = this.maskCtx.createImageData(w, h);
-    for (let i = 0; i < w * h; i++) {
-      const alpha = Math.round(Math.max(0, Math.min(1, this.persistedMask[i])) * 255);
-      maskImg.data[i * 4] = 255;
-      maskImg.data[i * 4 + 1] = 255;
-      maskImg.data[i * 4 + 2] = 255;
-      maskImg.data[i * 4 + 3] = alpha;
+    const maskData = this.maskImgData.data;
+    for (let i = 0; i < len; i++) {
+      const m = this.persistedMask[i];
+      // Crisp silhouette alpha (zero hazy translucent onion-skin ghosts)
+      const alpha = m >= 0.5 ? 245 : 0;
+      const p = i * 4;
+      maskData[p] = 255;
+      maskData[p + 1] = 255;
+      maskData[p + 2] = 255;
+      maskData[p + 3] = alpha;
     }
-    this.maskCtx.putImageData(maskImg, 0, 0);
+    this.maskCtx.putImageData(this.maskImgData, 0, 0);
 
-    // Draw feathered foreground mask, then clip live camera video into it
+    // Composite directly onto compact outputCanvas without expensive CPU blur()
     outCtx.save();
     outCtx.globalCompositeOperation = 'source-over';
-    outCtx.filter = 'blur(4px)';
+    outCtx.imageSmoothingEnabled = true;
     outCtx.drawImage(this.maskCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
-    outCtx.filter = 'none';
     outCtx.globalCompositeOperation = 'source-in';
     outCtx.drawImage(videoEl, 0, 0, outputCanvas.width, outputCanvas.height);
     outCtx.restore();

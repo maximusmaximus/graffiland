@@ -339,6 +339,75 @@ select {
   color: var(--text);
 }
 
+.surface-pill {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  max-width: calc(100vw - 84px);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(8, 12, 22, 0.72);
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  z-index: 22;
+}
+
+.surface-pill.under-pol {
+  top: calc(max(16px, env(safe-area-inset-top)) + 38px);
+}
+
+.surface-pill-prompt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.surface-pill-label {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.surface-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.surface-pill-btn.active {
+  border-color: var(--accent);
+  background: rgba(0, 245, 212, 0.2);
+}
+
+.surface-pill-btn.clear {
+  padding: 3px 6px;
+  border-color: rgba(255, 62, 127, 0.36);
+}
+
 /* Bottom-Right Scene Analysis Coverage Window */
 .scene-scan-box {
   position: absolute;

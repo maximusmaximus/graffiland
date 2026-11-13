@@ -91,7 +91,10 @@ export default function InfoTermsModal({
               </p>
               <ul style={{ margin: '8px 0 0 18px', padding: 0, color: 'var(--text)' }}>
                 <li>
-                  <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous 4x resolution 3D graffiti voxels along your phone&apos;s path (up to 4,096 blocks).
+                  <XeroIcon emoji="📌" size={14} /> <strong>Tap-to-Set Start Surface:</strong> Tap any floor, table, wall, scene spot, or existing block face to anchor your glowing 3D start ring + grid plane directly onto that surface (toggle <strong>Locked / Free 3D</strong> or tap <strong>+ Seed</strong> in the top-left pill).
+                </li>
+                <li>
+                  <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous, gap-free interpolated 4x resolution 3D graffiti voxels along your locked surface or freely in mid-air (up to 4,096 blocks).
                 </li>
                 <li>
                   <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode:</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it.
