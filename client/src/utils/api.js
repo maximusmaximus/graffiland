@@ -62,5 +62,43 @@ export const api = {
     request(`/api/admin/sculptures/${encodeURIComponent(id)}/visibility`, {
       method: 'POST',
       body: JSON.stringify({ hidden, reason })
+    }),
+  initSculptureChat: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/init`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateSculptureChatClue: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/clue`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  enterSculptureChat: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/enter`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  requestSculptureChatGrant: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/request-grant`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  claimClueChatGrant: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/claim-grant`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  listPendingChatGrants: () => request('/api/chat/pending-grants'),
+  listSculpturePendingGrants: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/pending-grants`),
+  submitSculptureChatGrant: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/grants`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  postSculptureChatMessage: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/chat/messages`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
 };

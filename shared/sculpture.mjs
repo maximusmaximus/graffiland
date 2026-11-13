@@ -77,6 +77,15 @@ export function serializeSculptureRow(row, { includeAdminFields = false, include
       royaltyReceiver: row.royalty_receiver
     },
     hidden: Boolean(row.hidden),
+    ...(row.chat_message_count !== undefined || row.chat_initialized !== undefined
+      ? {
+          chatSummary: {
+            initialized: Boolean(row.chat_initialized),
+            messageCount: Number(row.chat_message_count || 0),
+            hasClue: Boolean(row.chat_has_clue)
+          }
+        }
+      : {}),
     ...(includeAdminFields
       ? {
           hiddenReason: row.hidden_reason || '',

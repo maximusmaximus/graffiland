@@ -85,6 +85,60 @@ export function getDb() {
       sculpture_count INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS sculpture_chat_boards (
+      sculpture_id TEXT PRIMARY KEY,
+      creator_sub TEXT NOT NULL,
+      key_epoch INTEGER NOT NULL DEFAULT 1,
+      room_key_commit TEXT NOT NULL,
+      clue_prompt TEXT DEFAULT '',
+      clue_wrapped_json TEXT DEFAULT '',
+      auto_grant_pol INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sculpture_chat_grants (
+      id TEXT PRIMARY KEY,
+      sculpture_id TEXT NOT NULL,
+      key_epoch INTEGER NOT NULL DEFAULT 1,
+      requester_sub TEXT NOT NULL,
+      requester_name TEXT NOT NULL,
+      requester_ecdh_pub_jwk TEXT NOT NULL,
+      requester_sign_pub_jwk TEXT NOT NULL,
+      requester_pub_fp TEXT NOT NULL,
+      sight_proof_json TEXT NOT NULL,
+      sight_score INTEGER NOT NULL,
+      sight_distance_m REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      grantor_sub TEXT DEFAULT '',
+      grantor_ecdh_pub_jwk TEXT DEFAULT '',
+      grantor_sign_pub_jwk TEXT DEFAULT '',
+      wrapped_key_json TEXT DEFAULT '',
+      grant_sig TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(sculpture_id, key_epoch, requester_pub_fp)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_grants_sculpture_status ON sculpture_chat_grants(sculpture_id, key_epoch, status);
+    CREATE INDEX IF NOT EXISTS idx_chat_grants_requester ON sculpture_chat_grants(requester_sub, status);
+
+    CREATE TABLE IF NOT EXISTS sculpture_chat_messages (
+      id TEXT PRIMARY KEY,
+      sculpture_id TEXT NOT NULL,
+      key_epoch INTEGER NOT NULL DEFAULT 1,
+      sender_sub TEXT NOT NULL,
+      sender_pub_fp TEXT NOT NULL,
+      sender_sign_pub_jwk TEXT NOT NULL,
+      iv_b64 TEXT NOT NULL,
+      ciphertext_b64 TEXT NOT NULL,
+      aad_json TEXT NOT NULL,
+      signature_b64 TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_msgs_sculpture_time ON sculpture_chat_messages(sculpture_id, key_epoch, created_at);
   `);
 
   dbInstance = db;

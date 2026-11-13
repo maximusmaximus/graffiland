@@ -27,6 +27,16 @@ import {
   verifyAndEnrichLocation
 } from './services/pol.mjs';
 import { computeVerticalBounds, serializeSculptureRow } from '../shared/sculpture.mjs';
+import {
+  claimClueUnlockedGrant,
+  enterChatBoard,
+  initChatBoard,
+  listPendingGrantsForGrantor,
+  postEncryptedChatMessage,
+  requestChatGrant,
+  submitPeerGrant,
+  updateBoardClue
+} from '../shared/chatService.mjs';
 import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,7 +111,15 @@ export function createAppServer() {
   // Public Sculptures (Map, Gallery, Mobile AR Preview Mode)
   app.get('/api/sculptures', (req, res) => {
     const rows = db
-      .prepare('SELECT * FROM sculptures WHERE hidden = 0 ORDER BY created_at DESC')
+      .prepare(
+        `SELECT s.*,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+         FROM sculptures s
+         WHERE s.hidden = 0
+         ORDER BY s.created_at DESC`
+      )
       .all();
 
     const latParam = req.query.lat !== undefined ? Number(req.query.lat) : null;
@@ -130,7 +148,16 @@ export function createAppServer() {
   });
 
   app.get('/api/sculptures/:id', (req, res) => {
-    const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
+    const row = db
+      .prepare(
+        `SELECT s.*,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+         FROM sculptures s
+         WHERE s.id = ?`
+      )
+      .get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
     if (row.hidden && !caller?.is_admin) {
@@ -143,6 +170,129 @@ export function createAppServer() {
       })
     });
   });
+
+  // Server-Blind Location-Locked E2EE Sculpture Chat Routes
+  const chatDb = {
+    get: async (sql, params = []) => db.prepare(sql).get(...params),
+    all: async (sql, params = []) => db.prepare(sql).all(...params),
+    run: async (sql, params = []) => db.prepare(sql).run(...params)
+  };
+
+  function handleChatRoute(fn) {
+    return async (req, res) => {
+      try {
+        const result = await fn(req);
+        res.json(result);
+      } catch (err) {
+        res.status(err?.statusCode || 400).json({ error: err.message || 'Chat request failed' });
+      }
+    };
+  }
+
+  app.post(
+    '/api/sculptures/:id/chat/init',
+    requireAuth,
+    handleChatRoute((req) =>
+      initChatBoard(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/clue',
+    requireAuth,
+    handleChatRoute((req) =>
+      updateBoardClue(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/enter',
+    requireAuth,
+    handleChatRoute((req) =>
+      enterChatBoard(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/request-grant',
+    requireAuth,
+    handleChatRoute((req) =>
+      requestChatGrant(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/claim-grant',
+    requireAuth,
+    handleChatRoute((req) =>
+      claimClueUnlockedGrant(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.get(
+    '/api/chat/pending-grants',
+    requireAuth,
+    handleChatRoute((req) => listPendingGrantsForGrantor(chatDb, { user: req.user }))
+  );
+
+  app.get(
+    '/api/sculptures/:id/chat/pending-grants',
+    requireAuth,
+    handleChatRoute((req) =>
+      listPendingGrantsForGrantor(chatDb, { user: req.user, sculptureId: req.params.id })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/grants',
+    requireAuth,
+    handleChatRoute((req) =>
+      submitPeerGrant(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/chat/messages',
+    requireAuth,
+    handleChatRoute(async (req) => {
+      const out = await postEncryptedChatMessage(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      });
+      return out;
+    })
+  );
 
   app.get('/api/parcels', (_req, res) => {
     const rows = db

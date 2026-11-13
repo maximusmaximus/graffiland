@@ -97,6 +97,9 @@ export default function InfoTermsModal({
                   <XeroIcon emoji="👁️" size={14} /> <strong>AR Preview Mode:</strong> See nearby sculptures built by real phones anchored at their exact physical coordinates and altitude, complete with solar shadows, live camera reflections, and real-time foreground occlusion.
                 </li>
                 <li>
+                  <XeroIcon emoji="💬" size={14} /> <strong>Camera-Locked Encrypted Chat Boards:</strong> Tap any sculpture you see through your live AR camera to enter its private location chat &amp; past history. Secured client-side with AES-256-GCM &amp; ECDH P-256 — neither desktop browsers nor our server can read any chat messages.
+                </li>
+                <li>
                   <XeroIcon emoji="🪞" size={14} /> <strong>Foreground Occlusion:</strong> Objects or hands passing close in front of the lens naturally occlude your anchored 3D art (toggleable via the mirror icon).
                 </li>
                 <li>

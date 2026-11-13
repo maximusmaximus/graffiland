@@ -8,6 +8,16 @@ import {
   computeVerticalBounds,
   serializeSculptureRow
 } from '../../shared/sculpture.mjs';
+import {
+  claimClueUnlockedGrant,
+  enterChatBoard,
+  initChatBoard,
+  listPendingGrantsForGrantor,
+  postEncryptedChatMessage,
+  requestChatGrant,
+  submitPeerGrant,
+  updateBoardClue
+} from '../../shared/chatService.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   decodeGeohashBounds,
@@ -601,7 +611,13 @@ export default {
     // List public sculptures
     if (pathname === '/api/sculptures' && request.method === 'GET') {
       const { results } = await env.DB.prepare(
-        'SELECT * FROM sculptures WHERE hidden = 0 ORDER BY created_at DESC'
+        `SELECT s.*,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+         FROM sculptures s
+         WHERE s.hidden = 0
+         ORDER BY s.created_at DESC`
       ).all();
       let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels: true }));
 
@@ -895,11 +911,82 @@ export default {
       );
     }
 
+    // Server-Blind Location-Locked E2EE Sculpture Chat Routes
+    const chatDb = {
+      get: (sql, params = []) => env.DB.prepare(sql).bind(...params).first(),
+      all: async (sql, params = []) => {
+        const res = await env.DB.prepare(sql).bind(...params).all();
+        return res.results || [];
+      },
+      run: (sql, params = []) => env.DB.prepare(sql).bind(...params).run()
+    };
+
+    if (pathname === '/api/chat/pending-grants' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await listPendingGrantsForGrantor(chatDb, { user });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Chat request failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const chatMatch = pathname.match(
+      /^\/api\/sculptures\/([^/]+)\/chat\/(init|clue|enter|request-grant|claim-grant|pending-grants|grants|messages)$/
+    );
+    if (chatMatch) {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      const sculptureId = decodeURIComponent(chatMatch[1]);
+      const action = chatMatch[2];
+      const userAgent = request.headers.get('User-Agent') || '';
+
+      try {
+        if (action === 'pending-grants' && request.method === 'GET') {
+          const out = await listPendingGrantsForGrantor(chatDb, { user, sculptureId });
+          return jsonResponse(out, 200, request);
+        }
+        if (request.method !== 'POST') {
+          return jsonResponse({ error: 'Method not allowed' }, 405, request);
+        }
+        const body = await request.json().catch(() => ({}));
+        let out;
+        if (action === 'init') {
+          out = await initChatBoard(chatDb, { sculptureId, user, body, userAgent });
+        } else if (action === 'clue') {
+          out = await updateBoardClue(chatDb, { sculptureId, user, body, userAgent });
+        } else if (action === 'enter') {
+          out = await enterChatBoard(chatDb, { sculptureId, user, body, userAgent });
+        } else if (action === 'request-grant') {
+          out = await requestChatGrant(chatDb, { sculptureId, user, body, userAgent });
+        } else if (action === 'claim-grant') {
+          out = await claimClueUnlockedGrant(chatDb, { sculptureId, user, body, userAgent });
+        } else if (action === 'grants') {
+          out = await submitPeerGrant(chatDb, { sculptureId, user, body });
+        } else if (action === 'messages') {
+          out = await postEncryptedChatMessage(chatDb, { sculptureId, user, body, userAgent });
+        }
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Chat request failed' }, err?.statusCode || 400, request);
+      }
+    }
+
     // Single sculpture GET
     const scMatch = pathname.match(/^\/api\/sculptures\/([^/]+)$/);
     if (scMatch && request.method === 'GET') {
       const id = decodeURIComponent(scMatch[1]);
-      const row = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?').bind(id).first();
+      const row = await env.DB.prepare(
+        `SELECT s.*,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+         FROM sculptures s
+         WHERE s.id = ?`
+      )
+        .bind(id)
+        .first();
       if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
       const caller = await getAuthUser(request, env, cfg);
       if (row.hidden && !caller?.is_admin) {

@@ -212,6 +212,20 @@ export default function SculptureModal({ sculpture, onClose }) {
             </tbody>
           </table>
         </div>
+
+        <div className="card" style={{ padding: 12, marginTop: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <XeroIcon emoji="🔐" size={18} /> Camera-Locked Location Chat Board (E2EE)
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: 'var(--muted)' }}>
+            <span className="badge">
+              <XeroIcon emoji="🔒" size={12} /> {sculpture.chatSummary?.messageCount ?? 0} encrypted messages
+            </span>
+            <span>
+              Locked to physical in-person mobile AR camera selection only. Neither desktop browsers nor our servers can decrypt past chat history.
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

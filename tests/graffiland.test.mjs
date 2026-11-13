@@ -11,6 +11,7 @@ process.env.GRAFFILAND_IPFS_DIR = path.join(testTmpDir, 'ipfs');
 
 const { compileContract } = await import('../contracts/compile.mjs');
 const { createAppServer } = await import('../server/index.mjs');
+const chatCrypto = await import('../client/src/utils/chatCrypto.js');
 
 let server;
 let baseUrl;
@@ -298,5 +299,338 @@ describe('GRAFFILAND Full-Stack Verification', () => {
 
     desktopWs.close();
     mobileWs.close();
+  });
+
+  test('Camera-locked Location Chat enforces AR raycast/proximity gates and server-blind E2EE (Clue + ECDH Wrap)', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
+    const creatorAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'test-artist@graffiland.local', name: 'Test Artist' } })
+    });
+    const creatorUser = creatorAuth.body.user;
+
+    const visAAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'visitorA@graffiland.local', name: 'Visitor A' } })
+    });
+    const visBAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'visitorB@graffiland.local', name: 'Visitor B' } })
+    });
+
+    const creatorId = await chatCrypto.getOrCreateDeviceIdentity(creatorUser.id);
+    const visAId = await chatCrypto.getOrCreateDeviceIdentity(visAAuth.body.user.id);
+    const visBId = await chatCrypto.getOrCreateDeviceIdentity(visBAuth.body.user.id);
+
+    const makeSightProof = async (idObj, overrides = {}) => {
+      const base = {
+        selectionMethod: 'ar-camera-raycast',
+        rayHit: true,
+        inFrustum: true,
+        cameraReady: true,
+        cameraFrames: 6,
+        opticalFlowCorrelation: 0.88,
+        visualDHash: 'f0e1d2c3b4a59687',
+        lat: 37.80805,
+        lng: -122.41775,
+        altitude: 43,
+        selectedAt: new Date().toISOString(),
+        ...overrides
+      };
+      return chatCrypto.signSightProof(idObj, {
+        sculptureId: createdSculptureId,
+        parcelId: createdParcelId,
+        sightProof: base
+      });
+    };
+
+    // 1. Creator generates client-side AES-256-GCM room key + optional visual clue wrap (never plaintext on server)
+    const roomKeyB64 = chatCrypto.generateRoomKeyB64();
+    const { roomKeyCommit } = await chatCrypto.computeRoomPossessionProof(
+      roomKeyB64,
+      createdSculptureId,
+      1
+    );
+    const selfWrap = await chatCrypto.wrapRoomKeyForRecipient({
+      roomKeyB64,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      recipientEcdhPubJwk: creatorId.ecdhPublicJwk,
+      recipientPubFp: creatorId.pubFingerprint,
+      grantorIdentity: creatorId
+    });
+    const clueBlob = await chatCrypto.wrapRoomKeyWithClue({
+      roomKeyB64,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      clueAnswer: 'Golden Sea Lion'
+    });
+
+    const initRes = await apiJson(`/api/sculptures/${createdSculptureId}/chat/init`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ownerEcdhPubJwk: creatorId.ecdhPublicJwk,
+        ownerSignPubJwk: creatorId.signPublicJwk,
+        ownerPubFp: creatorId.pubFingerprint,
+        selfGrantEnvelope: selfWrap.wrappedKeyJson,
+        selfGrantSig: selfWrap.grantSig,
+        roomKeyCommit,
+        cluePrompt: 'Statuette above the pier arch?',
+        clueWrappedJson: clueBlob,
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(initRes.status, 200, JSON.stringify(initRes.body));
+    assert.equal(initRes.body.board.hasClue, true);
+
+    // 2. Enforce Desktop rejection (403), Too-Far GPS rejection (403), Missing Raycast rejection (403)
+    const desktopEnter = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}` },
+      body: JSON.stringify({
+        sightProof: await makeSightProof(visAId),
+        deviceProfile: { isMobile: false }
+      })
+    });
+    assert.equal(desktopEnter.status, 403);
+
+    const farEnter = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        sightProof: await makeSightProof(visAId, { lat: 37.9, lng: -122.41 }),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(farEnter.status, 403);
+
+    const noRayEnter = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        sightProof: await makeSightProof(visAId, { rayHit: false }),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(noRayEnter.status, 403);
+
+    // 3. Creator posts E2EE message #1; server strictly rejects plaintext
+    const secretText1 = 'Meet by the east pier lantern after sunset!';
+    const plaintextReject = await apiJson(`/api/sculptures/${createdSculptureId}/chat/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        text: secretText1,
+        sightProof: await makeSightProof(creatorId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(plaintextReject.status, 400);
+
+    const encMsg1 = await chatCrypto.encryptChatMessage({
+      roomKeyB64,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      senderSub: creatorUser.id,
+      identity: creatorId,
+      text: secretText1,
+      authorName: creatorUser.name,
+      sightDistM: 6.2,
+      altM: 43
+    });
+    const post1 = await apiJson(`/api/sculptures/${createdSculptureId}/chat/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...encMsg1,
+        sightProof: await makeSightProof(creatorId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(post1.status, 200, JSON.stringify(post1.body));
+    assert.ok(post1.body.message.ciphertextB64);
+
+    // 4. Visitor A taps sculpture in person through camera -> enters -> verifies server response has ZERO plaintext
+    const enterVisA = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: visAId.pubFingerprint,
+        sightProof: await makeSightProof(visAId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(enterVisA.status, 200);
+    assert.equal(JSON.stringify(enterVisA.body).includes(secretText1), false);
+    assert.equal(enterVisA.body.messages.length, 1);
+
+    // Wrong clue fails PBKDF2/AES-GCM unwrap; normalized correct clue succeeds
+    await assert.rejects(() =>
+      chatCrypto.unwrapRoomKeyWithClue({
+        clueWrappedJson: enterVisA.body.board.clueWrappedJson,
+        sculptureId: createdSculptureId,
+        keyEpoch: 1,
+        clueAnswer: 'silver pigeon'
+      })
+    );
+    const unlockedVisAKey = await chatCrypto.unwrapRoomKeyWithClue({
+      clueWrappedJson: enterVisA.body.board.clueWrappedJson,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      clueAnswer: '  golden   sea lion '
+    });
+    assert.equal(unlockedVisAKey, roomKeyB64);
+
+    const decMsg1 = await chatCrypto.decryptChatMessage({
+      msg: enterVisA.body.messages[0],
+      roomKeyB64: unlockedVisAKey,
+      sculptureId: createdSculptureId
+    });
+    assert.equal(decMsg1.verifiedSig, true);
+    assert.equal(decMsg1.text, secretText1);
+
+    // Visitor A claims granted membership via double-hashed proof without revealing clue answer or K_room
+    const { roomProofToken } = await chatCrypto.computeRoomPossessionProof(
+      unlockedVisAKey,
+      createdSculptureId,
+      1
+    );
+    const visASelfWrap = await chatCrypto.wrapRoomKeyForRecipient({
+      roomKeyB64: unlockedVisAKey,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      recipientEcdhPubJwk: visAId.ecdhPublicJwk,
+      recipientPubFp: visAId.pubFingerprint,
+      grantorIdentity: visAId
+    });
+    const claimA = await apiJson(`/api/sculptures/${createdSculptureId}/chat/claim-grant`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        roomProofToken,
+        requesterEcdhPubJwk: visAId.ecdhPublicJwk,
+        requesterSignPubJwk: visAId.signPublicJwk,
+        requesterPubFp: visAId.pubFingerprint,
+        selfGrantEnvelope: visASelfWrap.wrappedKeyJson,
+        selfGrantSig: visASelfWrap.grantSig,
+        sightProof: await makeSightProof(visAId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(claimA.status, 200);
+    assert.equal(claimA.body.grant.status, 'granted');
+
+    const secretText2 = 'Unlocked by standing under the arch!';
+    const encMsg2 = await chatCrypto.encryptChatMessage({
+      roomKeyB64: unlockedVisAKey,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      senderSub: visAAuth.body.user.id,
+      identity: visAId,
+      text: secretText2,
+      authorName: 'Visitor A',
+      sightDistM: 5.5,
+      altM: 43
+    });
+    const post2 = await apiJson(`/api/sculptures/${createdSculptureId}/chat/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...encMsg2,
+        sightProof: await makeSightProof(visAId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(post2.status, 200);
+
+    // 5. Visitor B enters without knowing the clue -> requests ECDH grant -> Visitor A wraps K_room -> Visitor B reads full history
+    const reqB = await apiJson(`/api/sculptures/${createdSculptureId}/chat/request-grant`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visBAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterEcdhPubJwk: visBId.ecdhPublicJwk,
+        requesterSignPubJwk: visBId.signPublicJwk,
+        requesterPubFp: visBId.pubFingerprint,
+        sightProof: await makeSightProof(visBId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(reqB.status, 200);
+    assert.equal(reqB.body.grant.status, 'pending');
+
+    const pendingForA = await apiJson('/api/chat/pending-grants', {
+      headers: { Authorization: `Bearer ${visAAuth.body.token}` }
+    });
+    assert.equal(pendingForA.status, 200);
+    const targetB = pendingForA.body.grants.find((g) => g.requesterPubFp === visBId.pubFingerprint);
+    assert.ok(targetB);
+
+    const wrapForB = await chatCrypto.wrapRoomKeyForRecipient({
+      roomKeyB64: unlockedVisAKey,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      recipientEcdhPubJwk: targetB.requesterEcdhPubJwk,
+      recipientPubFp: targetB.requesterPubFp,
+      grantorIdentity: visAId
+    });
+    const grantB = await apiJson(`/api/sculptures/${createdSculptureId}/chat/grants`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visAAuth.body.token}` },
+      body: JSON.stringify({
+        targetGrantId: targetB.id,
+        wrappedKeyJson: wrapForB.wrappedKeyJson,
+        grantorEcdhPubJwk: visAId.ecdhPublicJwk,
+        grantorSignPubJwk: visAId.signPublicJwk,
+        grantSig: wrapForB.grantSig
+      })
+    });
+    assert.equal(grantB.status, 200);
+    assert.equal(grantB.body.grant.status, 'granted');
+
+    const enterVisB = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visBAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: visBId.pubFingerprint,
+        sightProof: await makeSightProof(visBId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(enterVisB.status, 200);
+    assert.equal(enterVisB.body.myGrant.status, 'granted');
+
+    const unwrappedVisBKey = await chatCrypto.unwrapRoomKeyFromGrant({
+      wrappedKeyJson: enterVisB.body.myGrant.wrappedKeyJson,
+      grantSig: enterVisB.body.myGrant.grantSig,
+      grantorSignPubJwk: enterVisB.body.myGrant.grantorSignPubJwk,
+      sculptureId: createdSculptureId,
+      keyEpoch: 1,
+      identity: visBId
+    });
+    assert.equal(unwrappedVisBKey, roomKeyB64);
+
+    const decHistoryB = [];
+    for (const m of enterVisB.body.messages) {
+      decHistoryB.push(
+        await chatCrypto.decryptChatMessage({
+          msg: m,
+          roomKeyB64: unwrappedVisBKey,
+          sculptureId: createdSculptureId
+        })
+      );
+    }
+    assert.deepEqual(
+      decHistoryB.map((m) => m.text),
+      [secretText1, secretText2]
+    );
+
+    // 6. Desktop metadata endpoint exposes only encrypted count, zero plaintext or ciphertexts
+    const singleSc = await apiJson(`/api/sculptures/${createdSculptureId}`);
+    assert.equal(singleSc.status, 200);
+    assert.equal(singleSc.body.sculpture.chatSummary.initialized, true);
+    assert.equal(singleSc.body.sculpture.chatSummary.messageCount, 2);
+    assert.equal(JSON.stringify(singleSc.body).includes(secretText1), false);
+    assert.equal(JSON.stringify(singleSc.body).includes(secretText2), false);
   });
 });

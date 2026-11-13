@@ -1,9 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import {
+  CHAT_SIGHT_CLIENT_DISTANCE_M,
+  haversineMeters
+} from '../../../shared/chatPolicy.mjs';
 import { api } from '../utils/api.js';
+import {
+  computeRoomPossessionProof,
+  generateRoomKeyB64,
+  getOrCreateDeviceIdentity,
+  loadLocalRoomKey,
+  saveLocalRoomKey,
+  wrapRoomKeyForRecipient,
+  wrapRoomKeyWithClue
+} from '../utils/chatCrypto.js';
 import { getWsUrl } from '../utils/device.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import SculptureChatDrawer from './SculptureChatDrawer.jsx';
 import { ForegroundOcclusionCompositor } from './ForegroundOcclusion.js';
 import { ProofOfLocationTracker } from './ProofOfLocation.js';
 import {
@@ -54,6 +68,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [infoOpen, setInfoOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [pairOpen, setPairOpen] = useState(false);
+  const [chatSelection, setChatSelection] = useState(null);
+  const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
+  const [arSelectHint, setArSelectHint] = useState('');
 
   // Pairing
   const [pairCodeInput, setPairCodeInput] = useState(() => {
@@ -76,6 +93,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const rawOrientationRef = useRef(null);
   const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
   const dragStartRef = useRef(null);
+  const tapStartRef = useRef(null);
+  const hintTimerRef = useRef(null);
+  const arTargetedIdRef = useRef('');
   const voxelsRef = useRef([]);
   const modeRef = useRef(mode);
   const toolRef = useRef(tool);
@@ -83,6 +103,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const materialRef = useRef(material);
   const reachRef = useRef(reachMeters);
   const occlusionEnabledRef = useRef(occlusionEnabled);
+  const cameraReadyRef = useRef(cameraReady);
   const userRef = useRef(user);
   const locationRef = useRef(location);
   const paintingRef = useRef(false);
@@ -93,6 +114,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }, [user]);
 
   useEffect(() => {
+    cameraReadyRef.current = cameraReady;
+  }, [cameraReady]);
+
+  useEffect(() => {
     occlusionEnabledRef.current = occlusionEnabled;
   }, [occlusionEnabled]);
 
@@ -100,9 +125,56 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     locationRef.current = location;
   }, [location]);
 
+  // Background ECDH key-wrap loop for sculptures whose K_room is held locally on this phone
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    async function processPending() {
+      try {
+        const res = await api.listPendingChatGrants();
+        const grants = res.grants || [];
+        if (!grants.length || !active) return;
+        const identity = await getOrCreateDeviceIdentity(user.id);
+        for (const reqGrant of grants) {
+          if (!active) break;
+          if (reqGrant.sightDistanceM > 75 || reqGrant.sightScore < 45) continue;
+          const roomKeyB64 = loadLocalRoomKey(user.id, reqGrant.sculptureId, reqGrant.keyEpoch);
+          if (!roomKeyB64) continue;
+          const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
+            roomKeyB64,
+            sculptureId: reqGrant.sculptureId,
+            keyEpoch: reqGrant.keyEpoch,
+            recipientEcdhPubJwk: reqGrant.requesterEcdhPubJwk,
+            recipientPubFp: reqGrant.requesterPubFp,
+            grantorIdentity: identity
+          });
+          await api.submitSculptureChatGrant(reqGrant.sculptureId, {
+            targetGrantId: reqGrant.id,
+            wrappedKeyJson,
+            grantorEcdhPubJwk: identity.ecdhPublicJwk,
+            grantorSignPubJwk: identity.signPublicJwk,
+            grantSig
+          });
+        }
+      } catch {
+        // non-blocking background auto-grant
+      }
+    }
+    const initTimer = setTimeout(processPending, 1800);
+    const intervalId = setInterval(processPending, 15000);
+    return () => {
+      active = false;
+      clearTimeout(initTimer);
+      clearInterval(intervalId);
+      clearTimeout(hintTimerRef.current);
+    };
+  }, [user?.id]);
+
   // Publish state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [cluePrompt, setCluePrompt] = useState('');
+  const [clueAnswer, setClueAnswer] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
@@ -310,6 +382,28 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     for (const sc of nearbySculptures) {
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const sub = buildVoxelGroup(sc.voxels || []);
+      sub.traverse((obj) => {
+        if (obj.isMesh) obj.userData.sculpture = sc;
+      });
+
+      // Invisible enlarged tap-target bounding box around voxels for reliable AR camera selection
+      const bounds = new THREE.Box3().setFromObject(sub);
+      const boxCenter = new THREE.Vector3();
+      const boxSize = new THREE.Vector3();
+      bounds.getCenter(boxCenter);
+      bounds.getSize(boxSize);
+      const hitProxy = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          Math.max(1.0, boxSize.x + 0.55),
+          Math.max(1.0, boxSize.y + 0.55),
+          Math.max(1.0, boxSize.z + 0.55)
+        ),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      hitProxy.position.copy(boxCenter);
+      hitProxy.userData.sculpture = sc;
+      sub.add(hitProxy);
+
       // Clamp super distant previews visually within 35m so distant same-block art remains visible
       const dist = Math.hypot(offset.east, offset.north);
       const clampFactor = dist > 35 ? 35 / dist : 1;
@@ -513,6 +607,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     let lastWsPush = 0;
     let lastEnvPush = 0;
     let lastOcclusionPush = 0;
+    let lastTargetCheck = 0;
+    const targetRay = new THREE.Raycaster();
+    const centerNdc = new THREE.Vector2(0, 0);
 
     const animate = () => {
       rafId = requestAnimationFrame(animate);
@@ -581,6 +678,30 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           rawOrientationRef.current,
           occlusionEnabledRef.current
         );
+      }
+
+      if (now - lastTargetCheck > 180) {
+        lastTargetCheck = now;
+        if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
+          targetRay.setFromCamera(centerNdc, camera);
+          const hits = targetRay.intersectObjects(nearbyGroupRef.current.children, true);
+          const hitObj = hits.find((h) => h.object?.userData?.sculpture);
+          const sc = hitObj?.object?.userData?.sculpture || null;
+          if (sc) {
+            const loc = locationRef.current;
+            const d = loc ? haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) : hitObj.distance;
+            if (arTargetedIdRef.current !== sc.id) {
+              arTargetedIdRef.current = sc.id;
+              setArTargetedSculpture({ sculpture: sc, distanceM: d });
+            }
+          } else if (arTargetedIdRef.current) {
+            arTargetedIdRef.current = '';
+            setArTargetedSculpture(null);
+          }
+        } else if (arTargetedIdRef.current) {
+          arTargetedIdRef.current = '';
+          setArTargetedSculpture(null);
+        }
       }
 
       if (wsRef.current?.readyState === 1 && now - lastWsPush > 45) {
@@ -704,8 +825,58 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     lastPaintPosRef.current = null;
   }
 
+  function showTemporaryHint(msg) {
+    setArSelectHint(msg);
+    clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = setTimeout(() => setArSelectHint(''), 4200);
+  }
+
+  function openCameraSelectedChat(sc, rayHitDistanceM = null) {
+    if (!sc) return;
+    const loc = locationRef.current;
+    if (!cameraReadyRef.current) {
+      showTemporaryHint('Live mobile camera stream must be active to enter sculpture chat.');
+      return;
+    }
+    if (!loc) {
+      showTemporaryHint('Waiting for GPS fix before unlocking location chat.');
+      return;
+    }
+    const distM = haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng);
+    if (distM > CHAT_SIGHT_CLIENT_DISTANCE_M) {
+      showTemporaryHint(
+        `"${sc.title}" is ${Math.round(distM)}m away — walk within ${CHAT_SIGHT_CLIENT_DISTANCE_M}m in person to unlock.`
+      );
+      return;
+    }
+    const polSnap = polRef.current.getSnapshot();
+    if ((polSnap.cameraFrames || 0) < 2) {
+      showTemporaryHint('Hold live camera steady for a moment to verify Proof of Sight.');
+      return;
+    }
+    setArSelectHint('');
+    setChatSelection({
+      sculpture: sc,
+      sightProof: {
+        selectionMethod: 'ar-camera-raycast',
+        rayHit: true,
+        inFrustum: true,
+        cameraReady: true,
+        cameraFrames: polSnap.cameraFrames,
+        opticalFlowCorrelation: polSnap.opticalFlowCorrelation,
+        visualDHash: polSnap.visualDHash,
+        lat: loc.lat,
+        lng: loc.lng,
+        altitude: loc.altitude ?? null,
+        rayHitDistanceM: Number.isFinite(rayHitDistanceM) ? Math.round(rayHitDistanceM * 100) / 100 : null,
+        selectedAt: new Date().toISOString()
+      }
+    });
+  }
+
   function handleCanvasPointerDown(e) {
     dragStartRef.current = { x: e.clientX, y: e.clientY };
+    tapStartRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   function handleCanvasPointerMove(e) {
@@ -720,8 +891,32 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     );
   }
 
-  function handleCanvasPointerUp() {
+  function handleCanvasPointerUp(e) {
     dragStartRef.current = null;
+    const start = tapStartRef.current;
+    tapStartRef.current = null;
+    if (!start || modeRef.current !== 'preview') return;
+
+    const moveDist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+    if (moveDist > 14) return;
+
+    const host = canvasHostRef.current;
+    const cam = cameraRef.current;
+    const nearbyGroup = nearbyGroupRef.current;
+    if (!host || !cam || !nearbyGroup) return;
+
+    const rect = host.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, cam);
+    const hits = raycaster.intersectObjects(nearbyGroup.children, true);
+    const hitWithSculpture = hits.find((h) => h.object?.userData?.sculpture);
+    if (hitWithSculpture) {
+      openCameraSelectedChat(hitWithSculpture.object.userData.sculpture, hitWithSculpture.distance);
+    }
   }
 
   function openPublishSheet() {
@@ -779,10 +974,53 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           hasCamera: cameraReady
         }
       });
+
+      // Initialize the sculpture's client-side E2EE chat board (server never sees K_room or clue answer)
+      if (user?.id && res?.sculpture?.id) {
+        try {
+          const idObj = await getOrCreateDeviceIdentity(user.id);
+          const roomKeyB64 = generateRoomKeyB64();
+          saveLocalRoomKey(user.id, res.sculpture.id, 1, roomKeyB64);
+          const { roomKeyCommit } = await computeRoomPossessionProof(roomKeyB64, res.sculpture.id, 1);
+          const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
+            roomKeyB64,
+            sculptureId: res.sculpture.id,
+            keyEpoch: 1,
+            recipientEcdhPubJwk: idObj.ecdhPublicJwk,
+            recipientPubFp: idObj.pubFingerprint,
+            grantorIdentity: idObj
+          });
+          let clueWrappedJson = '';
+          if (cluePrompt.trim() && clueAnswer.trim()) {
+            clueWrappedJson = await wrapRoomKeyWithClue({
+              roomKeyB64,
+              sculptureId: res.sculpture.id,
+              keyEpoch: 1,
+              clueAnswer
+            });
+          }
+          await api.initSculptureChat(res.sculpture.id, {
+            ownerEcdhPubJwk: idObj.ecdhPublicJwk,
+            ownerSignPubJwk: idObj.signPublicJwk,
+            ownerPubFp: idObj.pubFingerprint,
+            selfGrantEnvelope: wrappedKeyJson,
+            selfGrantSig: grantSig,
+            roomKeyCommit,
+            cluePrompt: cluePrompt.trim(),
+            clueWrappedJson,
+            deviceProfile: { isMobile: true }
+          });
+        } catch {
+          // Non-blocking: chat board can still be initialized later on first AR tap
+        }
+      }
+
       setMintReceipt(res);
       setVoxels([]);
       setTitle('');
       setDescription('');
+      setCluePrompt('');
+      setClueAnswer('');
       setTermsAccepted(false);
       // Refresh nearby AR sculptures
       const nearbyRes = await api.listSculptures({
@@ -886,6 +1124,47 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             }}
           >
             <XeroIcon emoji="⚠️" size={14} /> {sensorBanner}
+          </div>
+        )}
+
+        {mode === 'preview' && arTargetedSculpture && (
+          <button
+            className="btn btn-primary"
+            onClick={() => openCameraSelectedChat(arTargetedSculpture.sculpture, arTargetedSculpture.distanceM)}
+            style={{
+              position: 'absolute',
+              bottom: 'max(86px, calc(env(safe-area-inset-bottom) + 70px))',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 24,
+              whiteSpace: 'nowrap',
+              boxShadow: '0 10px 26px rgba(0, 0, 0, 0.55)'
+            }}
+          >
+            <XeroIcon emoji="💬" size={16} />
+            <span>
+              {arTargetedSculpture.sculpture.title} ({Math.round(arTargetedSculpture.distanceM)}m) · Enter E2EE Chat
+            </span>
+          </button>
+        )}
+
+        {arSelectHint && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 64,
+              left: 14,
+              right: 70,
+              padding: '8px 10px',
+              borderRadius: 10,
+              background: 'rgba(12, 18, 34, 0.86)',
+              border: '1px solid rgba(0, 245, 212, 0.45)',
+              fontSize: 12,
+              color: 'var(--text)',
+              zIndex: 28
+            }}
+          >
+            <XeroIcon emoji="🔒" size={14} /> {arSelectHint}
           </div>
         )}
 
@@ -1183,6 +1462,30 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   />
                 </div>
 
+                <div>
+                  <div className="field-label">
+                    <span>Optional On-Site Chat Clue (24/7 Solo Unlock)</span>
+                    <span className="mono">E2EE · PBKDF2</span>
+                  </div>
+                  <input
+                    className="input"
+                    maxLength={140}
+                    value={cluePrompt}
+                    onChange={(e) => setCluePrompt(e.target.value)}
+                    placeholder="Question visible at this spot (leave blank for peer-only)"
+                  />
+                  {cluePrompt.trim() && (
+                    <input
+                      className="input"
+                      style={{ marginTop: 6 }}
+                      value={clueAnswer}
+                      onChange={(e) => setClueAnswer(e.target.value)}
+                      placeholder="Answer visible in person (never sent to server)"
+                      required
+                    />
+                  )}
+                </div>
+
                 {user && (
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                     Minted NFT Recipient ({user.email}):
@@ -1236,6 +1539,19 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             )}
           </div>
         </div>
+      )}
+
+      {chatSelection && (
+        <SculptureChatDrawer
+          sculpture={chatSelection.sculpture}
+          user={user}
+          location={location}
+          polTracker={polRef.current}
+          cameraReady={cameraReady}
+          initialSightProof={chatSelection.sightProof}
+          onRequestLogin={() => setLoginOpen(true)}
+          onClose={() => setChatSelection(null)}
+        />
       )}
 
       {infoOpen && (
