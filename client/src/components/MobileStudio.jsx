@@ -96,6 +96,26 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [needsGyroTap, setNeedsGyroTap] = useState(false);
   const [location, setLocation] = useState(null);
   const [polStats, setPolStats] = useState({ frames: 0, gyro: 0, flow: 0 });
+  const [sceneScan, setSceneScan] = useState({
+    coveragePct: 0,
+    scannedCount: 0,
+    targetCount: 9,
+    sectors: Array(12).fill(false),
+    cursorX: 0.5,
+    cursorY: 0.5,
+    optimal: false,
+    precisionMeters: 2.4,
+    hint: 'Move phone around scene'
+  });
+  const [scanBoxCollapsed, setScanBoxCollapsed] = useState(false);
+  const lastScanUiRef = useRef({
+    coveragePct: -1,
+    scannedCount: -1,
+    optimal: false,
+    cursorX: -1,
+    cursorY: -1,
+    hint: ''
+  });
   const [painting, setPainting] = useState(false);
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
@@ -270,6 +290,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             gyro: snap.gyroSamples,
             flow: Math.round(snap.opticalFlowCorrelation * 100)
           });
+          const cov = polRef.current.getSceneCoverage();
+          lastScanUiRef.current = {
+            coveragePct: cov.coveragePct,
+            scannedCount: cov.scannedCount,
+            optimal: cov.optimal,
+            cursorX: cov.cursorX,
+            cursorY: cov.cursorY,
+            hint: cov.hint
+          };
+          setSceneScan(cov);
         }
       }
     }, 450);
@@ -303,7 +333,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           speed: pos.coords.speed,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         };
-        setLocation(loc);
+        const refined = polRef.current.getRefinedLocation(loc) || loc;
+        setLocation(refined);
 
         // Align directional sunlight shadow vector to real-world solar azimuth & elevation
         if (dirLightRef.current) {
@@ -679,6 +710,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     let lastEnvPush = 0;
     let lastOcclusionPush = 0;
     let lastTargetCheck = 0;
+    let lastScanPosePush = 0;
+    const scanFwdVec = new THREE.Vector3();
     const targetRay = new THREE.Raycaster();
     const centerNdc = new THREE.Vector2(0, 0);
 
@@ -731,7 +764,39 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       }
 
       const now = performance.now();
-      if (now - lastEnvPush > 950 && videoRef.current && envUpdaterRef.current) {
+      if (now - lastScanPosePush > 110) {
+        lastScanPosePush = now;
+        scanFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+        const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
+        const pitchDeg = (Math.asin(Math.max(-1, Math.min(1, scanFwdVec.y))) * 180) / Math.PI;
+        const cov = polRef.current.recordViewPose({
+          yawDeg,
+          pitchDeg,
+          hasCamera: Boolean(videoRef.current && videoRef.current.readyState >= 2)
+        });
+        const prev = lastScanUiRef.current;
+        if (
+          cov.coveragePct !== prev.coveragePct ||
+          cov.scannedCount !== prev.scannedCount ||
+          cov.optimal !== prev.optimal ||
+          cov.hint !== prev.hint ||
+          Math.abs(cov.cursorX - prev.cursorX) >= 0.035 ||
+          Math.abs(cov.cursorY - prev.cursorY) >= 0.035
+        ) {
+          lastScanUiRef.current = {
+            coveragePct: cov.coveragePct,
+            scannedCount: cov.scannedCount,
+            optimal: cov.optimal,
+            cursorX: cov.cursorX,
+            cursorY: cov.cursorY,
+            hint: cov.hint
+          };
+          setSceneScan(cov);
+        }
+      }
+
+      const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 950 : 360;
+      if (now - lastEnvPush > envRefreshMs && videoRef.current && envUpdaterRef.current) {
         lastEnvPush = now;
         const envData = envUpdaterRef.current.update(videoRef.current);
         if (envData) {
@@ -1307,13 +1372,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       }
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = polRef.current.getSnapshot();
+      const refinedAnchor = polRef.current.getRefinedLocation(location) || location;
       const res = await api.publishSculpture({
         title,
         description,
         termsAccepted,
         voxels,
         previewDataUrl,
-        location,
+        location: refinedAnchor,
         proofOfLocation: polSnap,
         deviceProfile: {
           isMobile: true,
@@ -1570,6 +1636,66 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             </div>
           );
         })()}
+
+        {/* Bottom-Right Scene Analysis Coverage Window */}
+        <div
+          className={`scene-scan-box hud-interactive ${sceneScan.optimal ? 'optimal' : 'scanning'} ${scanBoxCollapsed ? 'collapsed' : ''} ${dockOpen ? 'hide-on-dock-mobile' : ''}`}
+          role="region"
+          aria-label="Scene analysis coverage window"
+        >
+          <div className="scene-scan-header">
+            <div className="scene-scan-title">
+              <XeroIcon emoji={sceneScan.optimal ? '✅' : '📡'} size={12} />
+              <span className="mono">{sceneScan.coveragePct}%</span>
+              <span className="scene-scan-tag">
+                {sceneScan.optimal ? 'LOCKED' : `${sceneScan.scannedCount}/${sceneScan.targetCount}`}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="scene-scan-collapse"
+              onClick={() => setScanBoxCollapsed((v) => !v)}
+              aria-label={scanBoxCollapsed ? 'Expand scene coverage window' : 'Collapse scene coverage window'}
+              title={scanBoxCollapsed ? 'Show scene scan window' : 'Minimize'}
+            >
+              <XeroIcon emoji={scanBoxCollapsed ? '🔍' : '➖'} size={11} />
+            </button>
+          </div>
+
+          {!scanBoxCollapsed && (
+            <>
+              <div className="scene-scan-window" aria-hidden="true">
+                <div className="scene-scan-grid">
+                  {sceneScan.sectors.map((lit, i) => (
+                    <span
+                      key={i}
+                      className={`scene-scan-cell ${lit ? 'scanned' : ''}`}
+                    />
+                  ))}
+                </div>
+                <span
+                  className="scene-scan-dot"
+                  style={{
+                    left: `${sceneScan.cursorX * 100}%`,
+                    top: `${sceneScan.cursorY * 100}%`
+                  }}
+                />
+              </div>
+
+              <div className="scene-scan-bar">
+                <div
+                  className="scene-scan-bar-fill"
+                  style={{ width: `${sceneScan.coveragePct}%` }}
+                />
+              </div>
+
+              <div className="scene-scan-hint">{sceneScan.hint}</div>
+              <div className="scene-scan-precision mono">
+                ±{sceneScan.precisionMeters.toFixed(2)}m placement
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Floating Toggle for Ultra-Minimal vs Active Dock */}
         <button

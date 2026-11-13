@@ -195,8 +195,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
           ambientPalette: ['#00f5d4', '#1a2b4c', '#ffd166'],
           visualDHash: 'f0e1d2c3b4a59687',
           cameraFacingMode: 'environment',
-          cameraResolution: '1280x720',
-          sculptDurationMs: 14200
+          cameraResolution: '3840x2160',
+          sculptDurationMs: 14200,
+          sceneCoveragePct: 100,
+          scannedSectors: 10,
+          placementPrecisionMeters: 0.15
         },
         deviceProfile: { isMobile: true }
       })
@@ -206,6 +209,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.ok(res.body.sculpture.id);
     assert.ok(res.body.sculpture.parcelId.startsWith('GLAND-'));
     assert.ok(res.body.sculpture.polScore >= 75);
+    assert.equal(res.body.sculpture.proofOfLocation.sensors.sceneCoveragePct, 100);
+    assert.equal(res.body.sculpture.proofOfLocation.sensors.scannedSectors, 10);
+    assert.equal(res.body.sculpture.proofOfLocation.sensors.placementPrecisionMeters, 0.15);
     assert.equal(res.body.sculpture.altitude, 42.5);
     assert.equal(res.body.sculpture.elevation.deviceAltitudeMeters, 42.5);
     assert.equal(res.body.sculpture.elevation.altitudeAccuracyMeters, 3.2);

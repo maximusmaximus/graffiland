@@ -119,12 +119,15 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="📍" size={18} /> Proof of Location (Camera + GPS)
+                <XeroIcon emoji="📡" size={18} /> Scene Analysis &amp; Proof of Location
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Every sculpture verifies physical presence using GPS stability, solar sky-luminance match,
-                environmental palette fingerprinting, and real-time <strong>Camera Optical-Flow vs. Gyroscope Correlation</strong>.
-                Publishing claims the surrounding ~12m &times; 12m Geohash Virtual Land parcel on IPFS &amp; Robinhood Chain.
+                Move your phone around left, right, and slightly up/down when sculpting — watch the
+                small coverage window in the bottom right fill to <strong>100% LOCKED</strong> (9+
+                viewed angles). Sweeping your camera stabilizes multi-sample GPS &amp; altitude lock,
+                sharpens 4x voxel placement precision, samples fuller environment reflections, and
+                verifies <strong>Optical-Flow vs. Gyroscope Correlation</strong> for Proof of Location
+                before minting your ~12m × 12m Geohash Virtual Land parcel on IPFS &amp; Robinhood Chain.
               </p>
             </div>
 

@@ -19,6 +19,15 @@ export class ProofOfLocationTracker {
     this.cameraResolution = 'unknown';
     this.cameraFacingMode = 'environment';
     this.startedAt = Date.now();
+
+    // Multi-angle Scene Analysis Coverage grid (4 yaw cols x 3 pitch rows = 12 sectors)
+    this.scanCols = 4;
+    this.scanRows = 3;
+    this.scanTargetCount = 9;
+    this.scanSectors = new Array(this.scanCols * this.scanRows).fill(false);
+    this.anchorYawDeg = null;
+    this.latestPose = null;
+    this.sceneContrast = 0;
   }
 
   recordGps(pos) {
@@ -47,6 +56,154 @@ export class ProofOfLocationTracker {
     this.latestGyro = { alpha, beta, gamma: gamma || 0, t: Date.now() };
   }
 
+  recordViewPose({ yawDeg, pitchDeg, hasCamera = false }) {
+    if (!Number.isFinite(yawDeg) || !Number.isFinite(pitchDeg)) {
+      return this.getSceneCoverage();
+    }
+    if (this.anchorYawDeg === null) {
+      this.anchorYawDeg = yawDeg;
+    }
+
+    let relYaw = yawDeg - this.anchorYawDeg;
+    while (relYaw > 180) relYaw -= 360;
+    while (relYaw < -180) relYaw += 360;
+
+    const maxYawHalf = 64;
+    const clampedYaw = Math.max(-maxYawHalf, Math.min(maxYawHalf, relYaw));
+    const normX = (clampedYaw + maxYawHalf) / (maxYawHalf * 2);
+    const col = Math.max(0, Math.min(this.scanCols - 1, Math.floor(normX * this.scanCols)));
+
+    const maxPitchHalf = 32;
+    const clampedPitch = Math.max(-maxPitchHalf, Math.min(maxPitchHalf, pitchDeg));
+    // pitch > 0 is looking up (row 0), pitch < 0 is looking down (row 2)
+    const normY = 1 - (clampedPitch + maxPitchHalf) / (maxPitchHalf * 2);
+    const row = Math.max(0, Math.min(this.scanRows - 1, Math.floor(normY * this.scanRows)));
+
+    this.latestPose = {
+      yawDeg,
+      pitchDeg,
+      relYaw,
+      col,
+      row,
+      cursorX: Math.max(0.06, Math.min(0.94, normX)),
+      cursorY: Math.max(0.08, Math.min(0.92, normY)),
+      t: Date.now()
+    };
+
+    if (hasCamera && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
+      this.scanSectors[row * this.scanCols + col] = true;
+    }
+
+    return this.getSceneCoverage();
+  }
+
+  getRefinedLocation(fallbackLocation = null) {
+    if (!this.gpsSamples.length) return fallbackLocation;
+    const latest = this.gpsSamples[this.gpsSamples.length - 1];
+    const recent = this.gpsSamples.slice(-12);
+
+    let wSum = 0;
+    let latSum = 0;
+    let lngSum = 0;
+    let altWSum = 0;
+    let altSum = 0;
+    let bestAcc = Infinity;
+
+    for (const s of recent) {
+      const acc = Number.isFinite(s.accuracy) && s.accuracy > 0 ? s.accuracy : 25;
+      if (acc < bestAcc) bestAcc = acc;
+      const w = 1 / Math.max(9, acc * acc);
+      wSum += w;
+      latSum += s.lat * w;
+      lngSum += s.lng * w;
+      if (Number.isFinite(s.altitude)) {
+        altWSum += w;
+        altSum += s.altitude * w;
+      }
+    }
+
+    if (wSum <= 0) return fallbackLocation;
+    const avgLat = latSum / wSum;
+    const avgLng = lngSum / wSum;
+    const avgAlt = altWSum > 0 ? altSum / altWSum : (fallbackLocation?.altitude ?? latest.altitude ?? null);
+
+    return {
+      ...(fallbackLocation || {}),
+      lat: avgLat,
+      lng: avgLng,
+      altitude: avgAlt,
+      accuracy: Number.isFinite(bestAcc) ? Math.min(bestAcc, fallbackLocation?.accuracy ?? bestAcc) : fallbackLocation?.accuracy ?? null,
+      altitudeAccuracy: fallbackLocation?.altitudeAccuracy ?? null,
+      heading: fallbackLocation?.heading ?? latest.heading ?? null,
+      speed: fallbackLocation?.speed ?? latest.speed ?? null
+    };
+  }
+
+  getSceneCoverage() {
+    const scannedCount = this.scanSectors.filter(Boolean).length;
+    const targetCount = this.scanTargetCount;
+    const sweepProgress = Math.min(1, scannedCount / targetCount);
+    const hasCamera = this.cameraFrames > 0;
+    const flowFactor = this.flowTotal >= 2 ? 1 : Math.min(0.85, this.cameraFrames / 5);
+    const gpsBonus = this.gpsSamples.length > 0 ? 1 : 0.6;
+    const stability = Math.min(1, flowFactor * 0.7 + gpsBonus * 0.3);
+
+    const rawPct = hasCamera ? Math.round((sweepProgress * 0.88 + stability * 0.12) * 100) : 0;
+    const optimal = scannedCount >= targetCount && this.cameraFrames >= 4;
+    const coveragePct = optimal ? 100 : Math.min(99, rawPct);
+
+    // Count missing regions to guide physical phone movement
+    let leftMissing = 0;
+    let rightMissing = 0;
+    let upMissing = 0;
+    let downMissing = 0;
+    for (let r = 0; r < this.scanRows; r++) {
+      for (let c = 0; c < this.scanCols; c++) {
+        if (!this.scanSectors[r * this.scanCols + c]) {
+          if (c < 2) leftMissing++;
+          else rightMissing++;
+          if (r === 0) upMissing++;
+          if (r === 2) downMissing++;
+        }
+      }
+    }
+
+    let hint = 'Move phone around scene';
+    if (!hasCamera) {
+      hint = 'Camera needed for scan';
+    } else if (optimal) {
+      hint = 'Optimal scene lock';
+    } else if (scannedCount <= 2) {
+      hint = 'Move phone around scene';
+    } else if (upMissing >= 2 && upMissing >= leftMissing && upMissing >= rightMissing) {
+      hint = 'Tilt up & sweep scene';
+    } else if (downMissing >= 2 && downMissing > leftMissing && downMissing > rightMissing) {
+      hint = 'Tilt down & sweep scene';
+    } else if (leftMissing > rightMissing) {
+      hint = 'Pan left to sharpen lock';
+    } else if (rightMissing > leftMissing) {
+      hint = 'Pan right to sharpen lock';
+    } else {
+      hint = 'Sweep phone for 100%';
+    }
+
+    // Visual-inertial local placement precision estimate tightens as angular sweep fills
+    const precisionMeters = Math.round((2.4 - sweepProgress * 2.25) * 100) / 100;
+
+    return {
+      coveragePct,
+      scannedCount,
+      targetCount,
+      totalSectors: this.scanSectors.length,
+      sectors: [...this.scanSectors],
+      cursorX: this.latestPose?.cursorX ?? 0.5,
+      cursorY: this.latestPose?.cursorY ?? 0.5,
+      optimal,
+      precisionMeters,
+      hint
+    };
+  }
+
   sampleCameraFrame(videoEl) {
     if (!videoEl || videoEl.readyState < 2 || !this.ctx) return null;
     const vw = videoEl.videoWidth || 640;
@@ -68,7 +225,7 @@ export class ProofOfLocationTracker {
     }
     this.horizonLuminance = Math.round(topLumSum / (topRows * 48));
 
-    // 2. Quantized 5-color ambient palette
+    // Quantized 5-color ambient palette + texture contrast check
     const buckets = new Map();
     const gray = new Float32Array(48 * 36);
     for (let i = 0; i < 48 * 36; i++) {
@@ -82,6 +239,22 @@ export class ProofOfLocationTracker {
       const qb = Math.min(240, Math.round(b / 32) * 32);
       const hex = `#${[qr, qg, qb].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
       buckets.set(hex, (buckets.get(hex) || 0) + 1);
+    }
+    let edgeSum = 0;
+    let edgeSamples = 0;
+    for (let y = 1; y < 35; y += 2) {
+      for (let x = 1; x < 47; x += 2) {
+        const c = gray[y * 48 + x];
+        edgeSum += Math.abs(c - gray[y * 48 + x + 1]) + Math.abs(c - gray[(y + 1) * 48 + x]);
+        edgeSamples += 2;
+      }
+    }
+    this.sceneContrast = edgeSamples ? edgeSum / edgeSamples : 0;
+    if (this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
+      this.scanSectors[this.latestPose.row * this.scanCols + this.latestPose.col] = true;
+    } else if (!this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
+      // Seed center sector cleanly on initial stationary startup frames
+      this.scanSectors[this.scanCols + 1] = true;
     }
     this.ambientPalette = [...buckets.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -153,6 +326,7 @@ export class ProofOfLocationTracker {
   }
 
   getSnapshot() {
+    const coverage = this.getSceneCoverage();
     return {
       gpsSamples: this.gpsSamples,
       gyroSamples: this.gyroSamples,
@@ -164,7 +338,10 @@ export class ProofOfLocationTracker {
       cameraFacingMode: this.cameraFacingMode,
       cameraResolution: this.cameraResolution,
       sculptDurationMs: Date.now() - this.startedAt,
-      deviceOrientationSummary: this.latestGyro
+      deviceOrientationSummary: this.latestGyro,
+      sceneCoveragePct: coverage.coveragePct,
+      scannedSectors: coverage.scannedCount,
+      placementPrecisionMeters: coverage.precisionMeters
     };
   }
 }

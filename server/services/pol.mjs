@@ -356,6 +356,11 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
       cameraFacingMode,
       cameraResolution,
       sculptDurationMs,
+      sceneCoveragePct: Math.max(0, Math.min(100, Number(polInput?.sceneCoveragePct || 0))),
+      scannedSectors: Math.max(0, Number(polInput?.scannedSectors || 0)),
+      placementPrecisionMeters: Number.isFinite(Number(polInput?.placementPrecisionMeters))
+        ? Number(polInput.placementPrecisionMeters)
+        : null,
       deviceOrientationSummary: polInput?.deviceOrientationSummary || null
     },
     score,
