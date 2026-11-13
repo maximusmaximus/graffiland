@@ -10,7 +10,8 @@ import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/consta
 const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
   { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Aim face & tap to stack' },
-  { id: 'erase', emoji: '🗑️', label: 'Erase', hint: 'Aim block & tap to remove' },
+  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Hold to erase blocks continuously' },
+  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform' },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
   { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
   { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
@@ -57,6 +58,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const shadowPlaneRef = useRef(null);
   const gridHelperRef = useRef(null);
   const surfaceMarkerRef = useRef(null);
+  const transformBoxRef = useRef(null);
   const draftMeshMapRef = useRef(new Map());
   const draftUnitGeoRef = useRef(null);
   const draftMatCacheRef = useRef(new Map());
@@ -128,6 +130,22 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   useEffect(() => {
     surfaceAnchorRef.current = surfaceAnchor;
   }, [surfaceAnchor]);
+  const [artTransform, setArtTransform] = useState({
+    scale: 1,
+    rotYDeg: 0,
+    offsetX: 0,
+    offsetY: 0,
+    offsetZ: 0
+  });
+  const [transformPivot, setTransformPivot] = useState({ x: 0, y: 0, z: 0 });
+  const artTransformRef = useRef(artTransform);
+  const transformPivotRef = useRef(transformPivot);
+  useEffect(() => {
+    artTransformRef.current = artTransform;
+  }, [artTransform]);
+  useEffect(() => {
+    transformPivotRef.current = transformPivot;
+  }, [transformPivot]);
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -152,6 +170,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
   const dragStartRef = useRef(null);
   const tapStartRef = useRef(null);
+  const activeCanvasPointersRef = useRef(new Map());
+  const transformPinchRef = useRef(null);
+  const clearedBackupRef = useRef(null);
+  const lastErasedKeyRef = useRef({ key: '', ts: 0 });
   const hintTimerRef = useRef(null);
   const arTargetedIdRef = useRef('');
   const voxelsRef = useRef([]);
@@ -449,6 +471,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     for (const [k, v] of wanted.entries()) {
       if (meshMap.has(k)) {
         const existing = meshMap.get(k);
+        existing.position.set(v.x, v.y, v.z);
+        existing.scale.setScalar(v.scale ?? 1);
         existing.userData.voxel = v;
         continue;
       }
@@ -541,7 +565,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }, [mode, location, nearbySculptures]);
 
-  const computeTargetVoxel = useCallback(() => {
+  const computeTargetVoxel = useCallback((forContinuousHold = false) => {
     const cam = cameraRef.current;
     const draftGroup = draftGroupRef.current;
     if (!cam) return null;
@@ -552,7 +576,22 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (toolRef.current === 'stack' || toolRef.current === 'erase') {
       const raycaster = new THREE.Raycaster(origin, dir, 0.1, 14);
       const targets = draftGroup ? draftGroup.children : [];
-      const hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
+      let hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
+      if (hits.length === 0 && toolRef.current === 'erase' && forContinuousHold && targets.length) {
+        const offsets = [
+          [0.025, 0],
+          [-0.025, 0],
+          [0, 0.025],
+          [0, -0.025]
+        ];
+        const sweepNdc = new THREE.Vector2();
+        for (const [ox, oy] of offsets) {
+          sweepNdc.set(ox, oy);
+          raycaster.setFromCamera(sweepNdc, cam);
+          hits = raycaster.intersectObjects(targets, false);
+          if (hits.length > 0) break;
+        }
+      }
       if (hits.length > 0) {
         const hit = hits[0];
         if (toolRef.current === 'erase') {
@@ -562,7 +601,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           .clone()
           .transformDirection(hit.object.matrixWorld)
           .normalize();
-        const center = hit.object.position.clone().addScaledVector(normal, VOXEL_STEP);
+        const stepOut = VOXEL_STEP * (((hit.object.userData.voxel?.scale ?? 1) + 1) * 0.5);
+        const center = hit.object.position.clone().addScaledVector(normal, stepOut);
         return {
           action: 'add',
           x: snapCoord(center.x),
@@ -649,6 +689,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         return;
       }
       if (uniqueAdds.length === 0) return;
+      clearedBackupRef.current = null;
 
       let limitNotice = '';
       setVoxels((prev) => {
@@ -730,19 +771,30 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels]
   );
 
+  const eraseTargetVoxel = useCallback((target) => {
+    if (!target || target.action !== 'erase' || !target.voxel) return false;
+    const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
+    const now = performance.now();
+    if (lastErasedKeyRef.current.key === killKey && now - lastErasedKeyRef.current.ts < 85) {
+      return false;
+    }
+    lastErasedKeyRef.current = { key: killKey, ts: now };
+    setVoxels((prev) => prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey));
+    return true;
+  }, []);
+
   const applyVoxelAction = useCallback(
     (target) => {
       if (!target) return;
-      if (target.action === 'erase' && target.voxel) {
-        const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
-        setVoxels((prev) => prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey));
+      if (target.action === 'erase') {
+        eraseTargetVoxel(target);
         return;
       }
       if (target.action === 'add') {
         applyVoxelBatch([target]);
       }
     },
-    [applyVoxelBatch]
+    [applyVoxelBatch, eraseTargetVoxel]
   );
 
   // Initialize Three.js transparent AR WebGL scene
@@ -860,6 +912,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     scene.add(draftGroup);
     scene.add(nearbyGroup);
 
+    const transformBox = new THREE.Box3Helper(new THREE.Box3(), 0x00f5d4);
+    transformBox.visible = false;
+    scene.add(transformBox);
+    transformBoxRef.current = transformBox;
+
     const ghostGeo = new THREE.BoxGeometry(VOXEL_STEP, VOXEL_STEP, VOXEL_STEP);
     const ghostMat = new THREE.MeshBasicMaterial({
       color: 0x00f5d4,
@@ -932,7 +989,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       ghost.visible = showCursor;
 
       if (showCursor) {
-        const target = computeTargetVoxel();
+        const target = computeTargetVoxel(paintingRef.current);
         if (target && target.action === 'add') {
           ghost.position.set(target.x, target.y, target.z);
           ghost.material.color.set(colorRef.current);
@@ -967,6 +1024,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         } else if (target && target.action === 'erase' && target.voxel) {
           ghost.position.set(target.voxel.x, target.voxel.y, target.voxel.z);
           ghost.material.color.set(0xff3e7f);
+          if (paintingRef.current && toolRef.current === 'erase') {
+            eraseTargetVoxel(target);
+          }
         }
       }
 
@@ -1080,6 +1140,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       stemGeo.dispose();
       ghostGeo.dispose();
       ghostMat.dispose();
+      transformBox.dispose?.();
+      transformBoxRef.current = null;
       draftUnitGeoRef.current?.dispose();
       draftUnitGeoRef.current = null;
       for (const mat of draftMatCacheRef.current.values()) mat.dispose();
@@ -1090,7 +1152,47 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         host.removeChild(renderer.domElement);
       }
     };
-  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel]);
+  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel, eraseTargetVoxel]);
+
+  // Keep locked sculpture live transform & bounding cage in sync
+  useEffect(() => {
+    const group = draftGroupRef.current;
+    const cage = transformBoxRef.current;
+    if (!group) return;
+
+    if (mode !== 'transform') {
+      group.position.set(0, 0, 0);
+      group.rotation.set(0, 0, 0);
+      group.scale.set(1, 1, 1);
+      if (cage) cage.visible = false;
+      return;
+    }
+
+    const s = artTransform.scale;
+    const rad = THREE.MathUtils.degToRad(artTransform.rotYDeg);
+    const pivotVec = new THREE.Vector3(transformPivot.x, transformPivot.y, transformPivot.z);
+    const offsetVec = new THREE.Vector3(
+      artTransform.offsetX,
+      artTransform.offsetY,
+      artTransform.offsetZ
+    );
+    const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rad);
+    const transformedPivot = pivotVec.clone().multiplyScalar(s).applyQuaternion(quat);
+
+    group.scale.setScalar(s);
+    group.quaternion.copy(quat);
+    group.position.copy(pivotVec).add(offsetVec).sub(transformedPivot);
+    group.updateMatrixWorld(true);
+
+    if (cage) {
+      if (voxels.length > 0) {
+        cage.box.setFromObject(group);
+        cage.visible = true;
+      } else {
+        cage.visible = false;
+      }
+    }
+  }, [mode, artTransform, transformPivot, voxels]);
 
   // Keep visible 3D surface anchor ring, shadow catcher plane, and ground grid aligned
   useEffect(() => {
@@ -1150,18 +1252,24 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         } else if (msg.type === 'desktop_command') {
           if (msg.action === 'set_color' && msg.color) setColor(msg.color);
           if (msg.action === 'set_tool' && msg.tool) {
-            setMode('draw');
-            setTool(msg.tool);
+            if (modeRef.current === 'transform') {
+              commitTransformAndExit('draw', msg.tool);
+            } else {
+              setMode('draw');
+              setTool(msg.tool);
+            }
           }
           if (msg.action === 'set_mode' && msg.mode) {
             if (msg.mode === 'publish' && !userRef.current) {
               setLoginOpen(true);
+            } else if (modeRef.current === 'transform') {
+              commitTransformAndExit(msg.mode);
             } else {
               setMode(msg.mode);
             }
           }
-          if (msg.action === 'undo') setVoxels((p) => p.slice(0, -1));
-          if (msg.action === 'clear') setVoxels([]);
+          if (msg.action === 'undo') handleUndo();
+          if (msg.action === 'clear') clearCanvas();
           if (msg.action === 'recenter' && rawOrientationRef.current) {
             yawOffsetRef.current = rawOrientationRef.current.alpha;
           }
@@ -1196,7 +1304,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   useEffect(() => {
     const prev = prevSyncStateRef.current;
     if (mode !== prev.mode) {
-      if (mode === 'preview' || mode === 'publish') {
+      if (mode === 'transform' || mode === 'preview' || mode === 'publish') {
         setActiveKeyTool(mode);
       } else if (mode === 'draw') {
         setActiveKeyTool(tool);
@@ -1343,15 +1451,196 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     return () => clearInterval(id);
   }, [agentSession?.code, applyAgentSessionDraft]);
 
+  function computeVoxelCentroid(list) {
+    if (!Array.isArray(list) || list.length === 0) {
+      return { x: 0, y: 0, z: 0 };
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const v of list) {
+      if (v.x < minX) minX = v.x;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.y > maxY) maxY = v.y;
+      if (v.z < minZ) minZ = v.z;
+      if (v.z > maxZ) maxZ = v.z;
+    }
+    return {
+      x: (minX + maxX) * 0.5,
+      y: (minY + maxY) * 0.5,
+      z: (minZ + maxZ) * 0.5
+    };
+  }
+
+  function hasNonIdentityTransform(tr) {
+    if (!tr) return false;
+    return (
+      Math.abs(tr.scale - 1) > 0.005 ||
+      Math.abs(tr.rotYDeg) > 0.25 ||
+      Math.abs(tr.offsetX) > 0.002 ||
+      Math.abs(tr.offsetY) > 0.002 ||
+      Math.abs(tr.offsetZ) > 0.002
+    );
+  }
+
+  function resetArtTransformState() {
+    setArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
+    activeCanvasPointersRef.current.clear();
+    transformPinchRef.current = null;
+    if (draftGroupRef.current) {
+      draftGroupRef.current.position.set(0, 0, 0);
+      draftGroupRef.current.rotation.set(0, 0, 0);
+      draftGroupRef.current.scale.set(1, 1, 1);
+    }
+    if (transformBoxRef.current) {
+      transformBoxRef.current.visible = false;
+    }
+  }
+
+  function enterTransformMode() {
+    stopBrushPainting();
+    setPaletteOpen(false);
+    const pivot = computeVoxelCentroid(voxelsRef.current);
+    setTransformPivot(pivot);
+    transformPivotRef.current = pivot;
+    resetArtTransformState();
+    setMode('transform');
+    modeRef.current = 'transform';
+    showTemporaryHint(
+      voxelsRef.current.length
+        ? 'Art locked — pinch/drag or use sliders to scale & transform, tap ✅ to draw'
+        : 'Transform locked — tap ✅ again to return to drawing mode'
+    );
+  }
+
+  function commitTransformAndExit(nextMode = 'draw', nextTool = null) {
+    const tr = artTransformRef.current;
+    const pivot = transformPivotRef.current;
+    if (
+      modeRef.current === 'transform' &&
+      voxelsRef.current.length > 0 &&
+      hasNonIdentityTransform(tr)
+    ) {
+      const s = tr.scale;
+      const quat = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        THREE.MathUtils.degToRad(tr.rotYDeg)
+      );
+      const safeLimit = (config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS) - VOXEL_STEP;
+      const vec = new THREE.Vector3();
+      const baked = voxelsRef.current.map((v) => {
+        vec
+          .set(v.x - pivot.x, v.y - pivot.y, v.z - pivot.z)
+          .multiplyScalar(s)
+          .applyQuaternion(quat);
+        return {
+          ...v,
+          x: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.x + tr.offsetX + vec.x) * 1000) / 1000)),
+          y: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.y + tr.offsetY + vec.y) * 1000) / 1000)),
+          z: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.z + tr.offsetZ + vec.z) * 1000) / 1000)),
+          scale: Math.min(2, Math.max(0.25, Math.round(((v.scale ?? 1) * s) * 100) / 100))
+        };
+      });
+      resetArtTransformState();
+      setVoxels(baked);
+    } else {
+      resetArtTransformState();
+    }
+    setMode(nextMode);
+    modeRef.current = nextMode;
+    if (nextTool) {
+      setTool(nextTool);
+      toolRef.current = nextTool;
+    }
+    if (nextMode === 'draw') {
+      showTemporaryHint('Returned to drawing mode');
+    }
+  }
+
+  function toggleTransformLock() {
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('draw');
+    } else {
+      enterTransformMode();
+    }
+  }
+
+  function clearCanvas() {
+    stopBrushPainting();
+    if (voxelsRef.current.length > 0) {
+      clearedBackupRef.current = voxelsRef.current;
+    }
+    lastErasedKeyRef.current = { key: '', ts: 0 };
+    resetArtTransformState();
+    setVoxels([]);
+    if (modeRef.current === 'transform') {
+      setMode('draw');
+      modeRef.current = 'draw';
+    }
+    showTemporaryHint('Canvas cleared (tap Undo ↩️ to restore)');
+  }
+
+  function handleUndo() {
+    if (voxelsRef.current.length === 0 && clearedBackupRef.current?.length) {
+      const restored = clearedBackupRef.current;
+      clearedBackupRef.current = null;
+      setVoxels(restored);
+      showTemporaryHint('Cleared canvas restored');
+      return;
+    }
+    setVoxels((p) => p.slice(0, -1));
+  }
+
+  function startContinuousHoldTool(holdTool) {
+    enterFullscreen();
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('draw', holdTool);
+    } else {
+      setMode('draw');
+      modeRef.current = 'draw';
+      setTool(holdTool);
+      toolRef.current = holdTool;
+    }
+    paintingRef.current = true;
+    setPainting(true);
+    const t = computeTargetVoxel(true);
+    if (holdTool === 'erase') {
+      eraseTargetVoxel(t);
+    } else if (t && t.action === 'add') {
+      lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
+      applyVoxelBatch([t]);
+    }
+  }
+
   function selectKeyTool(toolId) {
     setActiveKeyTool(toolId);
+    if (toolId === 'transform') {
+      enterTransformMode();
+      return;
+    }
     if (toolId === 'brush' || toolId === 'stack' || toolId === 'erase') {
-      setMode('draw');
-      setTool(toolId);
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit('draw', toolId);
+      } else {
+        setMode('draw');
+        setTool(toolId);
+      }
     } else if (toolId === 'preview') {
-      setMode('preview');
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit('preview');
+      } else {
+        setMode('preview');
+      }
     } else if (toolId === 'agent' || toolId === 'publish') {
-      setMode('draw');
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit('draw');
+      } else {
+        setMode('draw');
+      }
     }
   }
 
@@ -1374,13 +1663,24 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
   function triggerActiveKeyTool() {
     enterFullscreen();
-    if (activeKeyTool === 'brush' || activeKeyTool === 'stack' || activeKeyTool === 'erase') {
-      setMode('draw');
-      setTool(activeKeyTool);
-      toolRef.current = activeKeyTool;
+    if (activeKeyTool === 'transform') {
+      toggleTransformLock();
+    } else if (activeKeyTool === 'brush' || activeKeyTool === 'stack' || activeKeyTool === 'erase') {
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit('draw', activeKeyTool);
+      } else {
+        setMode('draw');
+        setTool(activeKeyTool);
+        toolRef.current = activeKeyTool;
+      }
       applyVoxelAction(computeTargetVoxel());
     } else if (activeKeyTool === 'preview') {
-      setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
+      const next = modeRef.current === 'preview' ? 'draw' : 'preview';
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit(next);
+      } else {
+        setMode(next);
+      }
     } else if (activeKeyTool === 'agent') {
       openAgentHandoff();
     } else if (activeKeyTool === 'publish') {
@@ -1406,21 +1706,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     };
     setSwipeDragPx(0);
 
-    if (activeKeyTool === 'brush') {
+    if (activeKeyTool === 'brush' || activeKeyTool === 'erase') {
+      const holdTool = activeKeyTool;
       paintHoldTimerRef.current = setTimeout(() => {
         if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
-        enterFullscreen();
         keyGestureRef.current.holdStarted = true;
-        setMode('draw');
-        setTool('brush');
-        toolRef.current = 'brush';
-        paintingRef.current = true;
-        setPainting(true);
-        const t = computeTargetVoxel();
-        if (t) {
-          lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
-          applyVoxelAction(t);
-        }
+        startContinuousHoldTool(holdTool);
       }, 120);
     }
   }
@@ -1540,11 +1831,81 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }
 
   function handleCanvasPointerDown(e) {
+    activeCanvasPointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (modeRef.current === 'transform') {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      if (activeCanvasPointersRef.current.size >= 2) {
+        const pts = Array.from(activeCanvasPointersRef.current.values());
+        transformPinchRef.current = {
+          dist: Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)),
+          angle: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
+        };
+      } else {
+        transformPinchRef.current = null;
+      }
+      return;
+    }
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     tapStartRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   function handleCanvasPointerMove(e) {
+    const pointers = activeCanvasPointersRef.current;
+    const prevPt = pointers.get(e.pointerId);
+    if (pointers.has(e.pointerId)) {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (modeRef.current === 'transform') {
+      if (!prevPt || !pointers.size) return;
+      if (pointers.size >= 2) {
+        const pts = Array.from(pointers.values());
+        const dist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
+        const angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
+        if (!transformPinchRef.current) {
+          transformPinchRef.current = { dist, angle };
+          return;
+        }
+        const scaleFactor = dist / Math.max(12, transformPinchRef.current.dist);
+        let dAngleDeg = ((angle - transformPinchRef.current.angle) * 180) / Math.PI;
+        if (dAngleDeg > 180) dAngleDeg -= 360;
+        if (dAngleDeg < -180) dAngleDeg += 360;
+        transformPinchRef.current = { dist, angle };
+        setArtTransform((prev) => ({
+          ...prev,
+          scale: Math.max(0.25, Math.min(2, Number((prev.scale * scaleFactor).toFixed(3)))),
+          rotYDeg: Math.round(((prev.rotYDeg - dAngleDeg + 540) % 360) - 180)
+        }));
+      } else if (pointers.size === 1) {
+        const dx = e.clientX - prevPt.x;
+        const dy = e.clientY - prevPt.y;
+        const cam = cameraRef.current;
+        if (!cam) return;
+        const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion).normalize();
+        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion).normalize();
+        const pivot = transformPivotRef.current;
+        const tr = artTransformRef.current;
+        const worldPos = new THREE.Vector3(
+          pivot.x + tr.offsetX,
+          pivot.y + tr.offsetY,
+          pivot.z + tr.offsetZ
+        );
+        const dist = Math.max(0.8, Math.min(5, cam.position.distanceTo(worldPos)));
+        const moveScale = dist * 0.0022;
+        setArtTransform((prev) => ({
+          ...prev,
+          offsetX: prev.offsetX + (camRight.x * dx - camUp.x * dy) * moveScale,
+          offsetY: prev.offsetY + (camRight.y * dx - camUp.y * dy) * moveScale,
+          offsetZ: prev.offsetZ + (camRight.z * dx - camUp.z * dy) * moveScale
+        }));
+      }
+      return;
+    }
+
     if (!dragStartRef.current || rawOrientationRef.current) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
@@ -1554,6 +1915,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       -1.2,
       Math.min(1.2, fallbackEulerRef.current.pitch - dy * 0.004)
     );
+  }
+
+  function handleCanvasPointerCancel(e) {
+    activeCanvasPointersRef.current.delete(e.pointerId);
+    if (activeCanvasPointersRef.current.size < 2) {
+      transformPinchRef.current = null;
+    }
+    dragStartRef.current = null;
+    tapStartRef.current = null;
   }
 
   function selectSurfaceAtScreenPoint(clientX, clientY) {
@@ -1672,10 +2042,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }
 
   function handleCanvasPointerUp(e) {
+    activeCanvasPointersRef.current.delete(e.pointerId);
+    if (activeCanvasPointersRef.current.size < 2) {
+      transformPinchRef.current = null;
+    }
     dragStartRef.current = null;
     const start = tapStartRef.current;
     tapStartRef.current = null;
-    if (!start) return;
+    if (!start || modeRef.current === 'transform') return;
 
     const moveDist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
     if (moveDist > 14) return;
@@ -1715,7 +2089,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
     setPublishError('');
     setMintReceipt(null);
-    setMode('publish');
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('publish');
+    } else {
+      setMode('publish');
+    }
   }
 
   function captureSculptureSnapshot() {
@@ -1837,6 +2215,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
         onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={handleCanvasPointerCancel}
       />
       <canvas ref={occlusionCanvasRef} className="occlusion-overlay" />
 
@@ -2042,6 +2421,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   onPointerMove={handleKeyPointerMove}
                   onPointerUp={handleKeyPointerUp}
                   onPointerCancel={handleKeyPointerCancel}
+                  onContextMenu={(e) => e.preventDefault()}
                   aria-label={`${activeItem.label} key button (swipe left or right to switch tool)`}
                   title={activeItem.hint}
                 >
@@ -2063,9 +2443,123 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           );
         })()}
 
+        {/* Scale & Transform Control Bar when art is locked */}
+        {mode === 'transform' && (
+          <div
+            className={`transform-bar hud-interactive ${dockOpen ? 'with-dock' : ''}`}
+            role="region"
+            aria-label="Scale and transform art piece"
+          >
+            <div className="transform-bar-top">
+              <span className="transform-bar-title">
+                <XeroIcon emoji="📐" size={14} />
+                <span>Lock &amp; Transform ({voxels.length})</span>
+              </span>
+              <div className="transform-nudge-row">
+                <button
+                  type="button"
+                  className="transform-chip-btn"
+                  onClick={() =>
+                    setArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY - 0.1).toFixed(2)) }))
+                  }
+                  title="Lower art (-10cm)"
+                >
+                  -Y
+                </button>
+                <button
+                  type="button"
+                  className="transform-chip-btn"
+                  onClick={() =>
+                    setArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY + 0.1).toFixed(2)) }))
+                  }
+                  title="Raise art (+10cm)"
+                >
+                  +Y
+                </button>
+                <button
+                  type="button"
+                  className="transform-chip-btn"
+                  onClick={() =>
+                    setArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ + 0.15).toFixed(2)) }))
+                  }
+                  title="Bring closer"
+                >
+                  Near
+                </button>
+                <button
+                  type="button"
+                  className="transform-chip-btn"
+                  onClick={() =>
+                    setArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ - 0.15).toFixed(2)) }))
+                  }
+                  title="Push further"
+                >
+                  Far
+                </button>
+                <button
+                  type="button"
+                  className="transform-chip-btn"
+                  onClick={() =>
+                    setArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 })
+                  }
+                  title="Reset transform"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            <div className="transform-sliders">
+              <label className="transform-slider-field">
+                <span>
+                  <XeroIcon emoji="🔍" size={12} /> {artTransform.scale.toFixed(2)}x
+                </span>
+                <input
+                  type="range"
+                  min={0.25}
+                  max={2}
+                  step={0.05}
+                  value={artTransform.scale}
+                  onChange={(e) =>
+                    setArtTransform((p) => ({ ...p, scale: Number(e.target.value) }))
+                  }
+                  aria-label="Scale sculpture"
+                />
+              </label>
+
+              <label className="transform-slider-field">
+                <span>
+                  <XeroIcon emoji="🔄" size={12} /> {artTransform.rotYDeg}°
+                </span>
+                <input
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={2}
+                  value={artTransform.rotYDeg}
+                  onChange={(e) =>
+                    setArtTransform((p) => ({ ...p, rotYDeg: Number(e.target.value) }))
+                  }
+                  aria-label="Rotate sculpture"
+                />
+              </label>
+
+              <button
+                type="button"
+                className="transform-done-btn"
+                onClick={toggleTransformLock}
+                title="Confirm transform & return to drawing mode"
+              >
+                <XeroIcon emoji="✅" size={14} />
+                <span>Draw</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Bottom-Right Scene Analysis Coverage Window */}
         <div
-          className={`scene-scan-box hud-interactive ${sceneScan.optimal ? 'optimal' : 'scanning'} ${scanBoxCollapsed ? 'collapsed' : ''} ${dockOpen ? 'hide-on-dock-mobile' : ''}`}
+          className={`scene-scan-box hud-interactive ${sceneScan.optimal ? 'optimal' : 'scanning'} ${scanBoxCollapsed ? 'collapsed' : ''} ${dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''}`}
           role="region"
           aria-label="Scene analysis coverage window"
         >
@@ -2170,8 +2664,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             <button
               className={`dock-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''}`}
               onClick={() => {
-                setMode('draw');
-                setTool('brush');
+                if (modeRef.current === 'transform') {
+                  commitTransformAndExit('draw', 'brush');
+                } else {
+                  setMode('draw');
+                  setTool('brush');
+                }
               }}
               title="3D Brush"
             >
@@ -2180,8 +2678,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             <button
               className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''}`}
               onClick={() => {
-                setMode('draw');
-                setTool('stack');
+                if (modeRef.current === 'transform') {
+                  commitTransformAndExit('draw', 'stack');
+                } else {
+                  setMode('draw');
+                  setTool('stack');
+                }
               }}
               title="Stack Voxels"
             >
@@ -2189,13 +2691,62 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             </button>
             <button
               className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''}`}
-              onClick={() => {
-                setMode('draw');
-                setTool('erase');
+              onPointerDown={(e) => {
+                if (e.button && e.button !== 0) return;
+                e.preventDefault();
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  // ignore
+                }
+                startContinuousHoldTool('erase');
               }}
-              title="Erase Voxel"
+              onPointerUp={(e) => {
+                stopBrushPainting();
+                try {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                } catch {
+                  // ignore
+                }
+              }}
+              onPointerCancel={() => stopBrushPainting()}
+              onContextMenu={(e) => e.preventDefault()}
+              onClick={() => {
+                if (modeRef.current === 'transform') {
+                  commitTransformAndExit('draw', 'erase');
+                } else {
+                  setMode('draw');
+                  setTool('erase');
+                }
+              }}
+              aria-label="Eraser (Hold to Erase)"
+              title="Eraser — Tap to select, hold down to continuously erase"
+            >
+              <XeroIcon emoji="🧽" size={19} />
+            </button>
+            <button
+              className="dock-btn pink"
+              onClick={clearCanvas}
+              aria-label="Trash Bin — Erase Current Canvas"
+              title="Trash Bin — Erase Current Canvas"
             >
               <XeroIcon emoji="🗑️" size={19} />
+            </button>
+            <button
+              className={`dock-btn check-btn ${mode === 'transform' ? 'active' : ''}`}
+              onClick={toggleTransformLock}
+              aria-label={
+                mode === 'transform'
+                  ? 'Confirm Transform & Back to Draw'
+                  : 'Lock Art to Scale & Transform'
+              }
+              title={
+                mode === 'transform'
+                  ? 'Check — Return to Drawing Mode'
+                  : 'Check — Lock Art, Scale & Transform'
+              }
+            >
+              <XeroIcon emoji="✅" size={19} />
             </button>
             <button
               className={`dock-btn ${paletteOpen ? 'active' : ''}`}
@@ -2204,11 +2755,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             >
               <XeroIcon emoji="🎨" size={19} />
             </button>
-            <button
-              className="dock-btn"
-              onClick={() => setVoxels((p) => p.slice(0, -1))}
-              title="Undo"
-            >
+            <button className="dock-btn" onClick={handleUndo} title="Undo / Restore Clear">
               <XeroIcon emoji="↩️" size={18} />
             </button>
             <button className="dock-btn" onClick={recenterAim} title="Recenter Aim">
@@ -2224,7 +2771,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             </button>
             <button
               className={`dock-btn ${mode === 'preview' ? 'active' : ''}`}
-              onClick={() => setMode((m) => (m === 'preview' ? 'draw' : 'preview'))}
+              onClick={() => {
+                if (modeRef.current === 'transform') {
+                  commitTransformAndExit('preview');
+                } else {
+                  setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
+                }
+              }}
               title="AR Preview Nearby Sculptures"
             >
               <XeroIcon emoji="👁️" size={19} />

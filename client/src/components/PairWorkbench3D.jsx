@@ -146,7 +146,7 @@ export default function PairWorkbench3D() {
               disabled={!mobileConnected}
               onClick={() => sendCommand('set_tool', { tool: 'erase' })}
             >
-              <XeroIcon emoji="🗑️" size={14} /> Erase
+              <XeroIcon emoji="🧽" size={14} /> Erase
             </button>
             <button
               className="btn"
@@ -185,7 +185,7 @@ export default function PairWorkbench3D() {
               disabled={!mobileConnected}
               onClick={() => sendCommand('clear')}
             >
-              <XeroIcon emoji="🧹" size={14} /> Clear
+              <XeroIcon emoji="🗑️" size={14} /> Clear
             </button>
           </div>
 

@@ -85,8 +85,8 @@ export default function InfoTermsModal({
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 Use the centered <strong>Key Button</strong> at the bottom of your screen — swipe{' '}
                 <strong>left or right</strong> across it to switch tools (Brush → Stack → Erase →
-                Preview → Agent Code → Publish). Your gyroscope aims the 4x high-precision{' '}
-                <strong>0.05m voxel</strong> cursor inside a{' '}
+                Lock &amp; Scale → Preview → Agent Code → Publish). Your gyroscope aims the 4x
+                high-precision <strong>0.05m voxel</strong> cursor inside a{' '}
                 <strong>10,000 × 10,000 × 10,000 block</strong> area limit:
               </p>
               <ul style={{ margin: '8px 0 0 18px', padding: 0, color: 'var(--text)' }}>
@@ -100,7 +100,13 @@ export default function InfoTermsModal({
                   <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode:</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it.
                 </li>
                 <li>
-                  <XeroIcon emoji="🗑️" size={14} /> <strong>Erase Mode:</strong> Aim at any placed block and tap the Key Button to remove it.
+                  <XeroIcon emoji="🧽" size={14} /> <strong>Eraser (Hold to Erase):</strong> Hold down the menu Eraser button (or Key Button in Erase mode) and sweep across blocks to erase continuously; tap for single-block removal.
+                </li>
+                <li>
+                  <XeroIcon emoji="🗑️" size={14} /> <strong>Trash Bin (Clear Canvas):</strong> Immediately clears your current canvas (tap Undo ↩️ right afterward if you need to restore it).
+                </li>
+                <li>
+                  <XeroIcon emoji="✅" size={14} /> <strong>Check Mark (Lock &amp; Transform):</strong> Tap <strong>✅</strong> to lock your art piece and pinch/drag or use sliders to scale, rotate, and move it in 3D space — tap <strong>✅</strong> again to bake the transform and resume drawing.
                 </li>
                 <li>
                   <XeroIcon emoji="👁️" size={14} /> <strong>AR Preview Mode:</strong> See nearby sculptures built by real phones anchored at their exact physical coordinates and altitude, complete with solar shadows, 4x live camera reflections, and real-time foreground occlusion.
