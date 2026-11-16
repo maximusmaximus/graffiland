@@ -9,7 +9,7 @@ import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/consta
 
 const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
-  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Aim face & tap to stack' },
+  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack & draw continuously' },
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Hold to erase blocks continuously' },
   { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform' },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
@@ -284,6 +284,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const locationRef = useRef(location);
   const paintingRef = useRef(false);
   const lastPaintPosRef = useRef(null);
+  const lastStackAtRef = useRef(0);
 
   useEffect(() => {
     userRef.current = user;
@@ -990,7 +991,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           action: 'add',
           x: snapCoord(center.x),
           y: snapCoord(center.y),
-          z: snapCoord(center.z)
+          z: snapCoord(center.z),
+          stackedFrom: {
+            x: snapCoord(hit.object.position.x),
+            y: snapCoord(hit.object.position.y),
+            z: snapCoord(hit.object.position.z)
+          }
         };
       }
       if (toolRef.current === 'erase') return null;
@@ -1387,30 +1393,46 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
           );
 
-          if (paintingRef.current && toolRef.current === 'brush') {
+          if (paintingRef.current && (toolRef.current === 'brush' || toolRef.current === 'stack')) {
             const prev = lastPaintPosRef.current;
-            if (!prev) {
-              lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-              applyVoxelBatch([{ action: 'add', x: target.x, y: target.y, z: target.z }]);
-            } else {
-              const dx = target.x - prev.x;
-              const dy = target.y - prev.y;
-              const dz = target.z - prev.z;
-              const dist = Math.hypot(dx, dy, dz);
-              if (dist >= VOXEL_STEP * 0.75) {
-                const steps = Math.min(28, Math.max(1, Math.ceil(dist / VOXEL_STEP)));
-                const batch = [];
-                for (let i = 1; i <= steps; i += 1) {
-                  const t = i / steps;
-                  batch.push({
-                    action: 'add',
-                    x: snapCoord(prev.x + dx * t),
-                    y: snapCoord(prev.y + dy * t),
-                    z: snapCoord(prev.z + dz * t)
-                  });
-                }
+            const selfStackBlocked =
+              toolRef.current === 'stack' &&
+              prev &&
+              target.stackedFrom &&
+              Math.hypot(
+                target.stackedFrom.x - prev.x,
+                target.stackedFrom.y - prev.y,
+                target.stackedFrom.z - prev.z
+              ) <
+                VOXEL_STEP * 0.5 &&
+              now - lastStackAtRef.current < 145;
+
+            if (!selfStackBlocked) {
+              if (!prev) {
                 lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-                applyVoxelBatch(batch);
+                lastStackAtRef.current = now;
+                applyVoxelBatch([{ action: 'add', x: target.x, y: target.y, z: target.z }]);
+              } else {
+                const dx = target.x - prev.x;
+                const dy = target.y - prev.y;
+                const dz = target.z - prev.z;
+                const dist = Math.hypot(dx, dy, dz);
+                if (dist >= VOXEL_STEP * 0.75) {
+                  const steps = Math.min(28, Math.max(1, Math.ceil(dist / VOXEL_STEP)));
+                  const batch = [];
+                  for (let i = 1; i <= steps; i += 1) {
+                    const t = i / steps;
+                    batch.push({
+                      action: 'add',
+                      x: snapCoord(prev.x + dx * t),
+                      y: snapCoord(prev.y + dy * t),
+                      z: snapCoord(prev.z + dz * t)
+                    });
+                  }
+                  lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
+                  lastStackAtRef.current = now;
+                  applyVoxelBatch(batch);
+                }
               }
             }
           }
@@ -2194,7 +2216,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (!ensureToolUsable(holdTool)) {
       return;
     }
-    if (holdTool === 'brush' && !assertOriginUnblockedForPaint()) {
+    if ((holdTool === 'brush' || holdTool === 'stack') && !assertOriginUnblockedForPaint()) {
       return;
     }
     if (modeRef.current === 'transform') {
@@ -2212,8 +2234,35 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       eraseTargetVoxel(t);
     } else if (t && t.action === 'add') {
       lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
+      lastStackAtRef.current = performance.now();
       applyVoxelBatch([t]);
     }
+  }
+
+  function getDockHoldHandlers(holdTool) {
+    return {
+      onPointerDown: (e) => {
+        if (e.button && e.button !== 0) return;
+        e.preventDefault();
+        if (!ensureToolUsable(holdTool)) return;
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+        startContinuousHoldTool(holdTool);
+      },
+      onPointerUp: (e) => {
+        stopBrushPainting();
+        try {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      },
+      onPointerCancel: () => stopBrushPainting(),
+      onContextMenu: (e) => e.preventDefault()
+    };
   }
 
   const KEY_CAROUSEL_SLOT_PX = 54;
@@ -2335,7 +2384,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     setIsDraggingKey(true);
 
     const curTool = activeKeyToolRef.current;
-    if (targetRel === 0 && (curTool === 'brush' || curTool === 'erase')) {
+    if (targetRel === 0 && (curTool === 'brush' || curTool === 'stack' || curTool === 'erase')) {
       paintHoldTimerRef.current = setTimeout(() => {
         if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
         keyGestureRef.current.holdStarted = true;
@@ -2481,11 +2530,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       return;
     }
     const target = computeTargetVoxel();
-    if (tool === 'brush') {
+    if (tool === 'brush' || tool === 'stack') {
       paintingRef.current = true;
       setPainting(true);
       lastPaintPosRef.current =
         target && target.action === 'add' ? { x: target.x, y: target.y, z: target.z } : null;
+      lastStackAtRef.current = performance.now();
       applyVoxelAction(target);
     } else {
       applyVoxelAction(target);
@@ -3225,20 +3275,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
         {sensorBanner && dockOpen && (
           <div
-            style={{
-              position: 'absolute',
-              top: mode === 'draw' ? 98 : 64,
-              left: 14,
-              right: 70,
-              padding: '7px 10px',
-              borderRadius: 10,
-              background: 'rgba(255, 77, 109, 0.25)',
-              border: '1px solid rgba(255, 77, 109, 0.5)',
-              fontSize: 11,
-              color: '#ffd6de'
-            }}
+            className={`mobile-hud-banner hud-interactive is-error ${mode === 'draw' ? 'under-pol' : ''}`}
+            role="status"
+            aria-live="polite"
+            style={{ zIndex: 26 }}
           >
-            <XeroIcon emoji="⚠️" size={14} /> {sensorBanner}
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="⚠️" size={14} />
+              <span>{sensorBanner}</span>
+            </span>
           </div>
         )}
 
@@ -3265,40 +3310,22 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
         {arSelectHint && (
           <div
-            className="hud-interactive"
+            className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''} ${
+              originStatus.originBlocked
+                ? 'is-error'
+                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
+                ? 'is-success'
+                : ''
+            }`}
             role="status"
             aria-live="polite"
-            style={{
-              position: 'absolute',
-              top: 64,
-              left: 14,
-              right: 70,
-              padding: '8px 10px',
-              borderRadius: 10,
-              background: originStatus.originBlocked
-                ? 'rgba(130, 18, 46, 0.92)'
-                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
-                ? 'rgba(8, 48, 42, 0.92)'
-                : 'rgba(12, 18, 34, 0.88)',
-              border: originStatus.originBlocked
-                ? '1px solid rgba(255, 62, 127, 0.72)'
-                : '1px solid rgba(0, 245, 212, 0.45)',
-              fontSize: 12,
-              color: 'var(--text)',
-              zIndex: 28,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              flexWrap: 'wrap'
-            }}
           >
-            <span>
+            <span className="mobile-hud-banner-text">
               <XeroIcon
                 emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
                 size={14}
-              />{' '}
-              {arSelectHint}
+              />
+              <span>{arSelectHint}</span>
             </span>
             {!user && arSelectHint.includes('Sign in') && (
               <button
@@ -3317,9 +3344,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         )}
 
         {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
-          <div className="origin-blocked-banner">
-            <XeroIcon emoji="⚠️" size={14} />
-            <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
+          <div
+            className={`mobile-hud-banner origin-blocked-banner is-error ${dockOpen ? 'under-pol' : ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="⚠️" size={14} />
+              <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
+            </span>
           </div>
         )}
 
@@ -3673,6 +3706,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             <button
               className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''} ${!toolAvailability.stack.usable ? 'is-unavailable' : ''}`}
               aria-disabled={!toolAvailability.stack.usable || undefined}
+              {...getDockHoldHandlers('stack')}
               onClick={() => {
                 if (!ensureToolUsable('stack')) return;
                 if (modeRef.current === 'transform') {
@@ -3682,34 +3716,19 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   setTool('stack');
                 }
               }}
-              title={toolAvailability.stack.usable ? 'Stack Voxels' : toolAvailability.stack.reason}
+              aria-label="Stack (Hold to Draw)"
+              title={
+                toolAvailability.stack.usable
+                  ? 'Stack Voxels — Tap to select, hold down to continuously stack & draw'
+                  : toolAvailability.stack.reason
+              }
             >
               <XeroIcon emoji="🧱" size={19} />
             </button>
             <button
               className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''} ${!toolAvailability.erase.usable ? 'is-unavailable' : ''}`}
               aria-disabled={!toolAvailability.erase.usable || undefined}
-              onPointerDown={(e) => {
-                if (e.button && e.button !== 0) return;
-                e.preventDefault();
-                if (!ensureToolUsable('erase')) return;
-                try {
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                } catch {
-                  // ignore
-                }
-                startContinuousHoldTool('erase');
-              }}
-              onPointerUp={(e) => {
-                stopBrushPainting();
-                try {
-                  e.currentTarget.releasePointerCapture(e.pointerId);
-                } catch {
-                  // ignore
-                }
-              }}
-              onPointerCancel={() => stopBrushPainting()}
-              onContextMenu={(e) => e.preventDefault()}
+              {...getDockHoldHandlers('erase')}
               onClick={() => {
                 if (!ensureToolUsable('erase')) return;
                 if (modeRef.current === 'transform') {

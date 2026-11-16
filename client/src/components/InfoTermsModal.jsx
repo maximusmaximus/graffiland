@@ -97,7 +97,7 @@ export default function InfoTermsModal({
                   <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous, gap-free interpolated 4x resolution 3D graffiti voxels along your locked surface or freely in mid-air (up to 4,096 blocks).
                 </li>
                 <li>
-                  <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode:</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it.
+                  <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode (Hold to Draw):</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it — tap for a single block or hold down the Stack button (Key Button or menu) to draw &amp; stack continuously.
                 </li>
                 <li>
                   <XeroIcon emoji="🧽" size={14} /> <strong>Eraser (Hold to Erase):</strong> Hold down the menu Eraser button (or Key Button in Erase mode) and sweep across blocks to erase continuously; tap for single-block removal.

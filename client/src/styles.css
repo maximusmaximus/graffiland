@@ -113,21 +113,52 @@ select {
   pointer-events: none;
 }
 
-.origin-blocked-banner {
+.mobile-hud-banner {
   position: absolute;
-  top: 64px;
-  left: 14px;
-  right: 70px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  background: rgba(130, 18, 46, 0.88);
-  border: 1px solid rgba(255, 62, 127, 0.7);
-  font-size: 11px;
-  font-weight: 600;
-  color: #ffd6de;
+  top: calc(max(14px, env(safe-area-inset-top)) + 74px);
+  left: max(14px, env(safe-area-inset-left));
+  right: max(14px, env(safe-area-inset-right));
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(12, 18, 34, 0.9);
+  border: 1px solid rgba(0, 245, 212, 0.45);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  z-index: 28;
+}
+
+.mobile-hud-banner.under-pol {
+  top: calc(max(14px, env(safe-area-inset-top)) + 104px);
+}
+
+.mobile-hud-banner.is-error {
+  background: rgba(130, 18, 46, 0.92);
+  border-color: rgba(255, 62, 127, 0.72);
+  color: #ffd6de;
+  font-weight: 600;
+}
+
+.mobile-hud-banner.is-success {
+  background: rgba(8, 48, 42, 0.92);
+  border-color: rgba(0, 245, 212, 0.58);
+}
+
+.mobile-hud-banner-text {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  flex: 1 1 200px;
+}
+
+.origin-blocked-banner {
   z-index: 27;
 }
 
