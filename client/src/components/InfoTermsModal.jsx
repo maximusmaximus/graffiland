@@ -134,15 +134,16 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="📡" size={18} /> Scene Analysis &amp; Proof of Location
+                <XeroIcon emoji="📡" size={18} /> Grayscale Scene Mapping &amp; Origin Visibility
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Move your phone around left, right, and slightly up/down when sculpting — watch the
-                small coverage window in the bottom right fill to <strong>100% LOCKED</strong> (9+
-                viewed angles). Sweeping your camera stabilizes multi-sample GPS &amp; altitude lock,
-                sharpens 4x voxel placement precision, samples fuller environment reflections, and
-                verifies <strong>Optical-Flow vs. Gyroscope Correlation</strong> for Proof of Location
-                before minting your ~12m × 12m Geohash Virtual Land parcel on IPFS &amp; Robinhood Chain.
+                Move your phone around left, right, and slightly up/down when sculpting — everything
+                not mapped yet renders as a <strong>grayscale preview</strong> in your camera view
+                (and bottom-right coverage window) until you sweep over it and unlock{' '}
+                <strong>Mapping complete for this space!</strong> Your sculpture&apos;s 3D{' '}
+                <strong>origin point</strong> must remain visible: anything passing or sitting in
+                front of it occludes that part of the sculpture and alerts you that the origin is
+                blocked if you try to start painting.
               </p>
             </div>
 

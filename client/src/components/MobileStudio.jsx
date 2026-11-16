@@ -177,6 +177,20 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     hint: 'Move phone around scene'
   });
   const [scanBoxCollapsed, setScanBoxCollapsed] = useState(false);
+  const [unmappedGrid, setUnmappedGrid] = useState(() => Array(48).fill(false));
+  const [originStatus, setOriginStatus] = useState({
+    originBlocked: false,
+    originVisible: true,
+    reason: ''
+  });
+  const originStatusRef = useRef({
+    originBlocked: false,
+    originVisible: true,
+    reason: ''
+  });
+  const lastUnmappedMaskRef = useRef('');
+  const mappingCompletedNoticeShownRef = useRef(false);
+  const originBeaconMatRef = useRef(null);
   const lastScanUiRef = useRef({
     coveragePct: -1,
     scannedCount: -1,
@@ -1166,6 +1180,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     surfaceMarker.visible = false;
     scene.add(surfaceMarker);
     surfaceMarkerRef.current = surfaceMarker;
+    originBeaconMatRef.current = { ringMat, dotMat, footMat };
 
     const draftGroup = new THREE.Group();
     const nearbyGroup = new THREE.Group();
@@ -1222,6 +1237,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     let lastTargetCheck = 0;
     let lastScanPosePush = 0;
     const scanFwdVec = new THREE.Vector3();
+    const originProjVec = new THREE.Vector3();
     const targetRay = new THREE.Raycaster();
     const centerNdc = new THREE.Vector2(0, 0);
 
@@ -1250,12 +1266,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
       const showCursor = modeRef.current === 'draw';
       ghost.visible = showCursor;
+      let latestTarget = null;
 
       if (showCursor) {
         const target = computeTargetVoxel(paintingRef.current);
+        latestTarget = target;
         if (target && target.action === 'add') {
           ghost.position.set(target.x, target.y, target.z);
-          ghost.material.color.set(colorRef.current);
+          ghost.material.color.set(
+            originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
+          );
 
           if (paintingRef.current && toolRef.current === 'brush') {
             const prev = lastPaintPosRef.current;
@@ -1293,6 +1313,49 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         }
       }
 
+      // Always keep visible 3D sculpture origin beacon positioned & tinted clearly
+      const anchor = surfaceAnchorRef.current;
+      const placedVoxels = voxelsRef.current || [];
+      let originX = null;
+      let originY = null;
+      let originZ = null;
+      let originRequired = false;
+
+      if (anchor) {
+        originX = anchor.x;
+        originY = anchor.y;
+        originZ = anchor.z;
+        originRequired = Boolean(anchor.locked);
+        surfaceMarker.visible = modeRef.current === 'draw';
+      } else if (placedVoxels.length > 0) {
+        originX = placedVoxels[0].x;
+        originY = placedVoxels[0].y;
+        originZ = placedVoxels[0].z;
+        surfaceMarker.visible = modeRef.current === 'draw' || modeRef.current === 'transform';
+        if (modeRef.current === 'draw') {
+          surfaceMarker.position.set(originX, originY, originZ);
+          surfaceMarker.rotation.set(-Math.PI / 2, 0, 0);
+        }
+      } else if (latestTarget && latestTarget.action === 'add') {
+        originX = latestTarget.x;
+        originY = latestTarget.y;
+        originZ = latestTarget.z;
+        originRequired = true;
+        surfaceMarker.visible = modeRef.current === 'draw';
+        surfaceMarker.position.set(originX, originY, originZ);
+        surfaceMarker.rotation.set(-Math.PI / 2, 0, 0);
+      } else {
+        surfaceMarker.visible = false;
+      }
+
+      const beaconMats = originBeaconMatRef.current;
+      if (beaconMats) {
+        const isBlk = originStatusRef.current.originBlocked;
+        beaconMats.ringMat.color.setHex(isBlk ? 0xff3e7f : 0x00f5d4);
+        beaconMats.footMat.color.setHex(isBlk ? 0xff3e7f : 0x00f5d4);
+        beaconMats.dotMat.color.setHex(isBlk ? 0xff3e7f : 0xffd166);
+      }
+
       const now = performance.now();
       if (now - lastScanPosePush > 110) {
         lastScanPosePush = now;
@@ -1305,6 +1368,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           hasCamera: Boolean(videoRef.current && videoRef.current.readyState >= 2)
         });
         const prev = lastScanUiRef.current;
+        if (!prev.optimal && cov.optimal && !mappingCompletedNoticeShownRef.current) {
+          mappingCompletedNoticeShownRef.current = true;
+          showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
+        }
         if (
           cov.coveragePct !== prev.coveragePct ||
           cov.scannedCount !== prev.scannedCount ||
@@ -1323,6 +1390,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           };
           setSceneScan(cov);
         }
+
+        const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+        const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
+        if (lastUnmappedMaskRef.current !== vpKey) {
+          lastUnmappedMaskRef.current = vpKey;
+          setUnmappedGrid(vpGrid);
+        }
       }
 
       const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
@@ -1336,15 +1410,42 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         }
       }
 
-      if (now - lastOcclusionPush > 120 && occlusionCanvasRef.current) {
+      if (now - lastOcclusionPush > 110 && occlusionCanvasRef.current) {
         lastOcclusionPush = now;
-        occlusionRef.current.processFrame(
+        let originScreen = { x: 0.5, y: 0.5, onScreen: true, requiredVisible: false };
+        if (originX !== null && originY !== null && originZ !== null) {
+          originProjVec.set(originX, originY, originZ).project(camera);
+          const sx = (originProjVec.x + 1) * 0.5;
+          const sy = (1 - originProjVec.y) * 0.5;
+          const onScreen =
+            originProjVec.z >= -1 &&
+            originProjVec.z <= 1 &&
+            sx >= 0.04 &&
+            sx <= 0.96 &&
+            sy >= 0.04 &&
+            sy <= 0.96;
+          originScreen = {
+            x: sx,
+            y: sy,
+            onScreen,
+            requiredVisible: originRequired
+          };
+        }
+        const occStatus = occlusionRef.current.processFrame(
           videoRef.current,
           occlusionCanvasRef.current,
           rawOrientationRef.current,
           occlusionEnabledRef.current,
-          paintingRef.current
+          originScreen
         );
+        if (
+          occStatus &&
+          (occStatus.originBlocked !== originStatusRef.current.originBlocked ||
+            occStatus.reason !== originStatusRef.current.reason)
+        ) {
+          originStatusRef.current = occStatus;
+          setOriginStatus(occStatus);
+        }
       }
 
       if (now - lastTargetCheck > 180) {
@@ -1391,6 +1492,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     animate();
 
     return () => {
+    originBeaconMatRef.current = null;
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
       envUpdaterRef.current?.dispose();
@@ -1465,7 +1567,6 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (!marker || !shadowPlane || !grid) return;
 
     if (!surfaceAnchor) {
-      marker.visible = false;
       shadowPlane.position.set(0, -0.8, 0);
       shadowPlane.rotation.set(-Math.PI / 2, 0, 0);
       grid.position.set(0, -0.805, 0);
@@ -1881,8 +1982,71 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     setVoxels((p) => p.slice(0, -1));
   }
 
+  function assertOriginUnblockedForPaint() {
+    const cam = cameraRef.current;
+    if (cam && occlusionRef.current) {
+      const anchor = surfaceAnchorRef.current;
+      const vList = voxelsRef.current || [];
+      let ox = 0;
+      let oy = 0;
+      let oz = 0;
+      let hasOrigin = false;
+      let requiredVisible = false;
+      if (anchor) {
+        ox = anchor.x;
+        oy = anchor.y;
+        oz = anchor.z;
+        hasOrigin = true;
+        requiredVisible = Boolean(anchor.locked);
+      } else if (vList.length > 0) {
+        ox = vList[0].x;
+        oy = vList[0].y;
+        oz = vList[0].z;
+        hasOrigin = true;
+        requiredVisible = false;
+      } else {
+        const t = computeTargetVoxel();
+        if (t && t.action === 'add') {
+          ox = t.x;
+          oy = t.y;
+          oz = t.z;
+          hasOrigin = true;
+          requiredVisible = true;
+        }
+      }
+      if (hasOrigin) {
+        const proj = new THREE.Vector3(ox, oy, oz).project(cam);
+        const sx = (proj.x + 1) * 0.5;
+        const sy = (1 - proj.y) * 0.5;
+        const onScreen =
+          proj.z >= -1 && proj.z <= 1 && sx >= 0.04 && sx <= 0.96 && sy >= 0.04 && sy <= 0.96;
+        const status = occlusionRef.current.evaluateOriginVisibility({
+          x: sx,
+          y: sy,
+          onScreen,
+          requiredVisible
+        });
+        originStatusRef.current = status;
+        setOriginStatus(status);
+      }
+    }
+
+    if (originStatusRef.current?.originBlocked) {
+      const msg =
+        originStatusRef.current.reason ||
+        'Origin is blocked — clear whatever is in front of the drawing origin to start painting.';
+      showTemporaryHint(msg);
+      setSensorBanner(msg);
+      return false;
+    }
+    return true;
+  }
+
   function startContinuousHoldTool(holdTool) {
     enterFullscreen();
+    if (holdTool === 'brush' && !assertOriginUnblockedForPaint()) {
+      return;
+    }
     if (modeRef.current === 'transform') {
       commitTransformAndExit('draw', holdTool);
     } else {
@@ -1956,6 +2120,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (curTool === 'transform') {
       toggleTransformLock();
     } else if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
+      if ((curTool === 'brush' || curTool === 'stack') && !assertOriginUnblockedForPaint()) {
+        return;
+      }
       if (modeRef.current === 'transform') {
         commitTransformAndExit('draw', curTool);
       } else {
@@ -2143,6 +2310,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   function handlePaintStart() {
     enterFullscreen();
     if (mode !== 'draw') return;
+    if ((tool === 'brush' || tool === 'stack') && !assertOriginUnblockedForPaint()) {
+      return;
+    }
     const target = computeTargetVoxel();
     if (tool === 'brush') {
       paintingRef.current = true;
@@ -2728,6 +2898,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   return (
     <div className="mobile-fullscreen">
       <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
+      {cameraReady && !sceneScan.optimal && (
+        <div className="mapping-grayscale-grid" aria-hidden="true">
+          {unmappedGrid.map((isUnmapped, i) => (
+            <div
+              key={i}
+              className={`mapping-grayscale-cell ${isUnmapped ? 'unmapped' : 'mapped'}`}
+            />
+          ))}
+        </div>
+      )}
       <div
         ref={canvasHostRef}
         className="webgl-overlay"
@@ -2895,14 +3075,31 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               right: 70,
               padding: '8px 10px',
               borderRadius: 10,
-              background: 'rgba(12, 18, 34, 0.86)',
-              border: '1px solid rgba(0, 245, 212, 0.45)',
+              background: originStatus.originBlocked
+                ? 'rgba(130, 18, 46, 0.92)'
+                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
+                ? 'rgba(8, 48, 42, 0.92)'
+                : 'rgba(12, 18, 34, 0.86)',
+              border: originStatus.originBlocked
+                ? '1px solid rgba(255, 62, 127, 0.72)'
+                : '1px solid rgba(0, 245, 212, 0.45)',
               fontSize: 12,
               color: 'var(--text)',
               zIndex: 28
             }}
           >
-            <XeroIcon emoji="🔒" size={14} /> {arSelectHint}
+            <XeroIcon
+              emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
+              size={14}
+            />{' '}
+            {arSelectHint}
+          </div>
+        )}
+
+        {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
+          <div className="origin-blocked-banner">
+            <XeroIcon emoji="⚠️" size={14} />
+            <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
           </div>
         )}
 

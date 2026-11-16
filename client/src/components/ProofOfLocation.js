@@ -25,10 +25,65 @@ export class ProofOfLocationTracker {
     this.scanRows = 3;
     this.scanTargetCount = 9;
     this.scanSectors = new Array(this.scanCols * this.scanRows).fill(false);
+    // Fine spatial grid for live grayscale-vs-color unmapped viewport preview
+    this.fineCols = 16;
+    this.fineRows = 12;
+    this.fineMapped = new Uint8Array(this.fineCols * this.fineRows);
     this.anchorYawDeg = null;
     this.latestPose = null;
     this.sceneContrast = 0;
     this.latestGray = null;
+  }
+
+  _markFinePatch(relYawDeg, pitchDeg) {
+    const yawSpan = 128; // -64..+64
+    const pitchSpan = 64; // -32..+32
+    const patchHalfYaw = 15; // crisp ~30 deg horizontal live core mapped per view
+    const patchHalfPitch = 11; // crisp ~22 deg vertical live core mapped per view
+    const minYaw = Math.max(-64, relYawDeg - patchHalfYaw);
+    const maxYaw = Math.min(63.9, relYawDeg + patchHalfYaw);
+    const minPitch = Math.max(-32, pitchDeg - patchHalfPitch);
+    const maxPitch = Math.min(31.9, pitchDeg + patchHalfPitch);
+
+    const cStart = Math.max(0, Math.floor(((minYaw + 64) / yawSpan) * this.fineCols));
+    const cEnd = Math.min(this.fineCols - 1, Math.floor(((maxYaw + 64) / yawSpan) * this.fineCols));
+    const rStart = Math.max(0, Math.floor((1 - (maxPitch + 32) / pitchSpan) * this.fineRows));
+    const rEnd = Math.min(this.fineRows - 1, Math.floor((1 - (minPitch + 32) / pitchSpan) * this.fineRows));
+
+    for (let r = rStart; r <= rEnd; r++) {
+      for (let c = cStart; c <= cEnd; c++) {
+        this.fineMapped[r * this.fineCols + c] = 1;
+      }
+    }
+  }
+
+  getViewportUnmappedGrid(gridCols = 8, gridRows = 6, fovH = 62, fovV = 46) {
+    const cov = this.getSceneCoverage();
+    const total = gridCols * gridRows;
+    if (cov.optimal || this.cameraFrames < 1) {
+      return new Array(total).fill(false);
+    }
+    const curRelYaw = this.latestPose?.relYaw ?? 0;
+    const curPitch = this.latestPose?.pitchDeg ?? 0;
+    const out = new Array(total);
+    for (let r = 0; r < gridRows; r++) {
+      const v = (r + 0.5) / gridRows;
+      const worldPitch = Math.max(-32, Math.min(31.9, curPitch + (0.5 - v) * fovV));
+      const fr = Math.max(
+        0,
+        Math.min(this.fineRows - 1, Math.floor((1 - (worldPitch + 32) / 64) * this.fineRows))
+      );
+      for (let c = 0; c < gridCols; c++) {
+        const u = (c + 0.5) / gridCols;
+        const worldYaw = Math.max(-64, Math.min(63.9, curRelYaw + (u - 0.5) * fovH));
+        const fc = Math.max(
+          0,
+          Math.min(this.fineCols - 1, Math.floor(((worldYaw + 64) / 128) * this.fineCols))
+        );
+        out[r * gridCols + c] = this.fineMapped[fr * this.fineCols + fc] === 0;
+      }
+    }
+    return out;
   }
 
   analyzeSurfacePatch(normX = 0.5, normY = 0.5) {
@@ -129,6 +184,7 @@ export class ProofOfLocationTracker {
 
     if (hasCamera && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
       this.scanSectors[row * this.scanCols + col] = true;
+      this._markFinePatch(relYaw, pitchDeg);
     }
 
     return this.getSceneCoverage();
@@ -206,10 +262,10 @@ export class ProofOfLocationTracker {
     }
 
     let hint = 'Move phone around scene';
-    if (!hasCamera) {
+    if (optimal) {
+      hint = 'Mapping complete for this space!';
+    } else if (!hasCamera) {
       hint = 'Camera needed for scan';
-    } else if (optimal) {
-      hint = 'Optimal scene lock';
     } else if (scannedCount <= 2) {
       hint = 'Move phone around scene';
     } else if (upMissing >= 2 && upMissing >= leftMissing && upMissing >= rightMissing) {
@@ -290,9 +346,11 @@ export class ProofOfLocationTracker {
     this.latestGray = gray;
     if (this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
       this.scanSectors[this.latestPose.row * this.scanCols + this.latestPose.col] = true;
+      this._markFinePatch(this.latestPose.relYaw, this.latestPose.pitchDeg);
     } else if (!this.latestPose && (this.sceneContrast >= 1.0 || this.cameraFrames >= 2)) {
       // Seed center sector cleanly on initial stationary startup frames
       this.scanSectors[this.scanCols + 1] = true;
+      this._markFinePatch(0, 0);
     }
     this.ambientPalette = [...buckets.entries()]
       .sort((a, b) => b[1] - a[1])
