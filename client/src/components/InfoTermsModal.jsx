@@ -123,6 +123,9 @@ export default function InfoTermsModal({
                 <li>
                   <XeroIcon emoji="🔗" size={14} /> <strong>Desktop Pair:</strong> Enter a 6-letter code from the Desktop app to view your entire 3D sculpture live on a big screen while sculpting!
                 </li>
+                <li>
+                  <XeroIcon emoji="💾" size={14} /> <strong>Auto-Saved Drafts:</strong> Your unfinished blocks, title, description, and surface anchor automatically save on-device (and sync to your cloud account when signed in) so you can safely leave and resume anytime before publishing.
+                </li>
               </ul>
             </div>
 

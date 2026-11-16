@@ -12,9 +12,11 @@ import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
-  const [tab, setTab] = useState('map'); // 'map' | 'gallery' | 'pair' | 'admin'
+  const [tab, setTab] = useState('map'); // 'map' | 'gallery' | 'drafts' | 'pair' | 'admin'
   const [sculptures, setSculptures] = useState([]);
   const [parcels, setParcels] = useState([]);
+  const [drafts, setDrafts] = useState([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -31,9 +33,29 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
   }, []);
 
+  const refreshDrafts = useCallback(async () => {
+    if (!user?.id) {
+      setDrafts([]);
+      return;
+    }
+    setDraftsLoading(true);
+    try {
+      const res = await api.listDrafts();
+      setDrafts(res.drafts || []);
+    } catch {
+      // ignore transient error
+    } finally {
+      setDraftsLoading(false);
+    }
+  }, [user?.id]);
+
   useEffect(() => {
     refreshData();
   }, [refreshData]);
+
+  useEffect(() => {
+    refreshDrafts();
+  }, [refreshDrafts]);
 
   useEffect(() => {
     const url = getMobileLaunchUrl();
@@ -67,6 +89,12 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             onClick={() => setTab('gallery')}
           >
             <XeroIcon emoji="🧱" size={17} /> Contributions ({sculptures.length})
+          </button>
+          <button
+            className={`nav-tab ${tab === 'drafts' ? 'active' : ''}`}
+            onClick={() => setTab('drafts')}
+          >
+            <XeroIcon emoji="💾" size={17} /> Drafts{user ? ` (${drafts.length})` : ''}
           </button>
           <button
             className={`nav-tab ${tab === 'pair' ? 'active' : ''}`}
@@ -161,6 +189,99 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
                     <button className="btn" onClick={() => setSelected(sc)}>
                       <XeroIcon emoji="🔍" size={14} /> Inspect Metadata &amp; On-Chain Deed
                     </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'drafts' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <XeroIcon emoji="💾" size={22} />
+                <strong>Saved Sculpture Drafts (Unpublished Work)</strong>
+              </div>
+              {user && (
+                <button className="btn" onClick={refreshDrafts} disabled={draftsLoading}>
+                  <XeroIcon emoji="🔄" size={14} /> Refresh
+                </button>
+              )}
+            </div>
+
+            {!user ? (
+              <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+                <XeroIcon emoji="🔐" size={34} />
+                <h3>Sign In to View Saved Cloud Drafts</h3>
+                <p style={{ color: 'var(--muted)', maxWidth: 460, margin: '8px auto 16px' }}>
+                  Unfinished work auto-saves locally on your phone and syncs here automatically when
+                  you sign in with Google.
+                </p>
+                <button className="btn btn-primary" onClick={() => setLoginOpen(true)}>
+                  <XeroIcon emoji="🔐" size={16} /> Google Sign-In
+                </button>
+              </div>
+            ) : drafts.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+                <XeroIcon emoji="💾" size={34} />
+                <h3>No Cloud Drafts Saved Yet</h3>
+                <p style={{ color: 'var(--muted)', maxWidth: 460, margin: '8px auto 16px' }}>
+                  Start sculpting on your phone — your work is automatically saved as a draft until
+                  you publish it on-chain.
+                </p>
+                <button className="btn btn-primary" onClick={() => setMobileModalOpen(true)}>
+                  <XeroIcon emoji="📱" size={16} /> Launch Mobile Studio
+                </button>
+              </div>
+            ) : (
+              <div className="grid-cards">
+                {drafts.map((d) => (
+                  <div
+                    key={d.id}
+                    className="card"
+                    style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                  >
+                    <SculptureViewer3D voxels={d.voxels || []} height={210} autoRotate />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <strong style={{ fontSize: 15 }}>{d.title || 'Untitled Draft'}</strong>
+                      <span className="badge teal">{d.voxelCount} blocks</span>
+                    </div>
+                    {d.description && (
+                      <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
+                        {d.description}
+                      </p>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {d.parcelId && (
+                        <span className="badge">
+                          <XeroIcon emoji="📍" size={12} /> {d.parcelId}
+                        </span>
+                      )}
+                      <span className="mono" style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center' }}>
+                        Updated {d.updatedAt ? new Date(d.updatedAt).toLocaleString() : ''}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ flex: 1 }}
+                        onClick={() => setMobileModalOpen(true)}
+                        title="Open GRAFFILAND on your phone to continue editing or publish"
+                      >
+                        <XeroIcon emoji="📱" size={14} /> Resume on Phone
+                      </button>
+                      <button
+                        className="btn btn-pink"
+                        onClick={async () => {
+                          await api.deleteDraft(d.id).catch(() => {});
+                          setDrafts((prev) => prev.filter((item) => item.id !== d.id));
+                        }}
+                        aria-label={`Delete draft ${d.title || d.id}`}
+                      >
+                        <XeroIcon emoji="🗑️" size={14} /> Delete
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

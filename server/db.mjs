@@ -173,6 +173,27 @@ export function getDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_sessions_expires ON agent_sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS sculpture_drafts (
+      id TEXT PRIMARY KEY,
+      owner_sub TEXT NOT NULL,
+      title TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      lat REAL,
+      lng REAL,
+      altitude REAL,
+      parcel_id TEXT DEFAULT '',
+      geohash TEXT DEFAULT '',
+      voxels_json TEXT NOT NULL,
+      voxel_count INTEGER NOT NULL DEFAULT 0,
+      surface_anchor_json TEXT DEFAULT '',
+      preview_data_url TEXT DEFAULT '',
+      source TEXT DEFAULT 'manual',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_drafts_owner_updated ON sculpture_drafts(owner_sub, updated_at DESC);
   `);
 
   dbInstance = db;

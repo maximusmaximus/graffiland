@@ -32,6 +32,13 @@ import {
   submitPeerGrant,
   updateBoardClue
 } from '../../shared/chatService.mjs';
+import {
+  consumeDraftOnPublish,
+  deleteUserDraft,
+  getUserDraft,
+  listUserDrafts,
+  saveUserDraft
+} from '../../shared/draftService.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   decodeGeohashBounds,
@@ -54,7 +61,7 @@ function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400'
   };
@@ -689,6 +696,48 @@ export default {
       return jsonResponse({ user: sanitizeUser(user) }, 200, request);
     }
 
+    // Cloud Saved Drafts (Auto-Saved & Named WIP Sculptures)
+    if (pathname === '/api/drafts') {
+      try {
+        const user = await getAuthUser(request, env, cfg);
+        if (request.method === 'GET') {
+          return jsonResponse(await listUserDrafts(d1Adapter, { user }), 200, request);
+        }
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          return jsonResponse(await saveUserDraft(d1Adapter, { user, body }), 200, request);
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Draft request failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+    if (draftMatch) {
+      try {
+        const draftId = decodeURIComponent(draftMatch[1]);
+        const user = await getAuthUser(request, env, cfg);
+        if (request.method === 'GET') {
+          return jsonResponse(await getUserDraft(d1Adapter, { draftId, user }), 200, request);
+        }
+        if (request.method === 'DELETE') {
+          return jsonResponse(await deleteUserDraft(d1Adapter, { draftId, user }), 200, request);
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Draft request failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
     if (pathname === '/api/wallet/payout' && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
@@ -959,6 +1008,10 @@ export default {
               now
             )
             .run();
+        }
+
+        if (body?.draftId) {
+          await consumeDraftOnPublish(d1Adapter, { draftId: body.draftId, user });
         }
 
         const saved = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?')

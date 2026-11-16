@@ -54,6 +54,13 @@ import {
   submitPeerGrant,
   updateBoardClue
 } from '../shared/chatService.mjs';
+import {
+  consumeDraftOnPublish,
+  deleteUserDraft,
+  getUserDraft,
+  listUserDrafts,
+  saveUserDraft
+} from '../shared/draftService.mjs';
 import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -459,6 +466,30 @@ export function createAppServer() {
     })
   );
 
+  app.get(
+    '/api/drafts',
+    requireAuth,
+    handleChatRoute((req) => listUserDrafts(chatDb, { user: req.user }))
+  );
+
+  app.post(
+    '/api/drafts',
+    requireAuth,
+    handleChatRoute((req) => saveUserDraft(chatDb, { user: req.user, body: req.body }))
+  );
+
+  app.get(
+    '/api/drafts/:id',
+    requireAuth,
+    handleChatRoute((req) => getUserDraft(chatDb, { draftId: req.params.id, user: req.user }))
+  );
+
+  app.delete(
+    '/api/drafts/:id',
+    requireAuth,
+    handleChatRoute((req) => deleteUserDraft(chatDb, { draftId: req.params.id, user: req.user }))
+  );
+
   app.get('/api/parcels', (_req, res) => {
     const rows = db
       .prepare(`
@@ -641,6 +672,10 @@ export function createAppServer() {
           recipientAddress,
           now
         );
+      }
+
+      if (req.body?.draftId) {
+        await consumeDraftOnPublish(chatDb, { draftId: req.body.draftId, user: req.user });
       }
 
       const saved = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(sculptureId);

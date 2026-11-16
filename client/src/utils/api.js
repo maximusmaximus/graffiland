@@ -116,5 +116,11 @@ export const api = {
   createAgentSession: (payload) =>
     request('/api/agent/sessions', { method: 'POST', body: JSON.stringify(payload) }),
   getAgentSession: (code) =>
-    request(`/api/agent/sessions/${encodeURIComponent(code)}`)
+    request(`/api/agent/sessions/${encodeURIComponent(code)}`),
+  listDrafts: () => request('/api/drafts'),
+  getDraft: (id) => request(`/api/drafts/${encodeURIComponent(id)}`),
+  saveDraft: (payload) =>
+    request('/api/drafts', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteDraft: (id) =>
+    request(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' })
 };

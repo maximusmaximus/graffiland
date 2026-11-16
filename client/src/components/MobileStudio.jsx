@@ -45,7 +45,41 @@ import {
 } from './VoxelEngine3D.js';
 import XeroIcon from './XeroIcon.jsx';
 
+const LOCAL_DRAFT_KEY = 'graffiland_studio_draft_v1';
+
+function loadLocalDraft() {
+  try {
+    const raw = localStorage.getItem(LOCAL_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalDraft(draft) {
+  try {
+    localStorage.setItem(LOCAL_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // ignore storage quota errors on restricted modes
+  }
+}
+
+function clearLocalDraft() {
+  try {
+    localStorage.removeItem(LOCAL_DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
+  const initialDraftRef = useRef(undefined);
+  if (initialDraftRef.current === undefined) {
+    initialDraftRef.current = loadLocalDraft() || {};
+  }
+  const initialDraft = initialDraftRef.current;
   const videoRef = useRef(null);
   const occlusionCanvasRef = useRef(null);
   const canvasHostRef = useRef(null);
@@ -71,13 +105,37 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const wsRef = useRef(null);
 
   // Studio states
-  const [mode, setMode] = useState('draw'); // 'draw' | 'preview' | 'publish'
+  const [mode, setMode] = useState('draw'); // 'draw' | 'transform' | 'preview' | 'publish'
   const [tool, setTool] = useState('brush'); // 'brush' | 'stack' | 'erase'
-  const [material, setMaterial] = useState('matte'); // 'matte' | 'neon' | 'glass'
-  const [color, setColor] = useState(GRAFFITI_PALETTE[0]);
-  const [reachMeters, setReachMeters] = useState(1.8);
-  const [voxels, setVoxels] = useState([]);
+  const [material, setMaterial] = useState(
+    initialDraft.material === 'neon' || initialDraft.material === 'glass'
+      ? initialDraft.material
+      : 'matte'
+  ); // 'matte' | 'neon' | 'glass'
+  const [color, setColor] = useState(
+    typeof initialDraft.color === 'string' && initialDraft.color
+      ? initialDraft.color
+      : GRAFFITI_PALETTE[0]
+  );
+  const [reachMeters, setReachMeters] = useState(
+    Number.isFinite(Number(initialDraft.reachMeters)) ? Number(initialDraft.reachMeters) : 1.8
+  );
+  const [voxels, setVoxels] = useState(() =>
+    Array.isArray(initialDraft.voxels) ? initialDraft.voxels : []
+  );
   const [nearbySculptures, setNearbySculptures] = useState([]);
+
+  // Draft persistence states
+  const [activeDraftId, setActiveDraftId] = useState(initialDraft.activeDraftId || '');
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [cloudDrafts, setCloudDrafts] = useState([]);
+  const [draftsBusy, setDraftsBusy] = useState(false);
+  const [draftError, setDraftError] = useState('');
+  const [draftStatusText, setDraftStatusText] = useState(() =>
+    Array.isArray(initialDraft.voxels) && initialDraft.voxels.length > 0
+      ? `Restored ${initialDraft.voxels.length} blocks`
+      : ''
+  );
 
   // Minimal HUD visibility: starts ultra-clean with "i" + compact trigger; expands tool dock on demand
   const [dockOpen, setDockOpen] = useState(false);
@@ -125,8 +183,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     hint: ''
   });
   const [painting, setPainting] = useState(false);
-  const [surfaceAnchor, setSurfaceAnchor] = useState(null);
-  const surfaceAnchorRef = useRef(null);
+  const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
+  const surfaceAnchorRef = useRef(initialDraft.surfaceAnchor || null);
   useEffect(() => {
     surfaceAnchorRef.current = surfaceAnchor;
   }, [surfaceAnchor]);
@@ -251,14 +309,20 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }, [user?.id]);
 
   // Publish state
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [cluePrompt, setCluePrompt] = useState('');
+  const [title, setTitle] = useState(initialDraft.title || '');
+  const [description, setDescription] = useState(initialDraft.description || '');
+  const [cluePrompt, setCluePrompt] = useState(initialDraft.cluePrompt || '');
   const [clueAnswer, setClueAnswer] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
+  const draftSnapshotRef = useRef(null);
+  const lastCloudSyncSigRef = useRef('');
+  const activeDraftIdRef = useRef(activeDraftId);
+  useEffect(() => {
+    activeDraftIdRef.current = activeDraftId;
+  }, [activeDraftId]);
 
   useEffect(() => {
     voxelsRef.current = voxels;
@@ -274,6 +338,181 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     materialRef.current = material;
     reachRef.current = reachMeters;
   }, [mode, tool, color, material, reachMeters]);
+
+  const refreshCloudDrafts = useCallback(async () => {
+    if (!userRef.current?.id) return [];
+    try {
+      const res = await api.listDrafts();
+      const items = res.drafts || [];
+      setCloudDrafts(items);
+      return items;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const persistCloudDraft = useCallback(
+    async ({ source = 'auto', forceNew = false, previewDataUrl = '' } = {}) => {
+      if (!userRef.current?.id) return null;
+      const currentVoxels = voxelsRef.current || [];
+      const currentTitle = title.trim();
+      const currentDesc = description.trim();
+      if (currentVoxels.length === 0 && !currentTitle && !currentDesc) return null;
+
+      const payload = {
+        ...(!forceNew && activeDraftIdRef.current ? { id: activeDraftIdRef.current } : {}),
+        title: currentTitle,
+        description: currentDesc,
+        voxels: currentVoxels,
+        location: locationRef.current,
+        surfaceAnchor: surfaceAnchorRef.current,
+        previewDataUrl,
+        source
+      };
+      const res = await api.saveDraft(payload);
+      if (res?.draft?.id) {
+        setActiveDraftId(res.draft.id);
+        activeDraftIdRef.current = res.draft.id;
+        setDraftStatusText(
+          `Saved to cloud (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
+        );
+        setCloudDrafts((prev) => [res.draft, ...prev.filter((d) => d.id !== res.draft.id)]);
+      }
+      return res?.draft || null;
+    },
+    [description, title]
+  );
+
+  // Auto-save work locally to device storage + flush on background/close
+  useEffect(() => {
+    const hasContent =
+      voxels.length > 0 ||
+      Boolean(title.trim()) ||
+      Boolean(description.trim()) ||
+      Boolean(surfaceAnchor);
+
+    if (!hasContent) {
+      draftSnapshotRef.current = null;
+      clearLocalDraft();
+      setDraftStatusText(user?.id ? 'Cloud drafts ready' : '');
+      return undefined;
+    }
+
+    const snap = {
+      activeDraftId,
+      title,
+      description,
+      cluePrompt,
+      color,
+      material,
+      reachMeters,
+      surfaceAnchor,
+      voxels,
+      updatedAt: new Date().toISOString()
+    };
+    draftSnapshotRef.current = snap;
+
+    const timer = setTimeout(() => {
+      saveLocalDraft(snap);
+      if (!user?.id) {
+        setDraftStatusText(`Auto-saved on device (${voxels.length} blocks)`);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [
+    activeDraftId,
+    cluePrompt,
+    color,
+    description,
+    material,
+    reachMeters,
+    surfaceAnchor,
+    title,
+    user?.id,
+    voxels
+  ]);
+
+  useEffect(() => {
+    const flushLocal = () => {
+      if (draftSnapshotRef.current) {
+        saveLocalDraft(draftSnapshotRef.current);
+      }
+    };
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') flushLocal();
+    };
+    window.addEventListener('beforeunload', flushLocal);
+    window.addEventListener('pagehide', flushLocal);
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushLocal);
+      window.removeEventListener('pagehide', flushLocal);
+      document.removeEventListener('visibilitychange', onVisChange);
+    };
+  }, []);
+
+  // Cloud auto-save + load ?draft=<id> when authenticated
+  useEffect(() => {
+    if (!user?.id) {
+      setCloudDrafts([]);
+      lastCloudSyncSigRef.current = '';
+      return undefined;
+    }
+
+    let cancelled = false;
+    refreshCloudDrafts();
+
+    const queryDraftId = new URLSearchParams(window.location.search).get('draft');
+    if (queryDraftId && !activeDraftIdRef.current) {
+      api
+        .getDraft(queryDraftId)
+        .then((res) => {
+          if (cancelled || !res?.draft) return;
+          const d = res.draft;
+          setActiveDraftId(d.id);
+          activeDraftIdRef.current = d.id;
+          setVoxels(Array.isArray(d.voxels) ? d.voxels : []);
+          setTitle(d.title || '');
+          setDescription(d.description || '');
+          setSurfaceAnchor(d.surfaceAnchor || null);
+          setDraftStatusText(`Loaded cloud draft (${d.voxelCount} blocks)`);
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshCloudDrafts, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const hasContent =
+      voxels.length > 0 || Boolean(title.trim()) || Boolean(description.trim());
+    if (!hasContent) return undefined;
+
+    let hash = 0;
+    for (let i = 0; i < voxels.length; i += 1) {
+      const v = voxels[i];
+      hash = (hash * 31 + Math.round(v.x * 1000) + Math.round(v.y * 1000) * 7 + Math.round(v.z * 1000) * 13 + Math.round((v.scale ?? 1) * 100)) | 0;
+    }
+    const anchorSig = surfaceAnchor
+      ? `${surfaceAnchor.x}:${surfaceAnchor.y}:${surfaceAnchor.z}:${surfaceAnchor.locked}`
+      : '';
+    const sig = `${user.id}|${activeDraftId}|${title}|${description}|${voxels.length}|${hash}|${anchorSig}`;
+    if (lastCloudSyncSigRef.current === sig) return undefined;
+
+    const timer = setTimeout(() => {
+      persistCloudDraft({ source: 'auto' })
+        .then((saved) => {
+          if (saved) lastCloudSyncSigRef.current = sig;
+        })
+        .catch(() => {});
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [activeDraftId, description, persistCloudDraft, surfaceAnchor, title, user?.id, voxels]);
 
   // Request fullscreen softly on first interaction
   const enterFullscreen = useCallback(() => {
@@ -933,6 +1172,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     draftGroupRef.current = draftGroup;
     nearbyGroupRef.current = nearbyGroup;
     ghostMeshRef.current = ghost;
+    if (voxelsRef.current?.length) {
+      rebuildDraftMesh(voxelsRef.current);
+    }
 
     const handleResize = () => {
       if (!host) return;
@@ -1152,7 +1394,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         host.removeChild(renderer.domElement);
       }
     };
-  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel, eraseTargetVoxel]);
+  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel, eraseTargetVoxel, rebuildDraftMesh]);
 
   // Keep locked sculpture live transform & bounding cage in sync
   useEffect(() => {
@@ -2082,6 +2324,134 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  async function openDraftsSheet() {
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('draw');
+    }
+    setDraftError('');
+    setDraftsOpen(true);
+    if (userRef.current?.id) {
+      setDraftsBusy(true);
+      try {
+        await refreshCloudDrafts();
+      } finally {
+        setDraftsBusy(false);
+      }
+    }
+  }
+
+  async function handleManualSaveDraft({ forceNew = false, closePublish = false } = {}) {
+    setDraftError('');
+    const currentVoxels = voxelsRef.current || [];
+    if (currentVoxels.length === 0 && !title.trim() && !description.trim()) {
+      setDraftError('Draw at least 1 block or add a title before saving a draft.');
+      return;
+    }
+
+    if (!userRef.current?.id) {
+      saveLocalDraft({
+        activeDraftId,
+        title,
+        description,
+        cluePrompt,
+        color,
+        material,
+        reachMeters,
+        surfaceAnchor,
+        voxels: currentVoxels,
+        updatedAt: new Date().toISOString()
+      });
+      setDraftStatusText(`Saved on device (${currentVoxels.length} blocks)`);
+      showTemporaryHint('Draft saved on device (sign in to sync to cloud)');
+      if (closePublish) setMode('draw');
+      return;
+    }
+
+    setDraftsBusy(true);
+    try {
+      const previewDataUrl = captureSculptureSnapshot();
+      await persistCloudDraft({ source: 'manual', forceNew, previewDataUrl });
+      showTemporaryHint(forceNew ? 'Saved as new cloud draft!' : 'Draft saved to your account!');
+      if (closePublish) setMode('draw');
+    } catch (err) {
+      setDraftError(err.message || 'Failed to save draft');
+    } finally {
+      setDraftsBusy(false);
+    }
+  }
+
+  async function handleLoadDraft(draft) {
+    if (!draft) return;
+    setDraftError('');
+    let full = draft;
+    if (!Array.isArray(draft.voxels) && userRef.current?.id) {
+      setDraftsBusy(true);
+      try {
+        const res = await api.getDraft(draft.id);
+        if (res?.draft) full = res.draft;
+      } catch (err) {
+        setDraftError(err.message || 'Failed to load draft');
+        setDraftsBusy(false);
+        return;
+      } finally {
+        setDraftsBusy(false);
+      }
+    }
+    stopBrushPainting();
+    resetArtTransformState();
+    setActiveDraftId(full.id || '');
+    activeDraftIdRef.current = full.id || '';
+    setVoxels(Array.isArray(full.voxels) ? full.voxels : []);
+    setTitle(full.title || '');
+    setDescription(full.description || '');
+    setCluePrompt('');
+    setClueAnswer('');
+    setSurfaceAnchor(full.surfaceAnchor || null);
+    setMode('draw');
+    modeRef.current = 'draw';
+    setDraftsOpen(false);
+    setDraftStatusText(`Loaded (${(full.voxels || []).length} blocks)`);
+    showTemporaryHint(`Resumed draft: ${full.title || 'Untitled'}`);
+  }
+
+  async function handleDeleteCloudDraft(draftId) {
+    if (!draftId) return;
+    setDraftError('');
+    setDraftsBusy(true);
+    try {
+      await api.deleteDraft(draftId);
+      setCloudDrafts((prev) => prev.filter((d) => d.id !== draftId));
+      if (activeDraftIdRef.current === draftId) {
+        setActiveDraftId('');
+        activeDraftIdRef.current = '';
+      }
+    } catch (err) {
+      setDraftError(err.message || 'Failed to delete draft');
+    } finally {
+      setDraftsBusy(false);
+    }
+  }
+
+  function handleStartNewDraft() {
+    stopBrushPainting();
+    resetArtTransformState();
+    clearLocalDraft();
+    setActiveDraftId('');
+    activeDraftIdRef.current = '';
+    lastCloudSyncSigRef.current = '';
+    setVoxels([]);
+    setTitle('');
+    setDescription('');
+    setCluePrompt('');
+    setClueAnswer('');
+    setSurfaceAnchor(null);
+    setDraftStatusText('');
+    setDraftsOpen(false);
+    setMode('draw');
+    modeRef.current = 'draw';
+    showTemporaryHint('Started fresh blank draft');
+  }
+
   function openPublishSheet() {
     if (!user) {
       setLoginOpen(true);
@@ -2133,6 +2503,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         termsAccepted,
         voxels,
         previewDataUrl,
+        draftId: activeDraftId || undefined,
         location: refinedAnchor,
         proofOfLocation: polSnap,
         deviceProfile: {
@@ -2183,6 +2554,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         }
       }
 
+      const publishedDraftId = activeDraftIdRef.current;
+      clearLocalDraft();
+      setActiveDraftId('');
+      activeDraftIdRef.current = '';
+      lastCloudSyncSigRef.current = '';
+      if (publishedDraftId) {
+        setCloudDrafts((prev) => prev.filter((d) => d.id !== publishedDraftId));
+      }
+
       setMintReceipt(res);
       setVoxels([]);
       setTitle('');
@@ -2190,6 +2570,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       setCluePrompt('');
       setClueAnswer('');
       setTermsAccepted(false);
+      setDraftStatusText('');
       // Refresh nearby AR sculptures
       const nearbyRes = await api.listSculptures({
         lat: location.lat,
@@ -2783,6 +3164,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="👁️" size={19} />
             </button>
             <button
+              className={`dock-btn ${draftsOpen || activeDraftId ? 'active' : ''}`}
+              onClick={openDraftsSheet}
+              title={draftStatusText ? `Saved Drafts · ${draftStatusText}` : 'Saved Drafts'}
+              aria-label="Saved Drafts"
+            >
+              <XeroIcon emoji="💾" size={19} />
+            </button>
+            <button
               className={`dock-btn ${pairedCode ? 'active' : ''}`}
               onClick={() => setPairOpen(true)}
               title="Pair Desktop"
@@ -3139,15 +3528,185 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  className="btn btn-pink"
-                  disabled={publishing || voxels.length === 0}
-                >
-                  <XeroIcon emoji="🚀" size={16} />
-                  {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Publish & Mint NFT'}
-                </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-pink"
+                    style={{ flex: 1 }}
+                    disabled={publishing || voxels.length === 0}
+                  >
+                    <XeroIcon emoji="🚀" size={16} />
+                    {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Publish & Mint NFT'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={publishing || draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
+                    onClick={() => handleManualSaveDraft({ closePublish: true })}
+                  >
+                    <XeroIcon emoji="💾" size={15} />
+                    <span>{draftsBusy ? 'Saving...' : 'Save Draft'}</span>
+                  </button>
+                </div>
+                {draftStatusText && (
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+                    <XeroIcon emoji="💾" size={12} /> Auto-draft: {draftStatusText}
+                  </div>
+                )}
               </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Saved Drafts Modal */}
+      {draftsOpen && (
+        <div className="modal-backdrop" onClick={() => setDraftsOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">
+                <XeroIcon emoji="💾" size={22} /> Saved Drafts
+              </h3>
+              <button className="btn" onClick={() => setDraftsOpen(false)}>
+                <XeroIcon emoji="❌" size={15} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
+              Your canvas auto-saves on this device as you work, and syncs to your account when
+              signed in so you never lose unfinished sculptures before publishing.
+            </p>
+
+            <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div>
+                  <strong style={{ fontSize: 13 }}>
+                    {title.trim() || 'Current Workspace Draft'}
+                  </strong>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+                    {voxels.length} blocks · {draftStatusText || 'Ready'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
+                    onClick={() => handleManualSaveDraft({ forceNew: false })}
+                  >
+                    <XeroIcon emoji="💾" size={14} /> Save Draft
+                  </button>
+                  {user && activeDraftId && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
+                      onClick={() => handleManualSaveDraft({ forceNew: true })}
+                    >
+                      <XeroIcon emoji="📄" size={14} /> Save Copy
+                    </button>
+                  )}
+                  <button type="button" className="btn" onClick={handleStartNewDraft}>
+                    <XeroIcon emoji="📝" size={14} /> New Blank
+                  </button>
+                </div>
+              </div>
+              {!user && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ alignSelf: 'flex-start' }}
+                  onClick={() => {
+                    setDraftsOpen(false);
+                    setLoginOpen(true);
+                  }}
+                >
+                  <XeroIcon emoji="🔐" size={14} /> Sign in with Google to Sync Cloud Drafts
+                </button>
+              )}
+            </div>
+
+            {draftError && (
+              <div style={{ color: '#ffb3c1', fontSize: 12, marginBottom: 10 }}>
+                <XeroIcon emoji="⚠️" size={14} /> {draftError}
+              </div>
+            )}
+
+            {user && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong style={{ fontSize: 13 }}>Cloud Saved Drafts ({cloudDrafts.length})</strong>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={draftsBusy}
+                    onClick={refreshCloudDrafts}
+                  >
+                    <XeroIcon emoji="🔄" size={13} /> Refresh
+                  </button>
+                </div>
+
+                {cloudDrafts.length === 0 ? (
+                  <div className="card" style={{ padding: 14, fontSize: 12, color: 'var(--muted)' }}>
+                    {draftsBusy
+                      ? 'Loading cloud drafts...'
+                      : 'No cloud drafts yet. Start sculpting or tap Save Draft to back up your work.'}
+                  </div>
+                ) : (
+                  cloudDrafts.map((d) => (
+                    <div
+                      key={d.id}
+                      className="card"
+                      style={{
+                        padding: 10,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 10,
+                        borderColor: d.id === activeDraftId ? 'var(--accent)' : undefined
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {d.title || 'Untitled Draft'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          <span className="badge teal">
+                            <XeroIcon emoji="🧱" size={11} /> {d.voxelCount} blocks
+                          </span>
+                          {d.parcelId && (
+                            <span className="badge">
+                              <XeroIcon emoji="📍" size={11} /> {d.parcelId}
+                            </span>
+                          )}
+                          <span className="mono" style={{ fontSize: 10, color: 'var(--muted)', alignSelf: 'center' }}>
+                            {d.updatedAt ? new Date(d.updatedAt).toLocaleString() : ''}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={draftsBusy}
+                          onClick={() => handleLoadDraft(d)}
+                        >
+                          <XeroIcon emoji="📂" size={13} /> Load
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-pink"
+                          disabled={draftsBusy}
+                          onClick={() => handleDeleteCloudDraft(d.id)}
+                          aria-label={`Delete draft ${d.title || d.id}`}
+                        >
+                          <XeroIcon emoji="🗑️" size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
         </div>

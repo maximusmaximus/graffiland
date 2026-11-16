@@ -887,4 +887,146 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       false
     );
   });
+
+  test('User sculpture drafts auto-save, enforce ownership, and clear on publish', async () => {
+    const unauth = await apiJson('/api/drafts');
+    assert.equal(unauth.status, 401);
+
+    const loginA = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'draft-artist-a@graffiland.test', name: 'Draft Artist A' }
+      })
+    });
+    assert.equal(loginA.status, 200);
+    const tokenA = loginA.body.token;
+
+    const loginB = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'draft-artist-b@graffiland.test', name: 'Draft Artist B' }
+      })
+    });
+    assert.equal(loginB.status, 200);
+    const tokenB = loginB.body.token;
+
+    const badDraft = await apiJson('/api/drafts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        title: 'Out of Bounds Draft',
+        voxels: [{ x: 300, y: 0, z: 0, color: '#00f5d4', material: 'matte' }]
+      })
+    });
+    assert.equal(badDraft.status, 400);
+
+    const saveRes = await apiJson('/api/drafts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        title: 'WIP Civic Arch',
+        description: 'Work in progress saved before finishing the top arch.',
+        source: 'auto',
+        location: { lat: 37.775, lng: -122.419, altitude: 18 },
+        surfaceAnchor: {
+          x: 0,
+          y: -0.6,
+          z: -1.5,
+          nx: 0,
+          ny: 1,
+          nz: 0,
+          depthM: 1.5,
+          label: 'Floor',
+          source: 'surface',
+          sharpnessScore: 0.72,
+          locked: true
+        },
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'matte' },
+          { x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'neon' }
+        ]
+      })
+    });
+    assert.equal(saveRes.status, 200);
+    assert.ok(saveRes.body.draft.id.startsWith('draft_'));
+    assert.equal(saveRes.body.draft.voxelCount, 2);
+    assert.equal(saveRes.body.draft.surfaceAnchor.label, 'Floor');
+
+    const draftId = saveRes.body.draft.id;
+
+    // Update same draft in place
+    const updateRes = await apiJson('/api/drafts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      body: JSON.stringify({
+        id: draftId,
+        title: 'WIP Civic Arch v2',
+        description: 'Added third neon block on top.',
+        source: 'manual',
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'matte' },
+          { x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'neon' },
+          { x: 0, y: 0.1, z: 0, color: '#ffd166', material: 'glass' }
+        ]
+      })
+    });
+    assert.equal(updateRes.status, 200);
+    assert.equal(updateRes.body.draft.id, draftId);
+    assert.equal(updateRes.body.draft.voxelCount, 3);
+    assert.equal(updateRes.body.draft.title, 'WIP Civic Arch v2');
+
+    // Cross-user isolation
+    const listB = await apiJson('/api/drafts', {
+      headers: { Authorization: `Bearer ${tokenB}` }
+    });
+    assert.equal(listB.status, 200);
+    assert.equal(listB.body.drafts.length, 0);
+
+    const peekB = await apiJson(`/api/drafts/${draftId}`, {
+      headers: { Authorization: `Bearer ${tokenB}` }
+    });
+    assert.equal(peekB.status, 403);
+
+    const deleteB = await apiJson(`/api/drafts/${draftId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenB}` }
+    });
+    assert.equal(deleteB.status, 403);
+
+    // Owner publishes draft and verifies it is consumed automatically
+    const pubRes = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        draftId,
+        title: 'Finished Civic Arch',
+        description: 'Completed 4x street sculpture originally saved as a WIP draft.',
+        termsAccepted: true,
+        location: { lat: 37.775, lng: -122.419, altitude: 18, accuracy: 6 },
+        proofOfLocation: {
+          frameHashes: ['aaa111', 'bbb222', 'ccc333', 'ddd444'],
+          gyroSamples: [
+            { alpha: 10, beta: 20, gamma: 1 },
+            { alpha: 14, beta: 22, gamma: 2 }
+          ],
+          flowCorrelation: 0.79,
+          skyPalette: ['#00f5d4', '#ff3e7f'],
+          visualDHash: '1010101010101010',
+          frameCount: 6,
+          flowScore: 0.79
+        },
+        voxels: updateRes.body.draft.voxels
+      })
+    });
+    assert.equal(pubRes.status, 201);
+
+    const afterPublishList = await apiJson('/api/drafts', {
+      headers: { Authorization: `Bearer ${tokenA}` }
+    });
+    assert.equal(afterPublishList.status, 200);
+    assert.equal(afterPublishList.body.drafts.some((d) => d.id === draftId), false);
+  });
 });
