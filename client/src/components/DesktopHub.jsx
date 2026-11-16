@@ -134,6 +134,8 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
           <MapView
             sculptures={sculptures}
             parcels={parcels}
+            selectedSculptureId={selected?.id || ''}
+            config={config}
             onSelectSculpture={setSelected}
           />
         )}

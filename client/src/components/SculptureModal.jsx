@@ -1,11 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { BrowserProvider, Contract, isAddress } from 'ethers';
+import xeroemoji from 'xeroemoji';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import {
   buildTransferAuthMessage,
   ERC721_TRANSFER_ABI
 } from '../../../shared/transferMessage.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
+import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -46,6 +50,7 @@ export default function SculptureModal({
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
+  const landMapHostRef = useRef(null);
   const [toAddress, setToAddress] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [nftNotice, setNftNotice] = useState('');
@@ -70,6 +75,55 @@ export default function SculptureModal({
     };
   }, [initialSculpture]);
 
+  useEffect(() => {
+    const host = landMapHostRef.current;
+    const latNum = Number(sculpture?.lat);
+    const lngNum = Number(sculpture?.lng);
+    if (!host || !sculpture || !Number.isFinite(latNum) || !Number.isFinite(lngNum)) return;
+
+    const map = L.map(host, {
+      center: [latNum, lngNum],
+      zoom: 18,
+      zoomControl: false,
+      attributionControl: false
+    });
+
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    if (sculpture.parcelBounds?.sw && sculpture.parcelBounds?.ne) {
+      L.rectangle([sculpture.parcelBounds.sw, sculpture.parcelBounds.ne], {
+        color: '#ffd166',
+        weight: 2.5,
+        fillColor: '#00f5d4',
+        fillOpacity: 0.25
+      })
+        .bindTooltip(`Virtual Land ${sculpture.parcelId}`)
+        .addTo(map);
+    }
+
+    const pinUrl = xeroemoji.get('📍')?.svgUrl;
+    const pinIcon = L.divIcon({
+      className: 'graffiland-map-pin',
+      html: pinUrl
+        ? `<img src="${pinUrl}" width="26" height="26" style="filter: drop-shadow(0 2px 6px rgba(0,245,212,0.75));" />`
+        : '📍',
+      iconSize: [26, 26],
+      iconAnchor: [13, 24]
+    });
+    L.marker([latNum, lngNum], { icon: pinIcon }).addTo(map);
+
+    const timer = setTimeout(() => {
+      map.invalidateSize();
+    }, 80);
+
+    return () => {
+      clearTimeout(timer);
+      map.remove();
+    };
+  }, [sculpture?.id, sculpture?.lat, sculpture?.lng, sculpture?.parcelBounds, sculpture?.parcelId]);
+
   if (!sculpture) return null;
 
   const pol = sculpture.proofOfLocation || {};
@@ -89,11 +143,10 @@ export default function SculptureModal({
   const tokenMetaUrl = resolveApiUrl(
     sculpture.metadataUrl || `/api/sculptures/${encodeURIComponent(sculpture.id)}/metadata.json`
   );
-  const explorerBase = config?.chain?.network?.explorerUrl || config?.chain?.network?.explorer || '';
-  const explorerTokenUrl =
-    !sculpture.chain?.simulated && explorerBase && sculpture.chain?.contractAddress
-      ? `${explorerBase}/token/${sculpture.chain.contractAddress}/instance/${sculpture.chain.tokenId}`
-      : '';
+  const chainLinks = getSculptureChainLinks(sculpture, config);
+  const explorerTokenUrl = chainLinks.tokenUrl;
+  const explorerTxUrl = chainLinks.txUrl;
+  const explorerContractUrl = chainLinks.contractUrl;
   const transfers = Array.isArray(sculpture.transfers) ? sculpture.transfers : [];
   const hasCoords =
     Number.isFinite(Number(sculpture.lat)) && Number.isFinite(Number(sculpture.lng));
@@ -297,6 +350,17 @@ export default function SculptureModal({
               </span>
             </a>
           )}
+          {explorerTxUrl ? (
+            <a className="btn" href={explorerTxUrl} target="_blank" rel="noreferrer">
+              <XeroIcon emoji="⛓️" size={14} />
+              <span>Tx {sculpture.chain?.txHash?.slice(0, 10)}...</span>
+            </a>
+          ) : sculpture.chain?.txHash ? (
+            <span className="badge">
+              <XeroIcon emoji="⛓️" size={13} />{' '}
+              {chainLinks.isSimulated ? 'Pre-chain' : 'Tx'} {sculpture.chain.txHash.slice(0, 10)}...
+            </span>
+          ) : null}
           <span className="badge teal">
             <XeroIcon emoji="📍" size={13} /> Land {sculpture.parcelId}
           </span>
@@ -316,8 +380,23 @@ export default function SculptureModal({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land Metadata
+              <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land Parcel ({sculpture.parcelId})
             </div>
+            {hasCoords && (
+              <div className="mini-land-map-wrap">
+                <div ref={landMapHostRef} className="mini-land-map" />
+                <div className="mini-land-map-caption">
+                  <span>
+                    <XeroIcon emoji="🗺️" size={11} /> Land {sculpture.parcelId}
+                  </span>
+                  {sculpture.parcelBounds?.sw && (
+                    <span className="mono">
+                      SW {sculpture.parcelBounds.sw[0].toFixed(5)},{sculpture.parcelBounds.sw[1].toFixed(5)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
             <table className="kv-table">
               <tbody>
                 <tr>
@@ -454,7 +533,19 @@ export default function SculptureModal({
               <tr>
                 <th>Token ID / Contract</th>
                 <td className="mono" style={{ wordBreak: 'break-all' }}>
-                  #{sculpture.chain?.tokenId} · {sculpture.chain?.contractAddress}
+                  #{sculpture.chain?.tokenId} ·{' '}
+                  {explorerContractUrl ? (
+                    <a
+                      href={explorerContractUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      {sculpture.chain?.contractAddress}
+                    </a>
+                  ) : (
+                    sculpture.chain?.contractAddress
+                  )}
                 </td>
               </tr>
               <tr>
@@ -476,7 +567,20 @@ export default function SculptureModal({
               </tr>
               <tr>
                 <th>Tx Hash</th>
-                <td className="mono" style={{ wordBreak: 'break-all' }}>{sculpture.chain?.txHash}</td>
+                <td className="mono" style={{ wordBreak: 'break-all' }}>
+                  {explorerTxUrl ? (
+                    <a
+                      href={explorerTxUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      {sculpture.chain?.txHash}
+                    </a>
+                  ) : (
+                    sculpture.chain?.txHash
+                  )}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -510,9 +614,14 @@ export default function SculptureModal({
             >
               <XeroIcon emoji="🔄" size={15} /> Sync Owner
             </button>
+            {explorerTxUrl && (
+              <a className="btn btn-primary" href={explorerTxUrl} target="_blank" rel="noreferrer">
+                <XeroIcon emoji="⛓️" size={15} /> View Tx On Chain
+              </a>
+            )}
             {explorerTokenUrl && (
               <a className="btn" href={explorerTokenUrl} target="_blank" rel="noreferrer">
-                <XeroIcon emoji="🌐" size={15} /> Blockscout
+                <XeroIcon emoji="🌐" size={15} /> Blockscout Token
               </a>
             )}
           </div>

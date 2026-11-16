@@ -26,6 +26,7 @@ import {
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
 import { getWsUrl } from '../utils/device.js';
+import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import MapView from './MapView.jsx';
@@ -3952,6 +3953,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               userLocation={location}
               focusArea={areaFilterMode === 'nearby'}
               areaRadiusMeters={5000}
+              selectedSculptureId={mapSelectedSculpture?.id || ''}
+              config={config}
               compact
               onSelectSculpture={(sc) => setMapSelectedSculpture(sc)}
             />
@@ -3986,6 +3989,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {displayedMapSculptures.map((sc) => {
+                  const chainLinks = getSculptureChainLinks(sc, config);
+                  const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : '';
                   const distText =
                     sc.distanceMeters == null
                       ? ''
@@ -4014,10 +4019,29 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                               <XeroIcon emoji="📍" size={11} /> {distText}
                             </span>
                           )}
+                          <span className="badge gold">
+                            <XeroIcon emoji="🗺️" size={11} /> Land {sc.parcelId}
+                          </span>
                           <span className="badge">
                             <XeroIcon emoji="🧱" size={11} /> {sc.voxelCount} blocks
                           </span>
-                          <span className="badge gold">{sc.parcelId}</span>
+                          {chainLinks.txUrl ? (
+                            <a
+                              className="badge teal"
+                              href={chainLinks.txUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="View mint transaction on chain"
+                            >
+                              <XeroIcon emoji="⛓️" size={11} /> Tx {txShort}
+                            </a>
+                          ) : txShort ? (
+                            <span className="badge">
+                              <XeroIcon emoji="⛓️" size={11} />{' '}
+                              {chainLinks.isSimulated ? 'Pre-chain' : 'Tx'} {txShort}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                       <button

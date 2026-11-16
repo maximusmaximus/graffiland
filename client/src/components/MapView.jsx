@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import React, { useEffect, useRef } from 'react';
 import xeroemoji from 'xeroemoji';
+import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function MapView({
@@ -11,6 +12,8 @@ export default function MapView({
   focusArea = false,
   areaRadiusMeters = 5000,
   compact = false,
+  selectedSculptureId = '',
+  config = null,
   onSelectSculpture
 }) {
   const mapHostRef = useRef(null);
@@ -90,15 +93,38 @@ export default function MapView({
         .addTo(layer);
     }
 
+    const parcelMap = new Map();
     for (const p of parcels) {
-      if (!p.bounds) continue;
+      if (p?.bounds) parcelMap.set(p.parcelId, p);
+    }
+    for (const sc of sculptures) {
+      if (sc?.parcelId && sc?.parcelBounds && !parcelMap.has(sc.parcelId)) {
+        parcelMap.set(sc.parcelId, {
+          parcelId: sc.parcelId,
+          bounds: sc.parcelBounds,
+          sculptureCount: 1
+        });
+      }
+    }
+
+    const selectedParcelId =
+      sculptures.find((s) => s.id === selectedSculptureId)?.parcelId || '';
+
+    for (const p of parcelMap.values()) {
+      const parcelSculptures = sculptures.filter((s) => s.parcelId === p.parcelId);
+      const isSelectedParcel = selectedParcelId && p.parcelId === selectedParcelId;
       const rect = L.rectangle([p.bounds.sw, p.bounds.ne], {
-        color: '#00f5d4',
-        weight: 1.5,
-        fillColor: '#00f5d4',
-        fillOpacity: 0.18
+        color: isSelectedParcel ? '#ffd166' : '#00f5d4',
+        weight: isSelectedParcel ? 2.5 : 1.75,
+        fillColor: isSelectedParcel ? '#ffd166' : '#00f5d4',
+        fillOpacity: isSelectedParcel ? 0.28 : 0.2
       });
-      rect.bindTooltip(`Virtual Land ${p.parcelId} (${p.sculptureCount} sculptures)`);
+      rect.bindTooltip(
+        `Virtual Land ${p.parcelId} (${parcelSculptures.length || p.sculptureCount} sculpture${(parcelSculptures.length || p.sculptureCount) === 1 ? '' : 's'})`
+      );
+      if (parcelSculptures.length > 0 && onSelectSculpture) {
+        rect.on('click', () => onSelectSculpture(parcelSculptures[0]));
+      }
       rect.addTo(layer);
     }
 
@@ -116,9 +142,13 @@ export default function MapView({
     for (const sc of sculptures) {
       if (!Number.isFinite(Number(sc.lat)) || !Number.isFinite(Number(sc.lng))) continue;
       coords.push([Number(sc.lat), Number(sc.lng)]);
+      const chainLinks = getSculptureChainLinks(sc, config);
+      const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : 'n/a';
       const marker = L.marker([Number(sc.lat), Number(sc.lng)], { icon: customIcon });
-      marker.on('click', () => onSelectSculpture(sc));
-      marker.bindTooltip(`${sc.title} · ${sc.parcelId}`);
+      marker.on('click', () => onSelectSculpture?.(sc));
+      marker.bindTooltip(
+        `${sc.title} · Land ${sc.parcelId} · ${chainLinks.isSimulated ? 'Pre-chain' : `Tx ${txShort}`}`
+      );
       marker.addTo(layer);
     }
 
@@ -130,7 +160,7 @@ export default function MapView({
     } else if (hasUser) {
       map.setView([Number(userLocation.lat), Number(userLocation.lng)], 14);
     }
-  }, [sculptures, parcels, userLocation, focusArea, areaRadiusMeters, onSelectSculpture]);
+  }, [sculptures, parcels, userLocation, focusArea, areaRadiusMeters, selectedSculptureId, config, onSelectSculpture]);
 
   function centerOnUser() {
     const map = mapRef.current;
