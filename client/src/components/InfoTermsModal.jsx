@@ -152,6 +152,26 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🗺️" size={18} /> Desktop Map Explorer, QR Pair &amp; Mobile Requirement
+              </div>
+              <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
+                <li>
+                  <strong>Map-First Desktop Interface:</strong> Opening GRAFFILAND on a desktop viewport defaults strictly to the interactive map and sculptures around your location — click any pin, Virtual Land parcel, or nearby sculpture card to inspect its interactive 3D view, land parcel, on-chain transaction, and Google Maps directions.
+                </li>
+                <li>
+                  <strong>Mobile Needed for Full Functionality:</strong> Creating &amp; capturing 3D sculptures and publishing them on-chain requires a mobile device with a live camera, gyroscope, and GPS Proof of Location.
+                </li>
+                <li>
+                  <strong>QR Pair Modal (Larger 3D Drawing View):</strong> Use <strong>Pair Phone (QR · Large 3D View)</strong> on desktop to open a modal pairing QR code and inspect your live strokes in a large 3D view while drawing on your phone.
+                </li>
+                <li>
+                  <strong>Session &amp; Last View Persistence:</strong> Your desktop login session, map viewport (position &amp; zoom), last interacted sculpture, and active QR Pair / inspection modal are automatically remembered across visits so you immediately see what you last interacted with.
+                </li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <XeroIcon emoji="🪙" size={18} /> Portable ERC-721 + 3D GLB + 5% Resale Fee
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>

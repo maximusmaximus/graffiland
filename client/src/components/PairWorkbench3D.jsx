@@ -5,13 +5,29 @@ import SculptureViewer3D from './SculptureViewer3D.jsx';
 import { GRAFFITI_PALETTE } from './VoxelEngine3D.js';
 import XeroIcon from './XeroIcon.jsx';
 
-export default function PairWorkbench3D() {
+const PAIR_VOXELS_STORAGE_KEY = 'graffiland_last_pair_voxels_v1';
+
+function loadSavedPairVoxels() {
+  try {
+    const raw = localStorage.getItem(PAIR_VOXELS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export default function PairWorkbench3D({ inModal = false }) {
   const wsRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const [pairCode, setPairCode] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [mobileConnected, setMobileConnected] = useState(false);
-  const [liveVoxels, setLiveVoxels] = useState([]);
+  const [liveVoxels, setLiveVoxels] = useState(() => loadSavedPairVoxels());
+  const [restoredFromLastSession, setRestoredFromLastSession] = useState(
+    () => loadSavedPairVoxels().length > 0
+  );
   const [hasClearedBackup, setHasClearedBackup] = useState(false);
   const [liveCursor, setLiveCursor] = useState(null);
   const [liveQuaternion, setLiveQuaternion] = useState(null);
@@ -41,11 +57,19 @@ export default function PairWorkbench3D() {
           setQrDataUrl(qr);
         } else if (msg.type === 'pair_connected') {
           setMobileConnected(true);
+          setRestoredFromLastSession(false);
         } else if (msg.type === 'mobile_disconnected') {
           setMobileConnected(false);
           setLiveCursor(null);
         } else if (msg.type === 'voxels_sync') {
-          setLiveVoxels(msg.voxels || []);
+          const incoming = Array.isArray(msg.voxels) ? msg.voxels : [];
+          setLiveVoxels(incoming);
+          setRestoredFromLastSession(false);
+          try {
+            localStorage.setItem(PAIR_VOXELS_STORAGE_KEY, JSON.stringify(incoming.slice(0, 4096)));
+          } catch {
+            // ignore quota errors
+          }
         } else if (msg.type === 'brush_state') {
           setLiveCursor(msg.cursor || null);
           setLiveQuaternion(msg.q || null);
@@ -308,12 +332,17 @@ export default function PairWorkbench3D() {
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
-            <XeroIcon emoji="🖥️" size={20} /> Live 3D Sculpture Workbench
+            <XeroIcon emoji="🖥️" size={20} /> Large Live 3D Drawing View
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <span className="badge teal">
               <XeroIcon emoji="🧱" size={13} /> {liveVoxels.length} voxels
             </span>
+            {restoredFromLastSession && !mobileConnected && liveVoxels.length > 0 && (
+              <span className="badge gold">
+                <XeroIcon emoji="🕒" size={12} /> Last Session Preview
+              </span>
+            )}
             <span className="badge">
               Mode: {mobileState.mode} · Tool: {mobileState.tool}
             </span>
@@ -322,7 +351,7 @@ export default function PairWorkbench3D() {
 
         <SculptureViewer3D
           voxels={liveVoxels}
-          height={540}
+          height={inModal ? 480 : 540}
           autoRotate={false}
           liveCursor={liveCursor}
           liveQuaternion={liveQuaternion}

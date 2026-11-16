@@ -1,72 +1,232 @@
-import QRCode from 'qrcode';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { api } from '../utils/api.js';
-import { getMobileLaunchUrl } from '../utils/device.js';
 import AdminPanel from './AdminPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import MapView from './MapView.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import SculptureModal from './SculptureModal.jsx';
-import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
+const DESKTOP_SESSION_KEY = 'graffiland_desktop_session_v1';
+const DESKTOP_NOTICE_SESSION_KEY = 'graffiland_desktop_notice_dismissed_v1';
+const NEARBY_RADIUS_METERS = 5000;
+
+function loadDesktopSession() {
+  try {
+    const raw = localStorage.getItem(DESKTOP_SESSION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDesktopSession(nextState) {
+  try {
+    localStorage.setItem(
+      DESKTOP_SESSION_KEY,
+      JSON.stringify({
+        ...nextState,
+        updatedAt: new Date().toISOString()
+      })
+    );
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function summarizeSculptureSnapshot(sc) {
+  if (!sc || !sc.id) return null;
+  return {
+    id: sc.id,
+    title: sc.title,
+    description: sc.description,
+    lat: sc.lat,
+    lng: sc.lng,
+    altitude: sc.altitude,
+    parcelId: sc.parcelId,
+    parcelBounds: sc.parcelBounds,
+    voxelCount: sc.voxelCount,
+    voxels: Array.isArray(sc.voxels) ? sc.voxels.slice(0, 4096) : [],
+    polScore: sc.polScore,
+    chain: sc.chain,
+    ipfs: sc.ipfs,
+    ownerAddress: sc.ownerAddress,
+    ownerUserId: sc.ownerUserId,
+    createdAt: sc.createdAt
+  };
+}
+
+function formatDistanceLabel(meters) {
+  if (!Number.isFinite(meters)) return '';
+  if (meters < 1000) return `${Math.round(meters)}m away`;
+  return `${(meters / 1000).toFixed(1)}km away`;
+}
+
 export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
-  const [tab, setTab] = useState('map'); // 'map' | 'gallery' | 'drafts' | 'pair' | 'admin'
+  const initialSession = useMemo(() => loadDesktopSession(), []);
+
   const [sculptures, setSculptures] = useState([]);
   const [parcels, setParcels] = useState([]);
-  const [drafts, setDrafts] = useState([]);
-  const [draftsLoading, setDraftsLoading] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
+  const [areaFilter, setAreaFilter] = useState(() =>
+    initialSession.areaFilter === 'all' ? 'all' : 'nearby'
+  );
+  const [mapViewport, setMapViewport] = useState(() => initialSession.mapViewport || null);
+  const [lastSculpture, setLastSculpture] = useState(
+    () => initialSession.lastSculptureSnapshot || null
+  );
+  const [selected, setSelected] = useState(() =>
+    initialSession.activeView === 'sculpture' && initialSession.lastSculptureSnapshot
+      ? initialSession.lastSculptureSnapshot
+      : null
+  );
+  const [pairOpen, setPairOpen] = useState(() => initialSession.activeView === 'pair');
+  const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
+  const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [mobileModalOpen, setMobileModalOpen] = useState(false);
-  const [mobileQr, setMobileQr] = useState('');
+  const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem(DESKTOP_NOTICE_SESSION_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const activeView = selected
+    ? 'sculpture'
+    : pairOpen
+    ? 'pair'
+    : infoOpen
+    ? 'info'
+    : 'map';
+
+  useEffect(() => {
+    saveDesktopSession({
+      areaFilter,
+      mapViewport,
+      lastSculptureId: lastSculpture?.id || '',
+      lastSculptureSnapshot: summarizeSculptureSnapshot(lastSculpture),
+      activeView
+    });
+  }, [areaFilter, mapViewport, lastSculpture, activeView]);
 
   const refreshData = useCallback(async () => {
     try {
       const [sRes, pRes] = await Promise.all([api.listSculptures(), api.listParcels()]);
-      setSculptures(sRes.sculptures || []);
+      const nextList = sRes.sculptures || [];
+      setSculptures(nextList);
       setParcels(pRes.parcels || []);
+      setLastSculpture((prev) => {
+        if (!prev?.id) return prev;
+        const fresh = nextList.find((item) => item.id === prev.id);
+        return fresh ? { ...prev, ...fresh } : prev;
+      });
+      setSelected((prev) => {
+        if (!prev?.id) return prev;
+        const fresh = nextList.find((item) => item.id === prev.id);
+        return fresh ? { ...prev, ...fresh } : prev;
+      });
     } catch {
       // ignore transient error
     }
   }, []);
-
-  const refreshDrafts = useCallback(async () => {
-    if (!user?.id) {
-      setDrafts([]);
-      return;
-    }
-    setDraftsLoading(true);
-    try {
-      const res = await api.listDrafts();
-      setDrafts(res.drafts || []);
-    } catch {
-      // ignore transient error
-    } finally {
-      setDraftsLoading(false);
-    }
-  }, [user?.id]);
 
   useEffect(() => {
     refreshData();
   }, [refreshData]);
 
   useEffect(() => {
-    refreshDrafts();
-  }, [refreshDrafts]);
-
-  useEffect(() => {
-    const url = getMobileLaunchUrl();
-    QRCode.toDataURL(url, {
-      width: 220,
-      margin: 1,
-      color: { dark: '#00f5d4', light: '#0b101b' }
-    })
-      .then(setMobileQr)
-      .catch(() => {});
+    if (!navigator.geolocation) return undefined;
+    let active = true;
+    const onPos = (pos) => {
+      if (!active) return;
+      setUserLocation({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude
+      });
+    };
+    navigator.geolocation.getCurrentPosition(onPos, () => {}, {
+      enableHighAccuracy: false,
+      maximumAge: 60000,
+      timeout: 7000
+    });
+    const watchId = navigator.geolocation.watchPosition(onPos, () => {}, {
+      enableHighAccuracy: false,
+      maximumAge: 60000,
+      timeout: 12000
+    });
+    return () => {
+      active = false;
+      navigator.geolocation.clearWatch?.(watchId);
+    };
   }, []);
+
+  const sculpturesSorted = useMemo(() => {
+    const withDist = (sculptures || []).map((sc) => {
+      const distanceMeters =
+        userLocation &&
+        Number.isFinite(Number(sc.lat)) &&
+        Number.isFinite(Number(sc.lng))
+          ? Math.round(haversineMeters(userLocation.lat, userLocation.lng, sc.lat, sc.lng))
+          : null;
+      return { ...sc, distanceMeters };
+    });
+    if (userLocation) {
+      withDist.sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity));
+    }
+    return withDist;
+  }, [sculptures, userLocation]);
+
+  const nearbyMatches = useMemo(() => {
+    if (!userLocation) return [];
+    return sculpturesSorted.filter(
+      (sc) => sc.distanceMeters !== null && sc.distanceMeters <= NEARBY_RADIUS_METERS
+    );
+  }, [sculpturesSorted, userLocation]);
+
+  const displayedSculptures = useMemo(() => {
+    if (areaFilter === 'nearby' && userLocation && nearbyMatches.length > 0) {
+      return nearbyMatches;
+    }
+    return sculpturesSorted;
+  }, [areaFilter, userLocation, nearbyMatches, sculpturesSorted]);
+
+  const handleViewportChange = useCallback((vp) => {
+    setMapViewport(vp);
+  }, []);
+
+  function openSculpture(sc) {
+    if (!sc) return;
+    setPairOpen(false);
+    setInfoOpen(false);
+    setSelected(sc);
+    setLastSculpture(sc);
+  }
+
+  function openPairModal() {
+    setSelected(null);
+    setInfoOpen(false);
+    setPairOpen(true);
+  }
+
+  function openInfoModal() {
+    setSelected(null);
+    setPairOpen(false);
+    setInfoOpen(true);
+  }
+
+  function dismissMobileNotice() {
+    setMobileNoticeDismissed(true);
+    try {
+      sessionStorage.setItem(DESKTOP_NOTICE_SESSION_KEY, '1');
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <div className="desktop-shell">
@@ -74,260 +234,242 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
         <div className="brand">
           <XeroIcon emoji="🧊" size={26} />
           <span>GRAFFILAND</span>
-          <span className="badge teal">3D AR · IPFS · Robinhood Chain</span>
+          <span className="badge teal">Desktop Map Explorer</span>
         </div>
 
-        <nav className="nav-tabs">
-          <button
-            className={`nav-tab ${tab === 'map' ? 'active' : ''}`}
-            onClick={() => setTab('map')}
-          >
-            <XeroIcon emoji="🗺️" size={17} /> Map View
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {lastSculpture && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => openSculpture(lastSculpture)}
+              title={`Reopen last interacted sculpture: ${lastSculpture.title}`}
+            >
+              <XeroIcon emoji="🕒" size={15} /> Last Viewed: {lastSculpture.title}
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" onClick={openPairModal}>
+            <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
           </button>
-          <button
-            className={`nav-tab ${tab === 'gallery' ? 'active' : ''}`}
-            onClick={() => setTab('gallery')}
-          >
-            <XeroIcon emoji="🧱" size={17} /> Contributions ({sculptures.length})
+          <button type="button" className="btn" onClick={openInfoModal} title="Info & Guide">
+            <XeroIcon emoji="ℹ️" size={16} /> Info
           </button>
-          <button
-            className={`nav-tab ${tab === 'drafts' ? 'active' : ''}`}
-            onClick={() => setTab('drafts')}
-          >
-            <XeroIcon emoji="💾" size={17} /> Drafts{user ? ` (${drafts.length})` : ''}
-          </button>
-          <button
-            className={`nav-tab ${tab === 'pair' ? 'active' : ''}`}
-            onClick={() => setTab('pair')}
-          >
-            <XeroIcon emoji="🔗" size={17} /> 3D Pair Studio
-          </button>
-          <button
-            className={`nav-tab ${tab === 'admin' ? 'active' : ''}`}
-            onClick={() => setTab('admin')}
-          >
-            <XeroIcon emoji="🛡️" size={17} /> Admin
-          </button>
-        </nav>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button className="btn" onClick={() => setMobileModalOpen(true)}>
-            <XeroIcon emoji="📱" size={16} /> Sculpt on Phone
-          </button>
-          <button className="btn" onClick={() => setInfoOpen(true)} title="Info & Terms">
-            <XeroIcon emoji="ℹ️" size={16} />
-          </button>
+          {user?.isAdmin && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setAdminOpen(true)}
+              title="Admin Moderation"
+            >
+              <XeroIcon emoji="🛡️" size={15} /> Admin
+            </button>
+          )}
           {user ? (
-            <button className="btn btn-primary" onClick={() => setInfoOpen(true)}>
+            <button type="button" className="btn" onClick={openInfoModal}>
               <XeroIcon emoji="👤" size={16} /> {user.name}
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={() => setLoginOpen(true)}>
-              <XeroIcon emoji="🔐" size={16} /> Google Sign-In
+            <button type="button" className="btn" onClick={() => setLoginOpen(true)}>
+              <XeroIcon emoji="🔐" size={16} /> Sign In
             </button>
           )}
         </div>
       </header>
 
       <main className="desktop-main">
-        {tab === 'map' && (
-          <MapView
-            sculptures={sculptures}
-            parcels={parcels}
-            selectedSculptureId={selected?.id || ''}
-            config={config}
-            onSelectSculpture={setSelected}
-          />
+        {!mobileNoticeDismissed && (
+          <div className="desktop-mobile-notice" role="status" aria-live="polite">
+            <div className="desktop-mobile-notice-body">
+              <XeroIcon emoji="📱" size={20} />
+              <div>
+                <strong>Mobile Required for Full Functionality</strong> — Desktop displays only the
+                interactive map and large-screen viewing. Use a mobile device (camera, gyroscope
+                &amp; GPS) to create/capture sculptures and publish them on-chain.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button type="button" className="btn btn-primary" onClick={openPairModal}>
+                <XeroIcon emoji="🔗" size={14} /> Pair with QR Code
+              </button>
+              <button type="button" className="btn" onClick={openInfoModal}>
+                <XeroIcon emoji="ℹ️" size={14} /> Learn More
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={dismissMobileNotice}
+                aria-label="Dismiss mobile notice"
+                title="Dismiss notice"
+              >
+                <XeroIcon emoji="❌" size={13} />
+              </button>
+            </div>
+          </div>
         )}
 
-        {tab === 'gallery' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <XeroIcon emoji="🧱" size={22} />
-                <strong>All Location-Anchored 3D Sculptures</strong>
+        <div className="desktop-map-layout">
+          <div className="desktop-map-stage">
+            <MapView
+              sculptures={displayedSculptures}
+              parcels={parcels}
+              userLocation={userLocation}
+              focusArea={areaFilter === 'nearby' && Boolean(userLocation) && nearbyMatches.length > 0}
+              selectedSculptureId={selected?.id || lastSculpture?.id || ''}
+              initialView={mapViewport}
+              onViewportChange={handleViewportChange}
+              config={config}
+              onSelectSculpture={openSculpture}
+            />
+          </div>
+
+          <aside className="card desktop-nearby-panel" aria-label="Sculptures around you">
+            <div className="desktop-nearby-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
+                <XeroIcon emoji="📍" size={17} />
+                <span>Sculptures Around You</span>
               </div>
-              <button className="btn" onClick={refreshData}>
-                <XeroIcon emoji="🔄" size={14} /> Refresh
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '5px 9px', fontSize: 11 }}
+                onClick={refreshData}
+                title="Refresh sculptures & parcels"
+              >
+                <XeroIcon emoji="🔄" size={12} />
               </button>
             </div>
 
-            {sculptures.length === 0 ? (
-              <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-                <XeroIcon emoji="📱" size={34} />
-                <h3>No Sculptures Published Yet</h3>
-                <p style={{ color: 'var(--muted)', maxWidth: 460, margin: '8px auto 16px' }}>
-                  Drawing &amp; minting sculptures requires a mobile device with camera, gyroscope, and GPS.
-                  Open GRAFFILAND on your phone or use <strong>3D Pair Studio</strong>!
-                </p>
-                <button className="btn btn-primary" onClick={() => setTab('pair')}>
-                  <XeroIcon emoji="🔗" size={16} /> Open 3D Pair Studio
-                </button>
-              </div>
-            ) : (
-              <div className="grid-cards">
-                {sculptures.map((sc) => (
-                  <div
-                    key={sc.id}
-                    className="card"
-                    style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
-                  >
-                    <SculptureViewer3D voxels={sc.voxels || []} height={210} autoRotate />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <strong style={{ fontSize: 15 }}>{sc.title}</strong>
-                      <span className="badge gold">PoL {sc.polScore}</span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
-                      {sc.description}
-                    </p>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <span className="badge teal">
-                        <XeroIcon emoji="📍" size={12} /> {sc.parcelId}
-                      </span>
-                      <span className="badge pink">
-                        <XeroIcon emoji="🪙" size={12} /> 5% Resale
-                      </span>
-                    </div>
-                    <button className="btn" onClick={() => setSelected(sc)}>
-                      <XeroIcon emoji="🔍" size={14} /> Inspect Metadata &amp; On-Chain Deed
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'drafts' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <XeroIcon emoji="💾" size={22} />
-                <strong>Saved Sculpture Drafts (Unpublished Work)</strong>
-              </div>
-              {user && (
-                <button className="btn" onClick={refreshDrafts} disabled={draftsLoading}>
-                  <XeroIcon emoji="🔄" size={14} /> Refresh
-                </button>
-              )}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className={`btn ${areaFilter === 'nearby' ? 'btn-primary' : ''}`}
+                style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
+                onClick={() => setAreaFilter('nearby')}
+              >
+                Near Me {userLocation ? `(${nearbyMatches.length})` : ''}
+              </button>
+              <button
+                type="button"
+                className={`btn ${areaFilter === 'all' ? 'btn-primary' : ''}`}
+                style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
+                onClick={() => setAreaFilter('all')}
+              >
+                Global ({sculptures.length})
+              </button>
             </div>
 
-            {!user ? (
-              <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-                <XeroIcon emoji="🔐" size={34} />
-                <h3>Sign In to View Saved Cloud Drafts</h3>
-                <p style={{ color: 'var(--muted)', maxWidth: 460, margin: '8px auto 16px' }}>
-                  Unfinished work auto-saves locally on your phone and syncs here automatically when
-                  you sign in with Google.
-                </p>
-                <button className="btn btn-primary" onClick={() => setLoginOpen(true)}>
-                  <XeroIcon emoji="🔐" size={16} /> Google Sign-In
-                </button>
-              </div>
-            ) : drafts.length === 0 ? (
-              <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-                <XeroIcon emoji="💾" size={34} />
-                <h3>No Cloud Drafts Saved Yet</h3>
-                <p style={{ color: 'var(--muted)', maxWidth: 460, margin: '8px auto 16px' }}>
-                  Start sculpting on your phone — your work is automatically saved as a draft until
-                  you publish it on-chain.
-                </p>
-                <button className="btn btn-primary" onClick={() => setMobileModalOpen(true)}>
-                  <XeroIcon emoji="📱" size={16} /> Launch Mobile Studio
-                </button>
-              </div>
-            ) : (
-              <div className="grid-cards">
-                {drafts.map((d) => (
-                  <div
-                    key={d.id}
-                    className="card"
-                    style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
-                  >
-                    <SculptureViewer3D voxels={d.voxels || []} height={210} autoRotate />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <strong style={{ fontSize: 15 }}>{d.title || 'Untitled Draft'}</strong>
-                      <span className="badge teal">{d.voxelCount} blocks</span>
-                    </div>
-                    {d.description && (
-                      <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {d.description}
-                      </p>
-                    )}
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {d.parcelId && (
-                        <span className="badge">
-                          <XeroIcon emoji="📍" size={12} /> {d.parcelId}
-                        </span>
-                      )}
-                      <span className="mono" style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center' }}>
-                        Updated {d.updatedAt ? new Date(d.updatedAt).toLocaleString() : ''}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button
-                        className="btn btn-primary"
-                        style={{ flex: 1 }}
-                        onClick={() => setMobileModalOpen(true)}
-                        title="Open GRAFFILAND on your phone to continue editing or publish"
-                      >
-                        <XeroIcon emoji="📱" size={14} /> Resume on Phone
-                      </button>
-                      <button
-                        className="btn btn-pink"
-                        onClick={async () => {
-                          await api.deleteDraft(d.id).catch(() => {});
-                          setDrafts((prev) => prev.filter((item) => item.id !== d.id));
-                        }}
-                        aria-label={`Delete draft ${d.title || d.id}`}
-                      >
-                        <XeroIcon emoji="🗑️" size={14} /> Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
+            {areaFilter === 'nearby' && userLocation && nearbyMatches.length === 0 && sculptures.length > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                No sculptures within 5km yet — showing all {sculptures.length} global sculptures sorted closest first.
               </div>
             )}
-          </div>
-        )}
 
-        {tab === 'pair' && <PairWorkbench3D />}
+            {lastSculpture && (
+              <button
+                type="button"
+                className="desktop-nearby-item is-last-viewed"
+                onClick={() => openSculpture(lastSculpture)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                  <strong style={{ fontSize: 12 }}>
+                    <XeroIcon emoji="🕒" size={12} /> Last Viewed: {lastSculpture.title}
+                  </strong>
+                  <span className="badge gold" style={{ fontSize: 10 }}>
+                    {lastSculpture.parcelId}
+                  </span>
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Click to reopen 3D view, land parcel &amp; on-chain deed
+                </span>
+              </button>
+            )}
 
-        {tab === 'admin' && (
-          <AdminPanel
-            user={user}
-            config={config}
-            onModerationChange={refreshData}
-            onSelectSculpture={setSelected}
-          />
-        )}
+            <div className="desktop-nearby-list">
+              {displayedSculptures.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
+                  No published sculptures on the map yet. Pair or open GRAFFILAND on your mobile phone to create the first piece nearby!
+                </div>
+              ) : (
+                displayedSculptures.map((sc) => {
+                  const isActive = (selected?.id || lastSculpture?.id) === sc.id;
+                  return (
+                    <button
+                      key={sc.id}
+                      type="button"
+                      className={`desktop-nearby-item ${isActive ? 'is-selected' : ''}`}
+                      onClick={() => openSculpture(sc)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                        <strong style={{ fontSize: 13, textAlign: 'left' }}>{sc.title}</strong>
+                        {sc.distanceMeters !== null && (
+                          <span className="badge teal" style={{ fontSize: 10 }}>
+                            {formatDistanceLabel(sc.distanceMeters)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span className="badge" style={{ fontSize: 10 }}>
+                          {sc.parcelId}
+                        </span>
+                        <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                          {sc.voxelCount || sc.voxels?.length || 0} blocks · PoL {sc.polScore}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        </div>
       </main>
 
-      {mobileModalOpen && (
-        <div className="modal-backdrop" onClick={() => setMobileModalOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: 420, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+      {pairOpen && (
+        <div className="modal-backdrop" onClick={() => setPairOpen(false)}>
+          <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">
-                <XeroIcon emoji="📱" size={22} /> Mobile Required for Sculpting
-              </h3>
-              <button className="btn" onClick={() => setMobileModalOpen(false)}>
+              <h2 className="modal-title">
+                <XeroIcon emoji="🔗" size={22} /> Pair Phone via QR · Large 3D Drawing View
+              </h2>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPairOpen(false)}
+                aria-label="Close pairing modal"
+              >
                 <XeroIcon emoji="❌" size={15} />
               </button>
             </div>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
-              Creating 3D graffiti uses your phone&apos;s live camera, gyroscope brush, and GPS Proof of Location.
-              Scan this QR code on your phone to launch the full-screen 3D brush:
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--muted)' }}>
+              Scan the QR code below with your mobile phone to draw &amp; create in AR while watching
+              your sculpture build live in this larger 3D workspace. Remember: publishing on-chain is
+              completed on mobile.
             </p>
-            {mobileQr && (
-              <img
-                src={mobileQr}
-                alt="Mobile QR"
-                style={{ width: 200, height: 200, borderRadius: 12, marginBottom: 10 }}
-              />
-            )}
-            <div className="mono" style={{ fontSize: 11, color: 'var(--accent)', wordBreak: 'break-all' }}>
-              {getMobileLaunchUrl()}
+            <PairWorkbench3D inModal />
+          </div>
+        </div>
+      )}
+
+      {adminOpen && user?.isAdmin && (
+        <div className="modal-backdrop" onClick={() => setAdminOpen(false)}>
+          <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">
+                <XeroIcon emoji="🛡️" size={20} /> Admin Moderation
+              </h2>
+              <button type="button" className="btn" onClick={() => setAdminOpen(false)}>
+                <XeroIcon emoji="❌" size={15} />
+              </button>
             </div>
+            <AdminPanel
+              user={user}
+              config={config}
+              onModerationChange={refreshData}
+              onSelectSculpture={(sc) => {
+                setAdminOpen(false);
+                openSculpture(sc);
+              }}
+            />
           </div>
         </div>
       )}
@@ -337,8 +479,10 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
           sculpture={selected}
           user={user}
           config={config}
+          userLocation={userLocation}
           onSculptureUpdated={(updated) => {
             setSelected(updated);
+            setLastSculpture(updated);
             setSculptures((prev) =>
               prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
             );

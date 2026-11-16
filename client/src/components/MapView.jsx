@@ -13,21 +13,46 @@ export default function MapView({
   areaRadiusMeters = 5000,
   compact = false,
   selectedSculptureId = '',
+  initialView = null,
+  onViewportChange = null,
   config = null,
   onSelectSculpture
 }) {
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
+  const initialViewRef = useRef(initialView);
+  const onViewportChangeRef = useRef(onViewportChange);
+  const userAdjustedViewRef = useRef(
+    Boolean(
+      initialView &&
+        Number.isFinite(Number(initialView.lat)) &&
+        Number.isFinite(Number(initialView.lng)) &&
+        Number.isFinite(Number(initialView.zoom))
+    )
+  );
+  const suppressViewSaveRef = useRef(false);
+
+  useEffect(() => {
+    onViewportChangeRef.current = onViewportChange;
+  }, [onViewportChange]);
 
   useEffect(() => {
     if (!mapHostRef.current || mapRef.current) return;
 
-    const initialCenter =
-      userLocation && Number.isFinite(userLocation.lat) && Number.isFinite(userLocation.lng)
-        ? [userLocation.lat, userLocation.lng]
-        : [37.7749, -122.4194];
-    const initialZoom = userLocation ? 14 : 3;
+    const saved = initialViewRef.current;
+    const hasSaved =
+      saved &&
+      Number.isFinite(Number(saved.lat)) &&
+      Number.isFinite(Number(saved.lng)) &&
+      Number.isFinite(Number(saved.zoom));
+
+    const initialCenter = hasSaved
+      ? [Number(saved.lat), Number(saved.lng)]
+      : userLocation && Number.isFinite(userLocation.lat) && Number.isFinite(userLocation.lng)
+      ? [userLocation.lat, userLocation.lng]
+      : [37.7749, -122.4194];
+    const initialZoom = hasSaved ? Number(saved.zoom) : userLocation ? 14 : 3;
 
     const map = L.map(mapHostRef.current, {
       center: initialCenter,
@@ -40,6 +65,26 @@ export default function MapView({
       maxZoom: 19
     }).addTo(map);
 
+    const markUserAdjusted = () => {
+      if (!suppressViewSaveRef.current) {
+        userAdjustedViewRef.current = true;
+      }
+    };
+
+    const emitViewport = () => {
+      if (suppressViewSaveRef.current) return;
+      const c = map.getCenter();
+      onViewportChangeRef.current?.({
+        lat: Number(c.lat.toFixed(6)),
+        lng: Number(c.lng.toFixed(6)),
+        zoom: map.getZoom()
+      });
+    };
+
+    map.on('dragstart', markUserAdjusted);
+    map.on('zoomstart', markUserAdjusted);
+    map.on('moveend', emitViewport);
+
     const layer = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerRef.current = layer;
@@ -50,6 +95,9 @@ export default function MapView({
 
     return () => {
       clearTimeout(resizeTimer);
+      map.off('dragstart', markUserAdjusted);
+      map.off('zoomstart', markUserAdjusted);
+      map.off('moveend', emitViewport);
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -152,13 +200,22 @@ export default function MapView({
       marker.addTo(layer);
     }
 
-    if (coords.length > 0) {
-      if (hasUser && focusArea) {
-        coords.push([Number(userLocation.lat), Number(userLocation.lng)]);
+    if (!userAdjustedViewRef.current) {
+      suppressViewSaveRef.current = true;
+      try {
+        if (coords.length > 0) {
+          if (hasUser && focusArea) {
+            coords.push([Number(userLocation.lat), Number(userLocation.lng)]);
+          }
+          map.fitBounds(coords, { padding: [44, 44], maxZoom: 16 });
+        } else if (hasUser) {
+          map.setView([Number(userLocation.lat), Number(userLocation.lng)], 14);
+        }
+      } finally {
+        setTimeout(() => {
+          suppressViewSaveRef.current = false;
+        }, 60);
       }
-      map.fitBounds(coords, { padding: [44, 44], maxZoom: 16 });
-    } else if (hasUser) {
-      map.setView([Number(userLocation.lat), Number(userLocation.lng)], 14);
     }
   }, [sculptures, parcels, userLocation, focusArea, areaRadiusMeters, selectedSculptureId, config, onSelectSculpture]);
 
@@ -170,7 +227,20 @@ export default function MapView({
       Number.isFinite(Number(userLocation.lat)) &&
       Number.isFinite(Number(userLocation.lng))
     ) {
+      userAdjustedViewRef.current = true;
       map.setView([Number(userLocation.lat), Number(userLocation.lng)], 15);
+    }
+  }
+
+  function fitAllSculptures() {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = sculptures
+      .filter((sc) => Number.isFinite(Number(sc.lat)) && Number.isFinite(Number(sc.lng)))
+      .map((sc) => [Number(sc.lat), Number(sc.lng)]);
+    if (pts.length > 0) {
+      userAdjustedViewRef.current = true;
+      map.fitBounds(pts, { padding: [44, 44], maxZoom: 16 });
     }
   }
 
@@ -180,12 +250,17 @@ export default function MapView({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <XeroIcon emoji="🗺️" size={22} />
-            <strong>Global Virtual Land &amp; 3D Graffiti Map</strong>
+            <strong>Virtual Land &amp; 3D Graffiti Map</strong>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             {userLocation && (
               <button type="button" className="btn" onClick={centerOnUser}>
                 <XeroIcon emoji="🎯" size={13} /> Center on Me
+              </button>
+            )}
+            {sculptures.length > 0 && (
+              <button type="button" className="btn" onClick={fitAllSculptures}>
+                <XeroIcon emoji="🌐" size={13} /> Fit Sculptures
               </button>
             )}
             <span className="badge teal">

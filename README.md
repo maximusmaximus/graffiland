@@ -23,12 +23,12 @@ Sculpting and publishing **require a mobile device** with a camera, gyroscope, a
 - **Auto-Saved Drafts (`💾`)**: All in-progress voxels, title, description, and locked surface anchors automatically save locally (`localStorage`) on every edit and sync to your Google account's cloud drafts (`sculpture_drafts`) via `/api/drafts` so unfinished work is preserved across refreshes or sessions and can be inspected on desktop (`💾 Drafts`) before minting.
 - **Gas-Free Publish (`🚀`)**: Sign in with **Google**, add a limited-terms title (`3–48` chars) and description (`10–240` chars, max `45` words), accept the Virtual Land Terms, and publish directly to IPFS + Robinhood Chain. You receive the minted ERC-721 NFT straight in your wallet at zero gas cost.
 
-### 2. Desktop Explorer, Map, 3D Pair Studio & Admin
-Opening GRAFFILAND on desktop launches the multi-tab hub:
-- **Global Map View (`🗺️`)**: Dark-mode OpenStreetMap Leaflet map rendering glowing **Geohash-8 Virtual Land parcel polygons** and clickable sculpture pins with full 3D orbit inspection and location/PoL/on-chain metadata.
-- **Contributions Gallery (`🧱`)**: Filterable 3D card grid with interactive Three.js `OrbitControls` previews of every visible sculpture.
-- **Live 3D Pair Studio (`🔗`)**: Generates a QR code and 6-character pairing code over WebSockets (`/ws`). Scan it with your phone to turn the phone into a wireless 3D gyro brush while watching the entire sculpture build in real time on your desktop monitor—complete with remote desktop brush, color, undo, recenter, preview, and publish triggers.
-- **Admin Moderation Panel (`🛡️`)**: Restricted to authorized Google Admin accounts (`ADMIN_EMAILS`) to inspect Proof-of-Location telemetry and **hide/unhide** items across the public map, gallery, and mobile AR preview feeds.
+### 2. Desktop Map Explorer & QR Pair Modal
+Opening GRAFFILAND on a desktop viewport defaults strictly to the interactive **Map & Large-View Explorer**:
+- **Map-Only View (`🗺️` + Surrounding Sculptures)**: Renders glowing **Geohash-8 Virtual Land parcel polygons**, clickable sculpture pins around your location (`Near Me` vs `Global`), and a **Sculptures Around You** panel. Click any pin, parcel, or surrounding card to inspect its interactive **3D model**, **Virtual Land parcel**, **on-chain transaction**, and **Google Maps directions**.
+- **Mobile-Required Banner (`📱`)**: Notifies desktop visitors that mobile (camera, gyroscope, and GPS Proof of Location) is required for full functionality — creating/capturing 3D sculptures and publishing them on-chain.
+- **QR Pair Modal (`🔗 Pair Phone · Large 3D View`)**: Opens a wide modal with a QR pairing code and 6-character code over WebSockets (`/ws`) so you can pair your mobile phone and view your strokes building in a larger live 3D workspace while drawing on mobile.
+- **Session & Last View Persistence**: Automatically remembers your login session, map viewport (center/zoom), area filter, last interacted sculpture (`Last Viewed`), and active QR Pair / inspection modal across visits (with an optional `🛡️ Admin` modal shown only for authorized `ADMIN_EMAILS`).
 
 ---
 

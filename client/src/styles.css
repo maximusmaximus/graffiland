@@ -850,6 +850,12 @@ select {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
 }
 
+.modal-card.wide {
+  max-width: 1180px;
+  width: min(1180px, 96vw);
+  max-height: 92dvh;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -1184,6 +1190,110 @@ select {
   color: var(--muted);
   font-weight: 500;
   width: 42%;
+}
+
+/* Desktop Map-Only Layout, Mobile Notice & Nearby Sculptures Panel */
+.desktop-mobile-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: rgba(0, 245, 212, 0.1);
+  border: 1px solid rgba(0, 245, 212, 0.35);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.desktop-mobile-notice-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 360px;
+}
+
+.desktop-map-layout {
+  display: grid;
+  grid-template-columns: 1fr 336px;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.desktop-map-stage {
+  min-width: 0;
+}
+
+.desktop-map-stage .map-container {
+  height: calc(100vh - 235px);
+  min-height: 440px;
+}
+
+.desktop-nearby-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 185px);
+  min-height: 460px;
+}
+
+.desktop-nearby-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.desktop-nearby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+  flex: 1;
+}
+
+.desktop-nearby-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.desktop-nearby-item:hover {
+  border-color: rgba(0, 245, 212, 0.45);
+  background: rgba(0, 245, 212, 0.06);
+}
+
+.desktop-nearby-item.is-selected {
+  border-color: var(--accent);
+  background: rgba(0, 245, 212, 0.12);
+}
+
+.desktop-nearby-item.is-last-viewed {
+  border-color: rgba(255, 209, 102, 0.52);
+  background: rgba(255, 209, 102, 0.08);
+}
+
+@media (max-width: 980px) {
+  .desktop-map-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-nearby-panel {
+    max-height: 380px;
+    min-height: 220px;
+  }
 }
 
 /* Unavailable / prerequisite-locked tools remain clickable to notify what is needed first */
