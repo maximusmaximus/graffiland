@@ -1154,3 +1154,53 @@ select {
   font-weight: 500;
   width: 42%;
 }
+
+/* Unavailable / prerequisite-locked tools remain clickable to notify what is needed first */
+.dock-btn.is-unavailable,
+.dock-btn.pink.is-unavailable,
+.dock-btn.active.is-unavailable {
+  filter: grayscale(100%) brightness(0.76);
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  transform: none;
+}
+
+.key-tool-caption.is-unavailable {
+  color: var(--muted);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.key-slot-btn.is-unavailable {
+  filter: grayscale(100%) brightness(0.74);
+  cursor: not-allowed;
+}
+
+.key-slot-btn.is-center.is-unavailable,
+.key-slot-btn.is-center.is-unavailable:active {
+  border-color: rgba(180, 192, 220, 0.3);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.surface-pill-btn.is-unavailable {
+  filter: grayscale(100%) brightness(0.76);
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.btn.is-unavailable,
+.btn.btn-primary.is-unavailable,
+.btn.btn-pink.is-unavailable,
+.btn.btn-danger.is-unavailable {
+  filter: grayscale(100%) brightness(0.8);
+  opacity: 0.44;
+  cursor: not-allowed;
+}
+
+.swatch.is-unavailable {
+  filter: grayscale(100%) brightness(0.72);
+  opacity: 0.38;
+  cursor: not-allowed;
+}

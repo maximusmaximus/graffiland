@@ -266,6 +266,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const activeCanvasPointersRef = useRef(new Map());
   const transformPinchRef = useRef(null);
   const clearedBackupRef = useRef(null);
+  const [hasClearedBackup, setHasClearedBackup] = useState(false);
+  const lastPrereqNotifyRef = useRef({ toolId: '', msg: '', ts: 0 });
+  const toolAvailabilityRef = useRef({});
   const lastErasedKeyRef = useRef({ key: '', ts: 0 });
   const hintTimerRef = useRef(null);
   const arTargetedIdRef = useRef('');
@@ -293,6 +296,112 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   useEffect(() => {
     occlusionEnabledRef.current = occlusionEnabled;
   }, [occlusionEnabled]);
+
+  const hasVoxels = voxels.length > 0;
+  const toolAvailability = useMemo(() => {
+    const originBlocked = Boolean(originStatus.originBlocked);
+    const originMsg =
+      originStatus.reason ||
+      'Origin is blocked — clear whatever is in front of the drawing origin first.';
+    const hasLoc = Boolean(location);
+    const needBlocksFor = (verb) =>
+      `Place at least 1 block with Brush (🖌️) or + Seed first before ${verb}.`;
+
+    let publishReason = '';
+    if (!hasVoxels) {
+      publishReason = needBlocksFor('publishing your 3D sculpture');
+    } else if (!hasLoc) {
+      publishReason = 'Wait for a GPS location fix first before publishing on-chain.';
+    } else if (!cameraReady) {
+      publishReason = 'Enable live camera access first for Proof of Location before publishing.';
+    } else if (!sceneScan.optimal) {
+      publishReason = `Move your phone around to finish mapping this space (${sceneScan.scannedCount}/${sceneScan.targetCount} angles for 100% lock) before publishing.`;
+    } else if (!user) {
+      publishReason = 'Sign in with Google first before publishing & minting on-chain.';
+    }
+
+    return {
+      brush: {
+        usable: !originBlocked,
+        reason: originBlocked ? originMsg : ''
+      },
+      stack: {
+        usable: !originBlocked && hasVoxels,
+        reason: originBlocked
+          ? originMsg
+          : !hasVoxels
+          ? needBlocksFor('stacking onto block faces')
+          : ''
+      },
+      erase: {
+        usable: hasVoxels,
+        reason: !hasVoxels ? needBlocksFor('erasing blocks') : ''
+      },
+      clear: {
+        usable: hasVoxels,
+        reason: !hasVoxels ? 'Canvas is already empty — draw blocks first before clearing.' : ''
+      },
+      transform: {
+        usable: hasVoxels || mode === 'transform',
+        reason:
+          !hasVoxels && mode !== 'transform'
+            ? needBlocksFor('locking and scaling your art piece')
+            : ''
+      },
+      undo: {
+        usable: hasVoxels || hasClearedBackup,
+        reason:
+          !hasVoxels && !hasClearedBackup
+            ? 'Nothing to undo yet — place or clear blocks first.'
+            : ''
+      },
+      palette: {
+        usable: mode === 'draw',
+        reason:
+          mode !== 'draw'
+            ? 'Return to drawing mode (🖌️) first to pick colors and block finishes.'
+            : ''
+      },
+      occlusion: {
+        usable: cameraReady,
+        reason: !cameraReady
+          ? 'Enable live camera access first to toggle live foreground occlusion.'
+          : ''
+      },
+      preview: {
+        usable: hasLoc,
+        reason: !hasLoc
+          ? 'Wait for a GPS location fix first to view nearby AR sculptures.'
+          : ''
+      },
+      agent: {
+        usable: hasLoc,
+        reason: !hasLoc
+          ? 'Enable GPS location permission first so the Agent Code locks onto your spot.'
+          : ''
+      },
+      publish: {
+        usable: !publishReason,
+        reason: publishReason
+      },
+      recenter: { usable: true, reason: '' },
+      drafts: { usable: true, reason: '' },
+      pair: { usable: true, reason: '' }
+    };
+  }, [
+    originStatus.originBlocked,
+    originStatus.reason,
+    hasVoxels,
+    hasClearedBackup,
+    location,
+    cameraReady,
+    sceneScan.optimal,
+    sceneScan.scannedCount,
+    sceneScan.targetCount,
+    user,
+    mode
+  ]);
+  toolAvailabilityRef.current = toolAvailability;
 
   useEffect(() => {
     locationRef.current = location;
@@ -964,6 +1073,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       }
       if (uniqueAdds.length === 0) return;
       clearedBackupRef.current = null;
+      setHasClearedBackup(false);
 
       let limitNotice = '';
       setVoxels((prev) => {
@@ -1616,6 +1726,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         } else if (msg.type === 'desktop_command') {
           if (msg.action === 'set_color' && msg.color) setColor(msg.color);
           if (msg.action === 'set_tool' && msg.tool) {
+            if (!ensureToolUsable(msg.tool)) return;
             if (modeRef.current === 'transform') {
               commitTransformAndExit('draw', msg.tool);
             } else {
@@ -1624,8 +1735,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             }
           }
           if (msg.action === 'set_mode' && msg.mode) {
-            if (msg.mode === 'publish' && !userRef.current) {
-              setLoginOpen(true);
+            if (msg.mode === 'publish') {
+              openPublishSheet();
+            } else if (msg.mode === 'preview' && !ensureToolUsable('preview')) {
+              return;
             } else if (modeRef.current === 'transform') {
               commitTransformAndExit(msg.mode);
             } else {
@@ -1748,6 +1861,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   );
 
   async function openAgentHandoff() {
+    if (!ensureToolUsable('agent')) return;
     setAgentOpen(true);
     setAgentError('');
     setAgentCopied(false);
@@ -1952,18 +2066,25 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (modeRef.current === 'transform') {
       commitTransformAndExit('draw');
     } else {
+      if (!ensureToolUsable('transform')) return;
       enterTransformMode();
     }
   }
 
   function clearCanvas() {
+    if (!ensureToolUsable('clear')) return;
     stopBrushPainting();
     if (voxelsRef.current.length > 0) {
       clearedBackupRef.current = voxelsRef.current;
+      setHasClearedBackup(true);
     }
     lastErasedKeyRef.current = { key: '', ts: 0 };
     resetArtTransformState();
     setVoxels([]);
+    if (toolRef.current === 'erase' || toolRef.current === 'stack') {
+      setTool('brush');
+      toolRef.current = 'brush';
+    }
     if (modeRef.current === 'transform') {
       setMode('draw');
       modeRef.current = 'draw';
@@ -1972,9 +2093,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }
 
   function handleUndo() {
+    if (!ensureToolUsable('undo')) return;
     if (voxelsRef.current.length === 0 && clearedBackupRef.current?.length) {
       const restored = clearedBackupRef.current;
       clearedBackupRef.current = null;
+      setHasClearedBackup(false);
       setVoxels(restored);
       showTemporaryHint('Cleared canvas restored');
       return;
@@ -2042,8 +2165,35 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     return true;
   }
 
+  function notifyToolUnavailable(toolId, reasonOverride = '') {
+    const info = toolAvailabilityRef.current?.[toolId];
+    const msg =
+      reasonOverride ||
+      info?.reason ||
+      'Complete the required step first before using this tool.';
+    const now = Date.now();
+    const last = lastPrereqNotifyRef.current;
+    if (last.toolId === toolId && last.msg === msg && now - last.ts < 220) {
+      return;
+    }
+    lastPrereqNotifyRef.current = { toolId, msg, ts: now };
+    showTemporaryHint(msg);
+  }
+
+  function ensureToolUsable(toolId) {
+    const info = toolAvailabilityRef.current?.[toolId];
+    if (info && !info.usable) {
+      notifyToolUnavailable(toolId, info.reason);
+      return false;
+    }
+    return true;
+  }
+
   function startContinuousHoldTool(holdTool) {
     enterFullscreen();
+    if (!ensureToolUsable(holdTool)) {
+      return;
+    }
     if (holdTool === 'brush' && !assertOriginUnblockedForPaint()) {
       return;
     }
@@ -2068,9 +2218,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
   const KEY_CAROUSEL_SLOT_PX = 54;
 
-  function selectKeyTool(toolId) {
+  function selectKeyTool(toolId, { silent = false } = {}) {
     activeKeyToolRef.current = toolId;
     setActiveKeyTool(toolId);
+    const avail = toolAvailabilityRef.current?.[toolId];
+    if (avail && !avail.usable) {
+      if (!silent) {
+        notifyToolUnavailable(toolId, avail.reason);
+      }
+      return;
+    }
     if (toolId === 'transform') {
       enterTransformMode();
       return;
@@ -2086,6 +2243,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       if (modeRef.current === 'transform') {
         commitTransformAndExit('preview');
       } else {
+        setPaletteOpen(false);
         setMode('preview');
       }
     } else if (toolId === 'agent' || toolId === 'publish') {
@@ -2097,11 +2255,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
-  function stepKeyTool(delta) {
+  function stepKeyTool(delta, opts = {}) {
     const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyToolRef.current);
     const current = idx >= 0 ? idx : 0;
     const nextIdx = (((current + delta) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
-    selectKeyTool(KEY_TOOLS[nextIdx].id);
+    selectKeyTool(KEY_TOOLS[nextIdx].id, opts);
   }
 
   function stopBrushPainting() {
@@ -2117,6 +2275,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   function triggerActiveKeyTool() {
     enterFullscreen();
     const curTool = activeKeyToolRef.current;
+    if (!ensureToolUsable(curTool)) {
+      return;
+    }
     if (curTool === 'transform') {
       toggleTransformLock();
     } else if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
@@ -2136,6 +2297,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       if (modeRef.current === 'transform') {
         commitTransformAndExit(next);
       } else {
+        setPaletteOpen(false);
         setMode(next);
       }
     } else if (curTool === 'agent') {
@@ -2200,13 +2362,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
     let dx = e.clientX - g.anchorX;
     while (dx >= KEY_CAROUSEL_SLOT_PX * 0.58) {
-      stepKeyTool(-1);
+      stepKeyTool(-1, { silent: true });
       g.anchorX += KEY_CAROUSEL_SLOT_PX;
       dx -= KEY_CAROUSEL_SLOT_PX;
       navigator.vibrate?.(8);
     }
     while (dx <= -KEY_CAROUSEL_SLOT_PX * 0.58) {
-      stepKeyTool(1);
+      stepKeyTool(1, { silent: true });
       g.anchorX -= KEY_CAROUSEL_SLOT_PX;
       dx += KEY_CAROUSEL_SLOT_PX;
       navigator.vibrate?.(8);
@@ -2244,6 +2406,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         } else if (Math.abs(residualDx) >= KEY_CAROUSEL_SLOT_PX * 0.38) {
           stepKeyTool(residualDx < 0 ? 1 : -1);
           navigator.vibrate?.(8);
+        } else {
+          const landedAvail = toolAvailabilityRef.current?.[activeKeyToolRef.current];
+          if (landedAvail && !landedAvail.usable) {
+            notifyToolUnavailable(activeKeyToolRef.current, landedAvail.reason);
+          }
         }
       } else if (movedPx < 8) {
         if (targetRel !== 0) {
@@ -2576,6 +2743,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
   function seedVoxelAtAnchor() {
     if (!surfaceAnchor) return;
+    if (!ensureToolUsable('brush')) return;
+    if (!assertOriginUnblockedForPaint()) return;
     const normal = new THREE.Vector3(surfaceAnchor.nx, surfaceAnchor.ny, surfaceAnchor.nz).normalize();
     const p = new THREE.Vector3(surfaceAnchor.x, surfaceAnchor.y, surfaceAnchor.z).addScaledVector(
       normal,
@@ -2760,10 +2929,33 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     showTemporaryHint('Started fresh blank draft');
   }
 
-  function openPublishSheet() {
-    if (!user) {
-      setLoginOpen(true);
-      return;
+  function openPublishSheet({ skipVoxelCheck = false } = {}) {
+    if (!skipVoxelCheck) {
+      if (!ensureToolUsable('publish')) return;
+    } else {
+      if (!locationRef.current && !location) {
+        notifyToolUnavailable('publish', 'Wait for a GPS location fix first before publishing on-chain.');
+        return;
+      }
+      if (!cameraReadyRef.current) {
+        notifyToolUnavailable(
+          'publish',
+          'Enable live camera access first for Proof of Location before publishing.'
+        );
+        return;
+      }
+      const cov = polRef.current.getSceneCoverage();
+      if (!cov.optimal) {
+        notifyToolUnavailable(
+          'publish',
+          `Move your phone around to finish mapping this space (${cov.scannedCount}/${cov.targetCount} angles for 100% lock) before publishing.`
+        );
+        return;
+      }
+      if (!userRef.current) {
+        notifyToolUnavailable('publish', 'Sign in with Google first before publishing & minting on-chain.');
+        return;
+      }
     }
     setPublishError('');
     setMintReceipt(null);
@@ -2981,9 +3173,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                 </button>
                 <button
                   type="button"
-                  className="surface-pill-btn"
+                  className={`surface-pill-btn ${!toolAvailability.brush.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!toolAvailability.brush.usable || undefined}
                   onClick={seedVoxelAtAnchor}
-                  title="Place first block flush on the selected surface"
+                  title={
+                    toolAvailability.brush.usable
+                      ? 'Place first block flush on the selected surface'
+                      : toolAvailability.brush.reason
+                  }
                 >
                   + Seed
                 </button>
@@ -3068,6 +3265,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
         {arSelectHint && (
           <div
+            className="hud-interactive"
+            role="status"
+            aria-live="polite"
             style={{
               position: 'absolute',
               top: 64,
@@ -3079,20 +3279,40 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                 ? 'rgba(130, 18, 46, 0.92)'
                 : sceneScan.optimal && arSelectHint.includes('Mapping complete')
                 ? 'rgba(8, 48, 42, 0.92)'
-                : 'rgba(12, 18, 34, 0.86)',
+                : 'rgba(12, 18, 34, 0.88)',
               border: originStatus.originBlocked
                 ? '1px solid rgba(255, 62, 127, 0.72)'
                 : '1px solid rgba(0, 245, 212, 0.45)',
               fontSize: 12,
               color: 'var(--text)',
-              zIndex: 28
+              zIndex: 28,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              flexWrap: 'wrap'
             }}
           >
-            <XeroIcon
-              emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
-              size={14}
-            />{' '}
-            {arSelectHint}
+            <span>
+              <XeroIcon
+                emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
+                size={14}
+              />{' '}
+              {arSelectHint}
+            </span>
+            {!user && arSelectHint.includes('Sign in') && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ padding: '4px 10px', fontSize: 11 }}
+                onClick={() => {
+                  setArSelectHint('');
+                  setLoginOpen(true);
+                }}
+              >
+                Sign In
+              </button>
+            )}
           </div>
         )}
 
@@ -3123,13 +3343,19 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           const safeIdx = idx >= 0 ? idx : 0;
           const activeItem = KEY_TOOLS[safeIdx];
           const slots = [-2, -1, 0, 1, 2];
+          const activeAvail = toolAvailability[activeItem.id] || { usable: true, reason: '' };
+          const activeUnavailable = !activeAvail.usable;
           return (
             <div className="key-carousel hud-interactive">
-              <div className="key-tool-caption">
-                <XeroIcon emoji="🔑" size={12} />
+              <div className={`key-tool-caption ${activeUnavailable ? 'is-unavailable' : ''}`}>
+                <XeroIcon emoji={activeUnavailable ? '🔒' : '🔑'} size={12} />
                 <span>{activeItem.label}</span>
                 <span className="key-tool-hint">
-                  {canTouch ? '· Swipe' : '· Arrows / Swipe'}
+                  {activeUnavailable
+                    ? '· Tap for requirement'
+                    : canTouch
+                    ? '· Swipe'
+                    : '· Arrows / Swipe'}
                 </span>
               </div>
               <div className="key-carousel-row">
@@ -3159,6 +3385,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                     const toolIdx =
                       (((safeIdx + rel) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
                     const item = KEY_TOOLS[toolIdx];
+                    const itemAvail = toolAvailability[item.id] || { usable: true, reason: '' };
+                    const isUnavailable = !itemAvail.usable;
                     const offsetPx = rel * KEY_CAROUSEL_SLOT_PX + swipeDragPx;
                     const distNorm = Math.min(2, Math.abs(offsetPx) / KEY_CAROUSEL_SLOT_PX);
                     const scale = Math.max(0.46, 1 - distNorm * 0.34);
@@ -3169,10 +3397,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                         key={`${rel}-${item.id}`}
                         type="button"
                         data-tool-rel={rel}
-                        className={`key-slot-btn ${isCenterSlot ? `is-center tool-${item.id} ${painting ? 'painting' : ''}` : 'is-neighbor'}`}
+                        aria-disabled={isUnavailable || undefined}
+                        className={`key-slot-btn ${isCenterSlot ? `is-center tool-${item.id} ${painting ? 'painting' : ''}` : 'is-neighbor'} ${isUnavailable ? 'is-unavailable' : ''}`}
                         style={{
                           transform: `translate(-50%, -50%) translateX(${offsetPx}px) scale(${scale})`,
-                          opacity,
+                          opacity: isUnavailable ? opacity * 0.44 : opacity,
                           zIndex: isCenterSlot ? 4 : 3 - Math.abs(rel),
                           transition: isDraggingKey
                             ? 'none'
@@ -3180,10 +3409,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                         }}
                         aria-label={
                           isCenterSlot
-                            ? `${item.label} tool button (${item.hint})`
-                            : `Switch to ${item.label}`
+                            ? `${item.label} tool button (${isUnavailable ? itemAvail.reason : item.hint})`
+                            : `Switch to ${item.label}${isUnavailable ? ` — ${itemAvail.reason}` : ''}`
                         }
-                        title={item.hint}
+                        title={isUnavailable ? itemAvail.reason : item.hint}
                       >
                         <XeroIcon emoji={item.emoji} size={28} />
                       </button>
@@ -3426,8 +3655,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         {dockOpen && (
           <div className="floating-dock hud-interactive">
             <button
-              className={`dock-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''}`}
+              className={`dock-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''} ${!toolAvailability.brush.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.brush.usable || undefined}
               onClick={() => {
+                if (!ensureToolUsable('brush')) return;
                 if (modeRef.current === 'transform') {
                   commitTransformAndExit('draw', 'brush');
                 } else {
@@ -3435,13 +3666,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   setTool('brush');
                 }
               }}
-              title="3D Brush"
+              title={toolAvailability.brush.usable ? '3D Brush' : toolAvailability.brush.reason}
             >
               <XeroIcon emoji="🖌️" size={19} />
             </button>
             <button
-              className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''}`}
+              className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''} ${!toolAvailability.stack.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.stack.usable || undefined}
               onClick={() => {
+                if (!ensureToolUsable('stack')) return;
                 if (modeRef.current === 'transform') {
                   commitTransformAndExit('draw', 'stack');
                 } else {
@@ -3449,15 +3682,17 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   setTool('stack');
                 }
               }}
-              title="Stack Voxels"
+              title={toolAvailability.stack.usable ? 'Stack Voxels' : toolAvailability.stack.reason}
             >
               <XeroIcon emoji="🧱" size={19} />
             </button>
             <button
-              className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''}`}
+              className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''} ${!toolAvailability.erase.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.erase.usable || undefined}
               onPointerDown={(e) => {
                 if (e.button && e.button !== 0) return;
                 e.preventDefault();
+                if (!ensureToolUsable('erase')) return;
                 try {
                   e.currentTarget.setPointerCapture(e.pointerId);
                 } catch {
@@ -3476,6 +3711,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               onPointerCancel={() => stopBrushPainting()}
               onContextMenu={(e) => e.preventDefault()}
               onClick={() => {
+                if (!ensureToolUsable('erase')) return;
                 if (modeRef.current === 'transform') {
                   commitTransformAndExit('draw', 'erase');
                 } else {
@@ -3484,20 +3720,30 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                 }
               }}
               aria-label="Eraser (Hold to Erase)"
-              title="Eraser — Tap to select, hold down to continuously erase"
+              title={
+                toolAvailability.erase.usable
+                  ? 'Eraser — Tap to select, hold down to continuously erase'
+                  : toolAvailability.erase.reason
+              }
             >
               <XeroIcon emoji="🧽" size={19} />
             </button>
             <button
-              className="dock-btn pink"
+              className={`dock-btn pink ${!toolAvailability.clear.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.clear.usable || undefined}
               onClick={clearCanvas}
               aria-label="Trash Bin — Erase Current Canvas"
-              title="Trash Bin — Erase Current Canvas"
+              title={
+                toolAvailability.clear.usable
+                  ? 'Trash Bin — Erase Current Canvas'
+                  : toolAvailability.clear.reason
+              }
             >
               <XeroIcon emoji="🗑️" size={19} />
             </button>
             <button
-              className={`dock-btn check-btn ${mode === 'transform' ? 'active' : ''}`}
+              className={`dock-btn check-btn ${mode === 'transform' ? 'active' : ''} ${!toolAvailability.transform.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.transform.usable || undefined}
               onClick={toggleTransformLock}
               aria-label={
                 mode === 'transform'
@@ -3505,7 +3751,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   : 'Lock Art to Scale & Transform'
               }
               title={
-                mode === 'transform'
+                !toolAvailability.transform.usable
+                  ? toolAvailability.transform.reason
+                  : mode === 'transform'
                   ? 'Check — Return to Drawing Mode'
                   : 'Check — Lock Art, Scale & Transform'
               }
@@ -3513,36 +3761,68 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="✅" size={19} />
             </button>
             <button
-              className={`dock-btn ${paletteOpen ? 'active' : ''}`}
-              onClick={() => setPaletteOpen((p) => !p)}
-              title="Colors & Finish"
+              className={`dock-btn ${paletteOpen ? 'active' : ''} ${!toolAvailability.palette.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.palette.usable || undefined}
+              onClick={() => {
+                if (!ensureToolUsable('palette')) return;
+                setPaletteOpen((p) => !p);
+              }}
+              title={
+                toolAvailability.palette.usable
+                  ? 'Colors & Finish'
+                  : toolAvailability.palette.reason
+              }
             >
               <XeroIcon emoji="🎨" size={19} />
             </button>
-            <button className="dock-btn" onClick={handleUndo} title="Undo / Restore Clear">
+            <button
+              className={`dock-btn ${!toolAvailability.undo.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.undo.usable || undefined}
+              onClick={handleUndo}
+              title={
+                toolAvailability.undo.usable
+                  ? 'Undo / Restore Clear'
+                  : toolAvailability.undo.reason
+              }
+            >
               <XeroIcon emoji="↩️" size={18} />
             </button>
             <button className="dock-btn" onClick={recenterAim} title="Recenter Aim">
               <XeroIcon emoji="🧭" size={19} />
             </button>
             <button
-              className={`dock-btn ${occlusionEnabled ? 'active' : ''}`}
-              onClick={() => setOcclusionEnabled((v) => !v)}
-              title="Toggle Foreground Occlusion"
+              className={`dock-btn ${occlusionEnabled ? 'active' : ''} ${!toolAvailability.occlusion.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.occlusion.usable || undefined}
+              onClick={() => {
+                if (!ensureToolUsable('occlusion')) return;
+                setOcclusionEnabled((v) => !v);
+              }}
+              title={
+                toolAvailability.occlusion.usable
+                  ? 'Toggle Foreground Occlusion'
+                  : toolAvailability.occlusion.reason
+              }
               aria-label="Toggle Foreground Occlusion"
             >
               <XeroIcon emoji="🪞" size={19} />
             </button>
             <button
-              className={`dock-btn ${mode === 'preview' ? 'active' : ''}`}
+              className={`dock-btn ${mode === 'preview' ? 'active' : ''} ${!toolAvailability.preview.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.preview.usable || undefined}
               onClick={() => {
+                if (!ensureToolUsable('preview')) return;
                 if (modeRef.current === 'transform') {
                   commitTransformAndExit('preview');
                 } else {
+                  setPaletteOpen(false);
                   setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
                 }
               }}
-              title="AR Preview Nearby Sculptures"
+              title={
+                toolAvailability.preview.usable
+                  ? 'AR Preview Nearby Sculptures'
+                  : toolAvailability.preview.reason
+              }
             >
               <XeroIcon emoji="👁️" size={19} />
             </button>
@@ -3562,17 +3842,27 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="🔗" size={19} />
             </button>
             <button
-              className={`dock-btn ${agentOpen || agentSession?.code ? 'active' : ''}`}
+              className={`dock-btn ${agentOpen || agentSession?.code ? 'active' : ''} ${!toolAvailability.agent.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.agent.usable || undefined}
               onClick={openAgentHandoff}
-              title="Copy Agent Code"
+              title={
+                toolAvailability.agent.usable
+                  ? 'Copy Agent Code'
+                  : toolAvailability.agent.reason
+              }
               aria-label="Copy Agent Code"
             >
               <XeroIcon emoji="📋" size={19} />
             </button>
             <button
-              className={`dock-btn ${mode === 'publish' ? 'active' : ''}`}
+              className={`dock-btn ${mode === 'publish' ? 'active' : ''} ${!toolAvailability.publish.usable ? 'is-unavailable' : ''}`}
+              aria-disabled={!toolAvailability.publish.usable || undefined}
               onClick={openPublishSheet}
-              title="Publish & Mint"
+              title={
+                toolAvailability.publish.usable
+                  ? 'Publish & Mint'
+                  : toolAvailability.publish.reason
+              }
             >
               <XeroIcon emoji="🚀" size={19} />
             </button>
@@ -3747,7 +4037,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                       onClick={() => {
                         applyAgentSessionDraft(agentSession);
                         setAgentOpen(false);
-                        openPublishSheet();
+                        openPublishSheet({ skipVoxelCheck: true });
                       }}
                     >
                       <XeroIcon emoji="🚀" size={15} /> Publish on Phone

@@ -129,6 +129,9 @@ export default function InfoTermsModal({
                 <li>
                   <XeroIcon emoji="🗺️" size={14} /> <strong>Public Area Map &amp; Google Maps Navigate:</strong> Tap the bottom-left Map button to explore public sculptures near your location, inspect any piece in interactive 3D, and tap <strong>Navigate</strong> for turn-by-turn Google Maps directions.
                 </li>
+                <li>
+                  <XeroIcon emoji="🔒" size={14} /> <strong>Tool Readiness &amp; Prerequisite Guides:</strong> Tools that are not usable yet (for example Stack/Erase/Clear/Lock before placing blocks, or Publish before finishing prerequisites) appear greyed out — selecting them tells you what to do first.
+                </li>
               </ul>
             </div>
 
