@@ -39,6 +39,29 @@ import {
   listUserDrafts,
   saveUserDraft
 } from '../../shared/draftService.mjs';
+import {
+  MCP_TOOLS,
+  connectMcpPairing,
+  createMcpPairing,
+  createPublishSignatureRequestForMobile,
+  directOwnerCreateSculptureOnLand,
+  directOwnerDeleteSculpture,
+  directOwnerUpdateParcel,
+  directOwnerUpdateSculpture,
+  disconnectMcpPairing,
+  getSignatureRequest,
+  handleMcpJsonRpc,
+  listLandsWithCurations,
+  listMcpPairings,
+  listPendingSignaturesForUser,
+  rejectSignatureRequest,
+  signRequestByAgent,
+  signRequestByMobile
+} from '../../shared/mcpService.mjs';
+import {
+  buildPropertyOwnerPrompt,
+  normalizePairingCode
+} from '../../shared/landSignatureMessage.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   decodeGeohashBounds,
@@ -61,8 +84,8 @@ function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Graffiland-Pairing-Code',
     'Access-Control-Max-Age': '86400'
   };
 }
@@ -408,6 +431,7 @@ export class PairCoordinator {
   constructor(state) {
     this.state = state;
     this.rooms = new Map();
+    this.mcpSubscribers = new Map();
   }
 
   generateCode() {
@@ -430,6 +454,19 @@ export class PairCoordinator {
   }
 
   async fetch(request) {
+    const reqUrl = new URL(request.url);
+    if (reqUrl.pathname === '/notify' && request.method === 'POST') {
+      const event = await request.json().catch(() => null);
+      const code = normalizePairingCode(event?.pairingCode || '');
+      const subs = code ? this.mcpSubscribers.get(code) : null;
+      if (subs) {
+        for (const ws of subs) {
+          this.sendJson(ws, event);
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('WebSocket upgrade required', { status: 426 });
     }
@@ -437,7 +474,7 @@ export class PairCoordinator {
     const [client, server] = Object.values(pair);
     server.accept();
 
-    let meta = { role: null, code: null };
+    let meta = { role: null, code: null, mcpCode: null };
 
     server.addEventListener('message', (event) => {
       let msg;
@@ -447,10 +484,24 @@ export class PairCoordinator {
         return;
       }
 
+      if (msg.type === 'subscribe_mcp') {
+        const mCode = normalizePairingCode(msg.pairingCode || '');
+        if (mCode) {
+          if (meta.mcpCode && this.mcpSubscribers.has(meta.mcpCode)) {
+            this.mcpSubscribers.get(meta.mcpCode).delete(server);
+          }
+          meta.mcpCode = mCode;
+          if (!this.mcpSubscribers.has(mCode)) this.mcpSubscribers.set(mCode, new Set());
+          this.mcpSubscribers.get(mCode).add(server);
+          this.sendJson(server, { type: 'mcp_subscribed', pairingCode: mCode });
+        }
+        return;
+      }
+
       if (msg.type === 'create_pair') {
         const code = this.generateCode();
         this.rooms.set(code, { code, desktopWs: server, mobileWs: null });
-        meta = { role: 'desktop', code };
+        meta = { ...meta, role: 'desktop', code };
         this.sendJson(server, { type: 'pair_created', code });
         return;
       }
@@ -463,7 +514,7 @@ export class PairCoordinator {
           return;
         }
         room.mobileWs = server;
-        meta = { role: 'mobile', code };
+        meta = { ...meta, role: 'mobile', code };
         this.sendJson(server, { type: 'pair_connected', code, role: 'mobile' });
         this.sendJson(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
         return;
@@ -479,6 +530,9 @@ export class PairCoordinator {
     });
 
     server.addEventListener('close', () => {
+      if (meta.mcpCode && this.mcpSubscribers.has(meta.mcpCode)) {
+        this.mcpSubscribers.get(meta.mcpCode).delete(server);
+      }
       if (!meta.code || !this.rooms.has(meta.code)) return;
       const room = this.rooms.get(meta.code);
       if (meta.role === 'desktop') {
@@ -805,41 +859,293 @@ export default {
       return jsonResponse({ sculptures: items }, 200, request);
     }
 
-    // List Virtual Land parcels
-    if (pathname === '/api/parcels' && request.method === 'GET') {
-      const { results } = await env.DB.prepare(`
-        SELECT
-          parcel_id,
-          geohash,
-          COUNT(*) AS visible_count,
-          MAX(created_at) AS latest_at
-        FROM sculptures
-        WHERE hidden = 0
-        GROUP BY parcel_id, geohash
-        ORDER BY visible_count DESC, latest_at DESC
-      `).all();
-
-      const parcels = [];
-      for (const row of results || []) {
-        const bounds = decodeGeohashBounds(row.geohash);
-        const first = await env.DB.prepare(
-          'SELECT recipient_address, creator_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1'
-        )
-          .bind(row.parcel_id)
-          .first();
-        parcels.push({
-          parcelId: row.parcel_id,
-          geohash: row.geohash,
-          bounds,
-          centerLat: bounds.center[0],
-          centerLng: bounds.center[1],
-          sculptureCount: row.visible_count,
-          firstClaimantAddress: first?.recipient_address || '',
-          firstClaimantName: first?.creator_name || '',
-          latestAt: row.latest_at
-        });
-      }
+    // List Virtual Land parcels (with owner curation metadata)
+    if ((pathname === '/api/parcels' || pathname === '/api/lands') && request.method === 'GET') {
+      const parcels = await listLandsWithCurations(d1Adapter);
       return jsonResponse({ parcels }, 200, request);
+    }
+
+    // Robust MCP Pairing, Land Ownership Edits, Signature Notifications & Agent Signing
+    const makeWorkerPinHook = () => (params) => pinSculptureBundle(params, url.origin, env, cfg);
+    const makeWorkerMintHook = () => (params) => mintOnChainOrSimulate(params, env, cfg);
+    const notifyWorkerMobile = async (event) => {
+      try {
+        const doId = env.PAIR_COORDINATOR.idFromName('global-hub');
+        await env.PAIR_COORDINATOR.get(doId).fetch('https://pair/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(event)
+        });
+      } catch {
+        // non-blocking push notification
+      }
+    };
+    const extractPairingCode = (req, body = {}) =>
+      req.headers.get('X-Graffiland-Pairing-Code') ||
+      body?.pairingCode ||
+      body?.code ||
+      body?.params?.pairingCode ||
+      body?.params?.arguments?.pairingCode ||
+      url.searchParams.get('pairingCode') ||
+      '';
+
+    if (pathname === '/api/mcp/spec' && request.method === 'GET') {
+      return jsonResponse(
+        {
+          protocol: 'Model Context Protocol (JSON-RPC 2.0)',
+          endpoint: `${url.origin}/api/mcp`,
+          requiresActivePairingConnection: true,
+          tools: MCP_TOOLS,
+          agentSpec: buildAgentSpec(url.origin),
+          ownerPromptTemplate: buildPropertyOwnerPrompt({ apiOrigin: url.origin })
+        },
+        200,
+        request
+      );
+    }
+
+    if (pathname === '/api/mcp/pairings') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        if (request.method === 'GET') {
+          return jsonResponse(await listMcpPairings(d1Adapter, { user }), 200, request);
+        }
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          return jsonResponse(
+            await createMcpPairing(d1Adapter, {
+              user,
+              expiresHours: Number(body?.expiresHours || 24),
+              apiOrigin: url.origin
+            }),
+            200,
+            request
+          );
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'MCP pairing error' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/mcp/pairings/connect' && request.method === 'POST') {
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const body = await request.json().catch(() => ({}));
+        const out = await connectMcpPairing(d1Adapter, {
+          pairingCode: extractPairingCode(request, body),
+          agentName: body?.agentName,
+          agentAddress: body?.agentAddress,
+          signature: body?.signature,
+          callerUser: caller,
+          apiOrigin: url.origin
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Pairing connect failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const mcpDisconnectMatch = pathname.match(/^\/api\/mcp\/pairings\/([^/]+)\/disconnect$/);
+    if (mcpDisconnectMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await disconnectMcpPairing(d1Adapter, {
+          pairingCode: decodeURIComponent(mcpDisconnectMatch[1]),
+          user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Disconnect failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/mcp' && request.method === 'POST') {
+      const rpcBody = await request.json().catch(() => ({}));
+      const id = rpcBody?.id ?? null;
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const out = await handleMcpJsonRpc(d1Adapter, {
+          rpcBody,
+          pairingCode: extractPairingCode(request, rpcBody),
+          callerUser: caller,
+          apiOrigin: url.origin,
+          pinSculptureFn: makeWorkerPinHook(),
+          mintSculptureFn: makeWorkerMintHook(),
+          notifyMobileFn: notifyWorkerMobile
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: err?.statusCode === 403 ? -32001 : -32000,
+              message: err.message || 'MCP request failed',
+              data: err?.extra || {}
+            }
+          },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const landUpdateMatch = pathname.match(/^\/api\/lands\/([^/]+)\/update$/);
+    if (landUpdateMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerUpdateParcel(d1Adapter, {
+          parcelId: decodeURIComponent(landUpdateMatch[1]),
+          user,
+          body
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landCreateMatch = pathname.match(/^\/api\/lands\/([^/]+)\/sculptures$/);
+    if (landCreateMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerCreateSculptureOnLand(d1Adapter, {
+          parcelId: decodeURIComponent(landCreateMatch[1]),
+          user,
+          body,
+          pinSculptureFn: makeWorkerPinHook(),
+          mintSculptureFn: makeWorkerMintHook()
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Create sculpture on land failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const editMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/edit$/);
+    if (editMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerUpdateSculpture(d1Adapter, {
+          sculptureId: decodeURIComponent(editMatch[1]),
+          user,
+          body,
+          pinSculptureFn: makeWorkerPinHook()
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Update sculpture failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/signatures/pending' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        return jsonResponse(await listPendingSignaturesForUser(d1Adapter, { user }), 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Failed to load signatures' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/signatures/requests' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const ua = request.headers.get('User-Agent') || '';
+        const isMobile =
+          Boolean(body?.deviceProfile?.isMobile) || /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+        const out = await createPublishSignatureRequestForMobile(d1Adapter, {
+          user,
+          body,
+          pairingCode: extractPairingCode(request, body),
+          isMobileRequest: isMobile,
+          apiOrigin: url.origin
+        });
+        return jsonResponse(out, 201, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to stage signature request', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const sigActionMatch = pathname.match(
+      /^\/api\/signatures\/requests\/([^/]+)\/(mobile-sign|agent-sign|reject)$/
+    );
+    if (sigActionMatch && request.method === 'POST') {
+      const reqId = decodeURIComponent(sigActionMatch[1]);
+      const action = sigActionMatch[2];
+      const body = await request.json().catch(() => ({}));
+      try {
+        if (action === 'mobile-sign') {
+          const user = await getAuthUser(request, env, cfg);
+          if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+          const out = await signRequestByMobile(d1Adapter, {
+            requestId: reqId,
+            user,
+            signature: body?.signature || '',
+            decryptEmbeddedPrivateKey: async (u) =>
+              decryptWalletPrivateKey(u.encrypted_wallet_json, cfg.walletEncryptionKey),
+            pinSculptureFn: makeWorkerPinHook(),
+            mintSculptureFn: makeWorkerMintHook()
+          });
+          return jsonResponse(out, 200, request);
+        }
+        if (action === 'agent-sign') {
+          const out = await signRequestByAgent(d1Adapter, {
+            requestId: reqId,
+            pairingCode: extractPairingCode(request, body),
+            signature: body?.signature || '',
+            txHash: body?.txHash || '',
+            agentName: body?.agentName || '',
+            pinSculptureFn: makeWorkerPinHook(),
+            mintSculptureFn: makeWorkerMintHook()
+          });
+          return jsonResponse(out, 200, request);
+        }
+        const user = await getAuthUser(request, env, cfg);
+        if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+        return jsonResponse(
+          await rejectSignatureRequest(d1Adapter, { requestId: reqId, user }),
+          200,
+          request
+        );
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Signature action failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const sigGetMatch = pathname.match(/^\/api\/signatures\/requests\/([^/]+)$/);
+    if (sigGetMatch && request.method === 'GET') {
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const out = await getSignatureRequest(d1Adapter, {
+          requestId: decodeURIComponent(sigGetMatch[1]),
+          user: caller,
+          pairingCode: extractPairingCode(request, {})
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Signature fetch failed' }, err?.statusCode || 400, request);
+      }
     }
 
     // Publish Sculpture
@@ -1228,8 +1534,39 @@ export default {
       }
     }
 
-    // Single sculpture GET
+    // Single sculpture GET / PUT / DELETE
     const scMatch = pathname.match(/^\/api\/sculptures\/([^/]+)$/);
+    if (scMatch && request.method === 'PUT') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerUpdateSculpture(d1Adapter, {
+          sculptureId: decodeURIComponent(scMatch[1]),
+          user,
+          body,
+          pinSculptureFn: makeWorkerPinHook()
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (scMatch && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await directOwnerDeleteSculpture(d1Adapter, {
+          sculptureId: decodeURIComponent(scMatch[1]),
+          user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Delete failed' }, err?.statusCode || 400, request);
+      }
+    }
+
     if (scMatch && request.method === 'GET') {
       const id = decodeURIComponent(scMatch[1]);
       const row = await env.DB.prepare(

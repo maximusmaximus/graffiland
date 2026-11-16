@@ -61,6 +61,29 @@ import {
   listUserDrafts,
   saveUserDraft
 } from '../shared/draftService.mjs';
+import {
+  MCP_TOOLS,
+  connectMcpPairing,
+  createMcpPairing,
+  createPublishSignatureRequestForMobile,
+  directOwnerCreateSculptureOnLand,
+  directOwnerDeleteSculpture,
+  directOwnerUpdateParcel,
+  directOwnerUpdateSculpture,
+  disconnectMcpPairing,
+  getSignatureRequest,
+  handleMcpJsonRpc,
+  listLandsWithCurations,
+  listMcpPairings,
+  listPendingSignaturesForUser,
+  rejectSignatureRequest,
+  signRequestByAgent,
+  signRequestByMobile
+} from '../shared/mcpService.mjs';
+import {
+  buildPropertyOwnerPrompt,
+  normalizePairingCode
+} from '../shared/landSignatureMessage.mjs';
 import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -490,46 +513,278 @@ export function createAppServer() {
     handleChatRoute((req) => deleteUserDraft(chatDb, { draftId: req.params.id, user: req.user }))
   );
 
-  app.get('/api/parcels', (_req, res) => {
-    const rows = db
-      .prepare(`
-        SELECT
-          parcel_id,
-          geohash,
-          AVG(lat) AS center_lat,
-          AVG(lng) AS center_lng,
-          COUNT(*) AS visible_count,
-          MAX(created_at) AS latest_at,
-          MIN(created_at) AS first_at
-        FROM sculptures
-        WHERE hidden = 0
-        GROUP BY parcel_id, geohash
-        ORDER BY visible_count DESC, latest_at DESC
-      `)
-      .all();
+  // Robust MCP Pairing, Land Ownership Edits, Signature Notifications & Agent Signing
+  const mcpNotifySubscribers = new Map(); // pairingCode -> Set<WebSocket>
+  function notifyPairedMobile(event) {
+    const code = normalizePairingCode(event?.pairingCode || '');
+    if (!code) return;
+    const set = mcpNotifySubscribers.get(code);
+    if (!set) return;
+    const msgStr = JSON.stringify(event);
+    for (const sock of set) {
+      if (sock && sock.readyState === 1) {
+        sock.send(msgStr);
+      }
+    }
+  }
 
-    const parcels = rows.map((row) => {
-      const bounds = decodeGeohashBounds(row.geohash);
-      const firstRow = db
-        .prepare(
-          'SELECT recipient_address, creator_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1'
-        )
-        .get(row.parcel_id);
+  function makePinHook() {
+    return ({ sculptureId, title, description, voxels, previewDataUrl, locationBundle, creatorAddress }) =>
+      pinSculptureToIpfs({
+        sculptureId,
+        title,
+        description,
+        voxels,
+        previewDataUrl,
+        locationBundle,
+        creatorAddress,
+        royaltyBps: CONFIG.resaleFeeBps,
+        royaltyReceiver: getChainStatus().royaltyReceiver
+      });
+  }
 
-      return {
-        parcelId: row.parcel_id,
-        geohash: row.geohash,
-        bounds,
-        centerLat: bounds.center[0],
-        centerLng: bounds.center[1],
-        sculptureCount: row.visible_count,
-        firstClaimantAddress: firstRow?.recipient_address || '',
-        firstClaimantName: firstRow?.creator_name || '',
-        latestAt: row.latest_at
-      };
+  function makeMintHook() {
+    return (mintArgs) => mintOnRobinhoodChain(mintArgs);
+  }
+
+  function getPairingCodeFromReq(req) {
+    return (
+      req.headers['x-graffiland-pairing-code'] ||
+      req.body?.pairingCode ||
+      req.body?.params?.pairingCode ||
+      req.body?.params?.arguments?.pairingCode ||
+      req.query?.pairingCode ||
+      ''
+    );
+  }
+
+  app.get('/api/mcp/spec', (req, res) => {
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json({
+      protocol: 'Model Context Protocol (JSON-RPC 2.0)',
+      endpoint: `${apiOrigin}/api/mcp`,
+      requiresActivePairingConnection: true,
+      tools: MCP_TOOLS,
+      agentSpec: buildAgentSpec(apiOrigin),
+      ownerPromptTemplate: buildPropertyOwnerPrompt({ apiOrigin })
     });
+  });
 
-    res.json({ parcels });
+  app.post(
+    '/api/mcp/pairings',
+    requireAuth,
+    handleChatRoute((req) =>
+      createMcpPairing(chatDb, {
+        user: req.user,
+        expiresHours: Number(req.body?.expiresHours || 24),
+        apiOrigin: `${req.protocol}://${req.get('host')}`
+      })
+    )
+  );
+
+  app.get(
+    '/api/mcp/pairings',
+    requireAuth,
+    handleChatRoute((req) => listMcpPairings(chatDb, { user: req.user }))
+  );
+
+  app.post('/api/mcp/pairings/connect', async (req, res) => {
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const out = await connectMcpPairing(chatDb, {
+        pairingCode: req.body?.pairingCode || req.body?.code || getPairingCodeFromReq(req),
+        agentName: req.body?.agentName,
+        agentAddress: req.body?.agentAddress,
+        signature: req.body?.signature,
+        callerUser: caller,
+        apiOrigin: `${req.protocol}://${req.get('host')}`
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Pairing connect failed' });
+    }
+  });
+
+  app.post(
+    '/api/mcp/pairings/:code/disconnect',
+    requireAuth,
+    handleChatRoute((req) =>
+      disconnectMcpPairing(chatDb, { pairingCode: req.params.code, user: req.user })
+    )
+  );
+
+  app.post('/api/mcp', async (req, res) => {
+    const id = req.body?.id ?? null;
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const out = await handleMcpJsonRpc(chatDb, {
+        rpcBody: req.body || {},
+        pairingCode: getPairingCodeFromReq(req),
+        callerUser: caller,
+        apiOrigin: `${req.protocol}://${req.get('host')}`,
+        pinSculptureFn: makePinHook(),
+        mintSculptureFn: makeMintHook(),
+        notifyMobileFn: notifyPairedMobile
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: err?.statusCode === 403 ? -32001 : -32000,
+          message: err.message || 'MCP request failed',
+          data: err?.extra || {}
+        }
+      });
+    }
+  });
+
+  app.put(
+    '/api/sculptures/:id',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerUpdateSculpture(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        pinSculptureFn: makePinHook()
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/edit',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerUpdateSculpture(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        pinSculptureFn: makePinHook()
+      })
+    )
+  );
+
+  app.delete(
+    '/api/sculptures/:id',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerDeleteSculpture(chatDb, { sculptureId: req.params.id, user: req.user })
+    )
+  );
+
+  app.get('/api/lands', async (_req, res) => {
+    res.json({ parcels: await listLandsWithCurations(chatDb) });
+  });
+
+  app.post(
+    '/api/lands/:parcelId/update',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerUpdateParcel(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/sculptures',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerCreateSculptureOnLand(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body,
+        pinSculptureFn: makePinHook(),
+        mintSculptureFn: makeMintHook()
+      })
+    )
+  );
+
+  app.get(
+    '/api/signatures/pending',
+    requireAuth,
+    handleChatRoute((req) => listPendingSignaturesForUser(chatDb, { user: req.user }))
+  );
+
+  app.post('/api/signatures/requests', requireAuth, async (req, res) => {
+    try {
+      const ua = String(req.headers['user-agent'] || '');
+      const isMobile =
+        Boolean(req.body?.deviceProfile?.isMobile) || /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+      const out = await createPublishSignatureRequestForMobile(chatDb, {
+        user: req.user,
+        body: req.body || {},
+        pairingCode: getPairingCodeFromReq(req),
+        isMobileRequest: isMobile,
+        apiOrigin: `${req.protocol}://${req.get('host')}`
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'Failed to create signature request',
+        ...(err?.extra || {})
+      });
+    }
+  });
+
+  app.get('/api/signatures/requests/:id', async (req, res) => {
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const out = await getSignatureRequest(chatDb, {
+        requestId: req.params.id,
+        user: caller,
+        pairingCode: getPairingCodeFromReq(req)
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Signature status error' });
+    }
+  });
+
+  app.post(
+    '/api/signatures/requests/:id/mobile-sign',
+    requireAuth,
+    handleChatRoute((req) =>
+      signRequestByMobile(chatDb, {
+        requestId: req.params.id,
+        user: req.user,
+        signature: req.body?.signature || '',
+        decryptEmbeddedPrivateKey: async (u) => decryptPrivateKey(u.encrypted_wallet_json),
+        pinSculptureFn: makePinHook(),
+        mintSculptureFn: makeMintHook()
+      })
+    )
+  );
+
+  app.post('/api/signatures/requests/:id/agent-sign', async (req, res) => {
+    try {
+      const out = await signRequestByAgent(chatDb, {
+        requestId: req.params.id,
+        pairingCode: getPairingCodeFromReq(req),
+        signature: req.body?.signature || '',
+        txHash: req.body?.txHash || '',
+        agentName: req.body?.agentName || '',
+        pinSculptureFn: makePinHook(),
+        mintSculptureFn: makeMintHook()
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Agent signature failed' });
+    }
+  });
+
+  app.post(
+    '/api/signatures/requests/:id/reject',
+    requireAuth,
+    handleChatRoute((req) => rejectSignatureRequest(chatDb, { requestId: req.params.id, user: req.user }))
+  );
+
+  app.get('/api/parcels', async (_req, res) => {
+    res.json({ parcels: await listLandsWithCurations(chatDb) });
   });
 
   // Publish & Mint Sculpture (Mobile-created + PoL + IPFS + Robinhood Chain)
@@ -760,13 +1015,27 @@ export function createAppServer() {
   }
 
   wss.on('connection', (ws) => {
-    ws.meta = { role: null, code: null };
+    ws.meta = { role: null, code: null, mcpCode: null };
 
     ws.on('message', (rawMsg) => {
       let msg;
       try {
         msg = JSON.parse(rawMsg.toString('utf8'));
       } catch {
+        return;
+      }
+
+      if (msg.type === 'subscribe_mcp') {
+        const mCode = normalizePairingCode(msg.pairingCode || '');
+        if (mCode) {
+          if (ws.meta.mcpCode && mcpNotifySubscribers.has(ws.meta.mcpCode)) {
+            mcpNotifySubscribers.get(ws.meta.mcpCode).delete(ws);
+          }
+          ws.meta.mcpCode = mCode;
+          if (!mcpNotifySubscribers.has(mCode)) mcpNotifySubscribers.set(mCode, new Set());
+          mcpNotifySubscribers.get(mCode).add(ws);
+          safeSend(ws, { type: 'mcp_subscribed', pairingCode: mCode });
+        }
         return;
       }
 
@@ -811,6 +1080,9 @@ export function createAppServer() {
     });
 
     ws.on('close', () => {
+      if (ws.meta.mcpCode && mcpNotifySubscribers.has(ws.meta.mcpCode)) {
+        mcpNotifySubscribers.get(ws.meta.mcpCode).delete(ws);
+      }
       const code = ws.meta?.code;
       if (!code || !pairRooms.has(code)) return;
       const room = pairRooms.get(code);

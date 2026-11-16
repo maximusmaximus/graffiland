@@ -1029,4 +1029,305 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(afterPublishList.status, 200);
     assert.equal(afterPublishList.body.drafts.some((d) => d.id === draftId), false);
   });
+
+  test('Property ownership land editing, active-pairing MCP gate, and two-way agent/mobile signing', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile';
+
+    // Login owner & stranger
+    const ownerLogin = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'landowner@graffiland.test', name: 'Landowner Alice' }
+      })
+    });
+    assert.equal(ownerLogin.status, 200);
+    const ownerToken = ownerLogin.body.token;
+
+    const outsiderLogin = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'outsider@graffiland.test', name: 'Outsider Bob' }
+      })
+    });
+    assert.equal(outsiderLogin.status, 200);
+    const outsiderToken = outsiderLogin.body.token;
+
+    const samplePol = {
+      frameHashes: ['f101', 'f202', 'f303', 'f404'],
+      gyroSamples: [
+        { alpha: 10, beta: 15, gamma: 2 },
+        { alpha: 18, beta: 16, gamma: 3 }
+      ],
+      flowCorrelation: 0.85,
+      skyPalette: ['#00f5d4', '#ffd166'],
+      visualDHash: '1110001110001110',
+      frameCount: 8,
+      flowScore: 0.85
+    };
+    const landLat = 37.7812;
+    const landLng = -122.4115;
+
+    // 1. Owner publishes initial sculpture claiming the Virtual Land parcel
+    const pub = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Founding Beacon',
+        description: 'First sculpture staking property on this land parcel.',
+        termsAccepted: true,
+        location: { lat: landLat, lng: landLng, altitude: 14, accuracy: 5 },
+        proofOfLocation: samplePol,
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(pub.status, 201);
+    const sId = pub.body.sculpture.id;
+    const parcelId = pub.body.sculpture.parcelId;
+
+    // Non-owner cannot edit or place sculptures on this land
+    const outsiderEdit = await apiJson(`/api/sculptures/${sId}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+      body: JSON.stringify({ title: 'Hijacked Piece' })
+    });
+    assert.equal(outsiderEdit.status, 403);
+
+    const outsiderPut = await apiJson(`/api/lands/${parcelId}/sculptures`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+      body: JSON.stringify({
+        title: 'Intruder Sculpture',
+        description: 'Should be rejected for non-owner.',
+        voxels: [{ x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' }]
+      })
+    });
+    assert.equal(outsiderPut.status, 403);
+
+    // 2. Owner edits sculpture directly & puts a second sculpture directly on their owned land + curates land
+    const directEdit = await apiJson(`/api/sculptures/${sId}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({
+        title: 'Founding Beacon v2',
+        description: 'Updated directly by the verified landowner.'
+      })
+    });
+    assert.equal(directEdit.status, 200);
+    assert.equal(directEdit.body.sculpture.title, 'Founding Beacon v2');
+
+    const directLandUpdate = await apiJson(`/api/lands/${parcelId}/update`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({
+        customName: 'Alice Plaza',
+        curationNote: 'Open 3D sculpture corner curated by Alice.',
+        featuredSculptureId: sId
+      })
+    });
+    assert.equal(directLandUpdate.status, 200);
+    assert.equal(directLandUpdate.body.parcel.customName, 'Alice Plaza');
+
+    const directPut = await apiJson(`/api/lands/${parcelId}/sculptures`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({
+        title: 'Plaza Arch',
+        description: 'Second sculpture placed onto owned land directly.',
+        voxels: [{ x: 0.05, y: 0, z: 0, color: '#ffd166', material: 'glass' }]
+      })
+    });
+    assert.equal(directPut.status, 200);
+    assert.equal(directPut.body.sculpture.parcelId, parcelId);
+
+    // 3. Robust MCP Pairing Gate: MCP MUST reject until connected
+    const pairCreate = await apiJson('/api/mcp/pairings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.equal(pairCreate.status, 200);
+    const pairingCode = pairCreate.body.pairing.code;
+    assert.match(pairingCode, /^GLP-[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/);
+    assert.equal(pairCreate.body.pairing.status, 'pending');
+
+    const mcpBeforeConnect = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+    });
+    assert.equal(mcpBeforeConnect.status, 403);
+    assert.match(mcpBeforeConnect.body.error.message, /inactive/i);
+
+    // Subscribe mobile WS listener for live signature push
+    const wsPushEvents = [];
+    const subWs = new WebSocket(wsUrl);
+    await new Promise((resolve) => subWs.on('open', resolve));
+    subWs.on('message', (raw) => {
+      try {
+        wsPushEvents.push(JSON.parse(raw.toString('utf8')));
+      } catch {
+        // ignore
+      }
+    });
+    subWs.send(JSON.stringify({ type: 'subscribe_mcp', pairingCode }));
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Agent connects using matching robust pairing code
+    const pairConn = await apiJson('/api/mcp/pairings/connect', {
+      method: 'POST',
+      body: JSON.stringify({ pairingCode, agentName: 'AliceMcpAgent' })
+    });
+    assert.equal(pairConn.status, 200);
+    assert.equal(pairConn.body.mcpActive, true);
+
+    const mcpToolsRes = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    });
+    assert.equal(mcpToolsRes.status, 200);
+    assert.ok(mcpToolsRes.body.result.tools.some((t) => t.name === 'put_sculpture_on_land'));
+
+    // 4. Paired agent updates sculpture WITHOUT private key -> sends mobile notification for signature
+    const unsignedMcpUpdate = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'update_land_sculpture',
+          arguments: {
+            sculptureId: sId,
+            title: 'Founding Beacon (Mobile Approved)'
+          }
+        }
+      })
+    });
+    assert.equal(unsignedMcpUpdate.status, 200);
+    const pendingContent = unsignedMcpUpdate.body.result.structuredContent;
+    assert.equal(pendingContent.status, 'pending_mobile_signature');
+    assert.equal(pendingContent.requiresMobileSignature, true);
+
+    // Mobile receives both HTTP pending queue & WS notification
+    await new Promise((r) => setTimeout(r, 80));
+    assert.ok(wsPushEvents.some((e) => e.type === 'signature_request' && e.request?.id === pendingContent.request.id));
+    const mobilePending = await apiJson('/api/signatures/pending', {
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.equal(mobilePending.status, 200);
+    assert.ok(mobilePending.body.requests.some((r) => r.id === pendingContent.request.id));
+
+    // Mobile signs & approves
+    const mobileSign = await apiJson(`/api/signatures/requests/${pendingContent.request.id}/mobile-sign`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.equal(mobileSign.status, 200);
+    assert.equal(mobileSign.body.request.status, 'executed');
+    assert.equal(mobileSign.body.request.signedBy, 'mobile-wallet');
+    assert.equal(mobileSign.body.result.sculpture.title, 'Founding Beacon (Mobile Approved)');
+
+    // 5. Agent holds owner private key & signs transaction directly from agent side!
+    const exportedKeyRes = await apiJson('/api/wallet/export', {
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.equal(exportedKeyRes.status, 200);
+    const agentWallet = new ethers.Wallet(exportedKeyRes.body.privateKey);
+
+    const agentQueuePut = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: {
+          name: 'put_sculpture_on_land',
+          arguments: {
+            parcelId,
+            title: 'Agent Key Signed Tower',
+            description: 'Signed directly on the agent side with matching owner key.',
+            voxels: [{ x: 0, y: 0.1, z: 0, color: '#80ff72', material: 'neon' }]
+          }
+        }
+      })
+    });
+    assert.equal(agentQueuePut.status, 200);
+    const putReq = agentQueuePut.body.result.structuredContent.request;
+    const agentPutSig = await agentWallet.signMessage(putReq.canonicalMessage);
+
+    const agentSignExec = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: {
+          name: 'sign_and_execute_pending',
+          arguments: {
+            requestId: putReq.id,
+            signature: agentPutSig
+          }
+        }
+      })
+    });
+    assert.equal(agentSignExec.status, 200);
+    const execPut = agentSignExec.body.result.structuredContent;
+    assert.equal(execPut.ok, true);
+    assert.equal(execPut.request.status, 'executed');
+    assert.equal(execPut.request.signedBy, 'agent-key');
+    assert.equal(execPut.result.sculpture.parcelId, parcelId);
+
+    // 6. Mobile chooses "Copy Agent Sign & Publish Prompt" when keys/pairing connected -> agent signs publish!
+    const pubReqRes = await apiJson('/api/signatures/requests', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        pairingCode,
+        title: 'Delegated Publish Art',
+        description: 'Captured on mobile then signed by paired agent on user behalf.',
+        termsAccepted: true,
+        location: { lat: landLat, lng: landLng, altitude: 14, accuracy: 5 },
+        proofOfLocation: samplePol,
+        voxels: [{ x: 0, y: 0, z: 0.05, color: '#ff3e7f', material: 'neon' }]
+      })
+    });
+    assert.equal(pubReqRes.status, 201);
+    assert.ok(pubReqRes.body.promptText.includes(pubReqRes.body.request.id));
+    const delegatedSig = await agentWallet.signMessage(pubReqRes.body.request.canonicalMessage);
+
+    const agentSignedPub = await apiJson(
+      `/api/signatures/requests/${pubReqRes.body.request.id}/agent-sign`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          pairingCode,
+          signature: delegatedSig,
+          agentName: 'AliceMcpAgent'
+        })
+      }
+    );
+    assert.equal(agentSignedPub.status, 200);
+    assert.equal(agentSignedPub.body.request.status, 'executed');
+    assert.equal(agentSignedPub.body.result.sculpture.title, 'Delegated Publish Art');
+
+    // 7. Disconnecting pairing immediately deactivates MCP service for user
+    const disc = await apiJson(`/api/mcp/pairings/${pairingCode}/disconnect`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.equal(disc.status, 200);
+    assert.equal(disc.body.mcpActive, false);
+
+    const mcpAfterDisc = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/list', params: {} })
+    });
+    assert.equal(mcpAfterDisc.status, 403);
+
+    subWs.close();
+  });
 });

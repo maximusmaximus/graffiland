@@ -8,8 +8,9 @@ import {
   buildTransferAuthMessage,
   ERC721_TRANSFER_ABI
 } from '../../../shared/transferMessage.mjs';
-import { api, resolveApiUrl } from '../utils/api.js';
+import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
+import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -55,11 +56,24 @@ export default function SculptureModal({
   const [busyAction, setBusyAction] = useState('');
   const [nftNotice, setNftNotice] = useState('');
   const [nftError, setNftError] = useState('');
+  const [editTitle, setEditTitle] = useState(initialSculpture?.title || '');
+  const [editDesc, setEditDesc] = useState(initialSculpture?.description || '');
+  const [landCustomName, setLandCustomName] = useState('');
+  const [landCurationNote, setLandCurationNote] = useState('');
+  const [propBusy, setPropBusy] = useState('');
+  const [propNotice, setPropNotice] = useState('');
+  const [propError, setPropError] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
 
   useEffect(() => {
     setSculpture(initialSculpture);
+    setEditTitle(initialSculpture?.title || '');
+    setEditDesc(initialSculpture?.description || '');
     setNftNotice('');
     setNftError('');
+    setPropNotice('');
+    setPropError('');
+    setPromptCopied(false);
     if (!initialSculpture?.id) return;
     let cancelled = false;
     api
@@ -132,11 +146,97 @@ export default function SculptureModal({
   const solar = pol.solar || {};
   const elevation = sculpture.elevation || pol.elevation || {};
   const ownerAddr = sculpture.recipientAddress || sculpture.ownerAddress || '';
+  const ownerWallets = [user?.walletAddress, user?.customPayoutAddress]
+    .filter(Boolean)
+    .map((a) => a.toLowerCase());
+  const isPropertyOwner = Boolean(ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()));
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
       ownerAddr &&
       user.walletAddress.toLowerCase() === ownerAddr.toLowerCase()
   );
+
+  async function handleSaveSculptureEdit(e) {
+    e.preventDefault();
+    setPropBusy('save');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const res = await api.updateSculpture(sculpture.id, {
+        title: editTitle,
+        description: editDesc
+      });
+      if (res?.sculpture) {
+        setSculpture((prev) => ({ ...prev, ...res.sculpture }));
+        onSculptureUpdated?.({ ...sculpture, ...res.sculpture });
+        setPropNotice('Sculpture metadata & IPFS bundle updated.');
+      }
+    } catch (err) {
+      setPropError(err.message || 'Update failed');
+    } finally {
+      setPropBusy('');
+    }
+  }
+
+  async function handleSaveLandCuration(e) {
+    e.preventDefault();
+    setPropBusy('land');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const res = await api.updateLandParcel(sculpture.parcelId, {
+        customName: landCustomName,
+        curationNote: landCurationNote
+      });
+      setPropNotice(`Saved land curation for ${res?.parcel?.parcelId || sculpture.parcelId}.`);
+    } catch (err) {
+      setPropError(err.message || 'Land update failed');
+    } finally {
+      setPropBusy('');
+    }
+  }
+
+  async function handleDeleteOwnedSculpture() {
+    setPropBusy('delete');
+    setPropNotice('');
+    setPropError('');
+    try {
+      await api.deleteSculpture(sculpture.id);
+      onClose?.();
+    } catch (err) {
+      setPropError(err.message || 'Delete failed');
+    } finally {
+      setPropBusy('');
+    }
+  }
+
+  async function handleCopyOwnerPrompt() {
+    setPropBusy('prompt');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const pairingsRes = await api.listMcpPairings();
+      let code = pairingsRes.activePairing?.code || pairingsRes.pairings?.find((p) => p.status === 'pending')?.code;
+      const origin = API_BASE || window.location.origin;
+      if (!code) {
+        const created = await api.createMcpPairing({ apiOrigin: origin });
+        code = created.pairing?.code;
+      }
+      const promptText = buildPropertyOwnerPrompt({
+        apiOrigin: origin,
+        pairingCode: code,
+        ownerAddress: ownerAddr,
+        parcelId: sculpture.parcelId
+      });
+      await navigator.clipboard?.writeText(promptText);
+      setPromptCopied(true);
+      setPropNotice(`Copied Property Owner MCP Prompt (Pairing Code: ${code}).`);
+    } catch (err) {
+      setPropError(err.message || 'Could not copy prompt');
+    } finally {
+      setPropBusy('');
+    }
+  }
   const glbUrl = resolveApiUrl(
     sculpture.modelGlbUrl || `/api/sculptures/${encodeURIComponent(sculpture.id)}/model.glb`
   );
@@ -709,6 +809,103 @@ export default function SculptureModal({
             )}
           </div>
         </div>
+
+        {isPropertyOwner && (
+          <div className="card" style={{ padding: 12, marginTop: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🏠" size={18} /> Property &amp; Land Controls ({sculpture.parcelId})
+              </span>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ fontSize: 12, padding: '6px 10px' }}
+                disabled={propBusy !== ''}
+                onClick={handleCopyOwnerPrompt}
+              >
+                <XeroIcon emoji="📋" size={14} />{' '}
+                {promptCopied ? 'Copied MCP Prompt!' : 'Copy Property Owner MCP Prompt'}
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSculptureEdit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
+                Edit Sculpture on Your Land
+              </div>
+              <input
+                className="input"
+                maxLength={48}
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="Sculpture title"
+              />
+              <textarea
+                className="textarea"
+                rows={2}
+                maxLength={240}
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                placeholder="Description"
+              />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="submit" className="btn btn-primary" disabled={propBusy !== ''}>
+                  <XeroIcon emoji="✏️" size={14} /> Save Sculpture Changes
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={propBusy !== ''}
+                  onClick={handleDeleteOwnedSculpture}
+                >
+                  <XeroIcon emoji="🗑️" size={14} /> Remove From Land
+                </button>
+              </div>
+            </form>
+
+            <form
+              onSubmit={handleSaveLandCuration}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                paddingTop: 10,
+                borderTop: '1px solid rgba(255,255,255,0.08)'
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-gold)' }}>
+                Curate Virtual Land Parcel ({sculpture.parcelId})
+              </div>
+              <input
+                className="input"
+                maxLength={48}
+                value={landCustomName}
+                onChange={(e) => setLandCustomName(e.target.value)}
+                placeholder="Custom Virtual Land title (e.g. Neon Corner Plaza)"
+              />
+              <input
+                className="input"
+                maxLength={240}
+                value={landCurationNote}
+                onChange={(e) => setLandCurationNote(e.target.value)}
+                placeholder="Land note or curator statement"
+              />
+              <button type="submit" className="btn" disabled={propBusy !== ''}>
+                <XeroIcon emoji="🗺️" size={14} /> Save Land Curations
+              </button>
+            </form>
+
+            {propNotice && (
+              <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--accent)' }}>
+                {propNotice}
+              </div>
+            )}
+            {propError && (
+              <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--danger, #ff5e7e)' }}>
+                {propError}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="card" style={{ padding: 12, marginTop: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>

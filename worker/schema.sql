@@ -179,3 +179,59 @@ CREATE TABLE IF NOT EXISTS sculpture_drafts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_drafts_owner_updated ON sculpture_drafts(owner_sub, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS mcp_pairings (
+  code TEXT PRIMARY KEY,
+  owner_sub TEXT NOT NULL,
+  owner_address TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  agent_name TEXT DEFAULT '',
+  agent_address TEXT DEFAULT '',
+  key_connected INTEGER NOT NULL DEFAULT 0,
+  challenge_nonce TEXT NOT NULL,
+  connected_at TEXT DEFAULT '',
+  last_active_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_pairings_owner_status ON mcp_pairings(owner_sub, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS land_signature_requests (
+  id TEXT PRIMARY KEY,
+  pairing_code TEXT DEFAULT '',
+  owner_sub TEXT NOT NULL,
+  owner_address TEXT NOT NULL,
+  action TEXT NOT NULL,
+  parcel_id TEXT NOT NULL,
+  sculpture_id TEXT DEFAULT '',
+  payload_json TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  canonical_message TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  requested_by TEXT NOT NULL DEFAULT 'agent',
+  agent_name TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  signed_by TEXT DEFAULT '',
+  signer_address TEXT DEFAULT '',
+  signature TEXT DEFAULT '',
+  tx_hash TEXT DEFAULT '',
+  result_json TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sigreq_owner_status ON land_signature_requests(owner_sub, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS parcel_curations (
+  parcel_id TEXT PRIMARY KEY,
+  owner_sub TEXT NOT NULL,
+  owner_address TEXT NOT NULL,
+  custom_name TEXT DEFAULT '',
+  curation_note TEXT DEFAULT '',
+  featured_sculpture_id TEXT DEFAULT '',
+  allow_public_ar INTEGER NOT NULL DEFAULT 1,
+  last_signed_tx_hash TEXT DEFAULT '',
+  updated_at TEXT NOT NULL
+);

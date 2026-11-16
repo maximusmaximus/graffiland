@@ -172,6 +172,26 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🔐" size={18} /> Land Ownership Editing, Active MCP Service &amp; Two-Way Signing
+              </div>
+              <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
+                <li>
+                  <strong>Edit Whatever Is On Your Land:</strong> Publishing a sculpture grants property ownership on that Virtual Land parcel (<code>GLAND-...</code>). You can edit titles, descriptions, or blocks on your sculptures, curate parcel info, remove items, or put new sculptures onto owned parcels — directly or via MCP.
+                </li>
+                <li>
+                  <strong>MCP Service Strictly Gated by Connected Pairing:</strong> The MCP JSON-RPC service (<code>/api/mcp</code>) remains <strong>inactive</strong> until you generate a robust <code>GLP-XXXX-XXXX-XXXX-XXXX</code> pairing code and your AI agent connects it via handshake. Disconnect anytime to deactivate MCP immediately.
+                </li>
+                <li>
+                  <strong>Two-Way Key Holding &amp; Mobile Signature Notifications:</strong> If your paired agent holds the matching wallet private key, it can sign &amp; execute updates and transactions from the agent side. Whenever an agent paired via matching pairing codes initiates updates requiring approval without a key signature, a real-time <strong>Sign &amp; Approve</strong> notification is sent directly to your mobile device.
+                </li>
+                <li>
+                  <strong>Choose How to Sign When Publishing:</strong> When paired keys are connected and you tap <strong>Publish</strong> on mobile, you can choose either <strong>Sign &amp; Publish on Mobile</strong> directly or <strong>Copy Agent Sign &amp; Publish Prompt</strong> so your agent signs on your behalf from its side.
+                </li>
+              </ul>
+            </div>
+
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <XeroIcon emoji="🪙" size={18} /> Portable ERC-721 + 3D GLB + 5% Resale Fee
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>

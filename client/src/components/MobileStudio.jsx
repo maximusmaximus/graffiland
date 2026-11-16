@@ -4,8 +4,9 @@ import {
   CHAT_SIGHT_CLIENT_DISTANCE_M,
   haversineMeters
 } from '../../../shared/chatPolicy.mjs';
-import { api } from '../utils/api.js';
+import { api, API_BASE } from '../utils/api.js';
 import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
+import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 
 const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
@@ -462,6 +463,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
+  const [mcpPairingsState, setMcpPairingsState] = useState({
+    mcpActive: false,
+    activePairing: null,
+    pairings: []
+  });
+  const [mcpPairBusy, setMcpPairBusy] = useState(false);
+  const [mcpPairNotice, setMcpPairNotice] = useState('');
+  const [pendingSignatures, setPendingSignatures] = useState([]);
+  const [pendingSigBusyId, setPendingSigBusyId] = useState('');
+  const [agentPublishPrompt, setAgentPublishPrompt] = useState(null);
   const draftSnapshotRef = useRef(null);
   const lastCloudSyncSigRef = useRef('');
   const activeDraftIdRef = useRef(activeDraftId);
@@ -483,6 +494,129 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     materialRef.current = material;
     reachRef.current = reachMeters;
   }, [mode, tool, color, material, reachMeters]);
+
+  const refreshMcpPairings = useCallback(async () => {
+    if (!userRef.current?.id) {
+      setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
+      return null;
+    }
+    try {
+      const res = await api.listMcpPairings();
+      setMcpPairingsState(res);
+      return res;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const refreshPendingSignatures = useCallback(async () => {
+    if (!userRef.current?.id) {
+      setPendingSignatures([]);
+      return [];
+    }
+    try {
+      const res = await api.listPendingSignatures();
+      const list = res.requests || [];
+      setPendingSignatures(list);
+      return list;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
+      setPendingSignatures([]);
+      return undefined;
+    }
+    refreshMcpPairings();
+    refreshPendingSignatures();
+    const timer = setInterval(() => {
+      refreshMcpPairings();
+      refreshPendingSignatures();
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [user?.id, refreshMcpPairings, refreshPendingSignatures]);
+
+  useEffect(() => {
+    const activeCode = mcpPairingsState.activePairing?.code;
+    if (!user?.id || !activeCode) return undefined;
+    let ws;
+    try {
+      ws = new WebSocket(getWsUrl());
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'subscribe_mcp', pairingCode: activeCode }));
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'signature_request') {
+            refreshPendingSignatures();
+            showTemporaryHint(
+              `🔔 Agent requests signature for ${msg.request?.parcelId || 'your land'}`
+            );
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // fallback to polling
+    }
+    return () => {
+      try {
+        ws?.close();
+      } catch {
+        // ignore
+      }
+    };
+  }, [user?.id, mcpPairingsState.activePairing?.code, refreshPendingSignatures]);
+
+  useEffect(() => {
+    const reqId = agentPublishPrompt?.requestId;
+    if (!reqId || mintReceipt) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await api.getSignatureRequest(reqId, agentPublishPrompt.pairingCode);
+        const reqObj = res?.request;
+        if (!cancelled && reqObj?.status === 'executed' && reqObj?.result?.sculpture) {
+          clearLocalDraft();
+          setActiveDraftId('');
+          activeDraftIdRef.current = '';
+          lastCloudSyncSigRef.current = '';
+          setMintReceipt(reqObj.result);
+          setAgentPublishPrompt(null);
+          setVoxels([]);
+          setTitle('');
+          setDescription('');
+          setCluePrompt('');
+          setClueAnswer('');
+          setTermsAccepted(false);
+          setDraftStatusText('');
+          refreshPendingSignatures();
+          if (locationRef.current) {
+            api
+              .listSculptures({
+                lat: locationRef.current.lat,
+                lng: locationRef.current.lng,
+                radiusMeters: 300
+              })
+              .then((nRes) => setNearbySculptures(nRes.sculptures || []))
+              .catch(() => {});
+          }
+        }
+      } catch {
+        // keep polling
+      }
+    };
+    const timer = setInterval(poll, 2200);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [agentPublishPrompt?.requestId, agentPublishPrompt?.pairingCode, mintReceipt, refreshPendingSignatures]);
 
   const refreshCloudDrafts = useCallback(async () => {
     if (!userRef.current?.id) return [];
@@ -3135,6 +3269,125 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  async function handleCopyAgentPublishPrompt() {
+    setPublishing(true);
+    setPublishError('');
+    try {
+      if (!location) {
+        throw new Error('Waiting for GPS location fix before creating agent publish request.');
+      }
+      const activePairingCode = mcpPairingsState.activePairing?.code;
+      if (!activePairingCode) {
+        throw new Error('Connect a robust MCP pairing code first before delegating signing.');
+      }
+      const previewDataUrl = captureSculptureSnapshot();
+      const polSnap = polRef.current.getSnapshot();
+      const refinedAnchor = polRef.current.getRefinedLocation(location) || location;
+      const out = await api.createPublishSignatureRequest({
+        pairingCode: activePairingCode,
+        title,
+        description,
+        termsAccepted,
+        voxels,
+        previewDataUrl,
+        draftId: activeDraftId || undefined,
+        location: refinedAnchor,
+        proofOfLocation: polSnap,
+        deviceProfile: {
+          isMobile: true,
+          screenWidth: window.innerWidth,
+          screenHeight: window.innerHeight,
+          hasCamera: cameraReady
+        }
+      });
+      const copied = await copyToClipboard(out.promptText);
+      setAgentPublishPrompt({
+        requestId: out.request?.id,
+        pairingCode: activePairingCode,
+        promptText: out.promptText,
+        copied
+      });
+    } catch (err) {
+      setPublishError(err.message || 'Could not create agent publish prompt');
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleCreateMcpPairing() {
+    if (!user) {
+      setLoginOpen(true);
+      return;
+    }
+    setMcpPairBusy(true);
+    setMcpPairNotice('');
+    try {
+      const res = await api.createMcpPairing({ apiOrigin: API_BASE || window.location.origin });
+      await refreshMcpPairings();
+      const copied = res.ownerPrompt ? await copyToClipboard(res.ownerPrompt) : false;
+      setMcpPairNotice(
+        `Generated ${res.pairing?.code}${copied ? ' & copied full Owner MCP Prompt!' : ''}`
+      );
+    } catch (err) {
+      setMcpPairNotice(err.message || 'Failed to generate pairing code');
+    } finally {
+      setMcpPairBusy(false);
+    }
+  }
+
+  async function handleDisconnectMcpPairing(code) {
+    setMcpPairBusy(true);
+    setMcpPairNotice('');
+    try {
+      await api.disconnectMcpPairing(code);
+      await refreshMcpPairings();
+      setMcpPairNotice('Disconnected MCP pairing — MCP service is now inactive.');
+    } catch (err) {
+      setMcpPairNotice(err.message || 'Disconnect failed');
+    } finally {
+      setMcpPairBusy(false);
+    }
+  }
+
+  async function handleMobileSignPending(reqItem) {
+    if (!reqItem?.id) return;
+    setPendingSigBusyId(reqItem.id);
+    try {
+      let extSig = '';
+      if (
+        user?.walletAddress &&
+        reqItem.ownerAddress &&
+        user.walletAddress.toLowerCase() !== reqItem.ownerAddress.toLowerCase() &&
+        window.ethereum
+      ) {
+        extSig = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [reqItem.canonicalMessage, reqItem.ownerAddress]
+        });
+      }
+      await api.mobileSignRequest(reqItem.id, extSig ? { signature: extSig } : {});
+      await refreshPendingSignatures();
+      showTemporaryHint(`✅ Signed & executed ${reqItem.action.replace('_', ' ')} on ${reqItem.parcelId}`);
+    } catch (err) {
+      showTemporaryHint(err.message || 'Could not sign request');
+    } finally {
+      setPendingSigBusyId('');
+    }
+  }
+
+  async function handleMobileRejectPending(reqId) {
+    setPendingSigBusyId(reqId);
+    try {
+      await api.rejectSignatureRequest(reqId);
+      await refreshPendingSignatures();
+      showTemporaryHint('Signature request rejected.');
+    } catch (err) {
+      showTemporaryHint(err.message || 'Could not reject request');
+    } finally {
+      setPendingSigBusyId('');
+    }
+  }
+
   const policy = config?.policy;
 
   return (
@@ -3353,6 +3606,56 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               <XeroIcon emoji="⚠️" size={14} />
               <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
             </span>
+          </div>
+        )}
+
+        {pendingSignatures.length > 0 && !arSelectHint && (
+          <div
+            className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''}`}
+            role="status"
+            aria-live="polite"
+            style={{
+              borderColor: 'rgba(255, 209, 102, 0.72)',
+              background: 'rgba(32, 24, 10, 0.94)',
+              zIndex: 29
+            }}
+          >
+            {(() => {
+              const reqItem = pendingSignatures[0];
+              const busy = pendingSigBusyId === reqItem.id;
+              return (
+                <>
+                  <span className="mobile-hud-banner-text">
+                    <XeroIcon emoji="✍️" size={14} />
+                    <span>
+                      Agent <strong>{reqItem.agentName || 'MCP Agent'}</strong> requests signature to{' '}
+                      <strong>{reqItem.action.replace(/_/g, ' ')}</strong> on{' '}
+                      <span className="mono">{reqItem.parcelId}</span>
+                    </span>
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ padding: '4px 10px', fontSize: 11 }}
+                      disabled={busy}
+                      onClick={() => handleMobileSignPending(reqItem)}
+                    >
+                      {busy ? 'Signing...' : '✍️ Sign & Approve'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      style={{ padding: '4px 9px', fontSize: 11 }}
+                      disabled={busy}
+                      onClick={() => handleMobileRejectPending(reqItem.id)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
@@ -3913,45 +4216,123 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         </div>
       )}
 
-      {/* Pair Desktop Modal */}
+      {/* Pair Desktop & Robust MCP Agent Modal */}
       {pairOpen && (
         <div className="modal-backdrop" onClick={() => setPairOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3 className="modal-title">
-                <XeroIcon emoji="🔗" size={22} /> Pair Desktop 3D View
+                <XeroIcon emoji="🔗" size={22} /> Pair Desktop &amp; MCP Agent
               </h3>
               <button className="btn" onClick={() => setPairOpen(false)}>
                 <XeroIcon emoji="❌" size={15} />
               </button>
             </div>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
-              Open GRAFFILAND on your desktop and copy the 6-character Pair Code so you can view
-              your full sculpture live in 3D while sculpting with your phone.
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                className="input mono"
-                value={pairCodeInput}
-                onChange={(e) => setPairCodeInput(e.target.value.toUpperCase())}
-                placeholder="ABC123"
-                maxLength={6}
-              />
-              <button
-                className="btn btn-primary"
-                onClick={() => connectPairCode(pairCodeInput)}
-              >
-                <XeroIcon emoji="🔗" size={16} /> Connect
-              </button>
-            </div>
-            {pairedCode && (
-              <div className="badge teal" style={{ marginTop: 10 }}>
-                <XeroIcon emoji="✅" size={14} /> Paired to {pairedCode}
+
+            <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+                Desktop Live 3D View Pair (6-char)
               </div>
-            )}
-            {pairError && (
-              <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 12 }}>{pairError}</div>
-            )}
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
+                Enter the 6-character code from Desktop to mirror your 3D drawing live on a big screen.
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="input mono"
+                  value={pairCodeInput}
+                  onChange={(e) => setPairCodeInput(e.target.value.toUpperCase())}
+                  placeholder="ABC123"
+                  maxLength={6}
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={() => connectPairCode(pairCodeInput)}
+                >
+                  <XeroIcon emoji="🔗" size={16} /> Connect
+                </button>
+              </div>
+              {pairedCode && (
+                <div className="badge teal" style={{ marginTop: 10 }}>
+                  <XeroIcon emoji="✅" size={14} /> Paired to {pairedCode}
+                </div>
+              )}
+              {pairError && (
+                <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 12 }}>{pairError}</div>
+              )}
+            </div>
+
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>Robust Agent MCP Pairing</strong>
+                <span className={`badge ${mcpPairingsState.mcpActive ? 'teal' : 'gold'}`}>
+                  {mcpPairingsState.mcpActive
+                    ? mcpPairingsState.activePairing?.keyConnected
+                      ? '🟢 MCP Active · Keys Connected'
+                      : '🟢 MCP Active'
+                    : '🟡 Inactive Until Connected'}
+                </span>
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
+                MCP tools stay inactive until an AI agent connects using your robust{' '}
+                <code>GLP-...</code> pairing code.
+              </p>
+
+              {mcpPairingsState.activePairing ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
+                    Active Code: {mcpPairingsState.activePairing.code}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={async () => {
+                        const txt = buildPropertyOwnerPrompt({
+                          apiOrigin: API_BASE || window.location.origin,
+                          pairingCode: mcpPairingsState.activePairing.code,
+                          ownerAddress: user?.activeMintRecipient || user?.walletAddress
+                        });
+                        const ok = await copyToClipboard(txt);
+                        setMcpPairNotice(ok ? 'Copied full Owner MCP Prompt!' : 'Copy prompt from README.');
+                      }}
+                    >
+                      <XeroIcon emoji="📋" size={14} /> Copy Owner MCP Prompt
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      disabled={mcpPairBusy}
+                      onClick={() => handleDisconnectMcpPairing(mcpPairingsState.activePairing.code)}
+                    >
+                      Disconnect MCP
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {mcpPairingsState.pairings?.[0]?.status === 'pending' && (
+                    <div className="mono" style={{ fontSize: 12, color: 'var(--accent-gold)', wordBreak: 'break-all' }}>
+                      Pending Code: {mcpPairingsState.pairings[0].code}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={mcpPairBusy}
+                    onClick={handleCreateMcpPairing}
+                  >
+                    <XeroIcon emoji="🔑" size={14} />{' '}
+                    {mcpPairBusy ? 'Generating...' : 'Generate Robust Pairing Code & Copy Prompt'}
+                  </button>
+                </div>
+              )}
+
+              {mcpPairNotice && (
+                <div className="mono" style={{ marginTop: 8, fontSize: 11, color: 'var(--accent)' }}>
+                  {mcpPairNotice}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -4220,16 +4601,40 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   </div>
                 )}
 
+                {mcpPairingsState.mcpActive && mcpPairingsState.activePairing && (
+                  <div className="card" style={{ padding: 10, fontSize: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span className="badge teal">
+                        <XeroIcon emoji="🔑" size={12} /> Agent Keys Connected ({mcpPairingsState.activePairing.code})
+                      </span>
+                      <span style={{ color: 'var(--muted)' }}>
+                        Sign here on mobile OR delegate signing to your agent
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     type="submit"
                     className="btn btn-pink"
-                    style={{ flex: 1 }}
+                    style={{ flex: '1 1 180px' }}
                     disabled={publishing || voxels.length === 0}
                   >
                     <XeroIcon emoji="🚀" size={16} />
-                    {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Publish & Mint NFT'}
+                    {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
                   </button>
+                  {mcpPairingsState.mcpActive && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ flex: '1 1 180px' }}
+                      disabled={publishing || voxels.length === 0}
+                      onClick={handleCopyAgentPublishPrompt}
+                    >
+                      <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn"
@@ -4240,6 +4645,52 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                     <span>{draftsBusy ? 'Saving...' : 'Save Draft'}</span>
                   </button>
                 </div>
+
+                {agentPublishPrompt && (
+                  <div className="card" style={{ padding: 10, fontSize: 12, borderColor: 'rgba(0, 245, 212, 0.45)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <strong style={{ color: 'var(--accent)' }}>
+                        ⏳ Waiting for Agent Signature ({agentPublishPrompt.requestId.slice(0, 14)}...)
+                      </strong>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: '4px 8px', fontSize: 11 }}
+                        onClick={() => copyToClipboard(agentPublishPrompt.promptText)}
+                      >
+                        📋 Re-copy Prompt
+                      </button>
+                    </div>
+                    <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 10, maxHeight: 140, overflowY: 'auto', color: 'var(--muted)' }}>
+                      {agentPublishPrompt.promptText}
+                    </pre>
+                  </div>
+                )}
+
+                {!mcpPairingsState.mcpActive && (
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    Want your AI agent to sign on your behalf? Pair a robust <code>GLP-...</code> code under{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('draw');
+                        setPairOpen(true);
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--accent)',
+                        padding: 0,
+                        textDecoration: 'underline',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Pair Desktop &amp; MCP Agent
+                    </button>
+                    .
+                  </div>
+                )}
+
                 {draftStatusText && (
                   <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
                     <XeroIcon emoji="💾" size={12} /> Auto-draft: {draftStatusText}

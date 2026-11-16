@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
-import { api } from '../utils/api.js';
+import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { api, API_BASE } from '../utils/api.js';
 import AdminPanel from './AdminPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
@@ -88,6 +89,8 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
   const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [mcpState, setMcpState] = useState({ mcpActive: false, activePairing: null, pairings: [] });
+  const [mcpNotice, setMcpNotice] = useState('');
   const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
     try {
       return sessionStorage.getItem(DESKTOP_NOTICE_SESSION_KEY) === '1';
@@ -138,6 +141,14 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   useEffect(() => {
     refreshData();
   }, [refreshData]);
+
+  useEffect(() => {
+    if (!user?.id || !pairOpen) return;
+    api
+      .listMcpPairings()
+      .then(setMcpState)
+      .catch(() => {});
+  }, [user?.id, pairOpen]);
 
   useEffect(() => {
     if (!navigator.geolocation) return undefined;
@@ -443,8 +454,70 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--muted)' }}>
               Scan the QR code below with your mobile phone to draw &amp; create in AR while watching
               your sculpture build live in this larger 3D workspace. Remember: publishing on-chain is
-              completed on mobile.
+              completed on mobile (or signed by your paired agent when initiated from mobile).
             </p>
+            {user && (
+              <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>Robust MCP Agent Pairing</span>
+                    <span className={`badge ${mcpState.mcpActive ? 'teal' : 'gold'}`}>
+                      {mcpState.mcpActive
+                        ? mcpState.activePairing?.keyConnected
+                          ? '🟢 MCP Active · Keys Connected'
+                          : '🟢 MCP Active'
+                        : '🟡 Inactive Until Connected'}
+                    </span>
+                  </div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                    {mcpState.activePairing?.code || mcpState.pairings?.[0]?.code || 'No active GLP pairing code yet'}
+                  </div>
+                  {mcpNotice && (
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--accent)', marginTop: 4 }}>
+                      {mcpNotice}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={async () => {
+                      const created = await api.createMcpPairing({
+                        apiOrigin: API_BASE || window.location.origin
+                      });
+                      const updated = await api.listMcpPairings();
+                      setMcpState(updated);
+                      const prompt =
+                        created.ownerPrompt ||
+                        buildPropertyOwnerPrompt({
+                          apiOrigin: API_BASE || window.location.origin,
+                          pairingCode: created.pairing?.code,
+                          ownerAddress: user.activeMintRecipient || user.walletAddress
+                        });
+                      await navigator.clipboard?.writeText(prompt);
+                      setMcpNotice(`Generated ${created.pairing?.code} & copied Property Owner MCP Prompt.`);
+                    }}
+                  >
+                    <XeroIcon emoji="🔑" size={14} /> New Robust Code &amp; Copy MCP Prompt
+                  </button>
+                  {mcpState.activePairing && (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={async () => {
+                        await api.disconnectMcpPairing(mcpState.activePairing.code);
+                        const updated = await api.listMcpPairings();
+                        setMcpState(updated);
+                        setMcpNotice('Disconnected MCP pairing.');
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             <PairWorkbench3D inModal />
           </div>
         </div>
@@ -487,7 +560,10 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
             );
           }}
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            setSelected(null);
+            refreshData();
+          }}
         />
       )}
 

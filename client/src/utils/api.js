@@ -122,5 +122,52 @@ export const api = {
   saveDraft: (payload) =>
     request('/api/drafts', { method: 'POST', body: JSON.stringify(payload) }),
   deleteDraft: (id) =>
-    request(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    request(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getMcpSpec: () => request('/api/mcp/spec'),
+  listMcpPairings: () => request('/api/mcp/pairings'),
+  createMcpPairing: (payload = {}) =>
+    request('/api/mcp/pairings', { method: 'POST', body: JSON.stringify(payload) }),
+  connectMcpPairing: (payload = {}) =>
+    request('/api/mcp/pairings/connect', { method: 'POST', body: JSON.stringify(payload) }),
+  disconnectMcpPairing: (code) =>
+    request(`/api/mcp/pairings/${encodeURIComponent(code)}/disconnect`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  updateSculpture: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteSculpture: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  updateLandParcel: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/update`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  createSculptureOnLand: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/sculptures`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  listPendingSignatures: () => request('/api/signatures/pending'),
+  createPublishSignatureRequest: (payload) =>
+    request('/api/signatures/requests', { method: 'POST', body: JSON.stringify(payload) }),
+  getSignatureRequest: (id, pairingCode = '') =>
+    request(
+      `/api/signatures/requests/${encodeURIComponent(id)}${
+        pairingCode ? `?pairingCode=${encodeURIComponent(pairingCode)}` : ''
+      }`
+    ),
+  mobileSignRequest: (id, payload = {}) =>
+    request(`/api/signatures/requests/${encodeURIComponent(id)}/mobile-sign`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  rejectSignatureRequest: (id) =>
+    request(`/api/signatures/requests/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    })
 };
