@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserProvider, Contract, isAddress } from 'ethers';
+import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import {
   buildTransferAuthMessage,
   ERC721_TRANSFER_ABI
@@ -40,6 +41,7 @@ export default function SculptureModal({
   sculpture: initialSculpture,
   user,
   config,
+  userLocation = null,
   onSculptureUpdated,
   onClose
 }) {
@@ -87,12 +89,39 @@ export default function SculptureModal({
   const tokenMetaUrl = resolveApiUrl(
     sculpture.metadataUrl || `/api/sculptures/${encodeURIComponent(sculpture.id)}/metadata.json`
   );
-  const explorerBase = config?.chain?.network?.explorer || '';
+  const explorerBase = config?.chain?.network?.explorerUrl || config?.chain?.network?.explorer || '';
   const explorerTokenUrl =
     !sculpture.chain?.simulated && explorerBase && sculpture.chain?.contractAddress
       ? `${explorerBase}/token/${sculpture.chain.contractAddress}/instance/${sculpture.chain.tokenId}`
       : '';
   const transfers = Array.isArray(sculpture.transfers) ? sculpture.transfers : [];
+  const hasCoords =
+    Number.isFinite(Number(sculpture.lat)) && Number.isFinite(Number(sculpture.lng));
+  const googleMapsUrl = hasCoords
+    ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        `${sculpture.lat},${sculpture.lng}`
+      )}`
+    : '';
+  const distanceMeters =
+    hasCoords &&
+    userLocation &&
+    Number.isFinite(Number(userLocation.lat)) &&
+    Number.isFinite(Number(userLocation.lng))
+      ? Math.round(
+          haversineMeters(
+            Number(userLocation.lat),
+            Number(userLocation.lng),
+            Number(sculpture.lat),
+            Number(sculpture.lng)
+          )
+        )
+      : null;
+  const distanceLabel =
+    distanceMeters === null
+      ? ''
+      : distanceMeters >= 1000
+      ? `${(distanceMeters / 1000).toFixed(1)} km away`
+      : `${distanceMeters} m away`;
 
   const handleAddToWallet = async () => {
     setNftNotice('');
@@ -254,7 +283,20 @@ export default function SculptureModal({
 
         <SculptureViewer3D voxels={sculpture.voxels || []} height={300} autoRotate />
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
+          {googleMapsUrl && (
+            <a
+              className="btn btn-primary"
+              href={googleMapsUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <XeroIcon emoji="🧭" size={15} />
+              <span>
+                Navigate (Google Maps){distanceLabel ? ` · ${distanceLabel}` : ''}
+              </span>
+            </a>
+          )}
           <span className="badge teal">
             <XeroIcon emoji="📍" size={13} /> Land {sculpture.parcelId}
           </span>

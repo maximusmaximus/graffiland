@@ -28,7 +28,9 @@ import {
 import { getWsUrl } from '../utils/device.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import MapView from './MapView.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
+import SculptureModal from './SculptureModal.jsx';
 import { ForegroundOcclusionCompositor } from './ForegroundOcclusion.js';
 import { ProofOfLocationTracker } from './ProofOfLocation.js';
 import {
@@ -205,7 +207,20 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     transformPivotRef.current = transformPivot;
   }, [transformPivot]);
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
+  const activeKeyToolRef = useRef('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
+  const [isDraggingKey, setIsDraggingKey] = useState(false);
+  const [canTouch, setCanTouch] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const coarse = window.matchMedia?.('(any-pointer: coarse), (pointer: coarse)')?.matches;
+    return Boolean(coarse || navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
+  });
+  const [mapOpen, setMapOpen] = useState(false);
+  const [areaFilterMode, setAreaFilterMode] = useState('nearby'); // 'nearby' | 'all'
+  const [mapSculptures, setMapSculptures] = useState([]);
+  const [mapParcels, setMapParcels] = useState([]);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapSelectedSculpture, setMapSelectedSculpture] = useState(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentCopied, setAgentCopied] = useState(false);
@@ -214,8 +229,13 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const keyGestureRef = useRef({
     active: false,
     pointerId: null,
+    targetRel: 0,
     startX: 0,
-    startY: 0,
+    anchorX: 0,
+    lastX: 0,
+    lastT: 0,
+    velocityX: 0,
+    movedPx: 0,
     swiped: false,
     holdStarted: false
   });
@@ -1545,17 +1565,40 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const prevSyncStateRef = useRef({ mode: 'draw', tool: 'brush' });
   useEffect(() => {
     const prev = prevSyncStateRef.current;
+    let syncedTool = null;
     if (mode !== prev.mode) {
       if (mode === 'transform' || mode === 'preview' || mode === 'publish') {
-        setActiveKeyTool(mode);
+        syncedTool = mode;
       } else if (mode === 'draw') {
-        setActiveKeyTool(tool);
+        syncedTool = tool;
       }
     } else if (tool !== prev.tool && mode === 'draw') {
-      setActiveKeyTool(tool);
+      syncedTool = tool;
+    }
+    if (syncedTool) {
+      activeKeyToolRef.current = syncedTool;
+      setActiveKeyTool(syncedTool);
     }
     prevSyncStateRef.current = { mode, tool };
   }, [mode, tool]);
+
+  useEffect(() => {
+    const mq = window.matchMedia?.('(pointer: coarse)');
+    const syncTouch = () => {
+      const hasTouch = Boolean(
+        mq?.matches || ('ontouchstart' in window && navigator.maxTouchPoints > 0)
+      );
+      setCanTouch(hasTouch);
+    };
+    const onTouchStart = () => setCanTouch(true);
+    syncTouch();
+    mq?.addEventListener?.('change', syncTouch);
+    window.addEventListener('touchstart', onTouchStart, { passive: true, once: true });
+    return () => {
+      mq?.removeEventListener?.('change', syncTouch);
+      window.removeEventListener('touchstart', onTouchStart);
+    };
+  }, []);
 
   async function copyToClipboard(text) {
     if (!text) return false;
@@ -1858,7 +1901,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  const KEY_CAROUSEL_SLOT_PX = 54;
+
   function selectKeyTool(toolId) {
+    activeKeyToolRef.current = toolId;
     setActiveKeyTool(toolId);
     if (toolId === 'transform') {
       enterTransformMode();
@@ -1887,9 +1933,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   }
 
   function stepKeyTool(delta) {
-    const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyTool);
+    const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyToolRef.current);
     const current = idx >= 0 ? idx : 0;
-    const nextIdx = (current + delta + KEY_TOOLS.length) % KEY_TOOLS.length;
+    const nextIdx = (((current + delta) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
     selectKeyTool(KEY_TOOLS[nextIdx].id);
   }
 
@@ -1905,27 +1951,28 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
   function triggerActiveKeyTool() {
     enterFullscreen();
-    if (activeKeyTool === 'transform') {
+    const curTool = activeKeyToolRef.current;
+    if (curTool === 'transform') {
       toggleTransformLock();
-    } else if (activeKeyTool === 'brush' || activeKeyTool === 'stack' || activeKeyTool === 'erase') {
+    } else if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
       if (modeRef.current === 'transform') {
-        commitTransformAndExit('draw', activeKeyTool);
+        commitTransformAndExit('draw', curTool);
       } else {
         setMode('draw');
-        setTool(activeKeyTool);
-        toolRef.current = activeKeyTool;
+        setTool(curTool);
+        toolRef.current = curTool;
       }
       applyVoxelAction(computeTargetVoxel());
-    } else if (activeKeyTool === 'preview') {
+    } else if (curTool === 'preview') {
       const next = modeRef.current === 'preview' ? 'draw' : 'preview';
       if (modeRef.current === 'transform') {
         commitTransformAndExit(next);
       } else {
         setMode(next);
       }
-    } else if (activeKeyTool === 'agent') {
+    } else if (curTool === 'agent') {
       openAgentHandoff();
-    } else if (activeKeyTool === 'publish') {
+    } else if (curTool === 'publish') {
       openPublishSheet();
     }
   }
@@ -1938,40 +1985,65 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       // ignore if synthetic pointer
     }
     stopBrushPainting();
+    const relAttr = e.target?.closest?.('[data-tool-rel]')?.getAttribute?.('data-tool-rel');
+    const targetRel = relAttr != null ? Number(relAttr) : 0;
+    const now = performance.now();
     keyGestureRef.current = {
       active: true,
       pointerId: e.pointerId,
+      targetRel: Number.isFinite(targetRel) ? targetRel : 0,
       startX: e.clientX,
-      startY: e.clientY,
+      anchorX: e.clientX,
+      lastX: e.clientX,
+      lastT: now,
+      velocityX: 0,
+      movedPx: 0,
       swiped: false,
       holdStarted: false
     };
     setSwipeDragPx(0);
+    setIsDraggingKey(true);
 
-    if (activeKeyTool === 'brush' || activeKeyTool === 'erase') {
-      const holdTool = activeKeyTool;
+    const curTool = activeKeyToolRef.current;
+    if (targetRel === 0 && (curTool === 'brush' || curTool === 'erase')) {
       paintHoldTimerRef.current = setTimeout(() => {
         if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
         keyGestureRef.current.holdStarted = true;
-        startContinuousHoldTool(holdTool);
-      }, 120);
+        startContinuousHoldTool(curTool);
+      }, 145);
     }
   }
 
   function handleKeyPointerMove(e) {
     const g = keyGestureRef.current;
     if (!g.active || g.pointerId !== e.pointerId) return;
-    const dx = e.clientX - g.startX;
-    if (!g.swiped && Math.abs(dx) >= 26) {
+    const now = performance.now();
+    const dt = Math.max(4, now - g.lastT);
+    const stepVx = (e.clientX - g.lastX) / dt;
+    g.velocityX = g.velocityX * 0.45 + stepVx * 0.55;
+    g.movedPx += Math.abs(e.clientX - g.lastX);
+    g.lastX = e.clientX;
+    g.lastT = now;
+
+    if (!g.swiped && Math.abs(e.clientX - g.startX) >= 7) {
       g.swiped = true;
       stopBrushPainting();
-      stepKeyTool(dx > 0 ? 1 : -1);
-      setSwipeDragPx(0);
-      return;
     }
-    if (!g.swiped && Math.abs(dx) > 4) {
-      setSwipeDragPx(Math.max(-34, Math.min(34, dx)));
+
+    let dx = e.clientX - g.anchorX;
+    while (dx >= KEY_CAROUSEL_SLOT_PX * 0.58) {
+      stepKeyTool(-1);
+      g.anchorX += KEY_CAROUSEL_SLOT_PX;
+      dx -= KEY_CAROUSEL_SLOT_PX;
+      navigator.vibrate?.(8);
     }
+    while (dx <= -KEY_CAROUSEL_SLOT_PX * 0.58) {
+      stepKeyTool(1);
+      g.anchorX -= KEY_CAROUSEL_SLOT_PX;
+      dx += KEY_CAROUSEL_SLOT_PX;
+      navigator.vibrate?.(8);
+    }
+    setSwipeDragPx(Math.max(-KEY_CAROUSEL_SLOT_PX, Math.min(KEY_CAROUSEL_SLOT_PX, dx)));
   }
 
   function handleKeyPointerUp(e) {
@@ -1979,9 +2051,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     if (!g.active) return;
     const wasSwiped = g.swiped;
     const wasHold = g.holdStarted;
+    const movedPx = g.movedPx;
+    const targetRel = g.targetRel;
+    const flickVx = g.velocityX;
+    const residualDx = e.clientX - g.anchorX;
+
     keyGestureRef.current.active = false;
     keyGestureRef.current.swiped = false;
     keyGestureRef.current.holdStarted = false;
+    setIsDraggingKey(false);
     setSwipeDragPx(0);
     stopBrushPainting();
     try {
@@ -1989,8 +2067,23 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     } catch {
       // ignore
     }
-    if (!wasSwiped && !wasHold) {
-      triggerActiveKeyTool();
+
+    if (!wasHold) {
+      if (wasSwiped) {
+        if (Math.abs(residualDx) >= 10 && Math.abs(flickVx) > 0.35) {
+          stepKeyTool(flickVx < 0 ? 1 : -1);
+          navigator.vibrate?.(8);
+        } else if (Math.abs(residualDx) >= KEY_CAROUSEL_SLOT_PX * 0.38) {
+          stepKeyTool(residualDx < 0 ? 1 : -1);
+          navigator.vibrate?.(8);
+        }
+      } else if (movedPx < 8) {
+        if (targetRel !== 0) {
+          stepKeyTool(targetRel);
+        } else {
+          triggerActiveKeyTool();
+        }
+      }
     }
   }
 
@@ -1998,9 +2091,53 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     keyGestureRef.current.active = false;
     keyGestureRef.current.swiped = false;
     keyGestureRef.current.holdStarted = false;
+    setIsDraggingKey(false);
     setSwipeDragPx(0);
     stopBrushPainting();
   }
+
+  async function loadPublicMapData() {
+    setMapLoading(true);
+    try {
+      const [sRes, pRes] = await Promise.all([api.listSculptures(), api.listParcels()]);
+      setMapSculptures(sRes.sculptures || []);
+      setMapParcels(pRes.parcels || []);
+    } catch {
+      // keep existing items
+    } finally {
+      setMapLoading(false);
+    }
+  }
+
+  function openAreaMap() {
+    stopBrushPainting();
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('draw');
+    }
+    setMapOpen(true);
+    loadPublicMapData();
+  }
+
+  const areaSculpturesSorted = useMemo(() => {
+    const withDist = (mapSculptures || []).map((sc) => {
+      const distanceMeters =
+        location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))
+          ? Math.round(haversineMeters(location.lat, location.lng, sc.lat, sc.lng))
+          : null;
+      return { ...sc, distanceMeters };
+    });
+    if (location) {
+      withDist.sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity));
+    }
+    return withDist;
+  }, [mapSculptures, location]);
+
+  const displayedMapSculptures = useMemo(() => {
+    if (areaFilterMode !== 'nearby' || !location) return areaSculpturesSorted;
+    return areaSculpturesSorted.filter(
+      (s) => s.distanceMeters === null || s.distanceMeters <= 5000
+    );
+  }, [areaFilterMode, areaSculpturesSorted, location]);
 
   function handlePaintStart() {
     enterFullscreen();
@@ -2768,57 +2905,105 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           </div>
         )}
 
-        {/* Centered Swipeable Key Button */}
+        {/* Bottom-Left Public Area Map Button */}
+        <button
+          type="button"
+          className={`floating-map-btn hud-interactive ${mapOpen ? 'active' : ''}`}
+          onClick={openAreaMap}
+          aria-label="Open Public Area Map"
+          title="Public Area Sculpture Map & Directions"
+        >
+          <XeroIcon emoji="🗺️" size={22} />
+          {nearbySculptures.length > 0 && (
+            <span className="floating-map-badge">{nearbySculptures.length}</span>
+          )}
+        </button>
+
+        {/* Centered Fluid Swipe Tool Carousel */}
         {(() => {
           const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyTool);
           const safeIdx = idx >= 0 ? idx : 0;
           const activeItem = KEY_TOOLS[safeIdx];
-          const prevItem = KEY_TOOLS[(safeIdx - 1 + KEY_TOOLS.length) % KEY_TOOLS.length];
-          const nextItem = KEY_TOOLS[(safeIdx + 1) % KEY_TOOLS.length];
+          const slots = [-2, -1, 0, 1, 2];
           return (
             <div className="key-carousel hud-interactive">
               <div className="key-tool-caption">
                 <XeroIcon emoji="🔑" size={12} />
                 <span>{activeItem.label}</span>
-                <span className="key-tool-hint">· Swipe ◀️ ▶️</span>
+                <span className="key-tool-hint">
+                  {canTouch ? '· Swipe' : '· Arrows / Swipe'}
+                </span>
               </div>
               <div className="key-carousel-row">
-                <button
-                  type="button"
-                  className="key-step-btn"
-                  onClick={() => stepKeyTool(-1)}
-                  aria-label="Previous tool"
-                  title={`Previous: ${prevItem.label}`}
-                >
-                  <XeroIcon emoji={prevItem.emoji} size={16} />
-                  <XeroIcon emoji="◀️" size={12} />
-                </button>
+                {!canTouch && (
+                  <button
+                    type="button"
+                    className="key-arrow-btn"
+                    onClick={() => stepKeyTool(-1)}
+                    aria-label="Previous tool"
+                    title="Previous tool"
+                  >
+                    <XeroIcon emoji="◀️" size={13} />
+                  </button>
+                )}
 
-                <button
-                  type="button"
-                  className={`key-action-btn ${painting ? 'painting' : ''} tool-${activeItem.id}`}
-                  style={{ transform: `translateX(${swipeDragPx}px)` }}
+                <div
+                  className={`key-carousel-track ${isDraggingKey ? 'dragging' : ''}`}
                   onPointerDown={handleKeyPointerDown}
                   onPointerMove={handleKeyPointerMove}
                   onPointerUp={handleKeyPointerUp}
                   onPointerCancel={handleKeyPointerCancel}
                   onContextMenu={(e) => e.preventDefault()}
-                  aria-label={`${activeItem.label} key button (swipe left or right to switch tool)`}
-                  title={activeItem.hint}
+                  role="group"
+                  aria-label="Fluid bottom tool switcher (swipe left or right)"
                 >
-                  <XeroIcon emoji={activeItem.emoji} size={30} />
-                </button>
+                  {slots.map((rel) => {
+                    const toolIdx =
+                      (((safeIdx + rel) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
+                    const item = KEY_TOOLS[toolIdx];
+                    const offsetPx = rel * KEY_CAROUSEL_SLOT_PX + swipeDragPx;
+                    const distNorm = Math.min(2, Math.abs(offsetPx) / KEY_CAROUSEL_SLOT_PX);
+                    const scale = Math.max(0.46, 1 - distNorm * 0.34);
+                    const opacity = Math.max(0.16, 1 - distNorm * 0.44);
+                    const isCenterSlot = rel === 0;
+                    return (
+                      <button
+                        key={`${rel}-${item.id}`}
+                        type="button"
+                        data-tool-rel={rel}
+                        className={`key-slot-btn ${isCenterSlot ? `is-center tool-${item.id} ${painting ? 'painting' : ''}` : 'is-neighbor'}`}
+                        style={{
+                          transform: `translate(-50%, -50%) translateX(${offsetPx}px) scale(${scale})`,
+                          opacity,
+                          zIndex: isCenterSlot ? 4 : 3 - Math.abs(rel),
+                          transition: isDraggingKey
+                            ? 'none'
+                            : 'transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease'
+                        }}
+                        aria-label={
+                          isCenterSlot
+                            ? `${item.label} tool button (${item.hint})`
+                            : `Switch to ${item.label}`
+                        }
+                        title={item.hint}
+                      >
+                        <XeroIcon emoji={item.emoji} size={28} />
+                      </button>
+                    );
+                  })}
+                </div>
 
-                <button
-                  type="button"
-                  className="key-step-btn"
-                  onClick={() => stepKeyTool(1)}
-                  aria-label="Next tool"
-                  title={`Next: ${nextItem.label}`}
-                >
-                  <XeroIcon emoji="▶️" size={12} />
-                  <XeroIcon emoji={nextItem.emoji} size={16} />
-                </button>
+                {!canTouch && (
+                  <button
+                    type="button"
+                    className="key-arrow-btn"
+                    onClick={() => stepKeyTool(1)}
+                    aria-label="Next tool"
+                    title="Next tool"
+                  >
+                    <XeroIcon emoji="▶️" size={13} />
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -3710,6 +3895,164 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             )}
           </div>
         </div>
+      )}
+
+      {/* Public Area Map View + 3D Review + Google Maps Directions */}
+      {mapOpen && (
+        <div className="mobile-map-overlay" role="dialog" aria-label="Public Area Sculpture Map">
+          <div className="mobile-map-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <XeroIcon emoji="🗺️" size={22} />
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>Public Area Map</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Tap any pin or card to inspect 3D &amp; navigate
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                type="button"
+                className={`btn ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
+                onClick={() => setAreaFilterMode('nearby')}
+              >
+                Area (5km)
+              </button>
+              <button
+                type="button"
+                className={`btn ${areaFilterMode === 'all' ? 'btn-primary' : ''}`}
+                onClick={() => setAreaFilterMode('all')}
+              >
+                All ({areaSculpturesSorted.length})
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={mapLoading}
+                onClick={loadPublicMapData}
+                aria-label="Refresh public map"
+              >
+                <XeroIcon emoji="🔄" size={14} />
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setMapOpen(false)}
+                aria-label="Close map"
+              >
+                <XeroIcon emoji="❌" size={15} />
+              </button>
+            </div>
+          </div>
+
+          <div className="mobile-map-canvas">
+            <MapView
+              sculptures={displayedMapSculptures}
+              parcels={mapParcels}
+              userLocation={location}
+              focusArea={areaFilterMode === 'nearby'}
+              areaRadiusMeters={5000}
+              compact
+              onSelectSculpture={(sc) => setMapSelectedSculpture(sc)}
+            />
+          </div>
+
+          <div className="mobile-map-list">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <strong style={{ fontSize: 13 }}>
+                Sculptures {areaFilterMode === 'nearby' && location ? 'in Your Area' : 'Worldwide'} ({displayedMapSculptures.length})
+              </strong>
+              {areaFilterMode === 'nearby' &&
+                displayedMapSculptures.length === 0 &&
+                areaSculpturesSorted.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setAreaFilterMode('all')}
+                  >
+                    Show All Public ({areaSculpturesSorted.length})
+                  </button>
+                )}
+            </div>
+
+            {mapLoading && displayedMapSculptures.length === 0 ? (
+              <div className="card" style={{ padding: 12, fontSize: 12, color: 'var(--muted)' }}>
+                Loading nearby sculptures...
+              </div>
+            ) : displayedMapSculptures.length === 0 ? (
+              <div className="card" style={{ padding: 12, fontSize: 12, color: 'var(--muted)' }}>
+                No public sculptures in this area yet. Be the first to paint &amp; mint here!
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {displayedMapSculptures.map((sc) => {
+                  const distText =
+                    sc.distanceMeters == null
+                      ? ''
+                      : sc.distanceMeters >= 1000
+                      ? `${(sc.distanceMeters / 1000).toFixed(1)} km`
+                      : `${sc.distanceMeters} m`;
+                  return (
+                    <div
+                      key={sc.id}
+                      className="card mobile-map-item"
+                      onClick={() => setMapSelectedSculpture(sc)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setMapSelectedSculpture(sc);
+                        }
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{sc.title}</div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {distText && (
+                            <span className="badge teal">
+                              <XeroIcon emoji="📍" size={11} /> {distText}
+                            </span>
+                          )}
+                          <span className="badge">
+                            <XeroIcon emoji="🧱" size={11} /> {sc.voxelCount} blocks
+                          </span>
+                          <span className="badge gold">{sc.parcelId}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMapSelectedSculpture(sc);
+                        }}
+                      >
+                        <XeroIcon emoji="🧊" size={14} /> Review 3D
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {mapSelectedSculpture && (
+        <SculptureModal
+          sculpture={mapSelectedSculpture}
+          user={user}
+          config={config}
+          userLocation={location}
+          onSculptureUpdated={(updated) => {
+            setMapSelectedSculpture(updated);
+            setMapSculptures((prev) =>
+              prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+            );
+          }}
+          onClose={() => setMapSelectedSculpture(null)}
+        />
       )}
 
       {chatSelection && (

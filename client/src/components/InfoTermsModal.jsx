@@ -126,6 +126,9 @@ export default function InfoTermsModal({
                 <li>
                   <XeroIcon emoji="💾" size={14} /> <strong>Auto-Saved Drafts:</strong> Your unfinished blocks, title, description, and surface anchor automatically save on-device (and sync to your cloud account when signed in) so you can safely leave and resume anytime before publishing.
                 </li>
+                <li>
+                  <XeroIcon emoji="🗺️" size={14} /> <strong>Public Area Map &amp; Google Maps Navigate:</strong> Tap the bottom-left Map button to explore public sculptures near your location, inspect any piece in interactive 3D, and tap <strong>Navigate</strong> for turn-by-turn Google Maps directions.
+                </li>
               </ul>
             </div>
 
