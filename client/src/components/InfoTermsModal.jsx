@@ -179,7 +179,7 @@ export default function InfoTermsModal({
               </div>
               <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
                 <li>
-                  <strong>Edit Whatever Is On Your Land:</strong> Publishing a sculpture grants property ownership on that Virtual Land parcel (<code>GLAND-...</code>). You can edit titles, descriptions, or blocks on your sculptures, curate parcel info, remove items, or put new sculptures onto owned parcels — directly or via MCP.
+                  <XeroIcon emoji="🔒" size={14} /> <strong>Edit Whatever Is On Your Land (Voxels OR Custom 3D Models) &amp; Land Management:</strong> Publishing your first sculpture unlocks the <strong>Land Management (🗺️)</strong> button directly on the main canvas. From there (after publish), you can add <strong>Contributor accounts</strong> (restricted to users who visited and chatted on that parcel IRL) to modify sculptures, load ANY suitable non-voxel 3D model (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>, <code>.stl</code>, <code>.ply</code>) via MCP, and grant or revoke permission for your paired agent to erase an existing land (<code>erase_land</code>).
                 </li>
                 <li>
                   <strong>MCP Service Strictly Gated by Connected Pairing:</strong> The MCP JSON-RPC service (<code>/api/mcp</code>) remains <strong>inactive</strong> until you generate a robust <code>GLP-XXXX-XXXX-XXXX-XXXX</code> pairing code and your AI agent connects it via handshake. Disconnect anytime to deactivate MCP immediately.

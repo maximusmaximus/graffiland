@@ -121,6 +121,7 @@ export async function pinSculptureToIpfs({
   title,
   description,
   voxels,
+  customModel = null,
   previewDataUrl,
   locationBundle,
   creatorAddress,
@@ -128,13 +129,21 @@ export async function pinSculptureToIpfs({
   royaltyReceiver
 }) {
   const preview = decodePreviewDataUrl(previewDataUrl);
-  const glbBytes = buildSculptureGlb(voxels, {
-    id: sculptureId,
-    title,
-    parcelId: locationBundle.parcelId,
-    geohash: locationBundle.geohash
-  });
-  const modelBuffer = Buffer.from(glbBytes);
+  const hasCustomBytes = Boolean(customModel?.bytes && customModel.bytes.length > 0);
+  const modelExt = hasCustomBytes ? customModel.ext || 'glb' : 'glb';
+  const modelMime = hasCustomBytes
+    ? customModel.mimeType || 'model/gltf-binary'
+    : 'model/gltf-binary';
+  const modelBuffer = hasCustomBytes
+    ? Buffer.from(customModel.bytes)
+    : Buffer.from(
+        buildSculptureGlb(voxels, {
+          id: sculptureId,
+          title,
+          parcelId: locationBundle.parcelId,
+          geohash: locationBundle.geohash
+        })
+      );
 
   let imagePin;
   let modelPin;
@@ -145,13 +154,13 @@ export async function pinSculptureToIpfs({
       `${sculptureId}-preview.${preview.mime.includes('svg') ? 'svg' : 'png'}`,
       preview.mime
     );
-    modelPin = await pinFileToPinata(modelBuffer, `${sculptureId}-model.glb`, 'model/gltf-binary');
+    modelPin = await pinFileToPinata(modelBuffer, `${sculptureId}-model.${modelExt}`, modelMime);
   } else if (CONFIG.ipfsApiUrl) {
     imagePin = await pinBufferToKubo(preview.buffer, `${sculptureId}-preview.png`);
-    modelPin = await pinBufferToKubo(modelBuffer, `${sculptureId}-model.glb`);
+    modelPin = await pinBufferToKubo(modelBuffer, `${sculptureId}-model.${modelExt}`);
   } else {
     imagePin = await pinBufferToLocal(preview.buffer, preview.mime);
-    modelPin = await pinBufferToLocal(modelBuffer, 'model/gltf-binary');
+    modelPin = await pinBufferToLocal(modelBuffer, modelMime);
   }
 
   const metadata = buildIpfsMetadata({
@@ -160,6 +169,8 @@ export async function pinSculptureToIpfs({
     description,
     imageUri: imagePin.uri,
     modelUri: modelPin.uri,
+    modelMimeType: modelMime,
+    modelFormat: modelExt,
     publicUrl: CONFIG.publicUrl,
     voxels,
     locationBundle,

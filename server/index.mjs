@@ -70,23 +70,31 @@ import {
 } from '../shared/draftService.mjs';
 import {
   MCP_TOOLS,
+  addLandContributor,
   connectMcpPairing,
   createMcpPairing,
   createPublishSignatureRequestForMobile,
   directOwnerCreateSculptureOnLand,
   directOwnerDeleteSculpture,
+  directOwnerEraseLand,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  getMyLandsWorkspace,
   getSignatureRequest,
   handleMcpJsonRpc,
+  isUserParcelContributor,
+  listLandContributorsAndEligible,
   listLandsWithCurations,
   listMcpPairings,
   listPendingSignaturesForUser,
   rejectSignatureRequest,
+  removeLandContributor,
   signRequestByAgent,
-  signRequestByMobile
+  signRequestByMobile,
+  updateLandSettings
 } from '../shared/mcpService.mjs';
+import { b64ToModelBytes } from '../shared/model3d.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
@@ -244,22 +252,32 @@ export function createAppServer() {
   });
 
   // Public Sculptures (Map, Gallery, Mobile AR Preview Mode)
+  const SCULPTURE_SELECT_SQL = `
+    SELECT s.*,
+      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+      (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+      (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+      (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+      (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+      (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+      (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at,
+      m.model_format AS custom_model_format,
+      m.mime_type AS custom_model_mime,
+      m.source_type AS custom_model_source_type,
+      m.model_url AS custom_model_url,
+      m.model_cid AS custom_model_cid,
+      m.model_uri AS custom_model_uri,
+      m.scale AS custom_model_scale,
+      m.rotation_y AS custom_model_rotation_y,
+      m.byte_length AS custom_model_bytes
+     FROM sculptures s
+     LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+  `;
+
   app.get('/api/sculptures', (req, res) => {
     const rows = db
-      .prepare(
-        `SELECT s.*,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
-          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
-          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
-          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
-          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
-          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
-          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
-         FROM sculptures s
-         WHERE s.hidden = 0
-         ORDER BY s.created_at DESC`
-      )
+      .prepare(`${SCULPTURE_SELECT_SQL} WHERE s.hidden = 0 ORDER BY s.created_at DESC`)
       .all();
 
     const latParam = req.query.lat !== undefined ? Number(req.query.lat) : null;
@@ -288,42 +306,57 @@ export function createAppServer() {
   });
 
   app.get('/api/sculptures/:id', async (req, res) => {
-    const row = db
-      .prepare(
-        `SELECT s.*,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
-          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
-          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
-          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
-          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
-          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
-          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
-         FROM sculptures s
-         WHERE s.id = ?`
-      )
-      .get(req.params.id);
+    const row = db.prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ?`).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
     if (row.hidden && !caller?.is_admin) {
       return res.status(404).json({ error: 'Sculpture not available' });
     }
     const transfers = await listSculptureTransfers(chatDb, req.params.id);
+    const viewerCanContribute = caller
+      ? await isUserParcelContributor(chatDb, { parcelId: row.parcel_id, user: caller })
+      : false;
     res.json({
       sculpture: serializeSculptureRow(row, {
         includeAdminFields: Boolean(caller?.is_admin),
         includeVoxels: true,
-        transfers
+        transfers,
+        viewerCanContribute
       })
     });
   });
 
-  app.get('/api/sculptures/:id/model.glb', (req, res) => {
+  function handleSculptureModelDownload(req, res) {
     const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
     if (row.hidden && !caller?.is_admin) {
       return res.status(404).json({ error: 'Sculpture not available' });
+    }
+    const custom = db
+      .prepare('SELECT * FROM sculpture_models WHERE sculpture_id = ?')
+      .get(row.id);
+    if (custom) {
+      let bytesBuf = null;
+      if (custom.inline_b64) {
+        bytesBuf = Buffer.from(b64ToModelBytes(custom.inline_b64));
+      } else {
+        const cid = custom.model_cid || row.ipfs_model_cid;
+        const local = cid ? readLocalIpfsCid(cid) : null;
+        if (local?.buffer) bytesBuf = local.buffer;
+      }
+      if (bytesBuf) {
+        res.setHeader('Content-Type', custom.mime_type || 'application/octet-stream');
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="graffiland-${row.id}.${custom.model_format || 'glb'}"`
+        );
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(bytesBuf);
+      }
+      if (custom.model_url) {
+        return res.redirect(302, custom.model_url);
+      }
     }
     const voxels = JSON.parse(row.voxels_json || '[]');
     const glb = buildSculptureGlb(voxels, {
@@ -336,10 +369,13 @@ export function createAppServer() {
     res.setHeader('Content-Disposition', `inline; filename="graffiland-${row.id}.glb"`);
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(Buffer.from(glb));
-  });
+  }
+
+  app.get('/api/sculptures/:id/model', handleSculptureModelDownload);
+  app.get('/api/sculptures/:id/model.glb', handleSculptureModelDownload);
 
   app.get('/api/sculptures/:id/metadata.json', (req, res) => {
-    const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
+    const row = db.prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ?`).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
     if (row.hidden && !caller?.is_admin) {
@@ -615,12 +651,13 @@ export function createAppServer() {
   }
 
   function makePinHook() {
-    return ({ sculptureId, title, description, voxels, previewDataUrl, locationBundle, creatorAddress }) =>
+    return ({ sculptureId, title, description, voxels, customModel, previewDataUrl, locationBundle, creatorAddress }) =>
       pinSculptureToIpfs({
         sculptureId,
         title,
         description,
         voxels,
+        customModel,
         previewDataUrl,
         locationBundle,
         creatorAddress,
@@ -763,6 +800,71 @@ export function createAppServer() {
   app.get('/api/lands', async (_req, res) => {
     res.json({ parcels: await listLandsWithCurations(chatDb) });
   });
+
+  app.get(
+    '/api/lands/mine',
+    requireAuth,
+    handleChatRoute((req) => getMyLandsWorkspace(chatDb, { user: req.user }))
+  );
+
+  app.post(
+    '/api/lands/:parcelId/settings',
+    requireAuth,
+    handleChatRoute((req) =>
+      updateLandSettings(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.get(
+    '/api/lands/:parcelId/contributors',
+    requireAuth,
+    handleChatRoute((req) =>
+      listLandContributorsAndEligible(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/contributors',
+    requireAuth,
+    handleChatRoute((req) =>
+      addLandContributor(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.delete(
+    '/api/lands/:parcelId/contributors/:contributorSub',
+    requireAuth,
+    handleChatRoute((req) =>
+      removeLandContributor(chatDb, {
+        parcelId: req.params.parcelId,
+        contributorSub: req.params.contributorSub,
+        user: req.user
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/erase',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerEraseLand(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
 
   app.post(
     '/api/lands/:parcelId/update',

@@ -194,6 +194,27 @@ select {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
+.land-manage-fab {
+  position: absolute;
+  top: calc(max(14px, env(safe-area-inset-top)) + 54px);
+  right: max(14px, env(safe-area-inset-right));
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 209, 102, 0.65);
+  background: rgba(14, 18, 30, 0.84);
+  backdrop-filter: blur(12px);
+  color: var(--accent-gold);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  z-index: 30;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.48);
+}
+
 .floating-tools-toggle {
   position: absolute;
   bottom: max(18px, env(safe-area-inset-bottom));

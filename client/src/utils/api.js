@@ -191,5 +191,28 @@ export const api = {
     request(`/api/sculptures/${encodeURIComponent(id)}/pins/unlock`, {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  getMyLands: () => request('/api/lands/mine'),
+  updateLandSettings: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/settings`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  listLandContributors: (parcelId) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/contributors`),
+  addLandContributor: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/contributors`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  removeLandContributor: (parcelId, contributorSub) =>
+    request(
+      `/api/lands/${encodeURIComponent(parcelId)}/contributors/${encodeURIComponent(contributorSub)}`,
+      { method: 'DELETE' }
+    ),
+  eraseLand: (parcelId, payload = {}) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/erase`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
 };

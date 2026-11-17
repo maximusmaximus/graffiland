@@ -4,9 +4,10 @@ import {
   CHAT_SIGHT_CLIENT_DISTANCE_M,
   haversineMeters
 } from '../../../shared/chatPolicy.mjs';
-import { api, API_BASE } from '../utils/api.js';
+import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
 import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { loadCustomModelObject } from '../utils/customModelLoader.js';
 
 const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
@@ -33,6 +34,7 @@ import { getWsUrl } from '../utils/device.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import LandManagementModal from './LandManagementModal.jsx';
 import MapView from './MapView.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
 import SculptureModal from './SculptureModal.jsx';
@@ -242,6 +244,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [mapParcels, setMapParcels] = useState([]);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapSelectedSculpture, setMapSelectedSculpture] = useState(null);
+  const [myLands, setMyLands] = useState({ parcelCount: 0, sculptureCount: 0, parcels: [] });
+  const [landManageOpen, setLandManageOpen] = useState(false);
+  const [landManageParcelId, setLandManageParcelId] = useState('');
+  const [editingSculpture, setEditingSculpture] = useState(null);
+  const [savingCanvasEdit, setSavingCanvasEdit] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentCopied, setAgentCopied] = useState(false);
@@ -514,6 +521,24 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }, []);
 
+  const refreshMyLands = useCallback(async () => {
+    if (!userRef.current?.id) {
+      setMyLands({ parcelCount: 0, sculptureCount: 0, parcels: [] });
+      return null;
+    }
+    try {
+      const res = await api.getMyLands();
+      setMyLands(res || { parcelCount: 0, sculptureCount: 0, parcels: [] });
+      return res;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshMyLands();
+  }, [user?.id, refreshMyLands]);
+
   const refreshPendingSignatures = useCallback(async () => {
     if (!userRef.current?.id) {
       setPendingSignatures([]);
@@ -601,6 +626,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           setTermsAccepted(false);
           setDraftStatusText('');
           refreshPendingSignatures();
+          refreshMyLands();
           if (locationRef.current) {
             api
               .listSculptures({
@@ -1032,20 +1058,27 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
         ? location.altitude
         : null;
+    let cancelled = false;
 
     for (const sc of nearbySculptures) {
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
-      const sub = buildVoxelGroup(sc.voxels || []);
+      const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
+      const sub = isCustom3d ? new THREE.Group() : buildVoxelGroup(sc.voxels || []);
       sub.traverse((obj) => {
         if (obj.isMesh) obj.userData.sculpture = sc;
       });
 
-      // Invisible enlarged tap-target bounding box around voxels for reliable AR camera selection
+      // Invisible enlarged tap-target bounding box around geometry/base for reliable AR selection
       const bounds = new THREE.Box3().setFromObject(sub);
       const boxCenter = new THREE.Vector3();
       const boxSize = new THREE.Vector3();
-      bounds.getCenter(boxCenter);
-      bounds.getSize(boxSize);
+      if (!bounds.isEmpty()) {
+        bounds.getCenter(boxCenter);
+        bounds.getSize(boxSize);
+      } else {
+        boxCenter.set(0, 0.75, 0);
+        boxSize.set(1.4, 1.5, 1.4);
+      }
       const hitProxy = new THREE.Mesh(
         new THREE.BoxGeometry(
           Math.max(1.0, boxSize.x + 0.55),
@@ -1057,6 +1090,26 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       hitProxy.position.copy(boxCenter);
       hitProxy.userData.sculpture = sc;
       sub.add(hitProxy);
+
+      if (isCustom3d) {
+        loadCustomModelObject(sc, resolveApiUrl)
+          .then((loaded) => {
+            if (cancelled || !loaded) return;
+            sub.add(loaded.object3d);
+            const loadedCenter = new THREE.Vector3();
+            const loadedSize = new THREE.Vector3();
+            loaded.bounds.getCenter(loadedCenter);
+            loaded.bounds.getSize(loadedSize);
+            hitProxy.geometry.dispose();
+            hitProxy.geometry = new THREE.BoxGeometry(
+              Math.max(1.0, loadedSize.x + 0.55),
+              Math.max(1.0, loadedSize.y + 0.55),
+              Math.max(1.0, loadedSize.z + 0.55)
+            );
+            hitProxy.position.copy(loadedCenter);
+          })
+          .catch(() => {});
+      }
 
       // Clamp super distant previews visually within 35m so distant same-block art remains visible
       const dist = Math.hypot(offset.east, offset.north);
@@ -1129,6 +1182,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       sub.position.set(offset.east * clampFactor, deltaY, -offset.north * clampFactor);
       group.add(sub);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [mode, location, nearbySculptures]);
 
   const computeTargetVoxel = useCallback((forContinuousHold = false) => {
@@ -3497,13 +3553,14 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       setClueAnswer('');
       setTermsAccepted(false);
       setDraftStatusText('');
-      // Refresh nearby AR sculptures
+      // Refresh nearby AR sculptures & owned lands
       const nearbyRes = await api.listSculptures({
         lat: location.lat,
         lng: location.lng,
         radiusMeters: 300
       });
       setNearbySculptures(nearbyRes.sculptures || []);
+      await refreshMyLands();
     } catch (err) {
       setPublishError(err.message || 'Publish failed');
     } finally {
@@ -3630,6 +3687,62 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  function startCanvasModification(sc) {
+    if (!sc || !Array.isArray(sc.voxels) || sc.voxels.length === 0) return;
+    setEditingSculpture({
+      id: sc.id,
+      title: sc.title,
+      description: sc.description,
+      parcelId: sc.parcelId
+    });
+    setVoxels(sc.voxels.map((v) => ({ ...v })));
+    setMapOpen(false);
+    setMapSelectedSculpture(null);
+    setMode('draw');
+    setTool('brush');
+    showTemporaryHint(`Editing "${sc.title}" on ${sc.parcelId} — draw/erase blocks then tap Save Edit.`);
+  }
+
+  async function handleSaveCanvasModification() {
+    if (!editingSculpture || savingCanvasEdit) return;
+    setSavingCanvasEdit(true);
+    try {
+      const previewDataUrl = captureSculptureSnapshot();
+      const res = await api.updateSculpture(editingSculpture.id, {
+        voxels,
+        previewDataUrl
+      });
+      if (res?.sculpture) {
+        setNearbySculptures((prev) =>
+          prev.map((item) => (item.id === res.sculpture.id ? { ...item, ...res.sculpture } : item))
+        );
+        setMapSculptures((prev) =>
+          prev.map((item) => (item.id === res.sculpture.id ? { ...item, ...res.sculpture } : item))
+        );
+      }
+      setEditingSculpture(null);
+      setVoxels([]);
+      showTemporaryHint(`Saved modification to "${editingSculpture.title}" on IPFS & Virtual Land.`);
+      await refreshMyLands();
+    } catch (err) {
+      showTemporaryHint(err.message || 'Could not save sculpture modification');
+    } finally {
+      setSavingCanvasEdit(false);
+    }
+  }
+
+  const hasOwnedLand = Boolean(
+    user?.id &&
+      (myLands.parcelCount > 0 ||
+        (myLands.parcels && myLands.parcels.length > 0) ||
+        mintReceipt?.sculpture?.parcelId)
+  );
+  const ownedLandCount = Math.max(
+    Number(myLands.parcelCount || 0),
+    myLands.parcels?.length || 0,
+    mintReceipt?.sculpture?.parcelId ? 1 : 0
+  );
+
   const policy = config?.policy;
 
   return (
@@ -3667,6 +3780,63 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         >
           <XeroIcon emoji="ℹ️" size={24} label="Info" />
         </button>
+
+        {/* Land Management button appears directly on the main canvas once user claims their first land */}
+        {hasOwnedLand && (
+          <button
+            type="button"
+            className="land-manage-fab hud-interactive"
+            onClick={() => {
+              setLandManageParcelId('');
+              setLandManageOpen(true);
+            }}
+            aria-label="Land Management"
+            title="Land Management (Contributors, 3D Models & Agent Controls)"
+          >
+            <XeroIcon emoji="🗺️" size={18} label="Land" />
+            <span>Land ({ownedLandCount})</span>
+          </button>
+        )}
+
+        {editingSculpture && (
+          <div
+            className="mobile-hud-banner hud-interactive under-pol"
+            style={{
+              borderColor: 'rgba(0, 245, 212, 0.72)',
+              background: 'rgba(10, 26, 30, 0.92)',
+              zIndex: 28
+            }}
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="🖌️" size={14} />
+              <span>
+                Editing {editingSculpture.title} ({voxels.length} blocks)
+              </span>
+            </span>
+            <span style={{ display: 'inline-flex', gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ padding: '4px 10px', fontSize: 11 }}
+                disabled={savingCanvasEdit}
+                onClick={handleSaveCanvasModification}
+              >
+                {savingCanvasEdit ? 'Saving...' : 'Save Edit'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: '4px 8px', fontSize: 11 }}
+                onClick={() => {
+                  setEditingSculpture(null);
+                  setVoxels([]);
+                }}
+              >
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
 
         {/* Minimal Proof-of-Location / Mode indicator when dock is expanded */}
         {dockOpen && (
@@ -4770,9 +4940,23 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                     <strong>Tx Hash:</strong> <span className="mono">{mintReceipt.mint.txHash}</span>
                   </div>
                 </div>
-                <button className="btn btn-primary" onClick={() => setMode('preview')}>
-                  <XeroIcon emoji="👁️" size={16} /> View in AR Preview
-                </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-primary" onClick={() => setMode('preview')}>
+                    <XeroIcon emoji="👁️" size={16} /> View in AR Preview
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ borderColor: 'rgba(255, 209, 102, 0.6)', color: 'var(--accent-gold)' }}
+                    onClick={() => {
+                      setMode('draw');
+                      setLandManageParcelId(mintReceipt.sculpture.parcelId || '');
+                      setLandManageOpen(true);
+                    }}
+                  >
+                    <XeroIcon emoji="🗺️" size={16} /> Manage Land &amp; Contributors
+                  </button>
+                </div>
               </div>
             ) : (
               <form onSubmit={handlePublishSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -5321,8 +5505,33 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             setMapSculptures((prev) =>
               prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
             );
+            refreshMyLands();
+          }}
+          onModifyInCanvas={startCanvasModification}
+          onOpenLandManagement={(pid) => {
+            setMapOpen(false);
+            setLandManageParcelId(pid || '');
+            setLandManageOpen(true);
           }}
           onClose={() => setMapSelectedSculpture(null)}
+        />
+      )}
+
+      {landManageOpen && user && (
+        <LandManagementModal
+          user={user}
+          initialParcelId={landManageParcelId}
+          onSelectSculpture={(sc) => setMapSelectedSculpture(sc)}
+          onWorkspaceChanged={async () => {
+            await refreshMyLands();
+            if (location) {
+              api
+                .listSculptures({ lat: location.lat, lng: location.lng, radiusMeters: 300 })
+                .then((res) => setNearbySculptures(res.sculptures || []))
+                .catch(() => {});
+            }
+          }}
+          onClose={() => setLandManageOpen(false)}
         />
       )}
 

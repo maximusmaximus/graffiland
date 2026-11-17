@@ -48,23 +48,31 @@ import {
 } from '../../shared/draftService.mjs';
 import {
   MCP_TOOLS,
+  addLandContributor,
   connectMcpPairing,
   createMcpPairing,
   createPublishSignatureRequestForMobile,
   directOwnerCreateSculptureOnLand,
   directOwnerDeleteSculpture,
+  directOwnerEraseLand,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  getMyLandsWorkspace,
   getSignatureRequest,
   handleMcpJsonRpc,
+  isUserParcelContributor,
+  listLandContributorsAndEligible,
   listLandsWithCurations,
   listMcpPairings,
   listPendingSignaturesForUser,
   rejectSignatureRequest,
+  removeLandContributor,
   signRequestByAgent,
-  signRequestByMobile
+  signRequestByMobile,
+  updateLandSettings
 } from '../../shared/mcpService.mjs';
+import { b64ToModelBytes } from '../../shared/model3d.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
@@ -295,12 +303,20 @@ async function pinToPinataJson(obj, name, env, cfg) {
 
 async function pinSculptureBundle(params, requestOrigin, env, cfg) {
   const preview = decodePreviewDataUrl(params.previewDataUrl);
-  const glbBytes = buildSculptureGlb(params.voxels, {
-    id: params.sculptureId,
-    title: params.title,
-    parcelId: params.locationBundle.parcelId,
-    geohash: params.locationBundle.geohash
-  });
+  const customModel = params.customModel || null;
+  const hasCustomBytes = Boolean(customModel?.bytes && customModel.bytes.length > 0);
+  const modelExt = hasCustomBytes ? customModel.ext || 'glb' : 'glb';
+  const modelMime = hasCustomBytes
+    ? customModel.mimeType || 'model/gltf-binary'
+    : 'model/gltf-binary';
+  const glbBytes = hasCustomBytes
+    ? customModel.bytes
+    : buildSculptureGlb(params.voxels, {
+        id: params.sculptureId,
+        title: params.title,
+        parcelId: params.locationBundle.parcelId,
+        geohash: params.locationBundle.geohash
+      });
 
   let imagePin;
   let modelPin;
@@ -314,14 +330,14 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
     );
     modelPin = await pinToPinataFile(
       glbBytes,
-      `${params.sculptureId}-model.glb`,
-      'model/gltf-binary',
+      `${params.sculptureId}-model.${modelExt}`,
+      modelMime,
       env,
       cfg
     );
   } else {
     imagePin = await pinToKv(preview.bytes, preview.mime, requestOrigin, env);
-    modelPin = await pinToKv(glbBytes, 'model/gltf-binary', requestOrigin, env);
+    modelPin = await pinToKv(glbBytes, modelMime, requestOrigin, env);
   }
 
   const publicIpfsAvailable = Boolean(env.PINATA_JWT);
@@ -331,6 +347,8 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
     description: params.description,
     imageUri: publicIpfsAvailable ? imagePin.uri : imagePin.gatewayUrl,
     modelUri: publicIpfsAvailable ? modelPin.uri : modelPin.gatewayUrl,
+    modelMimeType: modelMime,
+    modelFormat: modelExt,
     publicUrl: cfg.publicUrl,
     voxels: params.voxels,
     locationBundle: params.locationBundle,
@@ -829,21 +847,33 @@ export default {
       }
     }
 
+    const WORKER_SCULPTURE_SELECT_SQL = `
+      SELECT s.*,
+        (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+        (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+        (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+        (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+        (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+        (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+        (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+        (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at,
+        m.model_format AS custom_model_format,
+        m.mime_type AS custom_model_mime,
+        m.source_type AS custom_model_source_type,
+        m.model_url AS custom_model_url,
+        m.model_cid AS custom_model_cid,
+        m.model_uri AS custom_model_uri,
+        m.scale AS custom_model_scale,
+        m.rotation_y AS custom_model_rotation_y,
+        m.byte_length AS custom_model_bytes
+       FROM sculptures s
+       LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+    `;
+
     // List public sculptures
     if (pathname === '/api/sculptures' && request.method === 'GET') {
       const { results } = await env.DB.prepare(
-        `SELECT s.*,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
-          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
-          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
-          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
-          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
-          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
-          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
-         FROM sculptures s
-         WHERE s.hidden = 0
-         ORDER BY s.created_at DESC`
+        `${WORKER_SCULPTURE_SELECT_SQL} WHERE s.hidden = 0 ORDER BY s.created_at DESC`
       ).all();
       let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels: true }));
 
@@ -1003,6 +1033,93 @@ export default {
           err?.statusCode || 400,
           request
         );
+      }
+    }
+
+    if (pathname === '/api/lands/mine' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        return jsonResponse(await getMyLandsWorkspace(d1Adapter, { user }), 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Could not load lands' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landSettingsMatch = pathname.match(/^\/api\/lands\/([^/]+)\/settings$/);
+    if (landSettingsMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await updateLandSettings(d1Adapter, {
+          parcelId: decodeURIComponent(landSettingsMatch[1]),
+          user,
+          body
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Settings update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landContribMatch = pathname.match(/^\/api\/lands\/([^/]+)\/contributors$/);
+    if (landContribMatch) {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      const parcelId = decodeURIComponent(landContribMatch[1]);
+      try {
+        if (request.method === 'GET') {
+          return jsonResponse(
+            await listLandContributorsAndEligible(d1Adapter, { parcelId, user }),
+            200,
+            request
+          );
+        }
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          return jsonResponse(
+            await addLandContributor(d1Adapter, { parcelId, user, body }),
+            200,
+            request
+          );
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Contributor request failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landContribDelMatch = pathname.match(/^\/api\/lands\/([^/]+)\/contributors\/([^/]+)$/);
+    if (landContribDelMatch && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await removeLandContributor(d1Adapter, {
+          parcelId: decodeURIComponent(landContribDelMatch[1]),
+          contributorSub: decodeURIComponent(landContribDelMatch[2]),
+          user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Remove contributor failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landEraseMatch = pathname.match(/^\/api\/lands\/([^/]+)\/erase$/);
+    if (landEraseMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerEraseLand(d1Adapter, {
+          parcelId: decodeURIComponent(landEraseMatch[1]),
+          user,
+          body
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Erase land failed' }, err?.statusCode || 400, request);
       }
     }
 
@@ -1538,8 +1655,8 @@ export default {
       }
     }
 
-    // Sculpture 3D GLB Export & ERC-721 Marketplace Metadata
-    const glbMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/model\.glb$/);
+    // Sculpture 3D Model / GLB Export & ERC-721 Marketplace Metadata
+    const glbMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/model(?:\.glb)?$/);
     if (glbMatch && request.method === 'GET') {
       const id = decodeURIComponent(glbMatch[1]);
       const row = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?').bind(id).first();
@@ -1547,6 +1664,35 @@ export default {
       const caller = await getAuthUser(request, env, cfg);
       if (row.hidden && !caller?.is_admin) {
         return jsonResponse({ error: 'Sculpture not available' }, 404, request);
+      }
+      const custom = await env.DB.prepare('SELECT * FROM sculpture_models WHERE sculpture_id = ?')
+        .bind(id)
+        .first();
+      if (custom) {
+        let modelBytes = null;
+        if (custom.inline_b64) {
+          modelBytes = b64ToModelBytes(custom.inline_b64);
+        } else {
+          const cid = custom.model_cid || row.ipfs_model_cid;
+          if (cid && env.IPFS_KV) {
+            const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
+            if (value) modelBytes = b64ToModelBytes(value);
+          }
+        }
+        if (modelBytes) {
+          return new Response(modelBytes, {
+            status: 200,
+            headers: {
+              'Content-Type': custom.mime_type || 'application/octet-stream',
+              'Content-Disposition': `inline; filename="graffiland-${row.id}.${custom.model_format || 'glb'}"`,
+              'Cache-Control': 'public, max-age=86400',
+              ...corsHeaders(request)
+            }
+          });
+        }
+        if (custom.model_url) {
+          return Response.redirect(custom.model_url, 302);
+        }
       }
       const voxels = JSON.parse(row.voxels_json || '[]');
       const glb = buildSculptureGlb(voxels, {
@@ -1569,7 +1715,9 @@ export default {
     const metaMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/metadata\.json$/);
     if (metaMatch && request.method === 'GET') {
       const id = decodeURIComponent(metaMatch[1]);
-      const row = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?').bind(id).first();
+      const row = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ?`)
+        .bind(id)
+        .first();
       if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
       const caller = await getAuthUser(request, env, cfg);
       if (row.hidden && !caller?.is_admin) {
@@ -1664,19 +1812,7 @@ export default {
 
     if (scMatch && request.method === 'GET') {
       const id = decodeURIComponent(scMatch[1]);
-      const row = await env.DB.prepare(
-        `SELECT s.*,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
-          (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
-          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
-          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
-          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
-          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
-          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
-         FROM sculptures s
-         WHERE s.id = ?`
-      )
+      const row = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ?`)
         .bind(id)
         .first();
       if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
@@ -1685,12 +1821,16 @@ export default {
         return jsonResponse({ error: 'Sculpture not available' }, 404, request);
       }
       const transfers = await listSculptureTransfers(chatDb, id);
+      const viewerCanContribute = caller
+        ? await isUserParcelContributor(d1Adapter, { parcelId: row.parcel_id, user: caller })
+        : false;
       return jsonResponse(
         {
           sculpture: serializeSculptureRow(row, {
             includeAdminFields: Boolean(caller?.is_admin),
             includeVoxels: true,
-            transfers
+            transfers,
+            viewerCanContribute
           })
         },
         200,

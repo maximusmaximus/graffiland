@@ -2,9 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { resolveApiUrl } from '../utils/api.js';
+import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { buildVoxelGroup, computeCenteredBounds, VOXEL_STEP } from './VoxelEngine3D.js';
 
 export default function SculptureViewer3D({
+  sculpture = null,
   voxels = [],
   height = 300,
   autoRotate = true,
@@ -134,16 +137,8 @@ export default function SculptureViewer3D({
     const container = groupRef.current;
     if (!container) return;
     while (container.children.length > 0) container.remove(container.children[0]);
-    const meshGroup = buildVoxelGroup(voxels);
-    container.add(meshGroup);
 
-    if (voxels.length > 0 && controlsRef.current) {
-      let minY = Infinity;
-      for (const v of voxels) {
-        const halfH = (VOXEL_STEP / 2) * (v.scale ?? 1);
-        if (Number.isFinite(v.y) && v.y - halfH < minY) minY = v.y - halfH;
-      }
-      const { center, radius } = computeCenteredBounds(voxels);
+    function applyBoundsToScene(center, radius, minY) {
       const groundY = Number.isFinite(minY) ? minY - 0.04 : -0.8;
       if (gridRef.current) {
         gridRef.current.position.set(center.x, groundY, center.z);
@@ -161,14 +156,52 @@ export default function SculptureViewer3D({
         keyLightRef.current.shadow.camera.bottom = -span;
         keyLightRef.current.shadow.camera.updateProjectionMatrix();
       }
-      if (!liveCursor) {
+      if (!liveCursor && controlsRef.current) {
         controlsRef.current.target.copy(center);
-        if (cameraRef.current && voxels.length <= 2) {
-          cameraRef.current.position.set(center.x + radius * 2.2, center.y + radius * 1.4, center.z + radius * 2.4);
+        if (cameraRef.current) {
+          cameraRef.current.position.set(
+            center.x + radius * 2.1,
+            center.y + radius * 1.35,
+            center.z + radius * 2.3
+          );
         }
       }
     }
-  }, [voxels, liveCursor]);
+
+    if (sculpture?.customModel?.format) {
+      let cancelled = false;
+      loadCustomModelObject(sculpture, resolveApiUrl)
+        .then((loaded) => {
+          if (cancelled || !loaded || !groupRef.current) return;
+          while (groupRef.current.children.length > 0) {
+            groupRef.current.remove(groupRef.current.children[0]);
+          }
+          groupRef.current.add(loaded.object3d);
+          const center = new THREE.Vector3();
+          const sphere = new THREE.Sphere();
+          loaded.bounds.getCenter(center);
+          loaded.bounds.getBoundingSphere(sphere);
+          applyBoundsToScene(center, Math.max(0.8, sphere.radius), loaded.bounds.min.y);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const meshGroup = buildVoxelGroup(voxels);
+    container.add(meshGroup);
+
+    if (voxels.length > 0 && controlsRef.current) {
+      let minY = Infinity;
+      for (const v of voxels) {
+        const halfH = (VOXEL_STEP / 2) * (v.scale ?? 1);
+        if (Number.isFinite(v.y) && v.y - halfH < minY) minY = v.y - halfH;
+      }
+      const { center, radius } = computeCenteredBounds(voxels);
+      applyBoundsToScene(center, voxels.length <= 2 ? radius : Math.max(1.0, radius), minY);
+    }
+  }, [sculpture, sculpture?.customModel?.format, sculpture?.customModel?.ipfsCid, voxels, liveCursor]);
 
   useEffect(() => {
     if (!cursorRef.current) return;

@@ -1666,4 +1666,440 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       [v2Secret, v2Second]
     );
   });
+
+  test('MCP non-voxel 3D model loading, IRL chat Contributors, Land Management & authorized agent erase_land', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
+    const holderAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'm3d-holder@graffiland.test', name: 'Land Boss' } })
+    });
+    const visitorAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'm3d-visitor@graffiland.test', name: 'IRL Contributor' } })
+    });
+    const strangerAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'm3d-stranger@graffiland.test', name: 'Desktop Stranger' } })
+    });
+    assert.equal(holderAuth.status, 200);
+    assert.equal(visitorAuth.status, 200);
+    assert.equal(strangerAuth.status, 200);
+
+    const holderToken = holderAuth.body.token;
+    const visitorToken = visitorAuth.body.token;
+    const strangerToken = strangerAuth.body.token;
+
+    const holderWalletRes = await apiJson('/api/wallet/export', {
+      headers: { Authorization: `Bearer ${holderToken}` }
+    });
+    const holderSigner = new ethers.Wallet(holderWalletRes.body.privateKey);
+
+    const samplePol = {
+      frameHashes: ['a1', 'a2', 'a3', 'a4'],
+      gyroSamples: [
+        { alpha: 10, beta: 12, gamma: 4 },
+        { alpha: 18, beta: 14, gamma: 6 }
+      ],
+      flowCorrelation: 0.89,
+      visualDHash: 'fedcba9876543210',
+      frameCount: 6,
+      flowScore: 0.89
+    };
+    const mLat = 37.7521;
+    const mLng = -122.4412;
+
+    // 1. Holder publishes first land -> GET /api/lands/mine immediately exposes Land Management workspace
+    const pubRes = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Voxel Cornerstone',
+        description: 'Claims initial Virtual Land before loading custom 3D mesh.',
+        termsAccepted: true,
+        location: { lat: mLat, lng: mLng, altitude: 18, accuracy: 5 },
+        proofOfLocation: samplePol,
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(pubRes.status, 201);
+    const seedSc = pubRes.body.sculpture;
+    const parcelId = seedSc.parcelId;
+
+    const myLands1 = await apiJson('/api/lands/mine', {
+      headers: { Authorization: `Bearer ${holderToken}` }
+    });
+    assert.equal(myLands1.status, 200);
+    assert.equal(myLands1.body.parcelCount, 1);
+    assert.equal(myLands1.body.parcels[0].parcelId, parcelId);
+
+    // 2. Connect paired MCP agent & verify non-3D files rejected while valid .obj and .glb load via MCP
+    const pairCreate = await apiJson('/api/mcp/pairings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` }
+    });
+    const pairingCode = pairCreate.body.pairing.code;
+    const connRes = await apiJson('/api/mcp/pairings/connect', {
+      method: 'POST',
+      body: JSON.stringify({
+        pairingCode,
+        agentName: '3DModelAgent',
+        agentAddress: holderSigner.address
+      })
+    });
+    assert.equal(connRes.status, 200);
+    const hsSig = await holderSigner.signMessage(connRes.body.handshakeMessage);
+    await apiJson('/api/mcp/pairings/connect', {
+      method: 'POST',
+      body: JSON.stringify({ pairingCode, signature: hsSig })
+    });
+
+    // Reject bogus/unsuitable binary posing as .glb
+    const badModelRpc = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'load_3d_model_on_land',
+          arguments: {
+            parcelId,
+            title: 'Corrupt Mesh',
+            description: 'Should fail validation cleanly.',
+            modelFormat: 'glb',
+            modelBase64: btoa('NOT_A_GLB_FILE_HEADER')
+          }
+        }
+      })
+    });
+    assert.equal(badModelRpc.status, 400);
+
+    // Load a non-voxel Wavefront OBJ 3D pyramid via load_3d_model_on_land (signed by agent)
+    const objMeshText = [
+      '# GRAFFILAND Non-Voxel Pyramid',
+      'v 0 1.2 0',
+      'v -0.8 0 0.8',
+      'v 0.8 0 0.8',
+      'v 0 0 -0.8',
+      'f 1 2 3',
+      'f 1 3 4',
+      'f 1 4 2',
+      'f 2 4 3'
+    ].join('\n');
+
+    const objStep1 = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'load_3d_model_on_land',
+          arguments: {
+            parcelId,
+            title: 'Obsidian OBJ Pyramid',
+            description: 'Non-voxel Wavefront OBJ 3D mesh loaded onto owned parcel via MCP.',
+            modelFormat: 'obj',
+            modelData: objMeshText,
+            modelScale: 1.3
+          }
+        }
+      })
+    });
+    assert.equal(objStep1.status, 200);
+    const objReq = objStep1.body.result.structuredContent.request;
+    const objSig = await holderSigner.signMessage(objReq.canonicalMessage);
+    const objExec = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'sign_and_execute_pending',
+          arguments: { requestId: objReq.id, signature: objSig }
+        }
+      })
+    });
+    assert.equal(objExec.status, 200, JSON.stringify(objExec.body));
+    const objSc = objExec.body.result.structuredContent.result.sculpture;
+    assert.equal(objSc.modelType, 'custom-3d');
+    assert.equal(objSc.customModel.format, 'obj');
+    assert.equal(objSc.voxelCount, 0);
+
+    const objFetch = await fetch(`${baseUrl}/api/sculptures/${objSc.id}/model`);
+    assert.equal(objFetch.status, 200);
+    assert.match(objFetch.headers.get('content-type') || '', /model\/obj/);
+    assert.ok((await objFetch.text()).includes('v 0 1.2 0'));
+
+    // Also load a raw binary .glb file via put_sculpture_on_land
+    const { buildSculptureGlb } = await import('../shared/glb.mjs');
+    const glbBytes = buildSculptureGlb([{ x: 0.1, y: 0.2, z: 0.1, color: '#ffd166', material: 'neon' }]);
+    const glbB64 = Buffer.from(glbBytes).toString('base64');
+    const glbStep = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: {
+          name: 'put_sculpture_on_land',
+          arguments: {
+            parcelId,
+            title: 'Golden GLB Beacon',
+            description: 'Custom binary GLB file uploaded via MCP put_sculpture_on_land.',
+            modelFormat: 'glb',
+            modelBase64: glbB64
+          }
+        }
+      })
+    });
+    assert.equal(glbStep.status, 200);
+    const glbReq = glbStep.body.result.structuredContent.request;
+    const glbSig = await holderSigner.signMessage(glbReq.canonicalMessage);
+    const glbExec = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: {
+          name: 'sign_and_execute_pending',
+          arguments: { requestId: glbReq.id, signature: glbSig }
+        }
+      })
+    });
+    assert.equal(glbExec.status, 200);
+    const glbSc = glbExec.body.result.structuredContent.result.sculpture;
+    assert.equal(glbSc.modelType, 'custom-3d');
+    assert.equal(glbSc.customModel.format, 'glb');
+
+    // 3. Contributor gating: non-visitor stranger MUST be rejected (403); IRL chat visitor CAN be added
+    const rejectStranger = await apiJson(`/api/lands/${parcelId}/contributors`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ email: 'm3d-stranger@graffiland.test' })
+    });
+    assert.equal(rejectStranger.status, 403);
+
+    // Visitor enters seedSc chat in person IRL via camera + initializes/claims chat access
+    const visId = await chatCrypto.getOrCreateDeviceIdentity(visitorAuth.body.user.id);
+    const holderId = await chatCrypto.getOrCreateDeviceIdentity(holderAuth.body.user.id);
+    const makeLocalSight = async (idObj) =>
+      chatCrypto.signSightProof(idObj, {
+        sculptureId: seedSc.id,
+        parcelId,
+        sightProof: {
+          selectionMethod: 'ar-camera-raycast',
+          rayHit: true,
+          inFrustum: true,
+          cameraReady: true,
+          cameraFrames: 5,
+          opticalFlowCorrelation: 0.85,
+          visualDHash: '1234567890abcdef',
+          accuracy: 6,
+          lat: mLat,
+          lng: mLng,
+          altitude: 18,
+          selectedAt: new Date().toISOString()
+        }
+      });
+
+    // Holder initializes chat board, visitor gets admitted grant IRL via holder peer grant
+    const rKey = chatCrypto.generateRoomKeyB64();
+    const { roomKeyCommit } = await chatCrypto.computeRoomPossessionProof(rKey, seedSc.id, 1);
+    const ownerSelfWrap = await chatCrypto.wrapRoomKeyForRecipient({
+      roomKeyB64: rKey,
+      sculptureId: seedSc.id,
+      keyEpoch: 1,
+      recipientEcdhPubJwk: holderId.ecdhPublicJwk,
+      recipientPubFp: holderId.pubFingerprint,
+      grantorIdentity: holderId
+    });
+    await apiJson(`/api/sculptures/${seedSc.id}/chat/init`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ownerEcdhPubJwk: holderId.ecdhPublicJwk,
+        ownerSignPubJwk: holderId.signPublicJwk,
+        ownerPubFp: holderId.pubFingerprint,
+        selfGrantEnvelope: ownerSelfWrap.wrappedKeyJson,
+        selfGrantSig: ownerSelfWrap.grantSig,
+        roomKeyCommit,
+        deviceProfile: { isMobile: true }
+      })
+    });
+    const reqGrantRes = await apiJson(`/api/sculptures/${seedSc.id}/chat/request-grant`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterEcdhPubJwk: visId.ecdhPublicJwk,
+        requesterSignPubJwk: visId.signPublicJwk,
+        requesterPubFp: visId.pubFingerprint,
+        sightProof: await makeLocalSight(visId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(reqGrantRes.status, 200);
+    const peerWrap = await chatCrypto.wrapRoomKeyForRecipient({
+      roomKeyB64: rKey,
+      sculptureId: seedSc.id,
+      keyEpoch: 1,
+      recipientEcdhPubJwk: visId.ecdhPublicJwk,
+      recipientPubFp: visId.pubFingerprint,
+      grantorIdentity: holderId
+    });
+    const grantRes = await apiJson(`/api/sculptures/${seedSc.id}/chat/grants`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({
+        targetGrantId: reqGrantRes.body.grant.id,
+        grantorEcdhPubJwk: holderId.ecdhPublicJwk,
+        grantorSignPubJwk: holderId.signPublicJwk,
+        wrappedKeyJson: peerWrap.wrappedKeyJson,
+        grantSig: peerWrap.grantSig
+      })
+    });
+    assert.equal(grantRes.status, 200);
+
+    // Now visitor appears in eligibleVisitors and can be added as Contributor
+    const listContribs = await apiJson(`/api/lands/${parcelId}/contributors`, {
+      headers: { Authorization: `Bearer ${holderToken}` }
+    });
+    assert.equal(listContribs.status, 200);
+    assert.ok(listContribs.body.eligibleVisitors.some((v) => v.email === 'm3d-visitor@graffiland.test'));
+
+    const addContrib = await apiJson(`/api/lands/${parcelId}/contributors`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ email: 'm3d-visitor@graffiland.test' })
+    });
+    assert.equal(addContrib.status, 200);
+    assert.equal(addContrib.body.contributors.length, 1);
+
+    // Contributor sees viewerCanContribute: true and modifies sculpture blocks & title; Stranger still blocked
+    const scAsContrib = await apiJson(`/api/sculptures/${seedSc.id}`, {
+      headers: { Authorization: `Bearer ${visitorToken}` }
+    });
+    assert.equal(scAsContrib.status, 200);
+    assert.equal(scAsContrib.body.sculpture.viewerCanContribute, true);
+
+    const strangerEdit = await apiJson(`/api/sculptures/${seedSc.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${strangerToken}` },
+      body: JSON.stringify({ title: 'Unauthorized Tweak' })
+    });
+    assert.equal(strangerEdit.status, 403);
+
+    const contribEdit = await apiJson(`/api/sculptures/${seedSc.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${visitorToken}` },
+      body: JSON.stringify({
+        title: 'Contributor Remixed Beacon',
+        description: 'Remixed collaboratively by an IRL chat visitor contributor.',
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' }
+        ]
+      })
+    });
+    assert.equal(contribEdit.status, 200);
+    assert.equal(contribEdit.body.editorRole, 'contributor');
+    assert.equal(contribEdit.body.sculpture.title, 'Contributor Remixed Beacon');
+    assert.equal(contribEdit.body.sculpture.voxelCount, 2);
+    assert.equal(contribEdit.body.sculpture.recipientAddress, seedSc.recipientAddress);
+
+    // Contributors CANNOT delete sculptures or erase land
+    const contribDel = await apiJson(`/api/sculptures/${seedSc.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${visitorToken}` }
+    });
+    assert.equal(contribDel.status, 403);
+
+    // 4. Agent Land Erasure (erase_land): blocked when allowAgentErase=false, executes when authorized
+    const disableErase = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ allowAgentErase: false })
+    });
+    assert.equal(disableErase.status, 200);
+    assert.equal(disableErase.body.settings.allowAgentErase, false);
+
+    const blockedErase = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 6,
+        method: 'tools/call',
+        params: {
+          name: 'erase_land',
+          arguments: { parcelId, confirmParcelId: parcelId }
+        }
+      })
+    });
+    assert.equal(blockedErase.status, 403);
+
+    // Enable agent erase -> unsigned request notifies mobile (`pending_mobile_signature`) -> signed request erases land!
+    await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ allowAgentErase: true })
+    });
+    const erasePending = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
+        params: {
+          name: 'erase_land',
+          arguments: { parcelId, confirmParcelId: parcelId, reason: 'Clear for next exhibition' }
+        }
+      })
+    });
+    assert.equal(erasePending.status, 200);
+    const eraseReq = erasePending.body.result.structuredContent.request;
+    assert.equal(erasePending.body.result.structuredContent.status, 'pending_mobile_signature');
+
+    const eraseSig = await holderSigner.signMessage(eraseReq.canonicalMessage);
+    const eraseExec = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: {
+          name: 'sign_and_execute_pending',
+          arguments: { requestId: eraseReq.id, signature: eraseSig }
+        }
+      })
+    });
+    assert.equal(eraseExec.status, 200);
+    assert.equal(eraseExec.body.result.structuredContent.result.erased, true);
+    assert.equal(eraseExec.body.result.structuredContent.result.erasedSculptureCount, 3);
+
+    // Confirm parcel & its sculptures are gone from public listings & myLands
+    const publicSculpturesAfterErase = await apiJson('/api/sculptures');
+    assert.equal(
+      publicSculpturesAfterErase.body.sculptures.some((s) => s.parcelId === parcelId),
+      false
+    );
+    const parcelsAfterErase = await apiJson('/api/parcels');
+    assert.equal(
+      parcelsAfterErase.body.parcels.some((p) => p.parcelId === parcelId),
+      false
+    );
+    const myLandsAfter = await apiJson('/api/lands/mine', {
+      headers: { Authorization: `Bearer ${holderToken}` }
+    });
+    assert.equal(myLandsAfter.body.parcelCount, 0);
+  });
 });

@@ -5,6 +5,7 @@ import { api, API_BASE } from '../utils/api.js';
 import AdminPanel from './AdminPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import LandManagementModal from './LandManagementModal.jsx';
 import MapView from './MapView.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import SculptureModal from './SculptureModal.jsx';
@@ -87,6 +88,9 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   );
   const [pairOpen, setPairOpen] = useState(() => initialSession.activeView === 'pair');
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
+  const [landManageOpen, setLandManageOpen] = useState(false);
+  const [landManageParcelId, setLandManageParcelId] = useState('');
+  const [myLands, setMyLands] = useState({ parcelCount: 0, parcels: [] });
   const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [mcpState, setMcpState] = useState({ mcpActive: false, activePairing: null, pairings: [] });
@@ -138,9 +142,21 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
   }, []);
 
+  const refreshMyLands = useCallback(() => {
+    if (!user?.id) {
+      setMyLands({ parcelCount: 0, parcels: [] });
+      return;
+    }
+    api
+      .getMyLands()
+      .then((res) => setMyLands(res || { parcelCount: 0, parcels: [] }))
+      .catch(() => {});
+  }, [user?.id]);
+
   useEffect(() => {
     refreshData();
-  }, [refreshData]);
+    refreshMyLands();
+  }, [refreshData, refreshMyLands]);
 
   useEffect(() => {
     if (!user?.id || !pairOpen) return;
@@ -262,6 +278,20 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
           <button type="button" className="btn btn-primary" onClick={openPairModal}>
             <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
           </button>
+          {(myLands.parcelCount > 0 || (myLands.parcels && myLands.parcels.length > 0)) && (
+            <button
+              type="button"
+              className="btn"
+              style={{ borderColor: 'rgba(255, 209, 102, 0.6)', color: 'var(--accent-gold)' }}
+              onClick={() => {
+                setLandManageParcelId('');
+                setLandManageOpen(true);
+              }}
+              title="Manage owned lands, IRL contributors, 3D models & agent permissions"
+            >
+              <XeroIcon emoji="🗺️" size={16} /> Land Management ({myLands.parcelCount || myLands.parcels.length})
+            </button>
+          )}
           <button type="button" className="btn" onClick={openInfoModal} title="Info & Guide">
             <XeroIcon emoji="ℹ️" size={16} /> Info
           </button>
@@ -559,11 +589,30 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             setSculptures((prev) =>
               prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
             );
+            refreshMyLands();
+          }}
+          onOpenLandManagement={(pid) => {
+            setLandManageParcelId(pid || '');
+            setLandManageOpen(true);
           }}
           onClose={() => {
             setSelected(null);
             refreshData();
+            refreshMyLands();
           }}
+        />
+      )}
+
+      {landManageOpen && user && (
+        <LandManagementModal
+          user={user}
+          initialParcelId={landManageParcelId}
+          onSelectSculpture={(sc) => openSculpture(sc)}
+          onWorkspaceChanged={() => {
+            refreshData();
+            refreshMyLands();
+          }}
+          onClose={() => setLandManageOpen(false)}
         />
       )}
 

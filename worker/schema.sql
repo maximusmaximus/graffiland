@@ -273,3 +273,49 @@ CREATE TABLE IF NOT EXISTS parcel_presence_challenges (
 
 CREATE INDEX IF NOT EXISTS idx_parcel_challenges_user
   ON parcel_presence_challenges (sculpture_id, user_id, consumed);
+
+CREATE TABLE IF NOT EXISTS sculpture_models (
+  sculpture_id TEXT PRIMARY KEY,
+  parcel_id TEXT NOT NULL,
+  model_format TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'ipfs',
+  model_url TEXT DEFAULT '',
+  model_cid TEXT DEFAULT '',
+  model_uri TEXT DEFAULT '',
+  gateway_url TEXT DEFAULT '',
+  inline_b64 TEXT DEFAULT '',
+  byte_length INTEGER NOT NULL DEFAULT 0,
+  scale REAL NOT NULL DEFAULT 1,
+  rotation_y REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sculpture_models_parcel
+  ON sculpture_models (parcel_id);
+
+CREATE TABLE IF NOT EXISTS land_settings (
+  parcel_id TEXT PRIMARY KEY,
+  owner_sub TEXT NOT NULL,
+  owner_address TEXT NOT NULL,
+  allow_agent_erase INTEGER NOT NULL DEFAULT 1,
+  allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS land_contributors (
+  id TEXT PRIMARY KEY,
+  parcel_id TEXT NOT NULL,
+  contributor_sub TEXT NOT NULL,
+  contributor_email TEXT DEFAULT '',
+  contributor_name TEXT DEFAULT '',
+  contributor_address TEXT DEFAULT '',
+  can_edit_sculptures INTEGER NOT NULL DEFAULT 1,
+  added_by_sub TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(parcel_id, contributor_sub)
+);
+
+CREATE INDEX IF NOT EXISTS idx_land_contributors_parcel
+  ON land_contributors (parcel_id, contributor_sub);

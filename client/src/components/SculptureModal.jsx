@@ -53,6 +53,8 @@ export default function SculptureModal({
   config,
   userLocation = null,
   onSculptureUpdated,
+  onModifyInCanvas = null,
+  onOpenLandManagement = null,
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
@@ -167,6 +169,8 @@ export default function SculptureModal({
     .filter(Boolean)
     .map((a) => a.toLowerCase());
   const isPropertyOwner = Boolean(ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()));
+  const isContributor = !isPropertyOwner && Boolean(sculpture.viewerCanContribute);
+  const canModifySculpture = isPropertyOwner || isContributor;
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
       ownerAddr &&
@@ -514,7 +518,12 @@ export default function SculptureModal({
           </button>
         </div>
 
-        <SculptureViewer3D voxels={sculpture.voxels || []} height={300} autoRotate />
+        <SculptureViewer3D
+          sculpture={sculpture}
+          voxels={sculpture.voxels || []}
+          height={300}
+          autoRotate
+        />
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
           {googleMapsUrl && (
@@ -550,9 +559,20 @@ export default function SculptureModal({
           <span className="badge pink">
             <XeroIcon emoji="🪙" size={13} /> {sculpture.chain?.royaltyPercent || 5}% Resale Fee
           </span>
-          <span className="badge">
-            <XeroIcon emoji="🧱" size={13} /> {sculpture.voxelCount} voxels
-          </span>
+          {sculpture.modelType === 'custom-3d' && sculpture.customModel ? (
+            <span className="badge teal">
+              <XeroIcon emoji="🗿" size={13} /> {String(sculpture.customModel.format || 'glb').toUpperCase()} 3D Model
+            </span>
+          ) : (
+            <span className="badge">
+              <XeroIcon emoji="🧱" size={13} /> {sculpture.voxelCount} voxels
+            </span>
+          )}
+          {isContributor && (
+            <span className="badge gold">
+              <XeroIcon emoji="🤝" size={13} /> Contributor Edit Access
+            </span>
+          )}
         </div>
 
         <p style={{ fontSize: 14, lineHeight: 1.5, margin: '12px 0' }}>{sculpture.description}</p>
@@ -890,27 +910,47 @@ export default function SculptureModal({
           </div>
         </div>
 
-        {isPropertyOwner && (
+        {canModifySculpture && (
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🏠" size={18} /> Property &amp; Land Controls ({sculpture.parcelId})
+                <XeroIcon emoji={isPropertyOwner ? '🏠' : '🤝'} size={18} />{' '}
+                {isPropertyOwner
+                  ? `Property & Land Controls (${sculpture.parcelId})`
+                  : `Contributor Sculpture Modification (${sculpture.parcelId})`}
               </span>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ fontSize: 12, padding: '6px 10px' }}
-                disabled={propBusy !== ''}
-                onClick={handleCopyOwnerPrompt}
-              >
-                <XeroIcon emoji="📋" size={14} />{' '}
-                {promptCopied ? 'Copied MCP Prompt!' : 'Copy Property Owner MCP Prompt'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {onOpenLandManagement && isPropertyOwner && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ fontSize: 12, padding: '6px 10px' }}
+                    onClick={() => {
+                      onClose?.();
+                      onOpenLandManagement(sculpture.parcelId);
+                    }}
+                  >
+                    <XeroIcon emoji="🗺️" size={14} /> Land Management
+                  </button>
+                )}
+                {isPropertyOwner && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ fontSize: 12, padding: '6px 10px' }}
+                    disabled={propBusy !== ''}
+                    onClick={handleCopyOwnerPrompt}
+                  >
+                    <XeroIcon emoji="📋" size={14} />{' '}
+                    {promptCopied ? 'Copied MCP Prompt!' : 'Copy Property Owner MCP Prompt'}
+                  </button>
+                )}
+              </div>
             </div>
 
             <form onSubmit={handleSaveSculptureEdit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
-                Edit Sculpture on Your Land
+                {isPropertyOwner ? 'Edit Sculpture on Your Land' : 'Modify Sculpture as Verified Contributor'}
               </div>
               <input
                 className="input"
@@ -931,18 +971,35 @@ export default function SculptureModal({
                 <button type="submit" className="btn btn-primary" disabled={propBusy !== ''}>
                   <XeroIcon emoji="✏️" size={14} /> Save Sculpture Changes
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  disabled={propBusy !== ''}
-                  onClick={handleDeleteOwnedSculpture}
-                >
-                  <XeroIcon emoji="🗑️" size={14} /> Remove From Land
-                </button>
+                {onModifyInCanvas && sculpture.modelType !== 'custom-3d' && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={propBusy !== ''}
+                    onClick={() => {
+                      onClose?.();
+                      onModifyInCanvas(sculpture);
+                    }}
+                  >
+                    <XeroIcon emoji="🖌️" size={14} /> Modify 3D Blocks on AR Canvas
+                  </button>
+                )}
+                {isPropertyOwner && (
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={propBusy !== ''}
+                    onClick={handleDeleteOwnedSculpture}
+                  >
+                    <XeroIcon emoji="🗑️" size={14} /> Remove From Land
+                  </button>
+                )}
               </div>
             </form>
 
-            <form
+            {isPropertyOwner && (
+              <>
+                <form
               onSubmit={handleSaveLandCuration}
               style={{
                 display: 'flex',
@@ -1104,6 +1161,8 @@ export default function SculptureModal({
                 </button>
               </div>
             </div>
+              </>
+            )}
 
             {propNotice && (
               <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--accent)' }}>

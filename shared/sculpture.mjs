@@ -21,7 +21,7 @@ export function computeVerticalBounds(voxels = []) {
 
 export function serializeSculptureRow(
   row,
-  { includeAdminFields = false, includeVoxels = true, transfers } = {}
+  { includeAdminFields = false, includeVoxels = true, transfers, viewerCanContribute } = {}
 ) {
   const pol = JSON.parse(row.pol_json || '{}');
   const elevation = pol.elevation || {
@@ -34,6 +34,8 @@ export function serializeSculptureRow(
     sculptureVerticalMinM: 0,
     sculptureVerticalMaxM: 0
   };
+  const customFormat = row.custom_model_format || '';
+  const isCustom3d = Boolean(customFormat);
 
   return {
     id: row.id,
@@ -44,7 +46,27 @@ export function serializeSculptureRow(
     ...(includeAdminFields ? { creatorEmail: row.creator_email } : {}),
     recipientAddress: row.recipient_address,
     ownerAddress: row.recipient_address,
-    modelGlbUrl: `/api/sculptures/${row.id}/model.glb`,
+    modelType: isCustom3d ? 'custom-3d' : 'voxel',
+    ...(isCustom3d
+      ? {
+          customModel: {
+            format: customFormat,
+            mimeType: row.custom_model_mime || 'model/gltf-binary',
+            sourceType: row.custom_model_source_type || 'ipfs',
+            externalUrl: row.custom_model_url || '',
+            ipfsCid: row.custom_model_cid || row.ipfs_model_cid || '',
+            ipfsUri: row.custom_model_uri || `ipfs://${row.ipfs_model_cid}`,
+            downloadUrl: `/api/sculptures/${row.id}/model`,
+            scale: Number(row.custom_model_scale || 1),
+            rotationY: Number(row.custom_model_rotation_y || 0),
+            byteLength: Number(row.custom_model_bytes || 0)
+          }
+        }
+      : { customModel: null }),
+    modelGlbUrl:
+      isCustom3d && customFormat !== 'glb'
+        ? `/api/sculptures/${row.id}/model`
+        : `/api/sculptures/${row.id}/model.glb`,
     metadataUrl: `/api/sculptures/${row.id}/metadata.json`,
     lat: row.lat,
     lng: row.lng,
@@ -115,6 +137,9 @@ export function serializeSculptureRow(
           hiddenBy: row.hidden_by || ''
         }
       : {}),
+    ...(viewerCanContribute !== undefined
+      ? { viewerCanContribute: Boolean(viewerCanContribute) }
+      : {}),
     termsAcceptedVersion: row.terms_accepted_version,
     createdAt: row.created_at
   };
@@ -126,6 +151,8 @@ export function buildIpfsMetadata({
   description,
   imageUri,
   modelUri,
+  modelMimeType = 'model/gltf-binary',
+  modelFormat = 'glb',
   voxelJsonUri,
   publicUrl,
   voxels,
@@ -140,6 +167,7 @@ export function buildIpfsMetadata({
     { trait_type: 'Geohash', value: locationBundle.geohash },
     { trait_type: 'City', value: locationBundle.geoInfo.city || 'Unknown' },
     { trait_type: 'Country', value: locationBundle.geoInfo.country || 'Unknown' },
+    { trait_type: 'Model Format', value: String(modelFormat || 'glb').toUpperCase() },
     { trait_type: 'Voxel Count', display_type: 'number', value: voxels.length },
     { trait_type: 'Proof of Location Score', display_type: 'number', value: locationBundle.score },
     {
@@ -171,7 +199,7 @@ export function buildIpfsMetadata({
     description,
     image: imageUri,
     animation_url: modelUri,
-    animation_mime_type: 'model/gltf-binary',
+    animation_mime_type: modelMimeType,
     ...(voxelJsonUri ? { voxel_model_uri: voxelJsonUri } : {}),
     external_url: `${publicUrl}/?sculpture=${sculptureId}`,
     seller_fee_basis_points: royaltyBps,
@@ -179,7 +207,7 @@ export function buildIpfsMetadata({
     properties: {
       category: '3d-model',
       files: [
-        { uri: modelUri, type: 'model/gltf-binary' },
+        { uri: modelUri, type: modelMimeType },
         { uri: imageUri, type: 'image/png' }
       ]
     },
@@ -267,7 +295,10 @@ export function buildContractMetadata({
 
 export function formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl }) {
   const s = serializeSculptureRow(row, { includeVoxels: false });
-  const glbUrl = `${apiOrigin}/api/sculptures/${s.id}/model.glb`;
+  const glbUrl = s.customModel?.downloadUrl
+    ? `${apiOrigin}${s.customModel.downloadUrl}`
+    : `${apiOrigin}/api/sculptures/${s.id}/model.glb`;
+  const modelMime = s.customModel?.mimeType || 'model/gltf-binary';
   const imageUrl = s.ipfs?.imageCid
     ? `${apiOrigin}/ipfs/${s.ipfs.imageCid}`
     : `${publicUrl}/icon-512.png`;
@@ -295,7 +326,7 @@ export function formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl }) {
     description: s.description,
     image: imageUrl,
     animation_url: glbUrl,
-    animation_mime_type: 'model/gltf-binary',
+    animation_mime_type: modelMime,
     external_url: `${publicUrl}/?sculpture=${s.id}`,
     seller_fee_basis_points: s.chain.royaltyBps,
     fee_recipient: s.chain.royaltyReceiver,
@@ -306,7 +337,7 @@ export function formatMarketplaceTokenMetadata(row, { apiOrigin, publicUrl }) {
     properties: {
       category: '3d-model',
       files: [
-        { uri: glbUrl, type: 'model/gltf-binary' },
+        { uri: glbUrl, type: modelMime },
         { uri: imageUrl, type: 'image/png' }
       ]
     },

@@ -6,6 +6,12 @@ import { sanitizeVoxels, validatePublishPayload } from '../server/services/moder
 import { decodeGeohashBounds, encodeGeohash, verifyAndEnrichLocation } from '../server/services/pol.mjs';
 import { computeVerticalBounds, serializeSculptureRow } from './sculpture.mjs';
 import {
+  b64ToModelBytes,
+  extractCustomModelInput,
+  INLINE_MODEL_DB_MAX_BYTES,
+  modelBytesToB64
+} from './model3d.mjs';
+import {
   buildAgentSignPublishPrompt,
   buildLandActivityMessage,
   buildPairingHandshakeMessage,
@@ -164,6 +170,67 @@ export async function checkParcelOwnership(db, { parcelId, user = null, signerAd
     },
     visibleRows: visibleRows || []
   };
+}
+
+export async function isUserParcelContributor(db, { parcelId, user }) {
+  if (!user?.id || !parcelId) return false;
+  const cleanParcelId = normalizeParcelId(parcelId);
+  const settings = await db.get('SELECT allow_contributor_edits FROM land_settings WHERE parcel_id = ?', [
+    cleanParcelId
+  ]);
+  if (settings && Number(settings.allow_contributor_edits) === 0) {
+    return false;
+  }
+  const row = await db.get(
+    `SELECT * FROM land_contributors
+     WHERE parcel_id = ? AND contributor_sub = ? AND can_edit_sculptures = 1`,
+    [cleanParcelId, user.id]
+  );
+  return Boolean(row);
+}
+
+export async function checkSculptureEditPermission(
+  db,
+  { sculptureId, user = null, signerAddress = '' }
+) {
+  const row = await db.get('SELECT * FROM sculptures WHERE id = ?', [String(sculptureId || '')]);
+  if (!row || row.hidden) {
+    throw new McpServiceError('Sculpture not found.', 404);
+  }
+  const allowed = new Set(resolveUserWalletAddresses(user));
+  if (signerAddress && ethers.isAddress(signerAddress)) {
+    allowed.add(ethers.getAddress(signerAddress).toLowerCase());
+  }
+  const currentOwner = String(row.recipient_address || '').toLowerCase();
+  if (currentOwner && allowed.has(currentOwner)) {
+    return { row, role: 'owner', ownerAddress: row.recipient_address };
+  }
+  if (user && (await isUserParcelContributor(db, { parcelId: row.parcel_id, user }))) {
+    return { row, role: 'contributor', ownerAddress: row.recipient_address };
+  }
+  throw new McpServiceError(
+    `Only the property owner or an authorized IRL Contributor on ${row.parcel_id} can modify this sculpture.`,
+    403
+  );
+}
+
+async function fetchSculptureWithModelRow(db, sculptureId) {
+  return db.get(
+    `SELECT s.*,
+      m.model_format AS custom_model_format,
+      m.mime_type AS custom_model_mime,
+      m.source_type AS custom_model_source_type,
+      m.model_url AS custom_model_url,
+      m.model_cid AS custom_model_cid,
+      m.model_uri AS custom_model_uri,
+      m.scale AS custom_model_scale,
+      m.rotation_y AS custom_model_rotation_y,
+      m.byte_length AS custom_model_bytes
+     FROM sculptures s
+     LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     WHERE s.id = ?`,
+    [sculptureId]
+  );
 }
 
 function formatPairingRow(row) {
@@ -435,10 +502,156 @@ export async function listLandsWithCurations(db) {
   return parcels;
 }
 
+async function resolveCustomModelBytes(customModel) {
+  if (!customModel || customModel.bytes) return customModel;
+  let fetchUrl = customModel.externalUrl;
+  if (fetchUrl.startsWith('ipfs://')) {
+    fetchUrl = `https://gateway.pinata.cloud/ipfs/${fetchUrl.slice(7)}`;
+  }
+  let res;
+  try {
+    res = await fetch(fetchUrl, { signal: AbortSignal.timeout(8000) });
+  } catch {
+    throw new McpServiceError(`Could not download 3D model URL (${customModel.externalUrl}).`, 400);
+  }
+  if (!res.ok) {
+    throw new McpServiceError(`Could not download 3D model URL (HTTP ${res.status}).`, 400);
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const rechecked = extractCustomModelInput({
+    modelFormat: customModel.format,
+    modelBase64: modelBytesToB64(buf),
+    modelScale: customModel.scale,
+    modelRotationY: customModel.rotationY
+  });
+  if (rechecked.error || !rechecked.customModel) {
+    throw new McpServiceError(rechecked.error || 'Downloaded URL is not a valid 3D model.', 400);
+  }
+  return {
+    ...rechecked.customModel,
+    externalUrl: customModel.externalUrl
+  };
+}
+
+async function upsertSculptureModelRow(db, { sculptureId, parcelId, customModel, ipfsResult }) {
+  const now = new Date().toISOString();
+  const inlineB64 =
+    customModel.bytes && customModel.bytes.length <= INLINE_MODEL_DB_MAX_BYTES
+      ? modelBytesToB64(customModel.bytes)
+      : '';
+  await db.run(
+    `INSERT INTO sculpture_models (
+      sculpture_id, parcel_id, model_format, mime_type, source_type, model_url,
+      model_cid, model_uri, gateway_url, inline_b64, byte_length, scale, rotation_y, updated_at
+    ) VALUES (?, ?, ?, ?, 'ipfs', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sculpture_id) DO UPDATE SET
+      parcel_id = excluded.parcel_id,
+      model_format = excluded.model_format,
+      mime_type = excluded.mime_type,
+      source_type = excluded.source_type,
+      model_url = excluded.model_url,
+      model_cid = excluded.model_cid,
+      model_uri = excluded.model_uri,
+      gateway_url = excluded.gateway_url,
+      inline_b64 = excluded.inline_b64,
+      byte_length = excluded.byte_length,
+      scale = excluded.scale,
+      rotation_y = excluded.rotation_y,
+      updated_at = excluded.updated_at`,
+    [
+      sculptureId,
+      parcelId,
+      customModel.format,
+      customModel.mimeType,
+      customModel.externalUrl || '',
+      ipfsResult?.modelCid || '',
+      ipfsResult?.modelUri || '',
+      ipfsResult?.gatewayUrl || '',
+      inlineB64,
+      customModel.byteLength || customModel.bytes?.length || 0,
+      Number(customModel.scale ?? 1),
+      Number(customModel.rotationY ?? 0),
+      now
+    ]
+  );
+}
+
+async function getLandSettingsInternal(db, parcelId) {
+  const cleanId = normalizeParcelId(parcelId);
+  const row = await db.get('SELECT * FROM land_settings WHERE parcel_id = ?', [cleanId]);
+  return {
+    parcelId: cleanId,
+    allowAgentErase: row ? Boolean(row.allow_agent_erase) : true,
+    allowContributorEdits: row ? Boolean(row.allow_contributor_edits) : true,
+    updatedAt: row?.updated_at || ''
+  };
+}
+
+function formatContributorRow(row) {
+  return {
+    id: row.id,
+    parcelId: row.parcel_id,
+    contributorSub: row.contributor_sub,
+    email: row.contributor_email || '',
+    name: row.contributor_name || 'Artist',
+    walletAddress: row.contributor_address || '',
+    canEditSculptures: Boolean(row.can_edit_sculptures),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
+  const cleanId = normalizeParcelId(parcelId);
+  const rows = await db.all(
+    `SELECT DISTINCT u.id AS userId, u.email, u.name, u.wallet_address AS walletAddress,
+            u.custom_payout_address AS customPayoutAddress
+     FROM users u
+     WHERE u.id != ?
+       AND (
+         EXISTS (
+           SELECT 1 FROM sculpture_chat_grants g
+           JOIN sculptures s ON s.id = g.sculpture_id
+           WHERE s.parcel_id = ? AND g.requester_sub = u.id AND g.status = 'granted'
+         )
+         OR EXISTS (
+           SELECT 1 FROM sculpture_chat_messages m
+           JOIN sculptures s ON s.id = m.sculpture_id
+           WHERE s.parcel_id = ? AND m.sender_sub = u.id
+         )
+         OR EXISTS (
+           SELECT 1 FROM parcel_presence_challenges p
+           WHERE p.parcel_id = ? AND p.user_id = u.id AND p.consumed = 1
+         )
+       )
+     ORDER BY u.name ASC`,
+    [ownerSub, cleanId, cleanId, cleanId]
+  );
+  return (rows || []).map((r) => ({
+    userId: r.userId,
+    email: r.email || '',
+    name: r.name || 'Visitor',
+    walletAddress: r.customPayoutAddress || r.walletAddress || ''
+  }));
+}
+
 async function listOwnerLandsAndSculptures(db, ownerUser) {
   const wallets = new Set(resolveUserWalletAddresses(ownerUser));
   const allRows = await db.all(
-    'SELECT * FROM sculptures WHERE hidden = 0 ORDER BY created_at DESC'
+    `SELECT s.*,
+      m.model_format AS custom_model_format,
+      m.mime_type AS custom_model_mime,
+      m.source_type AS custom_model_source_type,
+      m.model_url AS custom_model_url,
+      m.model_cid AS custom_model_cid,
+      m.model_uri AS custom_model_uri,
+      m.scale AS custom_model_scale,
+      m.rotation_y AS custom_model_rotation_y,
+      m.byte_length AS custom_model_bytes
+     FROM sculptures s
+     LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     WHERE s.hidden = 0
+     ORDER BY s.created_at DESC`
   );
   const ownedSculptures = (allRows || []).filter((r) =>
     wallets.has(String(r.recipient_address || '').toLowerCase())
@@ -447,20 +660,34 @@ async function listOwnerLandsAndSculptures(db, ownerUser) {
   const curations = await db.all('SELECT * FROM parcel_curations');
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
 
-  const parcels = Array.from(ownedParcelSet).map((pid) => {
+  const parcels = [];
+  for (const pid of ownedParcelSet) {
     const onLand = (allRows || []).filter((s) => s.parcel_id === pid);
     const cur = curationMap.get(pid);
-    return {
+    const settings = await getLandSettingsInternal(db, pid);
+    const contribRows = await db.all(
+      'SELECT * FROM land_contributors WHERE parcel_id = ? ORDER BY created_at DESC',
+      [pid]
+    );
+    const eligibleVisitors = await findEligibleParcelVisitors(db, {
+      parcelId: pid,
+      ownerSub: ownerUser.id
+    });
+    parcels.push({
       parcelId: pid,
       geohash: onLand[0]?.geohash || '',
       bounds: onLand[0]?.geohash ? decodeGeohashBounds(onLand[0].geohash) : null,
       customName: cur?.custom_name || '',
       curationNote: cur?.curation_note || '',
       featuredSculptureId: cur?.featured_sculpture_id || '',
+      lastSignedTxHash: cur?.last_signed_tx_hash || '',
+      settings,
+      contributors: (contribRows || []).map(formatContributorRow),
+      eligibleVisitors,
       sculptureCount: onLand.length,
       sculptures: onLand.map((r) => serializeSculptureRow(r, { includeVoxels: true }))
-    };
-  });
+    });
+  }
 
   return {
     ownerAddress: resolvePreferredOwnerWallet(ownerUser),
@@ -479,13 +706,41 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
     description: nextDescription
   });
 
+  const modelExtract = extractCustomModelInput(payload);
+  if (modelExtract.error) {
+    throw new McpServiceError(modelExtract.error, 400);
+  }
+
   let cleanVoxels = JSON.parse(sculptureRow.voxels_json || '[]');
-  if (payload.voxels !== undefined) {
+  let activeCustomModel = null;
+
+  if (modelExtract.provided) {
+    activeCustomModel = await resolveCustomModelBytes(modelExtract.customModel);
+    cleanVoxels = [];
+  } else if (payload.voxels !== undefined) {
     const voxelCheck = sanitizeVoxels(payload.voxels);
     if (voxelCheck.errors.length > 0) {
       throw new McpServiceError(voxelCheck.errors[0], 400, { errors: voxelCheck.errors });
     }
     cleanVoxels = voxelCheck.cleanVoxels;
+    await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id]);
+  } else {
+    const existingModelRow = await db.get(
+      'SELECT * FROM sculpture_models WHERE sculpture_id = ?',
+      [sculptureRow.id]
+    );
+    if (existingModelRow) {
+      activeCustomModel = {
+        format: existingModelRow.model_format,
+        mimeType: existingModelRow.mime_type,
+        ext: existingModelRow.model_format,
+        bytes: existingModelRow.inline_b64 ? b64ToModelBytes(existingModelRow.inline_b64) : null,
+        byteLength: Number(existingModelRow.byte_length || 0),
+        externalUrl: existingModelRow.model_url || '',
+        scale: Number(existingModelRow.scale || 1),
+        rotationY: Number(existingModelRow.rotation_y || 0)
+      };
+    }
   }
 
   let ipfsMetadataCid = sculptureRow.ipfs_metadata_cid;
@@ -497,9 +752,12 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
       ? payload.previewDataUrl.slice(0, 450000)
       : sculptureRow.preview_data_url;
 
-  if (typeof pinSculptureFn === 'function') {
+  const canPinModel = !activeCustomModel || Boolean(activeCustomModel.bytes);
+  if (typeof pinSculptureFn === 'function' && canPinModel) {
     const existingPol = JSON.parse(sculptureRow.pol_json || '{}');
-    const verticalBounds = computeVerticalBounds(cleanVoxels);
+    const verticalBounds = activeCustomModel
+      ? { minY: 0, maxY: 1.5 }
+      : computeVerticalBounds(cleanVoxels);
     const locationBundle = {
       lat: sculptureRow.lat,
       lng: sculptureRow.lng,
@@ -530,6 +788,7 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
       title,
       description,
       voxels: cleanVoxels,
+      customModel: activeCustomModel,
       previewDataUrl: nextPreview,
       locationBundle,
       creatorAddress: sculptureRow.recipient_address
@@ -538,6 +797,21 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
     ipfsModelCid = ipfsRes.modelCid;
     ipfsImageCid = ipfsRes.imageCid;
     ipfsGatewayUrl = ipfsRes.gatewayUrl;
+    if (activeCustomModel) {
+      await upsertSculptureModelRow(db, {
+        sculptureId: sculptureRow.id,
+        parcelId: sculptureRow.parcel_id,
+        customModel: activeCustomModel,
+        ipfsResult: ipfsRes
+      });
+    }
+  } else if (activeCustomModel && modelExtract.provided) {
+    await upsertSculptureModelRow(db, {
+      sculptureId: sculptureRow.id,
+      parcelId: sculptureRow.parcel_id,
+      customModel: activeCustomModel,
+      ipfsResult: null
+    });
   }
 
   await db.run(
@@ -560,7 +834,7 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
     ]
   );
 
-  const updated = await db.get('SELECT * FROM sculptures WHERE id = ?', [sculptureRow.id]);
+  const updated = await fetchSculptureWithModelRow(db, sculptureRow.id);
   return {
     sculpture: serializeSculptureRow(updated, { includeVoxels: true })
   };
@@ -570,14 +844,37 @@ async function applyCreateSculptureOnLand(
   db,
   { parcelCtx, ownerUser, ownerAddress, payload, pinSculptureFn, mintSculptureFn, proofSeed = '' }
 ) {
-  const validation = validatePublishPayload({
-    title: payload.title,
-    description: payload.description,
-    termsAccepted: true,
-    voxels: payload.voxels
-  });
-  if (!validation.ok) {
-    throw new McpServiceError(validation.errors[0], 400, { errors: validation.errors });
+  const modelExtract = extractCustomModelInput(payload);
+  if (modelExtract.error) {
+    throw new McpServiceError(modelExtract.error, 400);
+  }
+
+  let title = '';
+  let description = '';
+  let cleanVoxels = [];
+  let activeCustomModel = null;
+
+  if (modelExtract.provided) {
+    const checkedMeta = validateEditableTitleAndDescription({
+      title: payload.title,
+      description: payload.description
+    });
+    title = checkedMeta.title;
+    description = checkedMeta.description;
+    activeCustomModel = await resolveCustomModelBytes(modelExtract.customModel);
+  } else {
+    const validation = validatePublishPayload({
+      title: payload.title,
+      description: payload.description,
+      termsAccepted: true,
+      voxels: payload.voxels
+    });
+    if (!validation.ok) {
+      throw new McpServiceError(validation.errors[0], 400, { errors: validation.errors });
+    }
+    title = validation.title;
+    description = validation.description;
+    cleanVoxels = validation.cleanVoxels;
   }
 
   const lat =
@@ -599,7 +896,9 @@ async function applyCreateSculptureOnLand(
 
   const seedSculpture = parcelCtx.visibleRows[0] || null;
   const seedPol = seedSculpture ? JSON.parse(seedSculpture.pol_json || '{}') : {};
-  const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
+  const verticalBounds = activeCustomModel
+    ? { minY: 0, maxY: 1.5 }
+    : computeVerticalBounds(cleanVoxels);
   const alt =
     Number.isFinite(Number(payload.altitude)) ? Number(payload.altitude) : seedSculpture?.altitude ?? null;
   const now = new Date().toISOString();
@@ -643,6 +942,7 @@ async function applyCreateSculptureOnLand(
       propertyAuthorized: true,
       parcelId: parcelCtx.parcelId,
       ownerAddress,
+      ...(activeCustomModel ? { modelFormat: activeCustomModel.format, modelType: 'custom-3d' } : {}),
       sensors: seedPol?.sensors || { opticalFlowCorrelation: 1, horizonLuminance: 128, visualDHash: '' }
     },
     proofHash
@@ -650,9 +950,10 @@ async function applyCreateSculptureOnLand(
 
   const ipfsResult = await pinSculptureFn({
     sculptureId,
-    title: validation.title,
-    description: validation.description,
-    voxels: validation.cleanVoxels,
+    title,
+    description,
+    voxels: cleanVoxels,
+    customModel: activeCustomModel,
     previewDataUrl: String(payload.previewDataUrl || '').slice(0, 450000),
     locationBundle,
     creatorAddress: ownerAddress
@@ -679,8 +980,8 @@ async function applyCreateSculptureOnLand(
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
     [
       sculptureId,
-      validation.title,
-      validation.description,
+      title,
+      description,
       ownerUser.id,
       ownerUser.name,
       ownerUser.email,
@@ -695,8 +996,8 @@ async function applyCreateSculptureOnLand(
       locationBundle.geoInfo.displayName || '',
       locationBundle.geoInfo.country || '',
       locationBundle.timezone,
-      JSON.stringify(validation.cleanVoxels),
-      validation.cleanVoxels.length,
+      JSON.stringify(cleanVoxels),
+      cleanVoxels.length,
       locationBundle.score,
       JSON.stringify(locationBundle.proofBundle),
       proofHash,
@@ -718,6 +1019,15 @@ async function applyCreateSculptureOnLand(
     ]
   );
 
+  if (activeCustomModel) {
+    await upsertSculptureModelRow(db, {
+      sculptureId,
+      parcelId: parcelCtx.parcelId,
+      customModel: activeCustomModel,
+      ipfsResult
+    });
+  }
+
   await db.run(
     `UPDATE land_parcels
      SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ?
@@ -725,7 +1035,7 @@ async function applyCreateSculptureOnLand(
     [ownerAddress, now, parcelCtx.parcelId]
   );
 
-  const saved = await db.get('SELECT * FROM sculptures WHERE id = ?', [sculptureId]);
+  const saved = await fetchSculptureWithModelRow(db, sculptureId);
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
     mint: mintResult,
@@ -748,6 +1058,39 @@ async function applyDeleteSculpture(db, { sculptureRow, ownerAddress }) {
     [Number(remaining?.cnt || 0), now, sculptureRow.parcel_id]
   );
   return { deleted: true, sculptureId: sculptureRow.id, parcelId: sculptureRow.parcel_id };
+}
+
+async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '', viaAgent = false }) {
+  const settings = await getLandSettingsInternal(db, parcelCtx.parcelId);
+  if (viaAgent && !settings.allowAgentErase) {
+    throw new McpServiceError(
+      `Agent land erasure is disabled by the holder of Virtual Land ${parcelCtx.parcelId}. Enable Allow Agent Erase in Land Management first.`,
+      403
+    );
+  }
+  const cleanReason =
+    String(reason || '').trim().slice(0, 160) ||
+    (viaAgent ? 'Land erased by authorized agent' : 'Land erased by property owner');
+
+  await db.run(
+    `UPDATE sculptures
+     SET hidden = 1, hidden_reason = ?, hidden_by = ?
+     WHERE parcel_id = ? AND hidden = 0`,
+    [cleanReason, ownerAddress, parcelCtx.parcelId]
+  );
+  await db.run('DELETE FROM parcel_curations WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM land_contributors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM sculpture_models WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
+
+  return {
+    erased: true,
+    parcelId: parcelCtx.parcelId,
+    erasedSculptureCount: parcelCtx.visibleRows.length,
+    reason: cleanReason
+  };
 }
 
 async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress, payload, txHash = '' }) {
@@ -1093,6 +1436,18 @@ async function executeValidatedSignatureRow(
       payload,
       txHash: txHash || ethers.keccak256(ethers.toUtf8Bytes(`${reqRow.id}:${signature || signerAddress}`))
     });
+  } else if (reqRow.action === 'erase_land') {
+    const parcelCtx = await checkParcelOwnership(db, {
+      parcelId: reqRow.parcel_id,
+      user: ownerUser,
+      signerAddress
+    });
+    result = await applyEraseLand(db, {
+      parcelCtx,
+      ownerAddress: reqRow.owner_address,
+      reason: payload.reason || '',
+      viaAgent: true
+    });
   } else if (reqRow.action === 'publish_sculpture') {
     result = await applyPublishOnBehalf(db, {
       ownerUser,
@@ -1384,8 +1739,190 @@ export async function rejectSignatureRequest(db, { requestId, user }) {
 
 export async function directOwnerUpdateSculpture(db, { sculptureId, user, body, pinSculptureFn }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
-  const row = await checkSculptureOwnership(db, { sculptureId, user });
-  return applyUpdateSculpture(db, { sculptureRow: row, payload: body || {}, pinSculptureFn });
+  const perm = await checkSculptureEditPermission(db, { sculptureId, user });
+  const out = await applyUpdateSculpture(db, {
+    sculptureRow: perm.row,
+    payload: body || {},
+    pinSculptureFn
+  });
+  return { ...out, editorRole: perm.role };
+}
+
+export async function getMyLandsWorkspace(db, { user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  return listOwnerLandsAndSculptures(db, user);
+}
+
+export async function updateLandSettings(db, { parcelId, user, body }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const current = await getLandSettingsInternal(db, parcelCtx.parcelId);
+  const allowAgentErase =
+    body?.allowAgentErase !== undefined ? Boolean(body.allowAgentErase) : current.allowAgentErase;
+  const allowContributorEdits =
+    body?.allowContributorEdits !== undefined
+      ? Boolean(body.allowContributorEdits)
+      : current.allowContributorEdits;
+  const now = new Date().toISOString();
+  const ownerAddress = resolvePreferredOwnerWallet(user);
+
+  await db.run(
+    `INSERT INTO land_settings (
+      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(parcel_id) DO UPDATE SET
+      owner_sub = excluded.owner_sub,
+      owner_address = excluded.owner_address,
+      allow_agent_erase = excluded.allow_agent_erase,
+      allow_contributor_edits = excluded.allow_contributor_edits,
+      updated_at = excluded.updated_at`,
+    [
+      parcelCtx.parcelId,
+      user.id,
+      ownerAddress,
+      allowAgentErase ? 1 : 0,
+      allowContributorEdits ? 1 : 0,
+      now
+    ]
+  );
+
+  return {
+    settings: await getLandSettingsInternal(db, parcelCtx.parcelId)
+  };
+}
+
+export async function listLandContributorsAndEligible(db, { parcelId, user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const rows = await db.all(
+    'SELECT * FROM land_contributors WHERE parcel_id = ? ORDER BY created_at DESC',
+    [parcelCtx.parcelId]
+  );
+  const eligibleVisitors = await findEligibleParcelVisitors(db, {
+    parcelId: parcelCtx.parcelId,
+    ownerSub: user.id
+  });
+  const settings = await getLandSettingsInternal(db, parcelCtx.parcelId);
+  return {
+    parcelId: parcelCtx.parcelId,
+    contributors: (rows || []).map(formatContributorRow),
+    eligibleVisitors,
+    settings
+  };
+}
+
+export async function addLandContributor(db, { parcelId, user, body }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+
+  const targetUserId = String(body?.contributorUserId || body?.userId || '').trim();
+  const targetEmail = String(body?.email || '').trim().toLowerCase();
+  const targetAddress = String(body?.walletAddress || '').trim().toLowerCase();
+
+  if (!targetUserId && !targetEmail && !targetAddress) {
+    throw new McpServiceError(
+      'Select an IRL visitor or enter contributor email / wallet address.',
+      400
+    );
+  }
+
+  let candidate = null;
+  if (targetUserId) {
+    candidate = await db.get('SELECT * FROM users WHERE id = ?', [targetUserId]);
+  } else if (targetEmail) {
+    candidate = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [targetEmail]);
+  } else if (targetAddress) {
+    candidate = await db.get(
+      'SELECT * FROM users WHERE LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?',
+      [targetAddress, targetAddress]
+    );
+  }
+
+  if (!candidate) {
+    throw new McpServiceError('Target user account was not found.', 404);
+  }
+  if (candidate.id === user.id) {
+    throw new McpServiceError('Land holder already holds full ownership on this parcel.', 400);
+  }
+
+  const eligibleVisitors = await findEligibleParcelVisitors(db, {
+    parcelId: parcelCtx.parcelId,
+    ownerSub: user.id
+  });
+  if (!eligibleVisitors.some((v) => v.userId === candidate.id)) {
+    throw new McpServiceError(
+      `Only accounts that visited Virtual Land ${parcelCtx.parcelId} in person and can chat on this land can be added as Contributors.`,
+      403
+    );
+  }
+
+  const now = new Date().toISOString();
+  const contributorId = globalThis.crypto.randomUUID();
+  const candidateAddr = candidate.custom_payout_address || candidate.wallet_address || '';
+
+  await db.run(
+    `INSERT INTO land_contributors (
+      id, parcel_id, contributor_sub, contributor_email, contributor_name,
+      contributor_address, can_edit_sculptures, added_by_sub, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    ON CONFLICT(parcel_id, contributor_sub) DO UPDATE SET
+      contributor_email = excluded.contributor_email,
+      contributor_name = excluded.contributor_name,
+      contributor_address = excluded.contributor_address,
+      can_edit_sculptures = 1,
+      updated_at = excluded.updated_at`,
+    [
+      contributorId,
+      parcelCtx.parcelId,
+      candidate.id,
+      candidate.email || '',
+      candidate.name || 'Artist',
+      candidateAddr,
+      user.id,
+      now,
+      now
+    ]
+  );
+
+  const listRes = await listLandContributorsAndEligible(db, {
+    parcelId: parcelCtx.parcelId,
+    user
+  });
+  return {
+    ok: true,
+    contributor:
+      listRes.contributors.find((c) => c.contributorSub === candidate.id) || null,
+    ...listRes
+  };
+}
+
+export async function removeLandContributor(db, { parcelId, contributorSub, user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const cleanSub = String(contributorSub || '').trim();
+  if (!cleanSub) throw new McpServiceError('contributorSub is required.', 400);
+
+  await db.run('DELETE FROM land_contributors WHERE parcel_id = ? AND contributor_sub = ?', [
+    parcelCtx.parcelId,
+    cleanSub
+  ]);
+
+  const listRes = await listLandContributorsAndEligible(db, {
+    parcelId: parcelCtx.parcelId,
+    user
+  });
+  return { ok: true, removedSub: cleanSub, ...listRes };
+}
+
+export async function directOwnerEraseLand(db, { parcelId, user, body }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  return applyEraseLand(db, {
+    parcelCtx,
+    ownerAddress: resolvePreferredOwnerWallet(user),
+    reason: body?.reason || '',
+    viaAgent: false
+  });
 }
 
 export async function directOwnerCreateSculptureOnLand(
@@ -1553,7 +2090,7 @@ export const MCP_TOOLS = [
   {
     name: 'put_sculpture_on_land',
     description:
-      'Place/mint a new 3D voxel sculpture on a Virtual Land parcel owned by the paired user. Executes immediately with owner key signature or sends signature notification to mobile.',
+      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Executes immediately with owner key signature or sends signature notification to mobile.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1561,17 +2098,47 @@ export const MCP_TOOLS = [
         title: { type: 'string' },
         description: { type: 'string' },
         voxels: { type: 'array' },
+        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
+        modelBase64: { type: 'string' },
+        modelData: { type: 'string' },
+        modelUrl: { type: 'string' },
+        modelScale: { type: 'number' },
+        modelRotationY: { type: 'number' },
         lat: { type: 'number' },
         lng: { type: 'number' },
         signature: { type: 'string' }
       },
-      required: ['parcelId', 'title', 'description', 'voxels']
+      required: ['parcelId', 'title', 'description']
+    }
+  },
+  {
+    name: 'load_3d_model_on_land',
+    description:
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Executes with owner signature or sends mobile approval notification.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        sculptureId: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
+        modelBase64: { type: 'string' },
+        modelData: { type: 'string' },
+        modelUrl: { type: 'string' },
+        modelScale: { type: 'number' },
+        modelRotationY: { type: 'number' },
+        lat: { type: 'number' },
+        lng: { type: 'number' },
+        signature: { type: 'string' }
+      },
+      required: ['parcelId', 'title', 'description', 'modelFormat']
     }
   },
   {
     name: 'update_land_sculpture',
     description:
-      'Edit title, description, or voxels of an existing sculpture on the user owned land. Signs via owner private key or notifies mobile device for signature.',
+      'Edit title, description, voxels, or non-voxel 3D model (.glb/.gltf/.obj/.stl/.ply) of an existing sculpture on the user owned land. Signs via owner private key or notifies mobile device for signature.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1579,6 +2146,12 @@ export const MCP_TOOLS = [
         title: { type: 'string' },
         description: { type: 'string' },
         voxels: { type: 'array' },
+        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
+        modelBase64: { type: 'string' },
+        modelData: { type: 'string' },
+        modelUrl: { type: 'string' },
+        modelScale: { type: 'number' },
+        modelRotationY: { type: 'number' },
         signature: { type: 'string' }
       },
       required: ['sculptureId']
@@ -1610,6 +2183,21 @@ export const MCP_TOOLS = [
         signature: { type: 'string' }
       },
       required: ['sculptureId']
+    }
+  },
+  {
+    name: 'erase_land',
+    description:
+      'Erase all sculptures, custom 3D models, and curations on an existing owned Virtual Land parcel when authorized by the landholder (requires allowAgentErase permission enabled + owner EIP-191 signature or mobile approval).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        confirmParcelId: { type: 'string' },
+        reason: { type: 'string' },
+        signature: { type: 'string' }
+      },
+      required: ['parcelId']
     }
   },
   {
@@ -1689,12 +2277,27 @@ export async function handleMcpJsonRpc(
     } else if (toolName === 'get_land') {
       const parcelId = normalizeParcelId(args.parcelId);
       const rows = await db.all(
-        'SELECT * FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC',
+        `SELECT s.*,
+          m.model_format AS custom_model_format,
+          m.mime_type AS custom_model_mime,
+          m.source_type AS custom_model_source_type,
+          m.model_url AS custom_model_url,
+          m.model_cid AS custom_model_cid,
+          m.model_uri AS custom_model_uri,
+          m.scale AS custom_model_scale,
+          m.rotation_y AS custom_model_rotation_y,
+          m.byte_length AS custom_model_bytes
+         FROM sculptures s
+         LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+         WHERE s.parcel_id = ? AND s.hidden = 0
+         ORDER BY s.created_at ASC`,
         [parcelId]
       );
       const cur = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [parcelId]);
+      const settings = await getLandSettingsInternal(db, parcelId);
       toolResult = {
         parcelId,
+        settings,
         curation: cur
           ? {
               customName: cur.custom_name,
@@ -1705,41 +2308,126 @@ export async function handleMcpJsonRpc(
           : null,
         sculptures: (rows || []).map((r) => serializeSculptureRow(r, { includeVoxels: true }))
       };
-    } else if (toolName === 'put_sculpture_on_land') {
+    } else if (toolName === 'put_sculpture_on_land' || toolName === 'load_3d_model_on_land') {
       const parcelCtx = await checkParcelOwnership(db, {
         parcelId: args.parcelId,
         user: ownerUser
       });
-      const validation = validatePublishPayload({
-        title: args.title,
-        description: args.description,
-        termsAccepted: true,
-        voxels: args.voxels
-      });
-      if (!validation.ok) {
-        throw new McpServiceError(validation.errors[0], 400, { errors: validation.errors });
+      const modelCheck = extractCustomModelInput(args);
+      if (modelCheck.error) {
+        throw new McpServiceError(modelCheck.error, 400);
       }
-      toolResult = await handlePairedLandMutationViaMcp(db, {
-        pairing,
-        ownerUser,
-        action: 'create_sculpture',
-        parcelId: parcelCtx.parcelId,
-        payload: {
-          title: validation.title,
-          description: validation.description,
-          voxels: validation.cleanVoxels,
-          lat: args.lat,
-          lng: args.lng,
-          altitude: args.altitude,
-          previewDataUrl: args.previewDataUrl
-        },
-        signature: args.signature || '',
-        auth: args.auth || null,
-        txHash: args.txHash || '',
-        pinSculptureFn,
-        mintSculptureFn,
-        notifyMobileFn
-      });
+
+      if (toolName === 'load_3d_model_on_land' && !modelCheck.provided) {
+        throw new McpServiceError(
+          'Provide a valid 3D model (modelFormat + modelBase64 / modelData / modelUrl).',
+          400
+        );
+      }
+
+      if (toolName === 'load_3d_model_on_land' && args.sculptureId) {
+        const scRow = await checkSculptureOwnership(db, {
+          sculptureId: args.sculptureId,
+          user: ownerUser
+        });
+        if (scRow.parcel_id !== parcelCtx.parcelId) {
+          throw new McpServiceError('Sculpture does not belong to target parcelId.', 400);
+        }
+        const checkedMeta = validateEditableTitleAndDescription({
+          title: args.title !== undefined ? args.title : scRow.title,
+          description: args.description !== undefined ? args.description : scRow.description
+        });
+        toolResult = await handlePairedLandMutationViaMcp(db, {
+          pairing,
+          ownerUser,
+          action: 'update_sculpture',
+          parcelId: parcelCtx.parcelId,
+          sculptureId: scRow.id,
+          payload: {
+            title: checkedMeta.title,
+            description: checkedMeta.description,
+            modelFormat: args.modelFormat ?? args.model?.format,
+            ...(args.modelBase64 || args.model?.dataBase64
+              ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
+              : {}),
+            ...(args.modelData || args.model?.data || args.model?.dataText
+              ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
+              : {}),
+            ...(args.modelUrl || args.model?.url
+              ? { modelUrl: args.modelUrl || args.model?.url }
+              : {}),
+            modelScale: modelCheck.customModel.scale,
+            modelRotationY: modelCheck.customModel.rotationY,
+            ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
+          },
+          signature: args.signature || '',
+          auth: args.auth || null,
+          txHash: args.txHash || '',
+          pinSculptureFn,
+          mintSculptureFn,
+          notifyMobileFn
+        });
+      } else {
+        let createPayload;
+        if (modelCheck.provided) {
+          const checkedMeta = validateEditableTitleAndDescription({
+            title: args.title,
+            description: args.description
+          });
+          createPayload = {
+            title: checkedMeta.title,
+            description: checkedMeta.description,
+            modelFormat: modelCheck.customModel.format,
+            ...(args.modelBase64 || args.model?.dataBase64
+              ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
+              : {}),
+            ...(args.modelData || args.model?.data || args.model?.dataText
+              ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
+              : {}),
+            ...(args.modelUrl || args.model?.url
+              ? { modelUrl: args.modelUrl || args.model?.url }
+              : {}),
+            modelScale: modelCheck.customModel.scale,
+            modelRotationY: modelCheck.customModel.rotationY,
+            lat: args.lat,
+            lng: args.lng,
+            altitude: args.altitude,
+            previewDataUrl: args.previewDataUrl
+          };
+        } else {
+          const validation = validatePublishPayload({
+            title: args.title,
+            description: args.description,
+            termsAccepted: true,
+            voxels: args.voxels
+          });
+          if (!validation.ok) {
+            throw new McpServiceError(validation.errors[0], 400, { errors: validation.errors });
+          }
+          createPayload = {
+            title: validation.title,
+            description: validation.description,
+            voxels: validation.cleanVoxels,
+            lat: args.lat,
+            lng: args.lng,
+            altitude: args.altitude,
+            previewDataUrl: args.previewDataUrl
+          };
+        }
+        toolResult = await handlePairedLandMutationViaMcp(db, {
+          pairing,
+          ownerUser,
+          action: 'create_sculpture',
+          parcelId: parcelCtx.parcelId,
+          payload: createPayload,
+          signature: args.signature || '',
+          auth: args.auth || null,
+          txHash: args.txHash || '',
+          pinSculptureFn,
+          mintSculptureFn,
+          notifyMobileFn
+        });
+      }
     } else if (toolName === 'update_land_sculpture') {
       const scRow = await checkSculptureOwnership(db, {
         sculptureId: args.sculptureId,
@@ -1751,8 +2439,12 @@ export async function handleMcpJsonRpc(
         title: nextTitle,
         description: nextDesc
       });
+      const modelCheck = extractCustomModelInput(args);
+      if (modelCheck.error) {
+        throw new McpServiceError(modelCheck.error, 400);
+      }
       let nextVoxels;
-      if (args.voxels !== undefined) {
+      if (!modelCheck.provided && args.voxels !== undefined) {
         const voxelRes = sanitizeVoxels(args.voxels);
         if (voxelRes.errors.length > 0) {
           throw new McpServiceError(voxelRes.errors[0], 400, { errors: voxelRes.errors });
@@ -1769,6 +2461,22 @@ export async function handleMcpJsonRpc(
           title: checkedMeta.title,
           description: checkedMeta.description,
           ...(nextVoxels ? { voxels: nextVoxels } : {}),
+          ...(modelCheck.provided
+            ? {
+                modelFormat: modelCheck.customModel.format,
+                ...(args.modelBase64 || args.model?.dataBase64
+                  ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
+                  : {}),
+                ...(args.modelData || args.model?.data || args.model?.dataText
+                  ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
+                  : {}),
+                ...(args.modelUrl || args.model?.url
+                  ? { modelUrl: args.modelUrl || args.model?.url }
+                  : {}),
+                modelScale: modelCheck.customModel.scale,
+                modelRotationY: modelCheck.customModel.rotationY
+              }
+            : {}),
           ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
         },
         signature: args.signature || '',
@@ -1812,6 +2520,43 @@ export async function handleMcpJsonRpc(
         parcelId: scRow.parcel_id,
         sculptureId: scRow.id,
         payload: { sculptureId: scRow.id },
+        signature: args.signature || '',
+        auth: args.auth || null,
+        txHash: args.txHash || '',
+        pinSculptureFn,
+        mintSculptureFn,
+        notifyMobileFn
+      });
+    } else if (toolName === 'erase_land') {
+      const parcelCtx = await checkParcelOwnership(db, {
+        parcelId: args.parcelId,
+        user: ownerUser
+      });
+      if (
+        args.confirmParcelId &&
+        normalizeParcelId(args.confirmParcelId) !== parcelCtx.parcelId
+      ) {
+        throw new McpServiceError(
+          `confirmParcelId mismatch: expected ${parcelCtx.parcelId}.`,
+          400
+        );
+      }
+      const settings = await getLandSettingsInternal(db, parcelCtx.parcelId);
+      if (!settings.allowAgentErase) {
+        throw new McpServiceError(
+          `Agent land erasure is disabled by the holder of Virtual Land ${parcelCtx.parcelId}.`,
+          403
+        );
+      }
+      toolResult = await handlePairedLandMutationViaMcp(db, {
+        pairing,
+        ownerUser,
+        action: 'erase_land',
+        parcelId: parcelCtx.parcelId,
+        payload: {
+          parcelId: parcelCtx.parcelId,
+          reason: String(args.reason || '').slice(0, 160)
+        },
         signature: args.signature || '',
         auth: args.auth || null,
         txHash: args.txHash || '',
