@@ -18,7 +18,11 @@ import {
   upsertGoogleUser,
   verifyGoogleSignIn
 } from './services/auth.mjs';
-import { getChainStatus, mintOnRobinhoodChain } from './services/blockchain.mjs';
+import {
+  emitMetadataUpdateOnChain,
+  getChainStatus,
+  mintOnRobinhoodChain
+} from './services/blockchain.mjs';
 import { pinJsonDocumentToIpfs, pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
 import { validatePublishPayload } from './services/moderation.mjs';
 import {
@@ -77,6 +81,7 @@ import {
   directOwnerCreateSculptureOnLand,
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
+  directOwnerRollbackRevision,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
@@ -88,13 +93,26 @@ import {
   listLandsWithCurations,
   listMcpPairings,
   listPendingSignaturesForUser,
+  listSculptureRevisions,
   rejectSignatureRequest,
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
-  updateLandSettings
+  updateLandSettings,
+  upsertAnchorAndRevision
 } from '../shared/mcpService.mjs';
-import { b64ToModelBytes } from '../shared/model3d.mjs';
+import { b64ToModelBytes, validateAnchorOffset } from '../shared/model3d.mjs';
+import {
+  checkAndConsumeRelayerQuota,
+  fetchParcelLandmarkAnchor,
+  saveParcelLandmarkAnchor,
+  updateLandSecurityPolicy
+} from '../shared/landmarkService.mjs';
+import {
+  issuePasskeyRegistrationOptions,
+  listUserPasskeys,
+  verifyAndStorePasskeyRegistration
+} from '../shared/passkeyService.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
@@ -103,9 +121,29 @@ import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mj
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createAppServer() {
+export function createAppServer(serverOptions = {}) {
+  const effectiveRelayerDailyQuota =
+    Number.isFinite(Number(serverOptions?.relayerDailyQuota))
+      ? Number(serverOptions.relayerDailyQuota)
+      : CONFIG.relayerDailyQuota;
   const db = getDb();
   const app = express();
+
+  function getRequestRpId(req) {
+    const originHeader = String(req.headers?.origin || '').trim();
+    if (originHeader) {
+      try {
+        const originHost = new URL(originHeader).hostname.toLowerCase();
+        if (originHost) return originHost;
+      } catch {
+        // ignore invalid origin
+      }
+    }
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')
+      .split(',')[0]
+      .trim();
+    return hostHeader.split(':')[0].toLowerCase() || 'localhost';
+  }
   app.use(cors());
   app.use(express.json({ limit: '12mb' }));
 
@@ -270,9 +308,17 @@ export function createAppServer() {
       m.model_uri AS custom_model_uri,
       m.scale AS custom_model_scale,
       m.rotation_y AS custom_model_rotation_y,
-      m.byte_length AS custom_model_bytes
+      m.byte_length AS custom_model_bytes,
+      a.dx AS anchor_dx,
+      a.dy AS anchor_dy,
+      a.dz AS anchor_dz,
+      a.yaw AS anchor_yaw,
+      a.current_rev AS current_rev,
+      a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+      a.mesh_stats_json AS mesh_stats_json
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
   `;
 
   app.get('/api/sculptures', (req, res) => {
@@ -285,8 +331,10 @@ export function createAppServer() {
     const radiusMeters =
       req.query.radiusMeters !== undefined ? Math.max(10, Number(req.query.radiusMeters)) : null;
     const parcelFilter = req.query.parcel ? String(req.query.parcel).toUpperCase() : null;
+    const includeVoxels =
+      req.query.includeVoxels !== '0' && req.query.includeVoxels !== 'false';
 
-    let items = rows.map((r) => serializeSculptureRow(r, { includeVoxels: true }));
+    let items = rows.map((r) => serializeSculptureRow(r, { includeVoxels }));
 
     if (parcelFilter) {
       items = items.filter((item) => item.parcelId === parcelFilter);
@@ -566,7 +614,8 @@ export function createAppServer() {
       getOwnerPinSeal(chatDb, {
         sculptureId: req.params.id,
         user: req.user,
-        readIpfsJsonFn: readIpfsJsonDoc
+        readIpfsJsonFn: readIpfsJsonDoc,
+        pinMasterKek: CONFIG.pinMasterKek
       })
     )
   );
@@ -606,7 +655,9 @@ export function createAppServer() {
         user: req.user,
         body: req.body,
         userAgent: req.headers['user-agent'] || '',
-        readIpfsJsonFn: readIpfsJsonDoc
+        readIpfsJsonFn: readIpfsJsonDoc,
+        pinMasterKek: CONFIG.pinMasterKek,
+        expectedRpId: getRequestRpId(req)
       })
     )
   );
@@ -747,7 +798,8 @@ export function createAppServer() {
         apiOrigin: `${req.protocol}://${req.get('host')}`,
         pinSculptureFn: makePinHook(),
         mintSculptureFn: makeMintHook(),
-        notifyMobileFn: notifyPairedMobile
+        notifyMobileFn: notifyPairedMobile,
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
       });
       res.json(out);
     } catch (err) {
@@ -771,7 +823,8 @@ export function createAppServer() {
         sculptureId: req.params.id,
         user: req.user,
         body: req.body,
-        pinSculptureFn: makePinHook()
+        pinSculptureFn: makePinHook(),
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
       })
     )
   );
@@ -784,7 +837,26 @@ export function createAppServer() {
         sculptureId: req.params.id,
         user: req.user,
         body: req.body,
-        pinSculptureFn: makePinHook()
+        pinSculptureFn: makePinHook(),
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
+      })
+    )
+  );
+
+  app.get(
+    '/api/sculptures/:id/revisions',
+    handleChatRoute((req) => listSculptureRevisions(chatDb, { sculptureId: req.params.id }))
+  );
+
+  app.post(
+    '/api/sculptures/:id/revisions/:revNum/rollback',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerRollbackRevision(chatDb, {
+        sculptureId: req.params.id,
+        revNum: Number(req.params.revNum),
+        user: req.user,
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
       })
     )
   );
@@ -881,13 +953,82 @@ export function createAppServer() {
   app.post(
     '/api/lands/:parcelId/sculptures',
     requireAuth,
-    handleChatRoute((req) =>
-      directOwnerCreateSculptureOnLand(chatDb, {
+    handleChatRoute(async (req) => {
+      await checkAndConsumeRelayerQuota(chatDb, {
+        userId: req.user.id,
+        isAdmin: Boolean(req.user.is_admin),
+        dailyQuota: effectiveRelayerDailyQuota
+      });
+      return directOwnerCreateSculptureOnLand(chatDb, {
         parcelId: req.params.parcelId,
         user: req.user,
         body: req.body,
         pinSculptureFn: makePinHook(),
         mintSculptureFn: makeMintHook()
+      });
+    })
+  );
+
+  app.post(
+    '/api/lands/:parcelId/landmark-pack',
+    requireAuth,
+    handleChatRoute((req) =>
+      saveParcelLandmarkAnchor(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body,
+        pinJsonFn: (obj, name) => pinJsonDocumentToIpfs(obj, name)
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/landmark-pack/fetch',
+    handleChatRoute((req) =>
+      fetchParcelLandmarkAnchor(chatDb, {
+        parcelId: req.params.parcelId,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/security',
+    requireAuth,
+    handleChatRoute((req) =>
+      updateLandSecurityPolicy(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.get(
+    '/api/passkeys/status',
+    requireAuth,
+    handleChatRoute(async (req) => ({
+      passkeys: await listUserPasskeys(chatDb, req.user.id)
+    }))
+  );
+
+  app.post(
+    '/api/passkeys/register/options',
+    requireAuth,
+    handleChatRoute((req) =>
+      issuePasskeyRegistrationOptions(req.user, { rpId: getRequestRpId(req) })
+    )
+  );
+
+  app.post(
+    '/api/passkeys/register/verify',
+    requireAuth,
+    handleChatRoute((req) =>
+      verifyAndStorePasskeyRegistration(chatDb, {
+        user: req.user,
+        body: req.body,
+        rpId: getRequestRpId(req)
       })
     )
   );
@@ -943,7 +1084,8 @@ export function createAppServer() {
         signature: req.body?.signature || '',
         decryptEmbeddedPrivateKey: async (u) => decryptPrivateKey(u.encrypted_wallet_json),
         pinSculptureFn: makePinHook(),
-        mintSculptureFn: makeMintHook()
+        mintSculptureFn: makeMintHook(),
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
       })
     )
   );
@@ -957,7 +1099,8 @@ export function createAppServer() {
         txHash: req.body?.txHash || '',
         agentName: req.body?.agentName || '',
         pinSculptureFn: makePinHook(),
-        mintSculptureFn: makeMintHook()
+        mintSculptureFn: makeMintHook(),
+        emitMetadataUpdateFn: emitMetadataUpdateOnChain
       });
       res.json(out);
     } catch (err) {
@@ -994,6 +1137,17 @@ export function createAppServer() {
       if (!validation.ok) {
         return res.status(400).json({ error: validation.errors.join(' '), errors: validation.errors });
       }
+
+      const anchorCheck = validateAnchorOffset(req.body?.anchorOffset || {});
+      if (anchorCheck.error) {
+        return res.status(400).json({ error: anchorCheck.error });
+      }
+
+      await checkAndConsumeRelayerQuota(chatDb, {
+        userId: req.user.id,
+        isAdmin: Boolean(req.user.is_admin),
+        dailyQuota: effectiveRelayerDailyQuota
+      });
 
       const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
       const locationBundle = await verifyAndEnrichLocation(
@@ -1117,11 +1271,29 @@ export function createAppServer() {
         );
       }
 
+      await upsertAnchorAndRevision(chatDb, {
+        sculptureId,
+        parcelId: locationBundle.parcelId,
+        revNum: 1,
+        anchorOffset: anchorCheck.offset,
+        erc4906TxHash: mintResult.txHash || '',
+        editorUser: req.user,
+        editorRole: 'owner',
+        modelType: 'voxel',
+        voxels: validation.cleanVoxels,
+        title: validation.title,
+        description: validation.description,
+        ipfsMetadataCid: ipfsResult.metadataCid,
+        ipfsModelCid: ipfsResult.modelCid,
+        ipfsImageCid: ipfsResult.imageCid,
+        changeSummary: 'Initial mobile publish'
+      });
+
       if (req.body?.draftId) {
         await consumeDraftOnPublish(chatDb, { draftId: req.body.draftId, user: req.user });
       }
 
-      const saved = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(sculptureId);
+      const saved = db.prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ?`).get(sculptureId);
       res.status(201).json({
         sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
         mint: mintResult,
@@ -1129,7 +1301,9 @@ export function createAppServer() {
       });
     } catch (err) {
       console.error('Publish failed:', err);
-      res.status(400).json({ error: err.message || 'Failed to publish sculpture' });
+      res
+        .status(err?.statusCode || 400)
+        .json({ error: err.message || 'Failed to publish sculpture', ...(err?.extra || {}) });
     }
   });
 

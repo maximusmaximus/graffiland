@@ -205,6 +205,26 @@ export default function InfoTermsModal({
               </p>
             </div>
 
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 700, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🛡️" size={16} /> Hybrid WebXR + ORB Relocalization, Passkeys &amp; Revisions
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)' }}>
+                <li>
+                  <strong>Ground AR Parcel Borders &amp; Spatial Streaming:</strong> Nearby Virtual Land parcels render ground perimeters in AR Preview (pulsing gold when standing inside). Maps load lightweight metadata first and hydrate full 3D geometry smoothly within <code>65m</code>.
+                </li>
+                <li>
+                  <strong>Non-Reversible 3-Angle ORB Anchoring:</strong> Moving across 3 angles during Scene Scan extracts privacy-safe binary ORB descriptors (zero raw pixels leave your phone) for WebXR / iOS Safari relocalization and local <code>anchorOffset</code> placement.
+                </li>
+                <li>
+                  <strong>Draco/Meshopt 3D Assets &amp; Immutable Revisions:</strong> Custom <code>.glb/.gltf/.obj/.stl/.ply</code> uploads support Draco &amp; Meshopt decoding within a mobile-safe <code>150k</code> triangle / <code>8</code> texture budget, with immutable IPFS revisions, <code>expectedRev</code> optimistic locking, <code>ERC-4906</code> MetadataUpdate events, and 1-click Land Holder rollback.
+                </li>
+                <li>
+                  <strong>Hardware ES256 Passkeys &amp; KEK Seals:</strong> Landholders can enforce WebAuthn Passkeys, live ORB PnP inlier proofs, and server <code>PIN_MASTER_KEK</code> envelope protection before unlocking on-site encrypted IPFS pinned batches.
+                </li>
+              </ul>
+            </div>
+
             <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 4 }}>
               Icons: Xero Emoji by Max Infeld (CC BY 4.0)
             </div>

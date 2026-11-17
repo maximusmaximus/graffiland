@@ -8,6 +8,12 @@ import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
 import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
+import { OrbLandmarkTracker } from '../utils/orbTracker.js';
+import {
+  isWebAuthnSupported,
+  registerHardwarePasskey,
+  requestPasskeyAssertion
+} from '../utils/passkeyClient.js';
 
 const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
@@ -111,6 +117,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const envUpdaterRef = useRef(null);
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
   const polRef = useRef(new ProofOfLocationTracker());
+  const orbTrackerRef = useRef(new OrbLandmarkTracker());
+  const orbKeyframesRef = useRef(new Map());
+  const orbPackCacheRef = useRef(new Map());
+  const latestOrbProofRef = useRef(null);
+  const hydratedSculptureMapRef = useRef(new Map());
   const wsRef = useRef(null);
 
   // Studio states
@@ -186,6 +197,15 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   });
   const [scanBoxCollapsed, setScanBoxCollapsed] = useState(false);
   const [unmappedGrid, setUnmappedGrid] = useState(() => Array(48).fill(false));
+  const [orbStatus, setOrbStatus] = useState({
+    keyframes: 0,
+    features: 0,
+    relocalizedInliers: 0,
+    reprojErrPx: null,
+    engine: 'Gyro+ORB'
+  });
+  const [passkeyCount, setPasskeyCount] = useState(0);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [originStatus, setOriginStatus] = useState({
     originBlocked: false,
     originVisible: true,
@@ -632,9 +652,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               .listSculptures({
                 lat: locationRef.current.lat,
                 lng: locationRef.current.lng,
-                radiusMeters: 300
+                radiusMeters: 300,
+                includeVoxels: false
               })
-              .then((nRes) => setNearbySculptures(nRes.sculptures || []))
+              .then((nRes) => hydrateNearbyList(nRes.sculptures || [], locationRef.current))
               .catch(() => {});
           }
         }
@@ -894,6 +915,88 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     };
   }, []);
 
+  // WebXR capability probe, ORB worker cleanup, and hardware passkey status
+  useEffect(() => {
+    let active = true;
+    if (typeof navigator !== 'undefined' && navigator.xr?.isSessionSupported) {
+      navigator.xr
+        .isSessionSupported('immersive-ar')
+        .then((supported) => {
+          if (active && supported) {
+            setOrbStatus((prev) => ({ ...prev, engine: 'WebXR+ORB' }));
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+      orbTrackerRef.current?.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setPasskeyCount(0);
+      return;
+    }
+    api
+      .getPasskeyStatus()
+      .then((res) => setPasskeyCount((res?.passkeys || []).length))
+      .catch(() => {});
+  }, [user?.id]);
+
+  // Progressive spatial streaming: fetch full voxels only within <= 65m
+  const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
+    const mergedInitial = (lightList || []).map((sc) => {
+      const cached = hydratedSculptureMapRef.current.get(sc.id);
+      if (cached && Number(cached.currentRev || 1) === Number(sc.currentRev || 1)) {
+        return { ...sc, ...cached };
+      }
+      return sc;
+    });
+    setNearbySculptures(mergedInitial);
+
+    if (!curLoc) return;
+    const toFetch = mergedInitial
+      .filter((sc) => {
+        const d =
+          sc.distanceMeters ?? haversineMeters(curLoc.lat, curLoc.lng, sc.lat, sc.lng);
+        const cached = hydratedSculptureMapRef.current.get(sc.id);
+        const alreadyHydrated =
+          cached &&
+          Number(cached.currentRev || 1) === Number(sc.currentRev || 1) &&
+          (cached.modelType === 'custom-3d' || (cached.voxels && cached.voxels.length > 0));
+        return d <= 65 && !alreadyHydrated;
+      })
+      .slice(0, 8);
+
+    if (toFetch.length === 0) return;
+
+    const fetched = await Promise.all(
+      toFetch.map((sc) =>
+        api
+          .getSculpture(sc.id)
+          .then((r) => r?.sculpture || null)
+          .catch(() => null)
+      )
+    );
+    let updated = false;
+    for (const full of fetched) {
+      if (full?.id) {
+        hydratedSculptureMapRef.current.set(full.id, full);
+        updated = true;
+      }
+    }
+    if (updated) {
+      setNearbySculptures((prev) =>
+        prev.map((sc) => {
+          const cached = hydratedSculptureMapRef.current.get(sc.id);
+          return cached ? { ...sc, ...cached } : sc;
+        })
+      );
+    }
+  }, []);
+
   // Geolocation watcher + load nearby sculptures at this physical location
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -932,9 +1035,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             const res = await api.listSculptures({
               lat: loc.lat,
               lng: loc.lng,
-              radiusMeters: 300
+              radiusMeters: 300,
+              includeVoxels: false
             });
-            setNearbySculptures(res.sculptures || []);
+            await hydrateNearbyList(res.sculptures || [], refined);
           } catch {
             // ignore offline fetch retry
           }
@@ -1179,13 +1283,122 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         baseGlowRing
       };
 
-      sub.position.set(offset.east * clampFactor, deltaY, -offset.north * clampFactor);
+      const ax = Number(sc.anchorOffset?.dx || 0);
+      const ay = Number(sc.anchorOffset?.dy || 0);
+      const az = Number(sc.anchorOffset?.dz || 0);
+      const ayaw = Number(sc.anchorOffset?.yaw || 0);
+      if (Number.isFinite(ayaw) && ayaw !== 0) {
+        sub.rotation.y = ayaw;
+      }
+      sub.position.set(
+        offset.east * clampFactor + ax,
+        deltaY + ay,
+        -offset.north * clampFactor + az
+      );
       group.add(sub);
+    }
+
+    // Ground-level Virtual Land Perimeter borders (cyan outside, pulsing gold inside parcel)
+    const renderedParcels = new Set();
+    for (const sc of nearbySculptures) {
+      if (!sc.parcelId || renderedParcels.has(sc.parcelId) || !sc.parcelBounds?.sw || !sc.parcelBounds?.ne) {
+        continue;
+      }
+      renderedParcels.add(sc.parcelId);
+      const [swLat, swLng] = sc.parcelBounds.sw;
+      const [neLat, neLng] = sc.parcelBounds.ne;
+      const insideParcel =
+        location.lat >= swLat && location.lat <= neLat && location.lng >= swLng && location.lng <= neLng;
+      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.11;
+      const corners = [
+        [swLat, swLng],
+        [swLat, neLng],
+        [neLat, neLng],
+        [neLat, swLng]
+      ].map(([cLat, cLng]) => {
+        const off = latLngOffsetMeters(location.lat, location.lng, cLat, cLng);
+        const cd = Math.hypot(off.east, off.north);
+        const cf = cd > 55 ? 55 / cd : 1;
+        return new THREE.Vector3(off.east * cf, baseY, -off.north * cf);
+      });
+      const borderGeo = new THREE.BufferGeometry().setFromPoints(corners);
+      const borderMat = new THREE.LineBasicMaterial({
+        color: insideParcel ? 0xffd166 : 0x00f5d4,
+        transparent: true,
+        opacity: insideParcel ? 0.92 : 0.56
+      });
+      const perimeterLoop = new THREE.LineLoop(borderGeo, borderMat);
+      perimeterLoop.userData = {
+        isParcelPerimeter: true,
+        insideParcel,
+        parcelId: sc.parcelId,
+        perimeterMat: borderMat
+      };
+      group.add(perimeterLoop);
     }
     return () => {
       cancelled = true;
     };
   }, [mode, location, nearbySculptures]);
+
+  // Live ORB visual landmark relocalization loop in AR Preview when inside <= 65m of a mapped parcel
+  useEffect(() => {
+    if (mode !== 'preview' || !location || !cameraReady) return undefined;
+    let cancelled = false;
+    let busy = false;
+
+    async function tickOrbMatch() {
+      if (cancelled || busy || !videoRef.current || videoRef.current.readyState < 2) return;
+      const loc = locationRef.current;
+      if (!loc) return;
+      const targetSc =
+        arTargetedSculpture?.sculpture ||
+        nearbySculptures.find((sc) => haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) <= 65);
+      if (!targetSc?.parcelId) return;
+
+      busy = true;
+      try {
+        let packEntry = orbPackCacheRef.current.get(targetSc.parcelId);
+        if (packEntry === undefined) {
+          const fetched = await api
+            .fetchParcelLandmarkPack(targetSc.parcelId, {
+              lat: loc.lat,
+              lng: loc.lng,
+              deviceProfile: { isMobile: true }
+            })
+            .catch(() => null);
+          packEntry = fetched?.available ? fetched.anchorPack : null;
+          orbPackCacheRef.current.set(targetSc.parcelId, packEntry);
+        }
+        if (!packEntry || cancelled) return;
+
+        const match = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, packEntry);
+        if (!match || cancelled) return;
+        if (match.inlierCount >= 4) {
+          latestOrbProofRef.current = {
+            descriptorDigest: match.descriptorDigest,
+            inlierCount: match.inlierCount,
+            reprojectionErrorPx: match.reprojectionErrorPx
+          };
+        }
+        setOrbStatus((prev) => ({
+          ...prev,
+          relocalizedInliers: match.inlierCount || 0,
+          reprojErrPx: match.inlierCount > 0 ? match.reprojectionErrorPx : null
+        }));
+      } catch {
+        // non-blocking relocalization tick
+      } finally {
+        busy = false;
+      }
+    }
+
+    const timer = setInterval(tickOrbMatch, 480);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [mode, Boolean(location), cameraReady, arTargetedSculpture?.sculpture?.parcelId, nearbySculptures]);
 
   const computeTargetVoxel = useCallback((forContinuousHold = false) => {
     const cam = cameraRef.current;
@@ -1590,6 +1803,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     let lastOcclusionPush = 0;
     let lastTargetCheck = 0;
     let lastScanPosePush = 0;
+    let lastOrbExtractPush = 0;
+    let orbExtractBusy = false;
     const scanFwdVec = new THREE.Vector3();
     const originProjVec = new THREE.Vector3();
     const targetRay = new THREE.Raycaster();
@@ -1767,6 +1982,39 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           lastUnmappedMaskRef.current = vpKey;
           setUnmappedGrid(vpGrid);
         }
+
+        if (
+          now - lastOrbExtractPush > 920 &&
+          !orbExtractBusy &&
+          videoRef.current?.readyState >= 2 &&
+          orbKeyframesRef.current.size < 3
+        ) {
+          const bucket = yawDeg < -18 ? 'left' : yawDeg > 18 ? 'right' : 'center';
+          if (!orbKeyframesRef.current.has(bucket)) {
+            lastOrbExtractPush = now;
+            orbExtractBusy = true;
+            orbTrackerRef.current
+              ?.extractKeyframeFeatures(videoRef.current, { yawDeg, pitchDeg })
+              .then((kf) => {
+                if (kf?.features?.length >= 4 && !orbKeyframesRef.current.has(bucket)) {
+                  orbKeyframesRef.current.set(bucket, kf);
+                  let totalPts = 0;
+                  for (const item of orbKeyframesRef.current.values()) {
+                    totalPts += item.features.length;
+                  }
+                  setOrbStatus((prev) => ({
+                    ...prev,
+                    keyframes: orbKeyframesRef.current.size,
+                    features: totalPts
+                  }));
+                }
+              })
+              .catch(() => {})
+              .finally(() => {
+                orbExtractBusy = false;
+              });
+          }
+        }
       }
 
       const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
@@ -1822,6 +2070,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         const activeId = arTargetedIdRef.current;
         for (const sub of nearbyGroupRef.current.children) {
           const ud = sub.userData;
+          if (ud?.isParcelPerimeter && ud.perimeterMat) {
+            const pPulse = 0.5 + 0.5 * Math.sin(now * 0.005);
+            ud.perimeterMat.opacity = ud.insideParcel ? 0.68 + pPulse * 0.28 : 0.42 + pPulse * 0.22;
+            continue;
+          }
           if (!ud?.baseRingMat) continue;
           const isTargeted = activeId && ud.sculptureId === activeId;
           const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
@@ -2741,7 +2994,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   async function loadPublicMapData() {
     setMapLoading(true);
     try {
-      const [sRes, pRes] = await Promise.all([api.listSculptures(), api.listParcels()]);
+      const [sRes, pRes] = await Promise.all([
+        api.listSculptures({ includeVoxels: false }),
+        api.listParcels()
+      ]);
       setMapSculptures(sRes.sculptures || []);
       setMapParcels(pRes.parcels || []);
     } catch {
@@ -2918,6 +3174,22 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         const ch = await api.issueParcelPinChallenge(sc.id, {
           deviceProfile: { isMobile: true }
         });
+        let orbProof = latestOrbProofRef.current;
+        const cachedPack = orbPackCacheRef.current.get(sc.parcelId);
+        if (cachedPack && videoRef.current?.readyState >= 2) {
+          const freshOrb = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, cachedPack);
+          if (freshOrb?.descriptorDigest) {
+            orbProof = {
+              descriptorDigest: freshOrb.descriptorDigest,
+              inlierCount: freshOrb.inlierCount,
+              reprojectionErrorPx: freshOrb.reprojectionErrorPx
+            };
+          }
+        }
+        let webauthnAssertion = null;
+        if (ch.webauthnRequired) {
+          webauthnAssertion = await requestPasskeyAssertion(ch.challengeNonce);
+        }
         const signed = await signParcelPresenceProof(idObj, {
           sculptureId: sc.id,
           parcelId: sc.parcelId,
@@ -2929,6 +3201,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         });
         const unlocked = await api.unlockPinnedIpfsBatch(sc.id, {
           ...signed,
+          ...(orbProof ? { orbProof } : {}),
+          ...(webauthnAssertion ? { webauthnAssertion } : {}),
           deviceProfile: { isMobile: true }
         });
         if (!cancelled && unlocked.encryptedBatch && unlocked.parcelSealKeyB64) {
@@ -3479,11 +3753,19 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = polRef.current.getSnapshot();
       const refinedAnchor = polRef.current.getRefinedLocation(location) || location;
+      const currentTransform = artTransformRef.current;
+      const anchorOffset = {
+        dx: Number(currentTransform.offsetX || 0),
+        dy: Number(currentTransform.offsetY || 0),
+        dz: Number(currentTransform.offsetZ || 0),
+        yaw: THREE.MathUtils.degToRad(Number(currentTransform.rotYDeg || 0))
+      };
       const res = await api.publishSculpture({
         title,
         description,
         termsAccepted,
         voxels,
+        anchorOffset,
         previewDataUrl,
         draftId: activeDraftId || undefined,
         location: refinedAnchor,
@@ -3495,6 +3777,23 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           hasCamera: cameraReady
         }
       });
+
+      // Persist captured non-reversible 3-angle binary ORB landmark descriptors for cross-platform relocalization
+      if (res?.sculpture?.parcelId && orbKeyframesRef.current.size > 0) {
+        const kfs = Array.from(orbKeyframesRef.current.values());
+        const totalFeatures = kfs.reduce((sum, kf) => sum + (kf.features?.length || 0), 0);
+        if (totalFeatures >= 12) {
+          api
+            .saveParcelLandmarkPack(res.sculpture.parcelId, {
+              geohash: res.sculpture.geohash,
+              keyframes: kfs,
+              allowInitialClaim: true
+            })
+            .catch(() => {});
+          orbKeyframesRef.current.clear();
+          setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0 }));
+        }
+      }
 
       // Initialize the sculpture's client-side E2EE chat board (server never sees K_room or clue answer)
       if (user?.id && res?.sculpture?.id) {
@@ -3557,9 +3856,10 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       const nearbyRes = await api.listSculptures({
         lat: location.lat,
         lng: location.lng,
-        radiusMeters: 300
+        radiusMeters: 300,
+        includeVoxels: false
       });
-      setNearbySculptures(nearbyRes.sculptures || []);
+      await hydrateNearbyList(nearbyRes.sculptures || [], location);
       await refreshMyLands();
     } catch (err) {
       setPublishError(err.message || 'Publish failed');
@@ -4400,7 +4700,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
 
               <div className="scene-scan-hint">{sceneScan.hint}</div>
               <div className="scene-scan-precision mono">
-                ±{sceneScan.precisionMeters.toFixed(2)}m placement
+                ±{sceneScan.precisionMeters.toFixed(2)}m · {orbStatus.engine} ({orbStatus.keyframes}/3)
+                {orbStatus.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
               </div>
             </>
           )}
@@ -4975,6 +5276,35 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
                   <span className="badge">
                     <XeroIcon emoji="🪙" size={13} /> Gas Free · 5% Resale Fee
                   </span>
+                  {orbStatus.features >= 12 && (
+                    <span className="badge teal">
+                      <XeroIcon emoji="📡" size={13} /> {orbStatus.keyframes}/3 ORB Angles ({orbStatus.features} pts)
+                    </span>
+                  )}
+                  {user && isWebAuthnSupported() && (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ fontSize: 11, padding: '3px 9px' }}
+                      disabled={passkeyBusy}
+                      onClick={async () => {
+                        setPasskeyBusy(true);
+                        setPublishError('');
+                        try {
+                          await registerHardwarePasskey('Mobile Biometric Passkey');
+                          const st = await api.getPasskeyStatus();
+                          setPasskeyCount((st?.passkeys || []).length);
+                        } catch (err) {
+                          setPublishError(err.message || 'Passkey registration failed');
+                        } finally {
+                          setPasskeyBusy(false);
+                        }
+                      }}
+                    >
+                      <XeroIcon emoji="🛡️" size={12} />{' '}
+                      {passkeyCount > 0 ? `Passkey Ready (${passkeyCount})` : 'Enroll Biometric Passkey'}
+                    </button>
+                  )}
                 </div>
 
                 <div>

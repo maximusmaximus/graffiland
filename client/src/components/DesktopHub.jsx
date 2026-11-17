@@ -123,7 +123,10 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
 
   const refreshData = useCallback(async () => {
     try {
-      const [sRes, pRes] = await Promise.all([api.listSculptures(), api.listParcels()]);
+      const [sRes, pRes] = await Promise.all([
+        api.listSculptures({ includeVoxels: false }),
+        api.listParcels()
+      ]);
       const nextList = sRes.sculptures || [];
       setSculptures(nextList);
       setParcels(pRes.parcels || []);

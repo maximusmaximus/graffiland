@@ -26,6 +26,8 @@ export const CONFIG = {
   publicUrl: process.env.PUBLIC_URL || 'https://localhost:5173',
   sessionSecret: process.env.SESSION_SECRET || 'graffiland-dev-session-secret-change-me',
   walletEncryptionKey: process.env.WALLET_ENCRYPTION_KEY || 'graffiland-dev-wallet-key-change-me',
+  pinMasterKek: process.env.PIN_MASTER_KEK || process.env.WALLET_ENCRYPTION_KEY || 'graffiland-dev-pin-kek-change-me',
+  relayerDailyQuota: Number(process.env.RELAYER_DAILY_QUOTA || 25),
   googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
   allowDevGoogleAuth: process.env.ALLOW_DEV_GOOGLE_AUTH !== 'false',
   adminEmails: (process.env.ADMIN_EMAILS || 'admin@graffiland.local')

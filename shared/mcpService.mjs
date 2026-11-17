@@ -9,8 +9,10 @@ import {
   b64ToModelBytes,
   extractCustomModelInput,
   INLINE_MODEL_DB_MAX_BYTES,
-  modelBytesToB64
+  modelBytesToB64,
+  validateAnchorOffset
 } from './model3d.mjs';
+import { getLandSecurityPolicy } from './landmarkService.mjs';
 import {
   buildAgentSignPublishPrompt,
   buildLandActivityMessage,
@@ -225,11 +227,105 @@ async function fetchSculptureWithModelRow(db, sculptureId) {
       m.model_uri AS custom_model_uri,
       m.scale AS custom_model_scale,
       m.rotation_y AS custom_model_rotation_y,
-      m.byte_length AS custom_model_bytes
+      m.byte_length AS custom_model_bytes,
+      a.dx AS anchor_dx,
+      a.dy AS anchor_dy,
+      a.dz AS anchor_dz,
+      a.yaw AS anchor_yaw,
+      a.current_rev AS current_rev,
+      a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+      a.mesh_stats_json AS mesh_stats_json
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      WHERE s.id = ?`,
     [sculptureId]
+  );
+}
+
+export async function upsertAnchorAndRevision(
+  db,
+  {
+    sculptureId,
+    parcelId,
+    revNum,
+    anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 },
+    erc4906TxHash = '',
+    meshStats = null,
+    editorUser,
+    editorRole = 'owner',
+    modelType = 'voxel',
+    voxels = [],
+    title = '',
+    description = '',
+    ipfsMetadataCid = '',
+    ipfsModelCid = '',
+    ipfsImageCid = '',
+    changeSummary = 'Initial publish',
+    customModelSnapshot = null
+  }
+) {
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO sculpture_anchors (
+      sculpture_id, parcel_id, dx, dy, dz, yaw, current_rev, last_erc4906_tx_hash, mesh_stats_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sculpture_id) DO UPDATE SET
+      dx = excluded.dx,
+      dy = excluded.dy,
+      dz = excluded.dz,
+      yaw = excluded.yaw,
+      current_rev = excluded.current_rev,
+      last_erc4906_tx_hash = CASE
+        WHEN excluded.last_erc4906_tx_hash != '' THEN excluded.last_erc4906_tx_hash
+        ELSE sculpture_anchors.last_erc4906_tx_hash
+      END,
+      mesh_stats_json = CASE
+        WHEN excluded.mesh_stats_json != '{}' THEN excluded.mesh_stats_json
+        ELSE sculpture_anchors.mesh_stats_json
+      END,
+      updated_at = excluded.updated_at`,
+    [
+      sculptureId,
+      parcelId,
+      Number(anchorOffset?.dx || 0),
+      Number(anchorOffset?.dy || 0),
+      Number(anchorOffset?.dz || 0),
+      Number(anchorOffset?.yaw || 0),
+      Number(revNum),
+      String(erc4906TxHash || ''),
+      meshStats ? JSON.stringify(meshStats) : '{}',
+      now
+    ]
+  );
+
+  await db.run(
+    `INSERT OR IGNORE INTO sculpture_revisions (
+      id, sculpture_id, rev_num, editor_sub, editor_name, editor_role,
+      model_type, voxels_json, voxel_count, title, description,
+      ipfs_metadata_cid, ipfs_model_cid, ipfs_image_cid,
+      change_summary, custom_model_json, anchor_offset_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      globalThis.crypto.randomUUID(),
+      sculptureId,
+      Number(revNum),
+      editorUser?.id || '',
+      editorUser?.name || 'Artist',
+      editorRole,
+      modelType,
+      JSON.stringify(voxels || []),
+      Array.isArray(voxels) ? voxels.length : 0,
+      title,
+      description,
+      ipfsMetadataCid || '',
+      ipfsModelCid || '',
+      ipfsImageCid || '',
+      String(changeSummary || '').slice(0, 160),
+      customModelSnapshot ? JSON.stringify(customModelSnapshot) : '',
+      JSON.stringify(anchorOffset || { dx: 0, dy: 0, dz: 0, yaw: 0 }),
+      now
+    ]
   );
 }
 
@@ -647,9 +743,17 @@ async function listOwnerLandsAndSculptures(db, ownerUser) {
       m.model_uri AS custom_model_uri,
       m.scale AS custom_model_scale,
       m.rotation_y AS custom_model_rotation_y,
-      m.byte_length AS custom_model_bytes
+      m.byte_length AS custom_model_bytes,
+      a.dx AS anchor_dx,
+      a.dy AS anchor_dy,
+      a.dz AS anchor_dz,
+      a.yaw AS anchor_yaw,
+      a.current_rev AS current_rev,
+      a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+      a.mesh_stats_json AS mesh_stats_json
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      WHERE s.hidden = 0
      ORDER BY s.created_at DESC`
   );
@@ -673,6 +777,11 @@ async function listOwnerLandsAndSculptures(db, ownerUser) {
       parcelId: pid,
       ownerSub: ownerUser.id
     });
+    const securityPolicy = await getLandSecurityPolicy(db, pid);
+    const landmarkAnchor = await db.get(
+      'SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, updated_at FROM parcel_landmark_anchors WHERE parcel_id = ?',
+      [pid]
+    );
     parcels.push({
       parcelId: pid,
       geohash: onLand[0]?.geohash || '',
@@ -682,6 +791,17 @@ async function listOwnerLandsAndSculptures(db, ownerUser) {
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       settings,
+      securityPolicy,
+      landmarkAnchor: landmarkAnchor
+        ? {
+            hasLandmark: true,
+            keyframeCount: Number(landmarkAnchor.keyframe_count || 0),
+            featureCount: Number(landmarkAnchor.feature_count || 0),
+            descriptorDigest: landmarkAnchor.descriptor_digest,
+            anchorCid: landmarkAnchor.anchor_cid || '',
+            updatedAt: landmarkAnchor.updated_at
+          }
+        : { hasLandmark: false, keyframeCount: 0, featureCount: 0 },
       contributors: (contribRows || []).map(formatContributorRow),
       eligibleVisitors,
       sculptureCount: onLand.length,
@@ -697,7 +817,45 @@ async function listOwnerLandsAndSculptures(db, ownerUser) {
   };
 }
 
-async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn }) {
+async function applyUpdateSculpture(
+  db,
+  {
+    sculptureRow,
+    payload,
+    pinSculptureFn,
+    emitMetadataUpdateFn = null,
+    editorUser = null,
+    editorRole = 'owner'
+  }
+) {
+  const existingAnchor = await db.get(
+    'SELECT * FROM sculpture_anchors WHERE sculpture_id = ?',
+    [sculptureRow.id]
+  );
+  const currentRev = Number(existingAnchor?.current_rev || 1);
+  if (payload.expectedRev !== undefined && payload.expectedRev !== null) {
+    const exp = Number(payload.expectedRev);
+    if (Number.isFinite(exp) && exp !== currentRev) {
+      throw new McpServiceError(
+        `Revision conflict: sculpture is already at v${currentRev} (you edited from v${exp}). Refresh revisions before saving.`,
+        409,
+        { currentRev, expectedRev: exp }
+      );
+    }
+  }
+
+  let anchorOffset = {
+    dx: Number(existingAnchor?.dx || 0),
+    dy: Number(existingAnchor?.dy || 0),
+    dz: Number(existingAnchor?.dz || 0),
+    yaw: Number(existingAnchor?.yaw || 0)
+  };
+  if (payload.anchorOffset !== undefined) {
+    const offRes = validateAnchorOffset(payload.anchorOffset);
+    if (offRes.error) throw new McpServiceError(offRes.error, 400);
+    anchorOffset = offRes.offset;
+  }
+
   const nextTitle = payload.title !== undefined ? payload.title : sculptureRow.title;
   const nextDescription =
     payload.description !== undefined ? payload.description : sculptureRow.description;
@@ -713,6 +871,7 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
 
   let cleanVoxels = JSON.parse(sculptureRow.voxels_json || '[]');
   let activeCustomModel = null;
+  let existingModelSnapshot = null;
 
   if (modelExtract.provided) {
     activeCustomModel = await resolveCustomModelBytes(modelExtract.customModel);
@@ -730,6 +889,7 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
       [sculptureRow.id]
     );
     if (existingModelRow) {
+      existingModelSnapshot = existingModelRow;
       activeCustomModel = {
         format: existingModelRow.model_format,
         mimeType: existingModelRow.mime_type,
@@ -834,9 +994,90 @@ async function applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn 
     ]
   );
 
+  // Ensure initial rev 1 is recorded cleanly before recording rev N+1 if sculpture pre-dated revisions
+  const revCountRow = await db.get(
+    'SELECT MAX(rev_num) AS maxRev FROM sculpture_revisions WHERE sculpture_id = ?',
+    [sculptureRow.id]
+  );
+  const highestExistingRev = Number(revCountRow?.maxRev || 0);
+  if (highestExistingRev === 0) {
+    await upsertAnchorAndRevision(db, {
+      sculptureId: sculptureRow.id,
+      parcelId: sculptureRow.parcel_id,
+      revNum: 1,
+      anchorOffset,
+      editorUser: { id: sculptureRow.creator_sub, name: sculptureRow.creator_name },
+      editorRole: 'owner',
+      modelType: existingModelSnapshot ? 'custom-3d' : 'voxel',
+      voxels: JSON.parse(sculptureRow.voxels_json || '[]'),
+      title: sculptureRow.title,
+      description: sculptureRow.description,
+      ipfsMetadataCid: sculptureRow.ipfs_metadata_cid,
+      ipfsModelCid: sculptureRow.ipfs_model_cid,
+      ipfsImageCid: sculptureRow.ipfs_image_cid,
+      changeSummary: 'Initial publish baseline'
+    });
+  }
+
+  const nextRev = Math.max(currentRev, highestExistingRev, 1) + 1;
+  let erc4906TxHash = '';
+  if (typeof emitMetadataUpdateFn === 'function') {
+    try {
+      const updRes = await emitMetadataUpdateFn({
+        tokenId: sculptureRow.token_id,
+        metadataUri: `ipfs://${ipfsMetadataCid}`
+      });
+      erc4906TxHash = updRes?.txHash || '';
+    } catch {
+      // non-fatal chain event emit
+    }
+  }
+
+  const savedCustomModelRow = activeCustomModel
+    ? await db.get('SELECT * FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id])
+    : null;
+  const customSnap = savedCustomModelRow
+    ? {
+        format: savedCustomModelRow.model_format,
+        mimeType: savedCustomModelRow.mime_type,
+        sourceType: savedCustomModelRow.source_type,
+        modelUrl: savedCustomModelRow.model_url,
+        modelCid: savedCustomModelRow.model_cid,
+        modelUri: savedCustomModelRow.model_uri,
+        inlineB64: savedCustomModelRow.inline_b64 || '',
+        byteLength: savedCustomModelRow.byte_length,
+        scale: savedCustomModelRow.scale,
+        rotationY: savedCustomModelRow.rotation_y
+      }
+    : null;
+
+  await upsertAnchorAndRevision(db, {
+    sculptureId: sculptureRow.id,
+    parcelId: sculptureRow.parcel_id,
+    revNum: nextRev,
+    anchorOffset,
+    erc4906TxHash,
+    meshStats: activeCustomModel?.stats || null,
+    editorUser: editorUser || { id: sculptureRow.creator_sub, name: sculptureRow.creator_name },
+    editorRole,
+    modelType: activeCustomModel ? 'custom-3d' : 'voxel',
+    voxels: cleanVoxels,
+    title,
+    description,
+    ipfsMetadataCid,
+    ipfsModelCid,
+    ipfsImageCid,
+    changeSummary:
+      String(payload.changeSummary || '').trim() ||
+      (activeCustomModel ? `Updated 3D model (${activeCustomModel.format})` : 'Updated sculpture'),
+    customModelSnapshot: customSnap
+  });
+
   const updated = await fetchSculptureWithModelRow(db, sculptureRow.id);
   return {
-    sculpture: serializeSculptureRow(updated, { includeVoxels: true })
+    sculpture: serializeSculptureRow(updated, { includeVoxels: true }),
+    revNum: nextRev,
+    erc4906TxHash
   };
 }
 
@@ -853,6 +1094,13 @@ async function applyCreateSculptureOnLand(
   let description = '';
   let cleanVoxels = [];
   let activeCustomModel = null;
+  let anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 };
+
+  if (payload.anchorOffset !== undefined) {
+    const offRes = validateAnchorOffset(payload.anchorOffset);
+    if (offRes.error) throw new McpServiceError(offRes.error, 400);
+    anchorOffset = offRes.offset;
+  }
 
   if (modelExtract.provided) {
     const checkedMeta = validateEditableTitleAndDescription({
@@ -1028,6 +1276,41 @@ async function applyCreateSculptureOnLand(
     });
   }
 
+  const savedModelRow = activeCustomModel
+    ? await db.get('SELECT * FROM sculpture_models WHERE sculpture_id = ?', [sculptureId])
+    : null;
+  await upsertAnchorAndRevision(db, {
+    sculptureId,
+    parcelId: parcelCtx.parcelId,
+    revNum: 1,
+    anchorOffset,
+    meshStats: activeCustomModel?.stats || null,
+    editorUser: ownerUser,
+    editorRole: 'mcp-agent',
+    modelType: activeCustomModel ? 'custom-3d' : 'voxel',
+    voxels: cleanVoxels,
+    title,
+    description,
+    ipfsMetadataCid: ipfsResult.metadataCid,
+    ipfsModelCid: ipfsResult.modelCid,
+    ipfsImageCid: ipfsResult.imageCid,
+    changeSummary: 'Created on owned land',
+    customModelSnapshot: savedModelRow
+      ? {
+          format: savedModelRow.model_format,
+          mimeType: savedModelRow.mime_type,
+          sourceType: savedModelRow.source_type,
+          modelUrl: savedModelRow.model_url,
+          modelCid: savedModelRow.model_cid,
+          modelUri: savedModelRow.model_uri,
+          inlineB64: savedModelRow.inline_b64 || '',
+          byteLength: savedModelRow.byte_length,
+          scale: savedModelRow.scale,
+          rotationY: savedModelRow.rotation_y
+        }
+      : null
+  });
+
   await db.run(
     `UPDATE land_parcels
      SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ?
@@ -1082,6 +1365,9 @@ async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '', viaAge
   await db.run('DELETE FROM land_contributors WHERE parcel_id = ?', [parcelCtx.parcelId]);
   await db.run('DELETE FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId]);
   await db.run('DELETE FROM sculpture_models WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM sculpture_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM parcel_landmark_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
   await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
   await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
 
@@ -1384,9 +1670,142 @@ async function enqueueSignatureRequest(
   return formatSignatureRequestRow(row);
 }
 
+async function applyRollbackSculptureRevision(
+  db,
+  { sculptureRow, revNum, ownerUser, emitMetadataUpdateFn = null }
+) {
+  const targetRev = Number(revNum);
+  if (!Number.isInteger(targetRev) || targetRev < 1) {
+    throw new McpServiceError('Valid integer revNum >= 1 is required.', 400);
+  }
+  const revRow = await db.get(
+    'SELECT * FROM sculpture_revisions WHERE sculpture_id = ? AND rev_num = ?',
+    [sculptureRow.id, targetRev]
+  );
+  if (!revRow) {
+    throw new McpServiceError(`Revision v${targetRev} not found for sculpture.`, 404);
+  }
+
+  const maxRow = await db.get(
+    'SELECT MAX(rev_num) AS maxRev FROM sculpture_revisions WHERE sculpture_id = ?',
+    [sculptureRow.id]
+  );
+  const newRev = Math.max(Number(maxRow?.maxRev || 1), 1) + 1;
+  const restoredVoxels = JSON.parse(revRow.voxels_json || '[]');
+  const restoredOffset = revRow.anchor_offset_json
+    ? JSON.parse(revRow.anchor_offset_json)
+    : { dx: 0, dy: 0, dz: 0, yaw: 0 };
+  const customSnap = revRow.custom_model_json ? JSON.parse(revRow.custom_model_json) : null;
+
+  await db.run(
+    `UPDATE sculptures
+     SET title = ?, description = ?, voxels_json = ?, voxel_count = ?,
+         ipfs_metadata_cid = ?, ipfs_model_cid = ?, ipfs_image_cid = ?
+     WHERE id = ?`,
+    [
+      revRow.title,
+      revRow.description,
+      revRow.voxels_json || '[]',
+      Number(revRow.voxel_count || restoredVoxels.length),
+      revRow.ipfs_metadata_cid,
+      revRow.ipfs_model_cid,
+      revRow.ipfs_image_cid,
+      sculptureRow.id
+    ]
+  );
+
+  if (customSnap) {
+    const now = new Date().toISOString();
+    await db.run(
+      `INSERT INTO sculpture_models (
+        sculpture_id, parcel_id, model_format, mime_type, source_type, model_url,
+        model_cid, model_uri, gateway_url, inline_b64, byte_length, scale, rotation_y, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
+      ON CONFLICT(sculpture_id) DO UPDATE SET
+        model_format = excluded.model_format,
+        mime_type = excluded.mime_type,
+        model_url = excluded.model_url,
+        model_cid = excluded.model_cid,
+        model_uri = excluded.model_uri,
+        inline_b64 = excluded.inline_b64,
+        byte_length = excluded.byte_length,
+        scale = excluded.scale,
+        rotation_y = excluded.rotation_y,
+        updated_at = excluded.updated_at`,
+      [
+        sculptureRow.id,
+        sculptureRow.parcel_id,
+        customSnap.format || 'glb',
+        customSnap.mimeType || 'model/gltf-binary',
+        customSnap.sourceType || 'ipfs',
+        customSnap.modelUrl || '',
+        customSnap.modelCid || revRow.ipfs_model_cid,
+        customSnap.modelUri || `ipfs://${revRow.ipfs_model_cid}`,
+        customSnap.inlineB64 || '',
+        Number(customSnap.byteLength || 0),
+        Number(customSnap.scale ?? 1),
+        Number(customSnap.rotationY ?? 0),
+        now
+      ]
+    );
+  } else {
+    await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id]);
+  }
+
+  let erc4906TxHash = '';
+  if (typeof emitMetadataUpdateFn === 'function') {
+    try {
+      const updRes = await emitMetadataUpdateFn({
+        tokenId: sculptureRow.token_id,
+        metadataUri: `ipfs://${revRow.ipfs_metadata_cid}`
+      });
+      erc4906TxHash = updRes?.txHash || '';
+    } catch {
+      // non-fatal
+    }
+  }
+
+  await upsertAnchorAndRevision(db, {
+    sculptureId: sculptureRow.id,
+    parcelId: sculptureRow.parcel_id,
+    revNum: newRev,
+    anchorOffset: restoredOffset,
+    erc4906TxHash,
+    editorUser: ownerUser,
+    editorRole: 'owner',
+    modelType: customSnap ? 'custom-3d' : 'voxel',
+    voxels: restoredVoxels,
+    title: revRow.title,
+    description: revRow.description,
+    ipfsMetadataCid: revRow.ipfs_metadata_cid,
+    ipfsModelCid: revRow.ipfs_model_cid,
+    ipfsImageCid: revRow.ipfs_image_cid,
+    changeSummary: `Rolled back to v${targetRev}`,
+    customModelSnapshot: customSnap
+  });
+
+  const updated = await fetchSculptureWithModelRow(db, sculptureRow.id);
+  return {
+    sculpture: serializeSculptureRow(updated, { includeVoxels: true }),
+    restoredFromRev: targetRev,
+    revNum: newRev,
+    erc4906TxHash
+  };
+}
+
 async function executeValidatedSignatureRow(
   db,
-  { reqRow, ownerUser, signedBy, signerAddress, signature = '', txHash = '', pinSculptureFn, mintSculptureFn }
+  {
+    reqRow,
+    ownerUser,
+    signedBy,
+    signerAddress,
+    signature = '',
+    txHash = '',
+    pinSculptureFn,
+    mintSculptureFn,
+    emitMetadataUpdateFn = null
+  }
 ) {
   const payload = JSON.parse(reqRow.payload_json || '{}');
   let result;
@@ -1412,7 +1831,26 @@ async function executeValidatedSignatureRow(
       user: ownerUser,
       signerAddress
     });
-    result = await applyUpdateSculpture(db, { sculptureRow, payload, pinSculptureFn });
+    result = await applyUpdateSculpture(db, {
+      sculptureRow,
+      payload,
+      pinSculptureFn,
+      emitMetadataUpdateFn,
+      editorUser: ownerUser,
+      editorRole: 'mcp-agent'
+    });
+  } else if (reqRow.action === 'rollback_sculpture') {
+    const sculptureRow = await checkSculptureOwnership(db, {
+      sculptureId: reqRow.sculpture_id,
+      user: ownerUser,
+      signerAddress
+    });
+    result = await applyRollbackSculptureRevision(db, {
+      sculptureRow,
+      revNum: payload.revNum,
+      ownerUser,
+      emitMetadataUpdateFn
+    });
   } else if (reqRow.action === 'delete_sculpture') {
     const sculptureRow = await checkSculptureOwnership(db, {
       sculptureId: reqRow.sculpture_id,
@@ -1613,7 +2051,15 @@ export async function getSignatureRequest(db, { requestId, user = null, pairingC
 
 export async function signRequestByMobile(
   db,
-  { requestId, user, signature = '', decryptEmbeddedPrivateKey, pinSculptureFn, mintSculptureFn }
+  {
+    requestId,
+    user,
+    signature = '',
+    decryptEmbeddedPrivateKey,
+    pinSculptureFn,
+    mintSculptureFn,
+    emitMetadataUpdateFn = null
+  }
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
@@ -1660,13 +2106,23 @@ export async function signRequestByMobile(
     signerAddress,
     signature: finalSig,
     pinSculptureFn,
-    mintSculptureFn
+    mintSculptureFn,
+    emitMetadataUpdateFn
   });
 }
 
 export async function signRequestByAgent(
   db,
-  { requestId, pairingCode, signature, txHash = '', agentName = '', pinSculptureFn, mintSculptureFn }
+  {
+    requestId,
+    pairingCode,
+    signature,
+    txHash = '',
+    agentName = '',
+    pinSculptureFn,
+    mintSculptureFn,
+    emitMetadataUpdateFn = null
+  }
 ) {
   const { pairing, ownerUser } = await requireActiveMcpPairing(db, { pairingCode });
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
@@ -1715,7 +2171,8 @@ export async function signRequestByAgent(
     signature,
     txHash: String(txHash || '').trim(),
     pinSculptureFn,
-    mintSculptureFn
+    mintSculptureFn,
+    emitMetadataUpdateFn
   });
 }
 
@@ -1737,15 +2194,74 @@ export async function rejectSignatureRequest(db, { requestId, user }) {
   return { ok: true, request: formatSignatureRequestRow(updated) };
 }
 
-export async function directOwnerUpdateSculpture(db, { sculptureId, user, body, pinSculptureFn }) {
+export async function directOwnerUpdateSculpture(
+  db,
+  { sculptureId, user, body, pinSculptureFn, emitMetadataUpdateFn = null }
+) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const perm = await checkSculptureEditPermission(db, { sculptureId, user });
   const out = await applyUpdateSculpture(db, {
     sculptureRow: perm.row,
     payload: body || {},
-    pinSculptureFn
+    pinSculptureFn,
+    emitMetadataUpdateFn,
+    editorUser: user,
+    editorRole: perm.role
   });
   return { ...out, editorRole: perm.role };
+}
+
+export async function listSculptureRevisions(db, { sculptureId }) {
+  const row = await db.get('SELECT id, title, parcel_id, hidden FROM sculptures WHERE id = ?', [
+    String(sculptureId || '')
+  ]);
+  if (!row || row.hidden) {
+    throw new McpServiceError('Sculpture not found.', 404);
+  }
+  const anchor = await db.get('SELECT * FROM sculpture_anchors WHERE sculpture_id = ?', [row.id]);
+  const revRows = await db.all(
+    `SELECT * FROM sculpture_revisions
+     WHERE sculpture_id = ?
+     ORDER BY rev_num DESC
+     LIMIT 30`,
+    [row.id]
+  );
+  return {
+    sculptureId: row.id,
+    parcelId: row.parcel_id,
+    currentRev: Number(anchor?.current_rev || revRows?.[0]?.rev_num || 1),
+    lastErc4906TxHash: anchor?.last_erc4906_tx_hash || '',
+    revisions: (revRows || []).map((r) => ({
+      id: r.id,
+      revNum: Number(r.rev_num),
+      editorSub: r.editor_sub,
+      editorName: r.editor_name || 'Artist',
+      editorRole: r.editor_role || 'owner',
+      modelType: r.model_type || 'voxel',
+      voxelCount: Number(r.voxel_count || 0),
+      title: r.title,
+      description: r.description,
+      ipfsMetadataCid: r.ipfs_metadata_cid,
+      ipfsModelCid: r.ipfs_model_cid,
+      ipfsImageCid: r.ipfs_image_cid,
+      changeSummary: r.change_summary || '',
+      createdAt: r.created_at
+    }))
+  };
+}
+
+export async function directOwnerRollbackRevision(
+  db,
+  { sculptureId, revNum, user, emitMetadataUpdateFn = null }
+) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const row = await checkSculptureOwnership(db, { sculptureId, user });
+  return applyRollbackSculptureRevision(db, {
+    sculptureRow: row,
+    revNum,
+    ownerUser: user,
+    emitMetadataUpdateFn
+  });
 }
 
 export async function getMyLandsWorkspace(db, { user }) {
@@ -1977,7 +2493,8 @@ async function handlePairedLandMutationViaMcp(
     txHash = '',
     pinSculptureFn,
     mintSculptureFn,
-    notifyMobileFn
+    notifyMobileFn,
+    emitMetadataUpdateFn = null
   }
 ) {
   const ownerAddress = resolvePreferredOwnerWallet(ownerUser);
@@ -2042,7 +2559,8 @@ async function handlePairedLandMutationViaMcp(
       signature: suppliedSig,
       txHash: String(txHash || auth?.txHash || '').trim(),
       pinSculptureFn,
-      mintSculptureFn
+      mintSculptureFn,
+      emitMetadataUpdateFn
     });
     return {
       status: 'executed',
@@ -2152,9 +2670,25 @@ export const MCP_TOOLS = [
         modelUrl: { type: 'string' },
         modelScale: { type: 'number' },
         modelRotationY: { type: 'number' },
+        anchorOffset: { type: 'object' },
+        expectedRev: { type: 'number' },
         signature: { type: 'string' }
       },
       required: ['sculptureId']
+    }
+  },
+  {
+    name: 'rollback_sculpture_revision',
+    description:
+      'Roll back an owned sculpture on a parcel to an earlier immutable IPFS revision (revNum) and emit ERC-4906 metadata refresh.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sculptureId: { type: 'string' },
+        revNum: { type: 'number' },
+        signature: { type: 'string' }
+      },
+      required: ['sculptureId', 'revNum']
     }
   },
   {
@@ -2223,7 +2757,16 @@ export const MCP_TOOLS = [
 
 export async function handleMcpJsonRpc(
   db,
-  { rpcBody, pairingCode, callerUser = null, apiOrigin = '', pinSculptureFn, mintSculptureFn, notifyMobileFn }
+  {
+    rpcBody,
+    pairingCode,
+    callerUser = null,
+    apiOrigin = '',
+    pinSculptureFn,
+    mintSculptureFn,
+    notifyMobileFn,
+    emitMetadataUpdateFn = null
+  }
 ) {
   const id = rpcBody?.id ?? null;
   const method = String(rpcBody?.method || '');
@@ -2286,9 +2829,17 @@ export async function handleMcpJsonRpc(
           m.model_uri AS custom_model_uri,
           m.scale AS custom_model_scale,
           m.rotation_y AS custom_model_rotation_y,
-          m.byte_length AS custom_model_bytes
+          m.byte_length AS custom_model_bytes,
+          a.dx AS anchor_dx,
+          a.dy AS anchor_dy,
+          a.dz AS anchor_dz,
+          a.yaw AS anchor_yaw,
+          a.current_rev AS current_rev,
+          a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+          a.mesh_stats_json AS mesh_stats_json
          FROM sculptures s
          LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+         LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
          WHERE s.parcel_id = ? AND s.hidden = 0
          ORDER BY s.created_at ASC`,
         [parcelId]
@@ -2356,8 +2907,10 @@ export async function handleMcpJsonRpc(
             ...(args.modelUrl || args.model?.url
               ? { modelUrl: args.modelUrl || args.model?.url }
               : {}),
-            modelScale: modelCheck.customModel.scale,
+          modelScale: modelCheck.customModel.scale,
             modelRotationY: modelCheck.customModel.rotationY,
+            ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
+            ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
             ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
           },
           signature: args.signature || '',
@@ -2365,7 +2918,8 @@ export async function handleMcpJsonRpc(
           txHash: args.txHash || '',
           pinSculptureFn,
           mintSculptureFn,
-          notifyMobileFn
+          notifyMobileFn,
+          emitMetadataUpdateFn
         });
       } else {
         let createPayload;
@@ -2389,6 +2943,7 @@ export async function handleMcpJsonRpc(
               : {}),
             modelScale: modelCheck.customModel.scale,
             modelRotationY: modelCheck.customModel.rotationY,
+            anchorOffset: args.anchorOffset,
             lat: args.lat,
             lng: args.lng,
             altitude: args.altitude,
@@ -2408,6 +2963,7 @@ export async function handleMcpJsonRpc(
             title: validation.title,
             description: validation.description,
             voxels: validation.cleanVoxels,
+            anchorOffset: args.anchorOffset,
             lat: args.lat,
             lng: args.lng,
             altitude: args.altitude,
@@ -2460,6 +3016,8 @@ export async function handleMcpJsonRpc(
         payload: {
           title: checkedMeta.title,
           description: checkedMeta.description,
+          ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
+          ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
           ...(nextVoxels ? { voxels: nextVoxels } : {}),
           ...(modelCheck.provided
             ? {
@@ -2484,7 +3042,8 @@ export async function handleMcpJsonRpc(
         txHash: args.txHash || '',
         pinSculptureFn,
         mintSculptureFn,
-        notifyMobileFn
+        notifyMobileFn,
+        emitMetadataUpdateFn
       });
     } else if (toolName === 'update_land_parcel') {
       const parcelCtx = await checkParcelOwnership(db, {
@@ -2526,6 +3085,26 @@ export async function handleMcpJsonRpc(
         pinSculptureFn,
         mintSculptureFn,
         notifyMobileFn
+      });
+    } else if (toolName === 'rollback_sculpture_revision') {
+      const scRow = await checkSculptureOwnership(db, {
+        sculptureId: args.sculptureId,
+        user: ownerUser
+      });
+      toolResult = await handlePairedLandMutationViaMcp(db, {
+        pairing,
+        ownerUser,
+        action: 'rollback_sculpture',
+        parcelId: scRow.parcel_id,
+        sculptureId: scRow.id,
+        payload: { sculptureId: scRow.id, revNum: Number(args.revNum) },
+        signature: args.signature || '',
+        auth: args.auth || null,
+        txHash: args.txHash || '',
+        pinSculptureFn,
+        mintSculptureFn,
+        notifyMobileFn,
+        emitMetadataUpdateFn
       });
     } else if (toolName === 'erase_land') {
       const parcelCtx = await checkParcelOwnership(db, {
@@ -2574,7 +3153,8 @@ export async function handleMcpJsonRpc(
         txHash: args.txHash || '',
         agentName: pairing.agentName,
         pinSculptureFn,
-        mintSculptureFn
+        mintSculptureFn,
+        emitMetadataUpdateFn
       });
     } else {
       throw new McpServiceError(`Unknown MCP tool: ${toolName}`, 404);

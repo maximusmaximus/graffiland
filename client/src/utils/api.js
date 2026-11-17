@@ -50,6 +50,9 @@ export const api = {
     }
     if (params.radiusMeters !== undefined) qs.set('radiusMeters', String(params.radiusMeters));
     if (params.parcel) qs.set('parcel', params.parcel);
+    if (params.includeVoxels !== undefined) {
+      qs.set('includeVoxels', params.includeVoxels ? '1' : '0');
+    }
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/sculptures${suffix}`);
   },
@@ -212,6 +215,39 @@ export const api = {
     ),
   eraseLand: (parcelId, payload = {}) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/erase`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  getSculptureRevisions: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/revisions`),
+  rollbackSculptureRevision: (id, revNum) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/revisions/${Number(revNum)}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  saveParcelLandmarkPack: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/landmark-pack`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchParcelLandmarkPack: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/landmark-pack/fetch`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateLandSecurityPolicy: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/security`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  getPasskeyStatus: () => request('/api/passkeys/status'),
+  getPasskeyRegistrationOptions: () =>
+    request('/api/passkeys/register/options', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  verifyPasskeyRegistration: (payload) =>
+    request('/api/passkeys/register/verify', {
       method: 'POST',
       body: JSON.stringify(payload)
     })

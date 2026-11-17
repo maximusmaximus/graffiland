@@ -5,9 +5,60 @@ import {
   verifyParcelPhysicalPresence,
   verifyParcelPresenceSignature
 } from './chatPolicy.mjs';
+import { getLandSecurityPolicy, verifyOrbProofAgainstParcel } from './landmarkService.mjs';
 import { checkParcelOwnership, checkSculptureOwnership } from './mcpService.mjs';
+import { hasRegisteredPasskey, verifyPasskeyAssertion } from './passkeyService.mjs';
 
 const PARCEL_CHALLENGE_TTL_MS = 90 * 1000;
+
+async function deriveKekAesKey(pinMasterKek, usages) {
+  const hash = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(String(pinMasterKek || ''))
+  );
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM', length: 256 }, false, usages);
+}
+
+async function wrapSealSecretWithKek(sealSecretB64, { pinMasterKek, sculptureId, parcelId }) {
+  if (!pinMasterKek) return sealSecretB64;
+  const key = await deriveKekAesKey(pinMasterKek, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aad = new TextEncoder().encode(`${sculptureId}:${parcelId}`);
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: aad, tagLength: 128 },
+    key,
+    new TextEncoder().encode(sealSecretB64)
+  );
+  return `kek-v1:${bytesToB64(iv)}:${bytesToB64(new Uint8Array(ct))}`;
+}
+
+async function unwrapSealSecretWithKek(storedValue, { pinMasterKek, sculptureId, parcelId }) {
+  const raw = String(storedValue || '');
+  if (!raw.startsWith('kek-v1:')) {
+    return raw;
+  }
+  if (!pinMasterKek) {
+    throw new PinServiceError('Server PIN_MASTER_KEK is required to unwrap sealed parcel keys.', 500);
+  }
+  const parts = raw.split(':');
+  if (parts.length !== 3) {
+    throw new PinServiceError('Corrupt KEK-wrapped seal key envelope.', 500);
+  }
+  try {
+    const key = await deriveKekAesKey(pinMasterKek, ['decrypt']);
+    const iv = b64ToBytes(parts[1]);
+    const ct = b64ToBytes(parts[2]);
+    const aad = new TextEncoder().encode(`${sculptureId}:${parcelId}`);
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv, additionalData: aad, tagLength: 128 },
+      key,
+      ct
+    );
+    return new TextDecoder().decode(pt);
+  } catch {
+    throw new PinServiceError('Failed to decrypt seal key envelope under PIN_MASTER_KEK.', 403);
+  }
+}
 
 export class PinServiceError extends Error {
   constructor(message, statusCode = 400, extra = {}) {
@@ -133,7 +184,10 @@ export async function getPinnedBatchMeta(db, { sculptureId }) {
   };
 }
 
-export async function getOwnerPinSeal(db, { sculptureId, user, readIpfsJsonFn = null }) {
+export async function getOwnerPinSeal(
+  db,
+  { sculptureId, user, readIpfsJsonFn = null, pinMasterKek = '' }
+) {
   const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [
     sculptureId
   ]);
@@ -146,10 +200,16 @@ export async function getOwnerPinSeal(db, { sculptureId, user, readIpfsJsonFn = 
     sculptureId
   ]);
   const now = new Date().toISOString();
+  let sealSecretB64 = '';
 
   if (!row) {
-    const sealSecretB64 = generateRandomB64(32);
+    sealSecretB64 = generateRandomB64(32);
     const keyCommitment = await computeSha256HexFromB64(sealSecretB64);
+    const storedSeal = await wrapSealSecretWithKek(sealSecretB64, {
+      pinMasterKek,
+      sculptureId: sculpture.id,
+      parcelId: sculpture.parcel_id
+    });
     await db.run(
       `INSERT INTO sculpture_pin_batches (
         sculpture_id, parcel_id, geohash, batch_seq, pin_count,
@@ -160,7 +220,7 @@ export async function getOwnerPinSeal(db, { sculptureId, user, readIpfsJsonFn = 
         sculpture.id,
         sculpture.parcel_id,
         String(sculpture.geohash || '').toLowerCase(),
-        sealSecretB64,
+        storedSeal,
         keyCommitment,
         user.id,
         user.custom_payout_address || user.wallet_address || '',
@@ -169,6 +229,24 @@ export async function getOwnerPinSeal(db, { sculptureId, user, readIpfsJsonFn = 
       ]
     );
     row = await db.get('SELECT * FROM sculpture_pin_batches WHERE sculpture_id = ?', [sculptureId]);
+  } else {
+    sealSecretB64 = await unwrapSealSecretWithKek(row.seal_secret_b64, {
+      pinMasterKek,
+      sculptureId: sculpture.id,
+      parcelId: sculpture.parcel_id
+    });
+    // Upgrade legacy unwrapped rows cleanly when PIN_MASTER_KEK is configured
+    if (pinMasterKek && !String(row.seal_secret_b64 || '').startsWith('kek-v1:')) {
+      const wrapped = await wrapSealSecretWithKek(sealSecretB64, {
+        pinMasterKek,
+        sculptureId: sculpture.id,
+        parcelId: sculpture.parcel_id
+      });
+      await db.run('UPDATE sculpture_pin_batches SET seal_secret_b64 = ? WHERE sculpture_id = ?', [
+        wrapped,
+        sculpture.id
+      ]);
+    }
   }
 
   let encryptedBatch = null;
@@ -189,7 +267,7 @@ export async function getOwnerPinSeal(db, { sculptureId, user, readIpfsJsonFn = 
     sculptureId: sculpture.id,
     parcelId: sculpture.parcel_id,
     geohash: String(sculpture.geohash || '').toLowerCase(),
-    parcelSealKeyB64: row.seal_secret_b64,
+    parcelSealKeyB64: sealSecretB64,
     keyCommitment: row.key_commitment,
     nextBatchSeq: Number(row.batch_seq || 0) + 1,
     meta: formatPinBatchMeta(row, sculpture.parcel_id),
@@ -374,19 +452,40 @@ export async function issueParcelPresenceChallenge(
     ]
   );
 
+  const [policy, anchorRow, userHasPasskey] = await Promise.all([
+    getLandSecurityPolicy(db, sculpture.parcel_id),
+    db.get('SELECT descriptor_digest FROM parcel_landmark_anchors WHERE parcel_id = ?', [
+      sculpture.parcel_id
+    ]),
+    hasRegisteredPasskey(db, user.id)
+  ]);
+
   return {
     challengeId,
     challengeNonce,
     sculptureId: sculpture.id,
     parcelId: sculpture.parcel_id,
     geohash: String(sculpture.geohash || '').toLowerCase(),
+    webauthnRequired: Boolean(policy.requirePasskeyUnlock || userHasPasskey),
+    orbRequired: Boolean(policy.requireOrbUnlock || anchorRow?.descriptor_digest),
+    descriptorDigest: anchorRow?.descriptor_digest || '',
+    minOrbInliers: policy.minOrbInliers,
+    maxReprojErrPx: policy.maxReprojErrPx,
     expiresAt
   };
 }
 
 export async function unlockPinnedBatchForParcelVisitor(
   db,
-  { sculptureId, user, body, userAgent = '', readIpfsJsonFn = null }
+  {
+    sculptureId,
+    user,
+    body,
+    userAgent = '',
+    readIpfsJsonFn = null,
+    pinMasterKek = '',
+    expectedRpId = ''
+  }
 ) {
   const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [
     sculptureId
@@ -447,6 +546,30 @@ export async function unlockPinnedBatchForParcelVisitor(
     signatureB64: body?.presenceSignatureB64
   });
 
+  const policy = await getLandSecurityPolicy(db, sculpture.parcel_id);
+  const orbCheck = await verifyOrbProofAgainstParcel(db, {
+    parcelId: sculpture.parcel_id,
+    orbProof: body?.orbProof,
+    policy
+  });
+
+  const userHasPasskey = await hasRegisteredPasskey(db, user.id);
+  if (policy.requirePasskeyUnlock && !userHasPasskey) {
+    throw new PinServiceError(
+      `Parcel ${sculpture.parcel_id} requires a registered hardware Passkey (WebAuthn) to unlock pinned messages.`,
+      403
+    );
+  }
+  let webauthnResult = { verified: false, skipped: true };
+  if (policy.requirePasskeyUnlock || userHasPasskey || body?.webauthnAssertion) {
+    webauthnResult = await verifyPasskeyAssertion(db, {
+      user,
+      assertion: body?.webauthnAssertion,
+      expectedChallengeB64: challenge.nonce,
+      expectedRpId
+    });
+  }
+
   const upd = await db.run(
     `UPDATE parcel_presence_challenges
      SET consumed = 1, requester_pub_fp = ?, consumed_at = ?
@@ -471,11 +594,19 @@ export async function unlockPinnedBatchForParcelVisitor(
       parcelId: sculpture.parcel_id,
       geohash: String(sculpture.geohash || '').toLowerCase(),
       verifiedPresence,
+      orbCheck,
+      webauthnResult,
       meta,
       parcelSealKeyB64: '',
       encryptedBatch: null
     };
   }
+
+  const plainSealKeyB64 = await unwrapSealSecretWithKek(batchRow.seal_secret_b64, {
+    pinMasterKek,
+    sculptureId: sculpture.id,
+    parcelId: sculpture.parcel_id
+  });
 
   let encryptedBatch = null;
   if (typeof readIpfsJsonFn === 'function') {
@@ -496,13 +627,15 @@ export async function unlockPinnedBatchForParcelVisitor(
     parcelId: sculpture.parcel_id,
     geohash: String(sculpture.geohash || '').toLowerCase(),
     verifiedPresence,
+    orbCheck,
+    webauthnResult,
     meta,
     ipfsCid: batchRow.ipfs_cid,
     ipfsUri: batchRow.ipfs_uri,
     ipfsGatewayUrl: batchRow.ipfs_gateway_url || '',
     batchSeq: Number(batchRow.batch_seq || 1),
     pinCount: Number(batchRow.pin_count || 0),
-    parcelSealKeyB64: batchRow.seal_secret_b64,
+    parcelSealKeyB64: plainSealKeyB64,
     encryptedBatch
   };
 }

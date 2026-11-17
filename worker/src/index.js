@@ -55,6 +55,7 @@ import {
   directOwnerCreateSculptureOnLand,
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
+  directOwnerRollbackRevision,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
@@ -66,13 +67,26 @@ import {
   listLandsWithCurations,
   listMcpPairings,
   listPendingSignaturesForUser,
+  listSculptureRevisions,
   rejectSignatureRequest,
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
-  updateLandSettings
+  updateLandSettings,
+  upsertAnchorAndRevision
 } from '../../shared/mcpService.mjs';
-import { b64ToModelBytes } from '../../shared/model3d.mjs';
+import { b64ToModelBytes, validateAnchorOffset } from '../../shared/model3d.mjs';
+import {
+  checkAndConsumeRelayerQuota,
+  fetchParcelLandmarkAnchor,
+  saveParcelLandmarkAnchor,
+  updateLandSecurityPolicy
+} from '../../shared/landmarkService.mjs';
+import {
+  issuePasskeyRegistrationOptions,
+  listUserPasskeys,
+  verifyAndStorePasskeyRegistration
+} from '../../shared/passkeyService.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
@@ -92,8 +106,23 @@ import {
 
 const NFT_ABI = [
   'function mintSculpture(address recipient, string calldata metadataURI, bytes32 landParcelId, bytes32 proofOfLocationHash, int32 latE6, int32 lngE6) external returns (uint256)',
+  'function updateTokenURI(uint256 tokenId, string calldata newURI) external',
+  'event MetadataUpdate(uint256 indexed _tokenId)',
   'event SculptureMinted(uint256 indexed tokenId, address indexed recipient, bytes32 indexed landParcelId, bytes32 proofOfLocationHash, string tokenURI, int32 latE6, int32 lngE6)'
 ];
+
+function resolveWorkerRpId(request, fallbackUrl) {
+  const originHeader = request.headers.get('Origin');
+  if (originHeader) {
+    try {
+      const originHost = new URL(originHeader).hostname.toLowerCase();
+      if (originHost) return originHost;
+    } catch {
+      // ignore invalid origin
+    }
+  }
+  return (fallbackUrl?.hostname || 'localhost').toLowerCase();
+}
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
@@ -157,7 +186,10 @@ function getRuntimeConfig(env) {
     publicUrl: env.PUBLIC_URL || 'https://maximusmaximus.github.io/graffiland',
     ipfsGateway: env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs',
     sessionSecret: env.SESSION_SECRET || 'graffiland-worker-dev-session-secret',
-    walletEncryptionKey: env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-wallet-key'
+    walletEncryptionKey: env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-wallet-key',
+    pinMasterKek:
+      env.PIN_MASTER_KEK || env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-pin-kek',
+    relayerDailyQuota: Number(env.RELAYER_DAILY_QUOTA || 25)
   };
 }
 
@@ -449,6 +481,28 @@ async function mintOnChainOrSimulate({
     royaltyBps: cfg.resaleFeeBps,
     royaltyReceiver: cfg.royaltyReceiver,
     gasSponsoredBy: 'Platform Relayer (Simulated)'
+  };
+}
+
+async function emitWorkerMetadataUpdate({ tokenId, metadataUri }, env, cfg) {
+  if (cfg.liveChainReady && tokenId && /^\d+$/.test(String(tokenId))) {
+    try {
+      const provider = new ethers.JsonRpcProvider(cfg.network.rpcUrl, cfg.network.chainId);
+      const relayer = new ethers.Wallet(env.ROBINHOOD_RELAYER_PRIVATE_KEY, provider);
+      const contract = new ethers.Contract(cfg.contractAddress, NFT_ABI, relayer);
+      const tx = await contract.updateTokenURI(BigInt(tokenId), metadataUri);
+      const receipt = await tx.wait();
+      return { simulated: false, erc4906Emitted: true, txHash: receipt.hash };
+    } catch {
+      // Older deployed contract instances without updateTokenURI still serve dynamic metadata
+    }
+  }
+  return {
+    simulated: true,
+    erc4906Emitted: true,
+    txHash: ethers.keccak256(
+      ethers.toUtf8Bytes(`erc4906:${cfg.contractAddress}:${tokenId}:${metadataUri}:${Date.now()}`)
+    )
   };
 }
 
@@ -865,9 +919,17 @@ export default {
         m.model_uri AS custom_model_uri,
         m.scale AS custom_model_scale,
         m.rotation_y AS custom_model_rotation_y,
-        m.byte_length AS custom_model_bytes
+        m.byte_length AS custom_model_bytes,
+        a.dx AS anchor_dx,
+        a.dy AS anchor_dy,
+        a.dz AS anchor_dz,
+        a.yaw AS anchor_yaw,
+        a.current_rev AS current_rev,
+        a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+        a.mesh_stats_json AS mesh_stats_json
        FROM sculptures s
        LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+       LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
     `;
 
     // List public sculptures
@@ -875,7 +937,9 @@ export default {
       const { results } = await env.DB.prepare(
         `${WORKER_SCULPTURE_SELECT_SQL} WHERE s.hidden = 0 ORDER BY s.created_at DESC`
       ).all();
-      let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels: true }));
+      const includeVoxelsParam = url.searchParams.get('includeVoxels');
+      const includeVoxels = includeVoxelsParam !== '0' && includeVoxelsParam !== 'false';
+      let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels }));
 
       const parcelFilter = url.searchParams.get('parcel')?.toUpperCase();
       if (parcelFilter) {
@@ -909,7 +973,20 @@ export default {
 
     // Robust MCP Pairing, Land Ownership Edits, Signature Notifications & Agent Signing
     const makeWorkerPinHook = () => (params) => pinSculptureBundle(params, url.origin, env, cfg);
+    const makeWorkerPinJsonHook = () => async (obj, fileName) => {
+      if (env.PINATA_JWT) {
+        return pinToPinataJson(obj, fileName, env, cfg);
+      }
+      return pinToKv(
+        new TextEncoder().encode(JSON.stringify(obj, null, 2)),
+        'application/json',
+        url.origin,
+        env
+      );
+    };
     const makeWorkerMintHook = () => (params) => mintOnChainOrSimulate(params, env, cfg);
+    const makeWorkerMetadataUpdateHook = () => (params) =>
+      emitWorkerMetadataUpdate(params, env, cfg);
     const notifyWorkerMobile = async (event) => {
       try {
         const doId = env.PAIR_COORDINATOR.idFromName('global-hub');
@@ -1016,7 +1093,8 @@ export default {
           apiOrigin: url.origin,
           pinSculptureFn: makeWorkerPinHook(),
           mintSculptureFn: makeWorkerMintHook(),
-          notifyMobileFn: notifyWorkerMobile
+          notifyMobileFn: notifyWorkerMobile,
+          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
@@ -1146,6 +1224,11 @@ export default {
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
         const body = await request.json().catch(() => ({}));
+        await checkAndConsumeRelayerQuota(d1Adapter, {
+          userId: user.id,
+          isAdmin: Boolean(user.is_admin),
+          dailyQuota: cfg.relayerDailyQuota
+        });
         const out = await directOwnerCreateSculptureOnLand(d1Adapter, {
           parcelId: decodeURIComponent(landCreateMatch[1]),
           user,
@@ -1156,10 +1239,92 @@ export default {
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse(
-          { error: err.message || 'Create sculpture on land failed' },
+          { error: err.message || 'Create sculpture on land failed', ...(err?.extra || {}) },
           err?.statusCode || 400,
           request
         );
+      }
+    }
+
+    const landLandmarkMatch = pathname.match(/^\/api\/lands\/([^/]+)\/landmark-pack$/);
+    if (landLandmarkMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await saveParcelLandmarkAnchor(d1Adapter, {
+          parcelId: decodeURIComponent(landLandmarkMatch[1]),
+          user,
+          body,
+          pinJsonFn: makeWorkerPinJsonHook()
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Landmark pack save failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landLandmarkFetchMatch = pathname.match(/^\/api\/lands\/([^/]+)\/landmark-pack\/fetch$/);
+    if (landLandmarkFetchMatch && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await fetchParcelLandmarkAnchor(d1Adapter, {
+          parcelId: decodeURIComponent(landLandmarkFetchMatch[1]),
+          body,
+          userAgent: request.headers.get('User-Agent') || ''
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Landmark pack fetch failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landSecurityMatch = pathname.match(/^\/api\/lands\/([^/]+)\/security$/);
+    if (landSecurityMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await updateLandSecurityPolicy(d1Adapter, {
+          parcelId: decodeURIComponent(landSecurityMatch[1]),
+          user,
+          body
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Security policy update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/passkeys/status' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      return jsonResponse({ passkeys: await listUserPasskeys(d1Adapter, user.id) }, 200, request);
+    }
+
+    if (pathname === '/api/passkeys/register/options' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      return jsonResponse(
+        issuePasskeyRegistrationOptions(user, { rpId: resolveWorkerRpId(request, url) }),
+        200,
+        request
+      );
+    }
+
+    if (pathname === '/api/passkeys/register/verify' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await verifyAndStorePasskeyRegistration(d1Adapter, {
+          user,
+          body,
+          rpId: resolveWorkerRpId(request, url)
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Passkey registration failed' }, err?.statusCode || 400, request);
       }
     }
 
@@ -1173,11 +1338,41 @@ export default {
           sculptureId: decodeURIComponent(editMatch[1]),
           user,
           body,
-          pinSculptureFn: makeWorkerPinHook()
+          pinSculptureFn: makeWorkerPinHook(),
+          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Update sculpture failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const revListMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/revisions$/);
+    if (revListMatch && request.method === 'GET') {
+      try {
+        const out = await listSculptureRevisions(d1Adapter, {
+          sculptureId: decodeURIComponent(revListMatch[1])
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Revision list failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const revRollbackMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/revisions\/(\d+)\/rollback$/);
+    if (revRollbackMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await directOwnerRollbackRevision(d1Adapter, {
+          sculptureId: decodeURIComponent(revRollbackMatch[1]),
+          revNum: Number(revRollbackMatch[2]),
+          user,
+          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Revision rollback failed' }, err?.statusCode || 400, request);
       }
     }
 
@@ -1234,7 +1429,8 @@ export default {
             decryptEmbeddedPrivateKey: async (u) =>
               decryptWalletPrivateKey(u.encrypted_wallet_json, cfg.walletEncryptionKey),
             pinSculptureFn: makeWorkerPinHook(),
-            mintSculptureFn: makeWorkerMintHook()
+            mintSculptureFn: makeWorkerMintHook(),
+            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
           });
           return jsonResponse(out, 200, request);
         }
@@ -1246,7 +1442,8 @@ export default {
             txHash: body?.txHash || '',
             agentName: body?.agentName || '',
             pinSculptureFn: makeWorkerPinHook(),
-            mintSculptureFn: makeWorkerMintHook()
+            mintSculptureFn: makeWorkerMintHook(),
+            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
           });
           return jsonResponse(out, 200, request);
         }
@@ -1303,6 +1500,17 @@ export default {
             request
           );
         }
+
+        const anchorCheck = validateAnchorOffset(body?.anchorOffset || {});
+        if (anchorCheck.error) {
+          return jsonResponse({ error: anchorCheck.error }, 400, request);
+        }
+
+        await checkAndConsumeRelayerQuota(d1Adapter, {
+          userId: user.id,
+          isAdmin: Boolean(user.is_admin),
+          dailyQuota: cfg.relayerDailyQuota
+        });
 
         const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
         const locationBundle = await verifyAndEnrichLocation(
@@ -1445,11 +1653,29 @@ export default {
             .run();
         }
 
+        await upsertAnchorAndRevision(d1Adapter, {
+          sculptureId,
+          parcelId: locationBundle.parcelId,
+          revNum: 1,
+          anchorOffset: anchorCheck.offset,
+          erc4906TxHash: mintResult.txHash || '',
+          editorUser: user,
+          editorRole: 'owner',
+          modelType: 'voxel',
+          voxels: validation.cleanVoxels,
+          title: validation.title,
+          description: validation.description,
+          ipfsMetadataCid: ipfsResult.metadataCid,
+          ipfsModelCid: ipfsResult.modelCid,
+          ipfsImageCid: ipfsResult.imageCid,
+          changeSummary: 'Initial mobile publish'
+        });
+
         if (body?.draftId) {
           await consumeDraftOnPublish(d1Adapter, { draftId: body.draftId, user });
         }
 
-        const saved = await env.DB.prepare('SELECT * FROM sculptures WHERE id = ?')
+        const saved = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ?`)
           .bind(sculptureId)
           .first();
         return jsonResponse(
@@ -1462,7 +1688,11 @@ export default {
           request
         );
       } catch (err) {
-        return jsonResponse({ error: err.message || 'Publish failed' }, 400, request);
+        return jsonResponse(
+          { error: err.message || 'Publish failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
@@ -1620,7 +1850,8 @@ export default {
           out = await getOwnerPinSeal(d1Adapter, {
             sculptureId,
             user,
-            readIpfsJsonFn: readWorkerIpfsJson
+            readIpfsJsonFn: readWorkerIpfsJson,
+            pinMasterKek: cfg.pinMasterKek
           });
         } else if (action === 'batch') {
           out = await saveEncryptedPinBatch(d1Adapter, {
@@ -1642,7 +1873,9 @@ export default {
             user,
             body,
             userAgent,
-            readIpfsJsonFn: readWorkerIpfsJson
+            readIpfsJsonFn: readWorkerIpfsJson,
+            pinMasterKek: cfg.pinMasterKek,
+            expectedRpId: resolveWorkerRpId(request, url)
           });
         }
         return jsonResponse(out, 200, request);
@@ -1788,7 +2021,8 @@ export default {
           sculptureId: decodeURIComponent(scMatch[1]),
           user,
           body,
-          pinSculptureFn: makeWorkerPinHook()
+          pinSculptureFn: makeWorkerPinHook(),
+          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
         });
         return jsonResponse(out, 200, request);
       } catch (err) {

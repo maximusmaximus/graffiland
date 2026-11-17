@@ -31,6 +31,21 @@ export default defineConfig({
   },
   build: {
     outDir: path.resolve(__dirname, 'dist'),
-    emptyOutDir: true
+    emptyOutDir: true,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/react')) return 'react-vendor';
+          if (id.includes('node_modules/xeroemoji')) return 'xeroemoji';
+          if (id.includes('node_modules/qrcode')) return 'qrcode';
+          if (id.includes('node_modules/three/examples/jsm')) return 'three-addons';
+          if (id.includes('node_modules/three')) return 'three-core';
+          if (id.includes('node_modules/leaflet')) return 'leaflet';
+          if (id.includes('node_modules/ethers')) return 'ethers';
+          return undefined;
+        }
+      }
+    }
   }
 });

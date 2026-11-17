@@ -334,6 +334,96 @@ export function getDb() {
 
     CREATE INDEX IF NOT EXISTS idx_land_contributors_parcel
       ON land_contributors (parcel_id, contributor_sub);
+
+    CREATE TABLE IF NOT EXISTS relayer_usage (
+      user_id TEXT NOT NULL,
+      day_key TEXT NOT NULL,
+      op_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, day_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS parcel_landmark_anchors (
+      parcel_id TEXT PRIMARY KEY,
+      geohash TEXT NOT NULL,
+      anchor_cid TEXT DEFAULT '',
+      anchor_uri TEXT DEFAULT '',
+      descriptor_digest TEXT NOT NULL,
+      keyframe_count INTEGER NOT NULL DEFAULT 0,
+      feature_count INTEGER NOT NULL DEFAULT 0,
+      anchor_pack_json TEXT NOT NULL,
+      creator_sub TEXT NOT NULL,
+      updated_by_sub TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sculpture_anchors (
+      sculpture_id TEXT PRIMARY KEY,
+      parcel_id TEXT NOT NULL,
+      dx REAL NOT NULL DEFAULT 0,
+      dy REAL NOT NULL DEFAULT 0,
+      dz REAL NOT NULL DEFAULT 0,
+      yaw REAL NOT NULL DEFAULT 0,
+      current_rev INTEGER NOT NULL DEFAULT 1,
+      last_erc4906_tx_hash TEXT DEFAULT '',
+      mesh_stats_json TEXT DEFAULT '{}',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sculpture_anchors_parcel
+      ON sculpture_anchors (parcel_id);
+
+    CREATE TABLE IF NOT EXISTS sculpture_revisions (
+      id TEXT PRIMARY KEY,
+      sculpture_id TEXT NOT NULL,
+      rev_num INTEGER NOT NULL,
+      editor_sub TEXT NOT NULL,
+      editor_name TEXT DEFAULT '',
+      editor_role TEXT NOT NULL DEFAULT 'owner',
+      model_type TEXT NOT NULL DEFAULT 'voxel',
+      voxels_json TEXT NOT NULL DEFAULT '[]',
+      voxel_count INTEGER NOT NULL DEFAULT 0,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      ipfs_metadata_cid TEXT NOT NULL,
+      ipfs_model_cid TEXT NOT NULL,
+      ipfs_image_cid TEXT NOT NULL,
+      change_summary TEXT DEFAULT '',
+      custom_model_json TEXT DEFAULT '',
+      anchor_offset_json TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      UNIQUE(sculpture_id, rev_num)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sculpture_revisions_lookup
+      ON sculpture_revisions (sculpture_id, rev_num DESC);
+
+    CREATE TABLE IF NOT EXISTS user_passkeys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      credential_id TEXT NOT NULL UNIQUE,
+      public_key_spki_b64 TEXT NOT NULL,
+      alg INTEGER NOT NULL DEFAULT -7,
+      sign_count INTEGER NOT NULL DEFAULT 0,
+      rp_id TEXT DEFAULT '',
+      device_label TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      last_used_at TEXT DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_passkeys_user
+      ON user_passkeys (user_id);
+
+    CREATE TABLE IF NOT EXISTS land_security_policies (
+      parcel_id TEXT PRIMARY KEY,
+      owner_sub TEXT NOT NULL,
+      require_passkey_unlock INTEGER NOT NULL DEFAULT 0,
+      require_orb_unlock INTEGER NOT NULL DEFAULT 0,
+      min_orb_inliers INTEGER NOT NULL DEFAULT 8,
+      max_reproj_err_px REAL NOT NULL DEFAULT 6.5,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   dbInstance = db;

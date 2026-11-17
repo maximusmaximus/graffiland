@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { api, API_BASE } from '../utils/api.js';
+import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
+import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function LandManagementModal({
@@ -21,6 +23,11 @@ export default function LandManagementModal({
   const [curationNote, setCurationNote] = useState('');
   const [allowAgentErase, setAllowAgentErase] = useState(true);
   const [allowContributorEdits, setAllowContributorEdits] = useState(true);
+  const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
+  const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
+  const [minOrbInliers, setMinOrbInliers] = useState(8);
+  const [passkeys, setPasskeys] = useState([]);
+  const [expandedRevIds, setExpandedRevIds] = useState({});
   const [manualContribInput, setManualContribInput] = useState('');
   const [eraseConfirmInput, setEraseConfirmInput] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
@@ -29,8 +36,12 @@ export default function LandManagementModal({
     setLoading(true);
     setErrorMsg('');
     try {
-      const res = await api.getMyLands();
+      const [res, pkRes] = await Promise.all([
+        api.getMyLands(),
+        api.getPasskeyStatus().catch(() => ({ passkeys: [] }))
+      ]);
       setWorkspace(res);
+      setPasskeys(pkRes?.passkeys || []);
       const list = res?.parcels || [];
       if (list.length > 0) {
         const picked =
@@ -40,6 +51,9 @@ export default function LandManagementModal({
         setCurationNote(picked.curationNote || '');
         setAllowAgentErase(picked.settings?.allowAgentErase !== false);
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
+        setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
+        setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
+        setMinOrbInliers(Number(picked.securityPolicy?.minOrbInliers || 8));
       } else {
         setSelectedParcelId('');
       }
@@ -65,9 +79,29 @@ export default function LandManagementModal({
     setCurationNote(p.curationNote || '');
     setAllowAgentErase(p.settings?.allowAgentErase !== false);
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
+    setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
+    setRequireOrbUnlock(Boolean(p.securityPolicy?.requireOrbUnlock));
+    setMinOrbInliers(Number(p.securityPolicy?.minOrbInliers || 8));
     setEraseConfirmInput('');
     setNotice('');
     setErrorMsg('');
+  }
+
+  async function handleRegisterPasskey() {
+    setBusy('passkey');
+    setNotice('');
+    setErrorMsg('');
+    try {
+      const label = navigator.userAgent?.includes('Mobile') ? 'Mobile Passkey' : 'Desktop Passkey';
+      const out = await registerHardwarePasskey(label);
+      const pkRes = await api.getPasskeyStatus();
+      setPasskeys(pkRes?.passkeys || []);
+      setNotice(`Registered hardware ES256 Passkey (${out.passkey?.deviceLabel || 'Device'}).`);
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not register hardware Passkey');
+    } finally {
+      setBusy('');
+    }
   }
 
   async function handleSaveCurationAndSettings(e) {
@@ -85,9 +119,14 @@ export default function LandManagementModal({
         allowAgentErase,
         allowContributorEdits
       });
+      await api.updateLandSecurityPolicy(activeParcel.parcelId, {
+        requirePasskeyUnlock,
+        requireOrbUnlock,
+        minOrbInliers: Number(minOrbInliers || 8)
+      });
       await loadWorkspace();
       onWorkspaceChanged?.();
-      setNotice(`Saved settings & permissions for ${activeParcel.parcelId}.`);
+      setNotice(`Saved settings, permissions & security policy for ${activeParcel.parcelId}.`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not update land settings');
     } finally {
@@ -300,8 +339,74 @@ export default function LandManagementModal({
                     </span>
                   </label>
 
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      padding: '9px 11px',
+                      borderRadius: 10,
+                      background: 'rgba(0, 245, 212, 0.05)',
+                      border: '1px solid rgba(0, 245, 212, 0.22)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                        <XeroIcon emoji="🔐" size={13} /> Parcel Pin-Unlock &amp; Visual ORB Policy
+                      </strong>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {activeParcel.landmarkAnchor ? (
+                          <span className="badge teal" style={{ fontSize: 10.5 }}>
+                            ORB Pack: {activeParcel.landmarkAnchor.featureCount} features
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ fontSize: 10.5 }}>No ORB Pack Yet</span>
+                        )}
+                        {isWebAuthnSupported() && (
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ fontSize: 10.5, padding: '3px 8px' }}
+                            disabled={busy !== ''}
+                            onClick={handleRegisterPasskey}
+                          >
+                            <XeroIcon emoji="🛡️" size={12} />{' '}
+                            {passkeys.length > 0 ? `Passkey Ready (${passkeys.length})` : 'Register Device Passkey'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={requirePasskeyUnlock}
+                        onChange={(e) => setRequirePasskeyUnlock(e.target.checked)}
+                      />
+                      <span>Require Hardware <strong>WebAuthn Passkey</strong> (FaceID / Biometrics) on pinned unlocks</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={requireOrbUnlock}
+                        onChange={(e) => setRequireOrbUnlock(e.target.checked)}
+                      />
+                      <span>
+                        Require live <strong>ORB Visual Landmark</strong> pose match (min inliers:
+                        <input
+                          type="number"
+                          min={4}
+                          max={64}
+                          value={minOrbInliers}
+                          onChange={(e) => setMinOrbInliers(Number(e.target.value || 8))}
+                          style={{ width: 52, marginLeft: 6, background: 'rgba(0,0,0,0.35)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '2px 5px' }}
+                        />
+                        )
+                      </span>
+                    </label>
+                  </div>
+
                   <button type="submit" className="btn btn-primary" disabled={busy !== ''}>
-                    <XeroIcon emoji="✅" size={14} /> Save Land Settings
+                    <XeroIcon emoji="✅" size={14} /> Save Land Settings &amp; Security Policy
                   </button>
                 </form>
 
@@ -441,43 +546,80 @@ export default function LandManagementModal({
                     <code>.obj</code>, <code>.stl</code>, or <code>.ply</code> non-voxel 3D model here via{' '}
                     <code>load_3d_model_on_land</code>.
                   </div>
-                  {(activeParcel.sculptures || []).map((sc) => (
-                    <div
-                      key={sc.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        background: 'rgba(255,255,255,0.04)'
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 12.5 }}>{sc.title}</div>
-                        <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                          {sc.modelType === 'custom-3d'
-                            ? `3D File (${String(sc.customModel?.format || 'glb').toUpperCase()})`
-                            : `${sc.voxelCount} blocks`}{' '}
-                          · {sc.id.slice(0, 8)}...
+                  {(activeParcel.sculptures || []).map((sc) => {
+                    const revOpen = Boolean(expandedRevIds[sc.id]);
+                    return (
+                      <div
+                        key={sc.id}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          background: 'rgba(255,255,255,0.04)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 12.5 }}>
+                              {sc.title}{' '}
+                              <span className="badge teal" style={{ fontSize: 10, marginLeft: 4 }}>
+                                v{sc.currentRev || 1}
+                              </span>
+                            </div>
+                            <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                              {sc.modelType === 'custom-3d'
+                                ? `3D File (${String(sc.customModel?.format || 'glb').toUpperCase()})`
+                                : `${sc.voxelCount} blocks`}{' '}
+                              · {sc.id.slice(0, 8)}...
+                              {sc.meshStats?.triangleCount > 0 ? ` · ${sc.meshStats.triangleCount.toLocaleString()} tris` : ''}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ fontSize: 11, padding: '4px 9px' }}
+                              onClick={() =>
+                                setExpandedRevIds((prev) => ({ ...prev, [sc.id]: !prev[sc.id] }))
+                              }
+                            >
+                              <XeroIcon emoji="📜" size={12} /> {revOpen ? 'Hide History' : 'Revisions'}
+                            </button>
+                            {onSelectSculpture && (
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{ fontSize: 11, padding: '4px 9px' }}
+                                onClick={() => {
+                                  onClose?.();
+                                  onSelectSculpture(sc);
+                                }}
+                              >
+                                <XeroIcon emoji="✏️" size={12} /> Inspect / Edit
+                              </button>
+                            )}
+                          </div>
                         </div>
+                        {revOpen && (
+                          <SculptureRevisionsPanel
+                            sculptureId={sc.id}
+                            currentRev={sc.currentRev || 1}
+                            lastErc4906TxHash={sc.lastErc4906TxHash || ''}
+                            canRollback
+                            onRolledBack={async (res) => {
+                              await loadWorkspace();
+                              onWorkspaceChanged?.();
+                              setNotice(
+                                `Rolled back ${sc.title} to v${res?.restoredFromRev} (now v${res?.revNum}) · ERC-4906 emitted.`
+                              );
+                            }}
+                          />
+                        )}
                       </div>
-                      {onSelectSculpture && (
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ fontSize: 11, padding: '4px 9px' }}
-                          onClick={() => {
-                            onClose?.();
-                            onSelectSculpture(sc);
-                          }}
-                        >
-                          <XeroIcon emoji="✏️" size={12} /> Inspect / Edit
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Erase Land Section */}

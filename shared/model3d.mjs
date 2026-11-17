@@ -1,5 +1,7 @@
 export const CUSTOM_MODEL_MAX_BYTES = 4 * 1024 * 1024;
 export const INLINE_MODEL_DB_MAX_BYTES = 180 * 1024;
+export const MAX_CUSTOM_MODEL_TRIANGLES = 150000;
+export const MAX_CUSTOM_MODEL_TEXTURES = 8;
 
 export const SUPPORTED_3D_FORMATS = ['glb', 'gltf', 'obj', 'stl', 'ply'];
 
@@ -116,6 +118,128 @@ function validateModelBytesByFormat(format, bytes) {
   return `Unsupported 3D model format "${format}". Supported formats: ${SUPPORTED_3D_FORMATS.join(', ')}.`;
 }
 
+function inspectGltfJsonStats(parsed) {
+  const accessors = Array.isArray(parsed?.accessors) ? parsed.accessors : [];
+  const meshes = Array.isArray(parsed?.meshes) ? parsed.meshes : [];
+  const textures = Array.isArray(parsed?.textures) ? parsed.textures : [];
+  const images = Array.isArray(parsed?.images) ? parsed.images : [];
+  const extensionsUsed = Array.isArray(parsed?.extensionsUsed) ? parsed.extensionsUsed : [];
+  let triangleCount = 0;
+
+  for (const mesh of meshes) {
+    for (const prim of mesh?.primitives || []) {
+      const mode = prim?.mode ?? 4;
+      if (prim?.indices !== undefined && accessors[prim.indices]) {
+        const count = Number(accessors[prim.indices].count || 0);
+        triangleCount += mode === 4 ? Math.ceil(count / 3) : Math.max(0, count - 2);
+      } else if (prim?.attributes?.POSITION !== undefined && accessors[prim.attributes.POSITION]) {
+        const count = Number(accessors[prim.attributes.POSITION].count || 0);
+        triangleCount += mode === 4 ? Math.ceil(count / 3) : Math.max(0, count - 2);
+      }
+    }
+  }
+
+  return {
+    triangleCount,
+    textureCount: Math.max(textures.length, images.length),
+    hasDraco: extensionsUsed.includes('KHR_draco_mesh_compression'),
+    hasMeshopt: extensionsUsed.includes('EXT_meshopt_compression')
+  };
+}
+
+export function inspectCustomModelStats(format, bytes) {
+  const stats = {
+    triangleCount: 0,
+    textureCount: 0,
+    hasDraco: false,
+    hasMeshopt: false,
+    byteLength: bytes?.length || 0
+  };
+  if (!bytes || bytes.length === 0) return { stats, error: null };
+
+  if (format === 'glb') {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length >= 20) {
+      const chunkLen = view.getUint32(12, true);
+      const chunkType = view.getUint32(16, true);
+      // 0x4E4F534A == 'JSON'
+      if (chunkType === 0x4e4f534a && 20 + chunkLen <= bytes.length) {
+        try {
+          const jsonStr = new TextDecoder().decode(bytes.subarray(20, 20 + chunkLen));
+          const parsed = JSON.parse(jsonStr);
+          Object.assign(stats, inspectGltfJsonStats(parsed));
+        } catch {
+          return { stats, error: 'Corrupt glTF JSON chunk inside GLB binary.' };
+        }
+      }
+    }
+  } else if (format === 'gltf') {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(bytes));
+      Object.assign(stats, inspectGltfJsonStats(parsed));
+    } catch {
+      return { stats, error: 'Invalid glTF JSON structure.' };
+    }
+  } else if (format === 'obj') {
+    const text = new TextDecoder().decode(bytes);
+    const faces = text.match(/^\s*f\s+.+/gm) || [];
+    stats.triangleCount = faces.length;
+  } else if (format === 'stl') {
+    const text = new TextDecoder().decode(bytes.subarray(0, Math.min(256, bytes.length)));
+    if (text.trimStart().toLowerCase().startsWith('solid')) {
+      const fullText = new TextDecoder().decode(bytes);
+      stats.triangleCount = (fullText.match(/facet\s+normal/gi) || []).length;
+    } else if (bytes.length >= 84) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      stats.triangleCount = view.getUint32(80, true);
+    }
+  } else if (format === 'ply') {
+    const head = new TextDecoder().decode(bytes.subarray(0, Math.min(1024, bytes.length)));
+    const faceMatch = head.match(/element\s+face\s+(\d+)/i);
+    if (faceMatch) stats.triangleCount = Number(faceMatch[1] || 0);
+  }
+
+  if (stats.triangleCount > MAX_CUSTOM_MODEL_TRIANGLES) {
+    return {
+      stats,
+      error: `3D model exceeds mobile WebGL triangle budget (${stats.triangleCount.toLocaleString()} > ${MAX_CUSTOM_MODEL_TRIANGLES.toLocaleString()} max). Compress or decimate the mesh (Draco/Meshopt recommended).`
+    };
+  }
+  if (stats.textureCount > MAX_CUSTOM_MODEL_TEXTURES) {
+    return {
+      stats,
+      error: `3D model embeds ${stats.textureCount} textures (max ${MAX_CUSTOM_MODEL_TEXTURES} allowed for mobile AR memory).`
+    };
+  }
+  return { stats, error: null };
+}
+
+export function validateAnchorOffset(raw = {}) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const dx = Number(src.dx ?? 0);
+  const dy = Number(src.dy ?? 0);
+  const dz = Number(src.dz ?? 0);
+  const yaw = Number(src.yaw ?? 0);
+  if (![dx, dy, dz, yaw].every(Number.isFinite)) {
+    return { error: 'anchorOffset coordinates (dx, dy, dz, yaw) must be finite numbers.', offset: null };
+  }
+  if (Math.abs(dx) > 20 || Math.abs(dz) > 20 || dy < -5 || dy > 30) {
+    return {
+      error: 'anchorOffset out of parcel landmark bounds (|dx|,|dz| <= 20m, -5m <= dy <= 30m).',
+      offset: null
+    };
+  }
+  return {
+    error: null,
+    offset: {
+      dx: Math.round(dx * 1000) / 1000,
+      dy: Math.round(dy * 1000) / 1000,
+      dz: Math.round(dz * 1000) / 1000,
+      yaw: Math.round(yaw * 10000) / 10000
+    }
+  };
+}
+
 /**
  * Extracts, validates, and normalizes a non-voxel 3D model payload passed via MCP or HTTP API.
  * Returns null if no custom model fields are present.
@@ -187,11 +311,17 @@ export function extractCustomModelInput(input = {}) {
     };
   }
 
+  let stats = { triangleCount: 0, textureCount: 0, hasDraco: false, hasMeshopt: false };
   if (decodedBytes) {
     const err = validateModelBytesByFormat(format, decodedBytes);
     if (err) {
       return { provided: true, error: err, customModel: null };
     }
+    const inspected = inspectCustomModelStats(format, decodedBytes);
+    if (inspected.error) {
+      return { provided: true, error: inspected.error, customModel: null };
+    }
+    stats = inspected.stats;
   } else if (rawUrl) {
     if (!/^(https?:\/\/|ipfs:\/\/)/i.test(rawUrl)) {
       return {
@@ -223,7 +353,8 @@ export function extractCustomModelInput(input = {}) {
       byteLength: decodedBytes ? decodedBytes.length : 0,
       externalUrl: rawUrl,
       scale,
-      rotationY
+      rotationY,
+      stats
     }
   };
 }

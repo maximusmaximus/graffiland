@@ -77,6 +77,25 @@ export function serializeSculptureRow(
     parcelId: row.parcel_id,
     geohash: row.geohash,
     parcelBounds: decodeGeohashBounds(row.geohash),
+    anchorOffset: {
+      dx: Number(row.anchor_dx || 0),
+      dy: Number(row.anchor_dy || 0),
+      dz: Number(row.anchor_dz || 0),
+      yaw: Number(row.anchor_yaw || 0)
+    },
+    currentRev: Number(row.current_rev || 1),
+    lastErc4906TxHash: row.last_erc4906_tx_hash || '',
+    ...(row.mesh_stats_json
+      ? {
+          meshStats: (() => {
+            try {
+              return JSON.parse(row.mesh_stats_json);
+            } catch {
+              return null;
+            }
+          })()
+        }
+      : {}),
     placeName: row.place_name,
     country: row.country,
     timezone: row.timezone,

@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import DesktopHub from './components/DesktopHub.jsx';
-import MobileStudio from './components/MobileStudio.jsx';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
 import { isMobileDevice } from './utils/device.js';
+
+const DesktopHub = lazy(() => import('./components/DesktopHub.jsx'));
+const MobileStudio = lazy(() => import('./components/MobileStudio.jsx'));
 
 export default function App() {
   const [config, setConfig] = useState(null);
@@ -67,23 +68,44 @@ export default function App() {
     );
   }
 
+  const lazyFallback = (
+    <div
+      style={{
+        height: '100dvh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        background: '#07090f',
+        color: '#f3f6ff'
+      }}
+    >
+      <XeroIcon emoji="🧊" size={28} />
+      <span className="mono">Loading Workspace...</span>
+    </div>
+  );
+
   if (isMobile) {
     return (
-      <MobileStudio
+      <Suspense fallback={lazyFallback}>
+        <MobileStudio
+          config={config}
+          user={user}
+          onUserUpdate={setUser}
+          onLogout={handleLogout}
+        />
+      </Suspense>
+    );
+  }
+
+  return (
+    <Suspense fallback={lazyFallback}>
+      <DesktopHub
         config={config}
         user={user}
         onUserUpdate={setUser}
         onLogout={handleLogout}
       />
-    );
-  }
-
-  return (
-    <DesktopHub
-      config={config}
-      user={user}
-      onUserUpdate={setUser}
-      onLogout={handleLogout}
-    />
+    </Suspense>
   );
 }

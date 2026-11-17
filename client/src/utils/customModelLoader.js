@@ -1,8 +1,21 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+
+let sharedDracoLoader = null;
+function getSharedDracoLoader() {
+  if (!sharedDracoLoader) {
+    sharedDracoLoader = new DRACOLoader();
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    sharedDracoLoader.setDecoderPath(`${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}draco/gltf/`);
+    sharedDracoLoader.preload();
+  }
+  return sharedDracoLoader;
+}
 
 function normalizeLoadedObject(root, customModel = {}) {
   const wrapper = new THREE.Group();
@@ -56,6 +69,8 @@ export async function loadCustomModelObject(sculpture, resolveUrlFn = (u) => u) 
   let root;
   if (format === 'glb' || format === 'gltf') {
     const loader = new GLTFLoader();
+    loader.setDRACOLoader(getSharedDracoLoader());
+    loader.setMeshoptDecoder(MeshoptDecoder);
     const gltf = await loader.loadAsync(url);
     root = gltf.scene || (gltf.scenes && gltf.scenes[0]) || new THREE.Group();
   } else if (format === 'obj') {

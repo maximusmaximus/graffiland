@@ -17,6 +17,7 @@ import {
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
+import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 async function switchOrAddRobinhoodNetwork(eth, chainInfo) {
@@ -562,12 +563,21 @@ export default function SculptureModal({
           {sculpture.modelType === 'custom-3d' && sculpture.customModel ? (
             <span className="badge teal">
               <XeroIcon emoji="🗿" size={13} /> {String(sculpture.customModel.format || 'glb').toUpperCase()} 3D Model
+              {sculpture.meshStats?.triangleCount > 0 && ` · ${sculpture.meshStats.triangleCount.toLocaleString()} tris`}
+              {sculpture.meshStats?.hasDraco && ' · Draco'}
+              {sculpture.meshStats?.hasMeshopt && ' · Meshopt'}
             </span>
           ) : (
             <span className="badge">
               <XeroIcon emoji="🧱" size={13} /> {sculpture.voxelCount} voxels
             </span>
           )}
+          <span className="badge teal">v{sculpture.currentRev || 1}</span>
+          {(sculpture.anchorOffset?.dx || sculpture.anchorOffset?.dy || sculpture.anchorOffset?.dz || sculpture.anchorOffset?.yaw) ? (
+            <span className="badge">
+              <XeroIcon emoji="📌" size={12} /> Offset ({sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m)
+            </span>
+          ) : null}
           {isContributor && (
             <span className="badge gold">
               <XeroIcon emoji="🤝" size={13} /> Contributor Edit Access
@@ -766,6 +776,13 @@ export default function SculptureModal({
                 </td>
               </tr>
               <tr>
+                <th>Version &amp; ERC-4906</th>
+                <td className="mono">
+                  Rev v{sculpture.currentRev || 1}
+                  {sculpture.lastErc4906TxHash ? ` · ERC-4906 ${sculpture.lastErc4906TxHash.slice(0, 14)}...` : ''}
+                </td>
+              </tr>
+              <tr>
                 <th>Tx Hash</th>
                 <td className="mono" style={{ wordBreak: 'break-all' }}>
                   {explorerTxUrl ? (
@@ -784,6 +801,23 @@ export default function SculptureModal({
               </tr>
             </tbody>
           </table>
+
+          <SculptureRevisionsPanel
+            sculptureId={sculpture.id}
+            currentRev={sculpture.currentRev || 1}
+            lastErc4906TxHash={sculpture.lastErc4906TxHash || ''}
+            explorerUrl={config?.chain?.network?.explorerUrl || ''}
+            canRollback={isPropertyOwner}
+            onRolledBack={(res) => {
+              if (res?.sculpture) {
+                setSculpture(res.sculpture);
+                onSculptureUpdated?.(res.sculpture);
+                setPropNotice(
+                  `Rolled back to v${res.restoredFromRev} (now v${res.revNum}) · ERC-4906 MetadataUpdate emitted.`
+                );
+              }
+            }}
+          />
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
             <a

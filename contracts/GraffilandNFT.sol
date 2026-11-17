@@ -126,6 +126,15 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         );
     }
 
+    /**
+     * @notice Updates tokenURI after an owner/contributor revision or rollback, emitting ERC-4906 MetadataUpdate.
+     */
+    function updateTokenURI(uint256 tokenId, string calldata newURI) external onlyRelayerOrOwner {
+        require(_ownerOf(tokenId) != address(0), "GraffilandNFT: non-existent token");
+        require(bytes(newURI).length > 0, "GraffilandNFT: empty URI");
+        _setTokenURI(tokenId, newURI);
+    }
+
     function getParcelTokens(bytes32 landParcelId) external view returns (uint256[] memory) {
         return _parcelTokens[landParcelId];
     }

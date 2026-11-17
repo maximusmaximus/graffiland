@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { ethers } from 'ethers';
 import { WebSocket } from 'ws';
 
@@ -2101,5 +2102,551 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${holderToken}` }
     });
     assert.equal(myLandsAfter.body.parcelCount, 0);
+  });
+
+  test('Spatial streaming, 3D triangle/texture budgets, anchorOffset, immutable IPFS revisions, 409 conflict, ERC-4906 rollback & 429 quota', async () => {
+    const mobileUa = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36';
+    const userAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: {
+          email: 'sprint16@graffiland.test',
+          name: 'Sprint16 Artist'
+        }
+      })
+    });
+    assert.equal(userAuth.status, 200);
+    const token = userAuth.body.token;
+    const pol16 = {
+      frameHashes: ['p1', 'p2', 'p3', 'p4'],
+      gyroSamples: [
+        { alpha: 5, beta: 8, gamma: 2 },
+        { alpha: 14, beta: 10, gamma: 5 }
+      ],
+      flowCorrelation: 0.87,
+      visualDHash: 'abcdef1234567890',
+      frameCount: 6,
+      flowScore: 0.87
+    };
+
+    // Invalid anchorOffset rejected (400)
+    const badOffsetPub = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Bad Offset Test',
+        description: 'Tests anchorOffset bounds validation cleanly.',
+        termsAccepted: true,
+        anchorOffset: { dx: 95, dy: 0, dz: 0, yaw: 0 },
+        location: { lat: 37.753, lng: -122.442, altitude: 15, accuracy: 5 },
+        proofOfLocation: pol16,
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(badOffsetPub.status, 400);
+
+    // Valid publish with anchorOffset -> creates immutable v1 revision
+    const pubRes = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Streamed Anchor V1',
+        description: 'Initial anchored revision for streaming and rollback test.',
+        termsAccepted: true,
+        anchorOffset: { dx: 1.25, dy: 0.4, dz: -0.75, yaw: 0.7854 },
+        location: { lat: 37.753, lng: -122.442, altitude: 15, accuracy: 5 },
+        proofOfLocation: pol16,
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 0.05, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' }
+        ]
+      })
+    });
+    assert.equal(pubRes.status, 201);
+    const sc1 = pubRes.body.sculpture;
+    assert.equal(sc1.currentRev, 1);
+    assert.equal(sc1.anchorOffset.dx, 1.25);
+    assert.equal(sc1.anchorOffset.dy, 0.4);
+    assert.equal(sc1.anchorOffset.dz, -0.75);
+
+    // Spatial streaming: includeVoxels=0 omits voxels array while preserving voxelCount, GET /:id hydrates
+    const lightList = await apiJson('/api/sculptures?includeVoxels=0');
+    assert.equal(lightList.status, 200);
+    const lightRow = lightList.body.sculptures.find((s) => s.id === sc1.id);
+    assert.ok(lightRow);
+    assert.equal(lightRow.voxels, undefined);
+    assert.equal(lightRow.voxelCount, 2);
+    assert.equal(lightRow.anchorOffset.dx, 1.25);
+
+    const hydratedOne = await apiJson(`/api/sculptures/${sc1.id}`);
+    assert.equal(hydratedOne.status, 200);
+    assert.equal(hydratedOne.body.sculpture.voxels.length, 2);
+
+    // 3D polygon (>150k faces) and texture (>8 textures) budget rejections
+    const overPolyObj = `v 0 0 0\nv 1 0 0\nv 0 1 0\n${'f 1 2 3\n'.repeat(150005)}`;
+    const overPolyRes = await apiJson(`/api/lands/${sc1.parcelId}/sculptures`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        title: 'Over Poly Mesh',
+        description: 'Should fail triangle budget cleanly.',
+        modelFormat: 'obj',
+        modelData: overPolyObj
+      })
+    });
+    assert.equal(overPolyRes.status, 400);
+    assert.match(overPolyRes.body.error, /triangle budget/i);
+
+    const overTexGltf = JSON.stringify({
+      asset: { version: '2.0' },
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+      accessors: [{ count: 3, type: 'VEC3', componentType: 5126 }],
+      textures: Array.from({ length: 10 }, (_, idx) => ({ name: `tex_${idx}` }))
+    });
+    const overTexRes = await apiJson(`/api/lands/${sc1.parcelId}/sculptures`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        title: 'Over Texture GLTF',
+        description: 'Should fail texture budget cleanly.',
+        modelFormat: 'gltf',
+        modelData: overTexGltf
+      })
+    });
+    assert.equal(overTexRes.status, 400);
+    assert.match(overTexRes.body.error, /textures/i);
+
+    // Update to v2 with expectedRev=1 & shifted anchorOffset -> emits ERC-4906
+    const updV2 = await apiJson(`/api/sculptures/${sc1.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        expectedRev: 1,
+        title: 'Streamed Anchor V2',
+        description: 'Second immutable revision with updated offset.',
+        anchorOffset: { dx: -0.5, dy: 0.1, dz: 0.25, yaw: 1.57 },
+        voxels: [{ x: 0, y: 0, z: 0, color: '#ffd166', material: 'glass' }]
+      })
+    });
+    assert.equal(updV2.status, 200);
+    assert.equal(updV2.body.sculpture.currentRev, 2);
+    assert.equal(updV2.body.sculpture.title, 'Streamed Anchor V2');
+    assert.equal(updV2.body.sculpture.anchorOffset.dx, -0.5);
+    assert.ok(updV2.body.sculpture.lastErc4906TxHash.startsWith('0x'));
+
+    // Stale expectedRev=1 must fail with HTTP 409 Conflict
+    const staleRes = await apiJson(`/api/sculptures/${sc1.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        expectedRev: 1,
+        title: 'Stale Write Attempt'
+      })
+    });
+    assert.equal(staleRes.status, 409);
+
+    // List revisions & rollback back to v1 -> creates v3 restoring v1 title, voxels & anchorOffset + ERC-4906
+    const revList = await apiJson(`/api/sculptures/${sc1.id}/revisions`);
+    assert.equal(revList.status, 200);
+    assert.equal(revList.body.revisions.length, 2);
+
+    const rollbackRes = await apiJson(`/api/sculptures/${sc1.id}/revisions/1/rollback`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(rollbackRes.status, 200);
+    assert.equal(rollbackRes.body.restoredFromRev, 1);
+    assert.equal(rollbackRes.body.revNum, 3);
+    assert.equal(rollbackRes.body.sculpture.title, 'Streamed Anchor V1');
+    assert.equal(rollbackRes.body.sculpture.voxelCount, 2);
+    assert.equal(rollbackRes.body.sculpture.anchorOffset.dx, 1.25);
+    assert.ok(rollbackRes.body.erc4906TxHash.startsWith('0x'));
+
+    // Daily relayer gas-sponsorship quota (429 Too Many Requests when exceeded)
+    const { server: quotaSrv } = createAppServer({ relayerDailyQuota: 2 });
+    await new Promise((resolve) => quotaSrv.listen(0, '127.0.0.1', resolve));
+    try {
+      const qPort = quotaSrv.address().port;
+      const qBase = `http://127.0.0.1:${qPort}`;
+      const qAuth = await (
+        await fetch(`${qBase}/api/auth/google`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            devProfile: {
+              email: 'quota@graffiland.test',
+              name: 'Quota User'
+            }
+          })
+        })
+      ).json();
+      const postQuotaPub = async (idx) => {
+        const res = await fetch(`${qBase}/api/sculptures/publish`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${qAuth.token}`,
+            'User-Agent': mobileUa
+          },
+          body: JSON.stringify({
+            title: `Quota Art ${idx}`,
+            description: 'Testing daily sponsored relayer gas limit.',
+            termsAccepted: true,
+            location: { lat: 37.754, lng: -122.443, altitude: 12, accuracy: 5 },
+            proofOfLocation: pol16,
+            voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+          })
+        });
+        return { status: res.status, body: await res.json() };
+      };
+      const q1 = await postQuotaPub(1);
+      const q2 = await postQuotaPub(2);
+      const q3 = await postQuotaPub(3);
+      assert.equal(q1.status, 201);
+      assert.equal(q2.status, 201);
+      assert.equal(q3.status, 429);
+      assert.equal(q3.body.dailyQuota, 2);
+    } finally {
+      await new Promise((resolve) => quotaSrv.close(resolve));
+    }
+  });
+
+  test('Non-reversible ORB landmark packs, PIN_MASTER_KEK seal wrapping, ES256 WebAuthn Passkeys & ORB PnP unlock verification', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) Mobile/15E148';
+    const desktopUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0';
+
+    const holderAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'holder17@graffiland.test', name: 'Holder 17' } })
+    });
+    const visitorAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'visitor17@graffiland.test', name: 'Visitor 17' } })
+    });
+    const holderToken = holderAuth.body.token;
+    const visitorToken = visitorAuth.body.token;
+
+    const pLat = 37.7551;
+    const pLng = -122.4451;
+    const pub17 = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Passkey ORB Citadel',
+        description: 'Protected by ORB landmarks, KEK seal encryption, and hardware WebAuthn passkeys.',
+        termsAccepted: true,
+        location: { lat: pLat, lng: pLng, altitude: 22, accuracy: 4 },
+        proofOfLocation: {
+          frameHashes: ['k1', 'k2', 'k3', 'k4'],
+          gyroSamples: [
+            { alpha: 4, beta: 10, gamma: 2 },
+            { alpha: 18, beta: 12, gamma: 4 }
+          ],
+          flowCorrelation: 0.9,
+          visualDHash: '1122334455667788',
+          frameCount: 6,
+          flowScore: 0.9
+        },
+        voxels: [{ x: 0, y: 0, z: 0, color: '#7b61ff', material: 'neon' }]
+      })
+    });
+    assert.equal(pub17.status, 201);
+    const sc = pub17.body.sculpture;
+    const parcelId = sc.parcelId;
+
+    // 1. Privacy gate: raw camera image / pixels in landmark-pack MUST be rejected (400)
+    const makeFeat = (seed) => {
+      const desc = new Uint8Array(32);
+      desc.fill(seed & 0xff);
+      return {
+        u: 0.25 + (seed % 5) * 0.1,
+        v: 0.3 + (seed % 4) * 0.1,
+        x: 0.4,
+        y: 0.2,
+        z: -2.4,
+        angle: 0.4,
+        response: 55,
+        descB64: Buffer.from(desc).toString('base64')
+      };
+    };
+    const validKeyframes = [
+      { yawOffsetDeg: -24, pitchDeg: 2, frameWidth: 160, frameHeight: 120, features: [1, 2, 3, 4, 5, 6].map(makeFeat) },
+      { yawOffsetDeg: 0, pitchDeg: 1, frameWidth: 160, frameHeight: 120, features: [7, 8, 9, 10, 11, 12].map(makeFeat) },
+      { yawOffsetDeg: 25, pitchDeg: -1, frameWidth: 160, frameHeight: 120, features: [13, 14, 15, 16, 17, 18].map(makeFeat) }
+    ];
+
+    const rejectRawPack = await apiJson(`/api/lands/${parcelId}/landmark-pack`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({
+        imageDataUrl: 'data:image/jpeg;base64,/9j/4AAQ',
+        keyframes: validKeyframes
+      })
+    });
+    assert.equal(rejectRawPack.status, 400);
+
+    const savedPack = await apiJson(`/api/lands/${parcelId}/landmark-pack`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ geohash: sc.geohash, keyframes: validKeyframes })
+    });
+    assert.equal(savedPack.status, 200);
+    assert.equal(savedPack.body.keyframeCount, 3);
+    assert.equal(savedPack.body.featureCount, 18);
+    const descriptorDigest = savedPack.body.descriptorDigest;
+
+    // 2. Geofenced fetch: desktop blocked (403), distant mobile blocked (403), on-site mobile allowed (200)
+    const desktopFetch = await apiJson(`/api/lands/${parcelId}/landmark-pack/fetch`, {
+      method: 'POST',
+      headers: { 'User-Agent': desktopUa },
+      body: JSON.stringify({ lat: pLat, lng: pLng, deviceProfile: { isMobile: false } })
+    });
+    assert.equal(desktopFetch.status, 403);
+
+    const farMobileFetch = await apiJson(`/api/lands/${parcelId}/landmark-pack/fetch`, {
+      method: 'POST',
+      headers: { 'User-Agent': mobileUa },
+      body: JSON.stringify({ lat: pLat + 0.005, lng: pLng + 0.005, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(farMobileFetch.status, 403);
+
+    const localFetch = await apiJson(`/api/lands/${parcelId}/landmark-pack/fetch`, {
+      method: 'POST',
+      headers: { 'User-Agent': mobileUa },
+      body: JSON.stringify({ lat: pLat, lng: pLng, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(localFetch.status, 200);
+    assert.equal(localFetch.body.descriptorDigest, descriptorDigest);
+
+    // 3. Pin encrypted IPFS batch -> verify seal_secret_b64 is envelope-wrapped under PIN_MASTER_KEK (`kek-v1:`)
+    const holderId = await chatCrypto.getOrCreateDeviceIdentity(holderAuth.body.user.id);
+    const sealRes = await apiJson(`/api/sculptures/${sc.id}/pins/owner-seal`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(sealRes.status, 200);
+
+    const rawDb = new DatabaseSync(process.env.GRAFFILAND_DB_PATH);
+    const pinDbRow = rawDb
+      .prepare('SELECT seal_secret_b64 FROM sculpture_pin_batches WHERE sculpture_id = ?')
+      .get(sc.id);
+    rawDb.close();
+    assert.ok(pinDbRow.seal_secret_b64.startsWith('kek-v1:'), 'seal_secret_b64 must be envelope-encrypted with KEK');
+
+    const encBatch = await chatCrypto.encryptPinnedIpfsBatch({
+      pins: [{ id: 'p17', text: 'Only real Passkey + ORB visitors can decrypt this', authorName: 'Holder 17', createdAt: new Date().toISOString() }],
+      sculptureId: sc.id,
+      parcelId,
+      geohash: sc.geohash,
+      batchSeq: 1,
+      parcelSealKeyB64: sealRes.body.parcelSealKeyB64,
+      identity: holderId
+    });
+    const savedPinRes = await apiJson(`/api/sculptures/${sc.id}/pins/batch`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ encryptedBatch: encBatch })
+    });
+    assert.equal(savedPinRes.status, 200);
+
+    // 4. Enforce strict Passkey + ORB policy on parcel
+    const polUpdate = await apiJson(`/api/lands/${parcelId}/security`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ requirePasskeyUnlock: true, requireOrbUnlock: true, minOrbInliers: 8 })
+    });
+    assert.equal(polUpdate.status, 200);
+    assert.equal(polUpdate.body.policy.requirePasskeyUnlock, true);
+    assert.equal(polUpdate.body.policy.requireOrbUnlock, true);
+
+    // 5. Visitor registers genuine WebCrypto ES256 hardware passkey credential
+    const b64u = (bytes) => Buffer.from(bytes).toString('base64url');
+    const pkKeyPair = await globalThis.crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const spkiBuf = new Uint8Array(await globalThis.crypto.subtle.exportKey('spki', pkKeyPair.publicKey));
+    const regOpts = await apiJson('/api/passkeys/register/options', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(regOpts.status, 200);
+    const rpId = regOpts.body.rp.id;
+    const credentialId = b64u(globalThis.crypto.getRandomValues(new Uint8Array(24)));
+    const verifyReg = await apiJson('/api/passkeys/register/verify', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}` },
+      body: JSON.stringify({
+        credentialId,
+        publicKeySpkiB64: b64u(spkiBuf),
+        clientDataJSON: b64u(new TextEncoder().encode(JSON.stringify({ type: 'webauthn.create', challenge: regOpts.body.challenge, origin: baseUrl }))),
+        deviceLabel: 'Test iPhone SecureEnclave'
+      })
+    });
+    assert.equal(verifyReg.status, 200);
+
+    const visId = await chatCrypto.getOrCreateDeviceIdentity(visitorAuth.body.user.id);
+    const buildSignedPresence = async () => {
+      const ch = await apiJson(`/api/sculptures/${sc.id}/pins/challenge`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+        body: JSON.stringify({ deviceProfile: { isMobile: true } })
+      });
+      assert.equal(ch.status, 200);
+      assert.equal(ch.body.webauthnRequired, true);
+      assert.equal(ch.body.orbRequired, true);
+      const freshSight = await chatCrypto.signSightProof(visId, {
+        sculptureId: sc.id,
+        parcelId,
+        sightProof: {
+          selectionMethod: 'ar-camera-raycast',
+          rayHit: true,
+          inFrustum: true,
+          cameraReady: true,
+          cameraFrames: 5,
+          opticalFlowCorrelation: 0.88,
+          visualDHash: '1122334455667788',
+          accuracy: 5,
+          lat: pLat,
+          lng: pLng,
+          altitude: 22,
+          selectedAt: new Date().toISOString()
+        }
+      });
+      const signed = await chatCrypto.signParcelPresenceProof(visId, {
+        sculptureId: sc.id,
+        parcelId,
+        geohash: sc.geohash,
+        challengeId: ch.body.challengeId,
+        challengeNonce: ch.body.challengeNonce,
+        sightProof: freshSight,
+        polSnapshot: {
+          cameraFrames: 6,
+          visualDHash: '1122334455667788',
+          gyroSamples: [
+            { alpha: 4, beta: 10, gamma: 2 },
+            { alpha: 18, beta: 12, gamma: 4 }
+          ],
+          opticalFlowCorrelation: 0.88,
+          gpsSamples: [
+            { lat: pLat, lng: pLng, accuracy: 5, t: Date.now() - 2000 },
+            { lat: pLat + 0.00001, lng: pLng + 0.00001, accuracy: 5, t: Date.now() }
+          ]
+        }
+      });
+      return { ch: ch.body, signed };
+    };
+
+    const signWebAuthnAssertion = async (nonceB64u, signCount, signWithPrivateKey = pkKeyPair.privateKey) => {
+      const rpHash = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(rpId)));
+      const authData = new Uint8Array(37);
+      authData.set(rpHash, 0);
+      authData[32] = 0x05; // UP + UV flags set
+      new DataView(authData.buffer).setUint32(33, signCount, false);
+      const clientDataBytes = new TextEncoder().encode(
+        JSON.stringify({ type: 'webauthn.get', challenge: nonceB64u, origin: baseUrl })
+      );
+      const clientHash = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', clientDataBytes));
+      const payloadToSign = new Uint8Array(authData.length + clientHash.length);
+      payloadToSign.set(authData, 0);
+      payloadToSign.set(clientHash, authData.length);
+      const p1363Sig = new Uint8Array(
+        await globalThis.crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signWithPrivateKey, payloadToSign)
+      );
+      return {
+        credentialId,
+        clientDataJSON: b64u(clientDataBytes),
+        authenticatorData: b64u(authData),
+        signature: b64u(p1363Sig)
+      };
+    };
+
+    // Attempt 1: Missing ORB + WebAuthn -> 403
+    const p1 = await buildSignedPresence();
+    const failMissing = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...p1.signed, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(failMissing.status, 403);
+    assert.match(failMissing.body.error, /ORB|Passkey/i);
+
+    // Attempt 2: Too few ORB inliers (3 < 8) -> 403
+    const p2 = await buildSignedPresence();
+    const failLowInliers = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p2.signed,
+        orbProof: { descriptorDigest, inlierCount: 3, reprojectionErrorPx: 1.5 },
+        webauthnAssertion: await signWebAuthnAssertion(p2.ch.challengeNonce, 1),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(failLowInliers.status, 403);
+    assert.match(failLowInliers.body.error, /inliers/i);
+
+    // Attempt 3: Valid ORB + forged wrong WebAuthn key -> 403
+    const wrongKeyPair = await globalThis.crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign', 'verify']
+    );
+    const p3 = await buildSignedPresence();
+    const failBadPasskey = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p3.signed,
+        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        webauthnAssertion: await signWebAuthnAssertion(p3.ch.challengeNonce, 1, wrongKeyPair.privateKey),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(failBadPasskey.status, 403);
+    assert.match(failBadPasskey.body.error, /Passkey|signature/i);
+
+    // Attempt 4: Valid ORB PnP + Valid ES256 WebAuthn Passkey -> UNLOCKED (200) & decrypts secret!
+    const p4 = await buildSignedPresence();
+    const okUnlock = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p4.signed,
+        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        webauthnAssertion: await signWebAuthnAssertion(p4.ch.challengeNonce, 2),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(okUnlock.status, 200, JSON.stringify(okUnlock.body));
+    assert.equal(okUnlock.body.orbCheck.verified, true);
+    assert.equal(okUnlock.body.webauthnResult.verified, true);
+    const decryptedPins = await chatCrypto.decryptPinnedIpfsBatch({
+      encryptedBatch: okUnlock.body.encryptedBatch,
+      parcelSealKeyB64: okUnlock.body.parcelSealKeyB64,
+      sculptureId: sc.id,
+      parcelId,
+      geohash: sc.geohash
+    });
+    assert.equal(decryptedPins.pins[0].text, 'Only real Passkey + ORB visitors can decrypt this');
+
+    // Attempt 5: Sign-count rollback (count 1 <= stored 2) -> blocked (403)!
+    const p5 = await buildSignedPresence();
+    const failRollback = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p5.signed,
+        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        webauthnAssertion: await signWebAuthnAssertion(p5.ch.challengeNonce, 1),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(failRollback.status, 403);
+    assert.match(failRollback.body.error, /rollback|cloned/i);
   });
 });
