@@ -26,7 +26,6 @@ import {
 import { pinJsonDocumentToIpfs, pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
 import { validatePublishPayload } from './services/moderation.mjs';
 import {
-  decodeGeohashBounds,
   haversineMeters,
   verifyAndEnrichLocation
 } from './services/pol.mjs';
@@ -39,6 +38,8 @@ import {
 import { buildSculptureGlb } from '../shared/glb.mjs';
 import {
   buildContractMetadata,
+  buildSculptureSelectSql,
+  buildSpatialBoundingWhere,
   computeVerticalBounds,
   formatMarketplaceTokenMetadata,
   serializeSculptureRow
@@ -105,27 +106,41 @@ import { b64ToModelBytes, validateAnchorOffset } from '../shared/model3d.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
+  refundRelayerQuota,
   saveParcelLandmarkAnchor,
   updateLandSecurityPolicy
 } from '../shared/landmarkService.mjs';
 import {
+  deleteUserPasskey,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
   verifyAndStorePasskeyRegistration
 } from '../shared/passkeyService.mjs';
+import {
+  checkRateLimit,
+  getOperationalHealthReport,
+  logStructured,
+  recordOpsEvent
+} from '../shared/monitoringService.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
 } from '../shared/landSignatureMessage.mjs';
 import { decryptPrivateKey, resolveRecipientAddress } from './services/wallet.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 export function createAppServer(serverOptions = {}) {
   const effectiveRelayerDailyQuota =
     Number.isFinite(Number(serverOptions?.relayerDailyQuota))
       ? Number(serverOptions.relayerDailyQuota)
       : CONFIG.relayerDailyQuota;
+  const effectivePublishRateLimit =
+    Number.isFinite(Number(serverOptions?.publishRateLimit))
+      ? Number(serverOptions.publishRateLimit)
+      : 30;
+  const effectiveMcpRateLimit =
+    Number.isFinite(Number(serverOptions?.mcpRateLimit))
+      ? Number(serverOptions.mcpRateLimit)
+      : 120;
   const db = getDb();
   const app = express();
 
@@ -149,7 +164,12 @@ export function createAppServer(serverOptions = {}) {
 
   // Ensure server responds cleanly to health checks
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'graffiland-api', timestamp: new Date().toISOString() });
+    try {
+      db.prepare('SELECT 1 AS ok').get();
+      res.json({ ok: true, db: 'connected', service: 'graffiland-api', timestamp: new Date().toISOString() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || 'Database probe failed' });
+    }
   });
 
   app.get('/api/config', (_req, res) => {
@@ -322,10 +342,6 @@ export function createAppServer(serverOptions = {}) {
   `;
 
   app.get('/api/sculptures', (req, res) => {
-    const rows = db
-      .prepare(`${SCULPTURE_SELECT_SQL} WHERE s.hidden = 0 ORDER BY s.created_at DESC`)
-      .all();
-
     const latParam = req.query.lat !== undefined ? Number(req.query.lat) : null;
     const lngParam = req.query.lng !== undefined ? Number(req.query.lng) : null;
     const radiusMeters =
@@ -334,11 +350,18 @@ export function createAppServer(serverOptions = {}) {
     const includeVoxels =
       req.query.includeVoxels !== '0' && req.query.includeVoxels !== 'false';
 
-    let items = rows.map((r) => serializeSculptureRow(r, { includeVoxels }));
+    const selectSql = buildSculptureSelectSql({ includeVoxels });
+    const { whereSql, params } = buildSpatialBoundingWhere({
+      lat: latParam,
+      lng: lngParam,
+      radiusMeters,
+      parcel: parcelFilter
+    });
+    const rows = db
+      .prepare(`${selectSql} WHERE ${whereSql} ORDER BY s.created_at DESC`)
+      .all(...params);
 
-    if (parcelFilter) {
-      items = items.filter((item) => item.parcelId === parcelFilter);
-    }
+    let items = rows.map((r) => serializeSculptureRow(r, { includeVoxels }));
 
     if (Number.isFinite(latParam) && Number.isFinite(lngParam)) {
       items = items
@@ -790,10 +813,17 @@ export function createAppServer(serverOptions = {}) {
   app.post('/api/mcp', async (req, res) => {
     const id = req.body?.id ?? null;
     try {
+      const pairingCode = getPairingCodeFromReq(req);
+      await checkRateLimit(chatDb, {
+        scope: 'mcp',
+        key: pairingCode || req.ip || 'anon',
+        windowSec: 60,
+        maxRequests: effectiveMcpRateLimit
+      });
       const caller = getAuthUserFromRequest(req);
       const out = await handleMcpJsonRpc(chatDb, {
         rpcBody: req.body || {},
-        pairingCode: getPairingCodeFromReq(req),
+        pairingCode,
         callerUser: caller,
         apiOrigin: `${req.protocol}://${req.get('host')}`,
         pinSculptureFn: makePinHook(),
@@ -803,6 +833,7 @@ export function createAppServer(serverOptions = {}) {
       });
       res.json(out);
     } catch (err) {
+      if (err?.retryAfterSec) res.setHeader('Retry-After', String(err.retryAfterSec));
       res.status(err?.statusCode || 400).json({
         jsonrpc: '2.0',
         id,
@@ -954,18 +985,31 @@ export function createAppServer(serverOptions = {}) {
     '/api/lands/:parcelId/sculptures',
     requireAuth,
     handleChatRoute(async (req) => {
-      await checkAndConsumeRelayerQuota(chatDb, {
+      await checkRateLimit(chatDb, {
+        scope: 'land_create',
+        key: req.user.id,
+        windowSec: 60,
+        maxRequests: effectivePublishRateLimit
+      });
+      const quotaRes = await checkAndConsumeRelayerQuota(chatDb, {
         userId: req.user.id,
         isAdmin: Boolean(req.user.is_admin),
         dailyQuota: effectiveRelayerDailyQuota
       });
-      return directOwnerCreateSculptureOnLand(chatDb, {
-        parcelId: req.params.parcelId,
-        user: req.user,
-        body: req.body,
-        pinSculptureFn: makePinHook(),
-        mintSculptureFn: makeMintHook()
-      });
+      try {
+        return await directOwnerCreateSculptureOnLand(chatDb, {
+          parcelId: req.params.parcelId,
+          user: req.user,
+          body: req.body,
+          pinSculptureFn: makePinHook(),
+          mintSculptureFn: makeMintHook()
+        });
+      } catch (err) {
+        if (quotaRes?.consumed) {
+          await refundRelayerQuota(chatDb, { userId: req.user.id });
+        }
+        throw err;
+      }
     })
   );
 
@@ -1017,7 +1061,7 @@ export function createAppServer(serverOptions = {}) {
     '/api/passkeys/register/options',
     requireAuth,
     handleChatRoute((req) =>
-      issuePasskeyRegistrationOptions(req.user, { rpId: getRequestRpId(req) })
+      issuePasskeyRegistrationOptions(req.user, { db: chatDb, rpId: getRequestRpId(req) })
     )
   );
 
@@ -1030,6 +1074,14 @@ export function createAppServer(serverOptions = {}) {
         body: req.body,
         rpId: getRequestRpId(req)
       })
+    )
+  );
+
+  app.delete(
+    '/api/passkeys/:id',
+    requireAuth,
+    handleChatRoute((req) =>
+      deleteUserPasskey(chatDb, { userId: req.user.id, passkeyId: req.params.id })
     )
   );
 
@@ -1143,10 +1195,11 @@ export function createAppServer(serverOptions = {}) {
         return res.status(400).json({ error: anchorCheck.error });
       }
 
-      await checkAndConsumeRelayerQuota(chatDb, {
-        userId: req.user.id,
-        isAdmin: Boolean(req.user.is_admin),
-        dailyQuota: effectiveRelayerDailyQuota
+      await checkRateLimit(chatDb, {
+        scope: 'publish',
+        key: req.user.id || req.ip || 'anon',
+        windowSec: 60,
+        maxRequests: effectivePublishRateLimit
       });
 
       const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
@@ -1167,28 +1220,63 @@ export function createAppServer(serverOptions = {}) {
         });
       }
 
+      const quotaRes = await checkAndConsumeRelayerQuota(chatDb, {
+        userId: req.user.id,
+        isAdmin: Boolean(req.user.is_admin),
+        dailyQuota: effectiveRelayerDailyQuota
+      });
+
       const sculptureId = crypto.randomUUID();
       const recipientAddress = resolveRecipientAddress(req.user);
 
-      const ipfsResult = await pinSculptureToIpfs({
-        sculptureId,
-        title: validation.title,
-        description: validation.description,
-        voxels: validation.cleanVoxels,
-        previewDataUrl: req.body?.previewDataUrl || '',
-        locationBundle,
-        creatorAddress: recipientAddress,
-        royaltyBps: CONFIG.resaleFeeBps,
-        royaltyReceiver: getChainStatus().royaltyReceiver
-      });
+      let ipfsResult;
+      let mintResult;
+      try {
+        ipfsResult = await pinSculptureToIpfs({
+          sculptureId,
+          title: validation.title,
+          description: validation.description,
+          voxels: validation.cleanVoxels,
+          previewDataUrl: req.body?.previewDataUrl || '',
+          locationBundle,
+          creatorAddress: recipientAddress,
+          royaltyBps: CONFIG.resaleFeeBps,
+          royaltyReceiver: getChainStatus().royaltyReceiver
+        });
 
-      const mintResult = await mintOnRobinhoodChain({
-        recipientAddress,
-        metadataUri: ipfsResult.metadataUri,
-        parcelBytes32: locationBundle.parcelBytes32,
-        proofHash: locationBundle.proofHash,
-        lat: locationBundle.lat,
-        lng: locationBundle.lng
+        mintResult = await mintOnRobinhoodChain({
+          recipientAddress,
+          metadataUri: ipfsResult.metadataUri,
+          parcelBytes32: locationBundle.parcelBytes32,
+          proofHash: locationBundle.proofHash,
+          lat: locationBundle.lat,
+          lng: locationBundle.lng
+        });
+      } catch (err) {
+        if (quotaRes?.consumed) {
+          await refundRelayerQuota(chatDb, { userId: req.user.id });
+        }
+        await recordOpsEvent(chatDb, {
+          category: /pinata|ipfs/i.test(err?.message || '') ? 'pinata' : 'relayer_mint',
+          status: 'error',
+          actorId: req.user.id,
+          parcelId: locationBundle.parcelId,
+          detail: err?.message || 'Publish pipeline failure'
+        }).catch(() => {});
+        throw err;
+      }
+
+      await recordOpsEvent(chatDb, {
+        category: 'relayer_mint',
+        status: 'ok',
+        actorId: req.user.id,
+        parcelId: locationBundle.parcelId,
+        detail: `Minted ${sculptureId} (${mintResult.simulated ? 'sim' : 'live'})`
+      }).catch(() => {});
+      logStructured('info', 'sculpture_published', {
+        sculptureId,
+        parcelId: locationBundle.parcelId,
+        simulated: Boolean(mintResult.simulated)
       });
 
       const now = new Date().toISOString();
@@ -1301,13 +1389,24 @@ export function createAppServer(serverOptions = {}) {
       });
     } catch (err) {
       console.error('Publish failed:', err);
-      res
-        .status(err?.statusCode || 400)
-        .json({ error: err.message || 'Failed to publish sculpture', ...(err?.extra || {}) });
+      res.status(err?.statusCode || 400);
+      if (err?.retryAfterSec) res.setHeader('Retry-After', String(err.retryAfterSec));
+      res.json({ error: err.message || 'Failed to publish sculpture', ...(err?.extra || {}) });
     }
   });
 
-  // Admin Moderation Endpoints
+  // Admin Moderation & Operational Metrics Endpoints
+  app.get('/api/admin/metrics', requireAdmin, async (_req, res) => {
+    try {
+      const report = await getOperationalHealthReport(chatDb, {
+        chain: getChainStatus(),
+        ipfsProvider: CONFIG.pinataJwt ? 'pinata' : CONFIG.ipfsApiUrl ? 'kubo' : 'local-cid'
+      });
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: err.message || 'Could not compute metrics' });
+    }
+  });
   app.get('/api/admin/sculptures', requireAdmin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM sculptures ORDER BY created_at DESC').all();
     res.json({

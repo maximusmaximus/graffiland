@@ -214,27 +214,76 @@ export function createVoxelMaterial(colorHex = '#00f5d4', material = 'matte', op
   });
 }
 
-export function buildVoxelGroup(voxels = [], { scale = 1, opacity = 1 } = {}) {
+let sharedUnitBoxGeo = null;
+function getSharedUnitBoxGeo() {
+  if (!sharedUnitBoxGeo) {
+    sharedUnitBoxGeo = new THREE.BoxGeometry(VOXEL_STEP * 0.96, VOXEL_STEP * 0.96, VOXEL_STEP * 0.96);
+  }
+  return sharedUnitBoxGeo;
+}
+
+export function disposeObject3D(root) {
+  if (!root) return;
+  root.traverse((obj) => {
+    if (obj.geometry && obj.geometry !== sharedUnitBoxGeo && typeof obj.geometry.dispose === 'function') {
+      obj.geometry.dispose();
+    }
+    const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+    for (const m of mats) {
+      if (m && typeof m.dispose === 'function') {
+        m.dispose();
+      }
+    }
+  });
+}
+
+/**
+ * Builds an instanced Three.js group from voxel data (one InstancedMesh per color/material bucket).
+ * Supports distance LOD simplification (`simplifyLod`) to sustain mobile frame rates.
+ */
+export function buildVoxelGroup(
+  voxels = [],
+  { scale = 1, opacity = 1, simplifyLod = false } = {}
+) {
   const group = new THREE.Group();
-  const unitGeo = new THREE.BoxGeometry(VOXEL_STEP * 0.96, VOXEL_STEP * 0.96, VOXEL_STEP * 0.96);
+  if (!Array.isArray(voxels) || voxels.length === 0) return group;
+
+  const stride = simplifyLod && voxels.length > 160 ? Math.max(2, Math.ceil(voxels.length / 140)) : 1;
+  const sourceVoxels =
+    stride > 1 ? voxels.filter((_, idx) => idx % stride === 0) : voxels;
+
+  const unitGeo = getSharedUnitBoxGeo();
+  const buckets = new Map();
   const matCache = new Map();
 
-  for (const v of voxels) {
+  for (const v of sourceVoxels) {
     const key = `${v.color}|${v.material || 'matte'}|${opacity}`;
-    let mat = matCache.get(key);
-    if (!mat) {
-      mat = createVoxelMaterial(v.color, v.material || 'matte', opacity);
-      matCache.set(key, mat);
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      matCache.set(key, createVoxelMaterial(v.color, v.material || 'matte', opacity));
     }
+    buckets.get(key).push(v);
+  }
 
-    const mesh = new THREE.Mesh(unitGeo, mat);
-    mesh.position.set(v.x * scale, v.y * scale, v.z * scale);
-    const vScale = (v.scale ?? 1) * scale;
-    mesh.scale.setScalar(vScale);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.userData.voxel = v;
-    group.add(mesh);
+  const dummy = new THREE.Object3D();
+  for (const [key, list] of buckets.entries()) {
+    const mat = matCache.get(key);
+    const inst = new THREE.InstancedMesh(unitGeo, mat, list.length);
+    for (let i = 0; i < list.length; i += 1) {
+      const v = list[i];
+      dummy.position.set((v.x || 0) * scale, (v.y || 0) * scale, (v.z || 0) * scale);
+      const vScale = (v.scale ?? 1) * scale * (simplifyLod && stride > 1 ? 1.2 : 1);
+      dummy.scale.setScalar(vScale);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere();
+    inst.castShadow = !simplifyLod;
+    inst.receiveShadow = !simplifyLod;
+    inst.userData.voxel = list[0];
+    inst.userData.voxels = list;
+    group.add(inst);
   }
   return group;
 }

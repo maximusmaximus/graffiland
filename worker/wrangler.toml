@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 PUBLIC_URL = "https://maximusmaximus.github.io/graffiland"
-ALLOW_DEV_GOOGLE_AUTH = "true"
+ALLOW_DEV_GOOGLE_AUTH = "false"
 ROBINHOOD_NETWORK = "testnet"
 ROBINHOOD_RESALE_FEE_BPS = "500"
 IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs"

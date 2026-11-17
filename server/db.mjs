@@ -424,6 +424,43 @@ export function getDb() {
       max_reproj_err_px REAL NOT NULL DEFAULT 6.5,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS api_rate_limits (
+      bucket_key TEXT NOT NULL,
+      window_start INTEGER NOT NULL,
+      req_count INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (bucket_key, window_start)
+    );
+
+    CREATE TABLE IF NOT EXISTS ops_events (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ok',
+      actor_id TEXT DEFAULT '',
+      parcel_id TEXT DEFAULT '',
+      detail TEXT DEFAULT '',
+      metric_value REAL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ops_events_time
+      ON ops_events (created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS webauthn_reg_challenges (
+      challenge TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      rp_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sculptures_hidden_lat_lng
+      ON sculptures (hidden, lat, lng);
+
+    CREATE INDEX IF NOT EXISTS idx_sculptures_geohash
+      ON sculptures (geohash);
   `);
 
   dbInstance = db;

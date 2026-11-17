@@ -452,13 +452,15 @@ export async function issueParcelPresenceChallenge(
     ]
   );
 
-  const [policy, anchorRow, userHasPasskey] = await Promise.all([
+  const [policy, anchorRow, userPasskeys] = await Promise.all([
     getLandSecurityPolicy(db, sculpture.parcel_id),
     db.get('SELECT descriptor_digest FROM parcel_landmark_anchors WHERE parcel_id = ?', [
       sculpture.parcel_id
     ]),
-    hasRegisteredPasskey(db, user.id)
+    db.all('SELECT credential_id FROM user_passkeys WHERE user_id = ?', [user.id])
   ]);
+  const allowedCredentialIds = (userPasskeys || []).map((r) => r.credential_id).filter(Boolean);
+  const userHasPasskey = allowedCredentialIds.length > 0;
 
   return {
     challengeId,
@@ -467,6 +469,7 @@ export async function issueParcelPresenceChallenge(
     parcelId: sculpture.parcel_id,
     geohash: String(sculpture.geohash || '').toLowerCase(),
     webauthnRequired: Boolean(policy.requirePasskeyUnlock || userHasPasskey),
+    allowedCredentialIds,
     orbRequired: Boolean(policy.requireOrbUnlock || anchorRow?.descriptor_digest),
     descriptorDigest: anchorRow?.descriptor_digest || '',
     minOrbInliers: policy.minOrbInliers,
@@ -560,6 +563,7 @@ export async function unlockPinnedBatchForParcelVisitor(
       403
     );
   }
+  /** @type {{ verified: boolean, skipped?: boolean, credentialId?: string, signCount?: number }} */
   let webauthnResult = { verified: false, skipped: true };
   if (policy.requirePasskeyUnlock || userHasPasskey || body?.webauthnAssertion) {
     webauthnResult = await verifyPasskeyAssertion(db, {

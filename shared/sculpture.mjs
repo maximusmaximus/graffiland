@@ -1,5 +1,73 @@
 import { decodeGeohashBounds } from '../server/services/pol.mjs';
 
+/**
+ * Shared SELECT column list omitting `voxels_json` on lightweight list/spatial queries
+ * so D1 / SQLite never reads large 3D voxel blobs when `includeVoxels=0`.
+ */
+export const SCULPTURE_BASE_COLUMNS_NO_VOXELS = `
+  s.id, s.title, s.description, s.creator_sub, s.creator_name, s.creator_email, s.recipient_address,
+  s.lat, s.lng, s.altitude, s.accuracy, s.heading, s.parcel_id, s.geohash, s.place_name, s.country, s.timezone,
+  s.voxel_count, s.pol_score, s.pol_json, s.proof_hash, s.preview_data_url,
+  s.ipfs_metadata_cid, s.ipfs_model_cid, s.ipfs_image_cid, s.ipfs_gateway_url,
+  s.chain_id, s.chain_name, s.contract_address, s.token_id, s.tx_hash, s.simulated_chain,
+  s.royalty_bps, s.royalty_receiver, s.hidden, s.hidden_reason, s.hidden_by,
+  s.terms_accepted_version, s.created_at
+`;
+
+export function buildSculptureSelectSql({ includeVoxels = true } = {}) {
+  const cols = includeVoxels ? 's.*' : SCULPTURE_BASE_COLUMNS_NO_VOXELS;
+  return `
+    SELECT ${cols},
+      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
+      (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
+      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+      (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+      (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+      (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+      (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+      (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at,
+      m.model_format AS custom_model_format,
+      m.mime_type AS custom_model_mime,
+      m.source_type AS custom_model_source_type,
+      m.model_url AS custom_model_url,
+      m.model_cid AS custom_model_cid,
+      m.model_uri AS custom_model_uri,
+      m.scale AS custom_model_scale,
+      m.rotation_y AS custom_model_rotation_y,
+      m.byte_length AS custom_model_bytes,
+      a.dx AS anchor_dx,
+      a.dy AS anchor_dy,
+      a.dz AS anchor_dz,
+      a.yaw AS anchor_yaw,
+      a.current_rev AS current_rev,
+      a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+      a.mesh_stats_json AS mesh_stats_json
+     FROM sculptures s
+     LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+  `;
+}
+
+export function buildSpatialBoundingWhere({ lat = null, lng = null, radiusMeters = null, parcel = '' } = {}) {
+  const clauses = ['s.hidden = 0'];
+  const params = [];
+  const cleanParcel = String(parcel || '').trim().toUpperCase();
+  if (cleanParcel) {
+    clauses.push('s.parcel_id = ?');
+    params.push(cleanParcel);
+  }
+  if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(radiusMeters) && radiusMeters > 0) {
+    const padLat = radiusMeters / 111320 + 0.0005;
+    const cosLat = Math.max(0.15, Math.abs(Math.cos((lat * Math.PI) / 180)));
+    const padLng = radiusMeters / (111320 * cosLat) + 0.0005;
+    clauses.push('s.lat BETWEEN ? AND ?');
+    params.push(lat - padLat, lat + padLat);
+    clauses.push('s.lng BETWEEN ? AND ?');
+    params.push(lng - padLng, lng + padLng);
+  }
+  return { whereSql: clauses.join(' AND '), params };
+}
+
 export function computeVerticalBounds(voxels = []) {
   if (!Array.isArray(voxels) || voxels.length === 0) {
     return { minY: 0, maxY: 0 };
@@ -21,7 +89,7 @@ export function computeVerticalBounds(voxels = []) {
 
 export function serializeSculptureRow(
   row,
-  { includeAdminFields = false, includeVoxels = true, transfers, viewerCanContribute } = {}
+  { includeAdminFields = false, includeVoxels = true, transfers = undefined, viewerCanContribute = undefined } = {}
 ) {
   const pol = JSON.parse(row.pol_json || '{}');
   const elevation = pol.elevation || {

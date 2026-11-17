@@ -4,6 +4,7 @@ import XeroIcon from './XeroIcon.jsx';
 
 export default function AdminPanel({ user, config, onModerationChange, onSelectSculpture }) {
   const [items, setItems] = useState([]);
+  const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [reasonDrafts, setReasonDrafts] = useState({});
@@ -13,8 +14,12 @@ export default function AdminPanel({ user, config, onModerationChange, onSelectS
     setLoading(true);
     setError('');
     try {
-      const res = await api.adminListSculptures();
+      const [res, metricsRes] = await Promise.all([
+        api.adminListSculptures(),
+        api.getAdminMetrics().catch(() => null)
+      ]);
       setItems(res.sculptures || []);
+      if (metricsRes) setMetrics(metricsRes);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -77,6 +82,71 @@ export default function AdminPanel({ user, config, onModerationChange, onSelectS
           <XeroIcon emoji="⚠️" size={15} /> {error}
         </div>
       )}
+
+      {metrics && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <strong style={{ fontSize: 13 }}>
+              <XeroIcon emoji="📡" size={14} /> Operational Telemetry &amp; Quota Health
+            </strong>
+            <span className={`badge ${metrics.status === 'degraded' || metrics.recentAlerts?.length ? 'gold' : 'teal'}`}>
+              {metrics.status === 'degraded'
+                ? 'Degraded'
+                : metrics.recentAlerts?.length
+                ? `${metrics.recentAlerts.length} Alert(s)`
+                : 'Healthy'}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: 8, fontSize: 12 }}>
+            <div style={{ padding: 8, borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+              <div style={{ color: 'var(--muted)', fontSize: 11 }}>Relayer Ops Today</div>
+              <div className="mono" style={{ fontWeight: 700, color: 'var(--accent)' }}>
+                {metrics.relayerTodayOps || 0}
+              </div>
+            </div>
+            <div style={{ padding: 8, borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+              <div style={{ color: 'var(--muted)', fontSize: 11 }}>Pinata Errors (24h)</div>
+              <div
+                className="mono"
+                style={{
+                  fontWeight: 700,
+                  color: (metrics.counts?.pinFailures24h || 0) > 0 ? '#ffb3c1' : 'var(--accent)'
+                }}
+              >
+                {metrics.counts?.pinFailures24h || 0}
+              </div>
+            </div>
+            <div style={{ padding: 8, borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+              <div style={{ color: 'var(--muted)', fontSize: 11 }}>Rate Limit Trips (24h)</div>
+              <div className="mono" style={{ fontWeight: 700 }}>
+                {metrics.counts?.rateLimitTrips24h || 0}
+              </div>
+            </div>
+            <div style={{ padding: 8, borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+              <div style={{ color: 'var(--muted)', fontSize: 11 }}>Sculptures / Revs / ORB</div>
+              <div className="mono" style={{ fontWeight: 700 }}>
+                {metrics.counts?.sculptures || 0} / {metrics.counts?.revisions || 0} / {metrics.counts?.landmarks || 0}
+              </div>
+            </div>
+          </div>
+          {metrics.recentAlerts?.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: 'var(--accent-gold)' }}>
+              {metrics.recentAlerts.slice(0, 5).map((a) => (
+                <div key={a.id}>
+                  <XeroIcon emoji="⚠️" size={12} /> [{a.category}] {a.detail || a.status}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card" style={{ fontSize: 12, color: 'var(--muted)' }}>
+        <strong style={{ color: 'var(--text)' }}>
+          <XeroIcon emoji="📜" size={13} /> Takedown &amp; Virtual Land Dispute Policy:
+        </strong>{' '}
+        Physical-property safety complaints, DMCA/IP takedown notices, or severe policy violations can be hidden immediately with an explicit audit reason below. All on-chain ERC-721 provenance and IPFS revisions remain transparent while public map/AR feeds suppress hidden items.
+      </div>
 
       <div className="card" style={{ overflowX: 'auto' }}>
         {loading ? (

@@ -1,93 +1,46 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { api } from '../utils/api.js';
 import {
-  CHAT_SIGHT_CLIENT_DISTANCE_M,
-  haversineMeters
-} from '../../../shared/chatPolicy.mjs';
-import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
-import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
-import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
-import { loadCustomModelObject } from '../utils/customModelLoader.js';
-import { OrbLandmarkTracker } from '../utils/orbTracker.js';
-import {
-  isWebAuthnSupported,
-  registerHardwarePasskey,
-  requestPasskeyAssertion
-} from '../utils/passkeyClient.js';
-
-const KEY_TOOLS = [
-  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels' },
-  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack & draw continuously' },
-  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Hold to erase blocks continuously' },
-  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform' },
-  { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
-  { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
-  { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
-];
-import {
-  computeRoomPossessionProof,
-  decryptPinnedIpfsBatch,
-  generateRoomKeyB64,
-  getOrCreateDeviceIdentity,
-  loadLocalRoomKey,
-  saveLocalRoomKey,
-  signParcelPresenceProof,
-  signSightProof,
-  wrapRoomKeyForRecipient,
-  wrapRoomKeyWithClue
-} from '../utils/chatCrypto.js';
-import { getWsUrl } from '../utils/device.js';
-import { getSculptureChainLinks } from '../utils/chainLinks.js';
+  loadBoolPreference,
+  loadLocalDraft,
+  QUICK_SCULPT_KEY,
+  saveBoolPreference,
+  TUTORIAL_SEEN_KEY
+} from '../utils/clipboard.js';
+import { useARPreview } from '../hooks/useARPreview.js';
+import { useChat } from '../hooks/useChat.js';
+import { useDrafts } from '../hooks/useDrafts.js';
+import { useLandManagement } from '../hooks/useLandManagement.js';
+import { usePairing } from '../hooks/usePairing.js';
+import { useProofOfLocation } from '../hooks/useProofOfLocation.js';
+import { useVoxelBrush } from '../hooks/useVoxelBrush.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
-import MapView from './MapView.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
 import SculptureModal from './SculptureModal.jsx';
-import { ForegroundOcclusionCompositor } from './ForegroundOcclusion.js';
-import { ProofOfLocationTracker } from './ProofOfLocation.js';
 import {
-  buildVoxelGroup,
-  computeSolarLightVector,
-  createLiveEnvUpdater,
-  createVoxelMaterial,
-  deviceOrientationToQuaternion,
-  GRAFFITI_PALETTE,
-  latLngOffsetMeters,
-  snapCoord,
-  VOXEL_STEP,
-  voxelKey
-} from './VoxelEngine3D.js';
-import XeroIcon from './XeroIcon.jsx';
-
-const LOCAL_DRAFT_KEY = 'graffiland_studio_draft_v1';
-
-function loadLocalDraft() {
-  try {
-    const raw = localStorage.getItem(LOCAL_DRAFT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveLocalDraft(draft) {
-  try {
-    localStorage.setItem(LOCAL_DRAFT_KEY, JSON.stringify(draft));
-  } catch {
-    // ignore storage quota errors on restricted modes
-  }
-}
-
-function clearLocalDraft() {
-  try {
-    localStorage.removeItem(LOCAL_DRAFT_KEY);
-  } catch {
-    // ignore
-  }
-}
+  AgentHandoffModal,
+  PairDesktopMcpModal,
+  SavedDraftsModal
+} from './studio/AgentPairModals.jsx';
+import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
+import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
+import MobileMapSheet from './studio/MobileMapSheet.jsx';
+import PublishSculptureModal from './studio/PublishSculptureModal.jsx';
+import SceneCoverageWidget from './studio/SceneCoverageWidget.jsx';
+import StudioDockDrawer from './studio/StudioDockDrawer.jsx';
+import StudioHudTopBar from './studio/StudioHudTopBar.jsx';
+import ToolCarouselBar from './studio/ToolCarouselBar.jsx';
+import {
+  computeRoomPossessionProof,
+  generateRoomKeyB64,
+  getOrCreateDeviceIdentity,
+  saveLocalRoomKey,
+  wrapRoomKeyForRecipient,
+  wrapRoomKeyWithClue
+} from '../utils/chatCrypto.js';
 
 export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const initialDraftRef = useRef(undefined);
@@ -95,7 +48,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     initialDraftRef.current = loadLocalDraft() || {};
   }
   const initialDraft = initialDraftRef.current;
-  const videoRef = useRef(null);
+
+  // Shared Scene & DOM Refs
   const occlusionCanvasRef = useRef(null);
   const canvasHostRef = useRef(null);
   const rendererRef = useRef(null);
@@ -108,385 +62,25 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const gridHelperRef = useRef(null);
   const surfaceMarkerRef = useRef(null);
   const transformBoxRef = useRef(null);
-  const draftMeshMapRef = useRef(new Map());
-  const draftUnitGeoRef = useRef(null);
-  const draftMatCacheRef = useRef(new Map());
+  const originBeaconMatRef = useRef(null);
   const dirLightRef = useRef(null);
   const hemiLightRef = useRef(null);
-  const occlusionWallRef = useRef(null);
   const envUpdaterRef = useRef(null);
-  const occlusionRef = useRef(new ForegroundOcclusionCompositor());
-  const polRef = useRef(new ProofOfLocationTracker());
-  const orbTrackerRef = useRef(new OrbLandmarkTracker());
-  const orbKeyframesRef = useRef(new Map());
-  const orbPackCacheRef = useRef(new Map());
-  const latestOrbProofRef = useRef(null);
-  const hydratedSculptureMapRef = useRef(new Map());
-  const wsRef = useRef(null);
 
-  // Studio states
-  const [mode, setMode] = useState('draw'); // 'draw' | 'transform' | 'preview' | 'publish'
-  const [tool, setTool] = useState('brush'); // 'brush' | 'stack' | 'erase'
-  const [material, setMaterial] = useState(
-    initialDraft.material === 'neon' || initialDraft.material === 'glass'
-      ? initialDraft.material
-      : 'matte'
-  ); // 'matte' | 'neon' | 'glass'
-  const [color, setColor] = useState(
-    typeof initialDraft.color === 'string' && initialDraft.color
-      ? initialDraft.color
-      : GRAFFITI_PALETTE[0]
-  );
-  const [reachMeters, setReachMeters] = useState(
-    Number.isFinite(Number(initialDraft.reachMeters)) ? Number(initialDraft.reachMeters) : 1.8
-  );
-  const [voxels, setVoxels] = useState(() =>
-    Array.isArray(initialDraft.voxels) ? initialDraft.voxels : []
-  );
-  const [nearbySculptures, setNearbySculptures] = useState([]);
-
-  // Draft persistence states
-  const [activeDraftId, setActiveDraftId] = useState(initialDraft.activeDraftId || '');
-  const [draftsOpen, setDraftsOpen] = useState(false);
-  const [cloudDrafts, setCloudDrafts] = useState([]);
-  const [draftsBusy, setDraftsBusy] = useState(false);
-  const [draftError, setDraftError] = useState('');
-  const [draftStatusText, setDraftStatusText] = useState(() =>
-    Array.isArray(initialDraft.voxels) && initialDraft.voxels.length > 0
-      ? `Restored ${initialDraft.voxels.length} blocks`
-      : ''
-  );
-
-  // Minimal HUD visibility: starts ultra-clean with "i" + compact trigger; expands tool dock on demand
+  // Studio shell & UI state
   const [dockOpen, setDockOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [occlusionEnabled, setOcclusionEnabled] = useState(true);
   const [infoOpen, setInfoOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [pairOpen, setPairOpen] = useState(false);
-  const [chatSelection, setChatSelection] = useState(null);
-  const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
-  const [arPinPreview, setArPinPreview] = useState(null);
+  const [tutorialOpen, setTutorialOpen] = useState(
+    () => !loadBoolPreference(TUTORIAL_SEEN_KEY, false)
+  );
+  const [quickSculpt, setQuickSculpt] = useState(
+    () => loadBoolPreference(QUICK_SCULPT_KEY, false)
+  );
   const [arSelectHint, setArSelectHint] = useState('');
-  const arPinCacheRef = useRef(new Map());
-
-  // Pairing
-  const [pairCodeInput, setPairCodeInput] = useState(() => {
-    const p = new URLSearchParams(window.location.search).get('pair') || '';
-    return p.toUpperCase();
-  });
-  const [pairedCode, setPairedCode] = useState('');
-  const [pairError, setPairError] = useState('');
-
-  // Sensors & PoL
-  const [cameraReady, setCameraReady] = useState(false);
-  const [sensorBanner, setSensorBanner] = useState('');
-  const [needsGyroTap, setNeedsGyroTap] = useState(false);
-  const [location, setLocation] = useState(null);
-  const [polStats, setPolStats] = useState({ frames: 0, gyro: 0, flow: 0 });
-  const [sceneScan, setSceneScan] = useState({
-    coveragePct: 0,
-    scannedCount: 0,
-    targetCount: 9,
-    sectors: Array(12).fill(false),
-    cursorX: 0.5,
-    cursorY: 0.5,
-    optimal: false,
-    precisionMeters: 2.4,
-    hint: 'Move phone around scene'
-  });
-  const [scanBoxCollapsed, setScanBoxCollapsed] = useState(false);
-  const [unmappedGrid, setUnmappedGrid] = useState(() => Array(48).fill(false));
-  const [orbStatus, setOrbStatus] = useState({
-    keyframes: 0,
-    features: 0,
-    relocalizedInliers: 0,
-    reprojErrPx: null,
-    engine: 'Gyro+ORB'
-  });
-  const [passkeyCount, setPasskeyCount] = useState(0);
-  const [passkeyBusy, setPasskeyBusy] = useState(false);
-  const [originStatus, setOriginStatus] = useState({
-    originBlocked: false,
-    originVisible: true,
-    reason: ''
-  });
-  const originStatusRef = useRef({
-    originBlocked: false,
-    originVisible: true,
-    reason: ''
-  });
-  const lastUnmappedMaskRef = useRef('');
-  const mappingCompletedNoticeShownRef = useRef(false);
-  const originBeaconMatRef = useRef(null);
-  const lastScanUiRef = useRef({
-    coveragePct: -1,
-    scannedCount: -1,
-    optimal: false,
-    cursorX: -1,
-    cursorY: -1,
-    hint: ''
-  });
-  const [painting, setPainting] = useState(false);
-  const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
-  const surfaceAnchorRef = useRef(initialDraft.surfaceAnchor || null);
-  useEffect(() => {
-    surfaceAnchorRef.current = surfaceAnchor;
-  }, [surfaceAnchor]);
-  const [artTransform, setArtTransform] = useState({
-    scale: 1,
-    rotYDeg: 0,
-    offsetX: 0,
-    offsetY: 0,
-    offsetZ: 0
-  });
-  const [transformPivot, setTransformPivot] = useState({ x: 0, y: 0, z: 0 });
-  const artTransformRef = useRef(artTransform);
-  const transformPivotRef = useRef(transformPivot);
-  useEffect(() => {
-    artTransformRef.current = artTransform;
-  }, [artTransform]);
-  useEffect(() => {
-    transformPivotRef.current = transformPivot;
-  }, [transformPivot]);
-  const [activeKeyTool, setActiveKeyTool] = useState('brush');
-  const activeKeyToolRef = useRef('brush');
-  const [swipeDragPx, setSwipeDragPx] = useState(0);
-  const [isDraggingKey, setIsDraggingKey] = useState(false);
-  const [canTouch, setCanTouch] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    const coarse = window.matchMedia?.('(any-pointer: coarse), (pointer: coarse)')?.matches;
-    return Boolean(coarse || navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
-  });
-  const [mapOpen, setMapOpen] = useState(false);
-  const [areaFilterMode, setAreaFilterMode] = useState('nearby'); // 'nearby' | 'all'
-  const [mapSculptures, setMapSculptures] = useState([]);
-  const [mapParcels, setMapParcels] = useState([]);
-  const [mapLoading, setMapLoading] = useState(false);
-  const [mapSelectedSculpture, setMapSelectedSculpture] = useState(null);
-  const [myLands, setMyLands] = useState({ parcelCount: 0, sculptureCount: 0, parcels: [] });
-  const [landManageOpen, setLandManageOpen] = useState(false);
-  const [landManageParcelId, setLandManageParcelId] = useState('');
-  const [editingSculpture, setEditingSculpture] = useState(null);
-  const [savingCanvasEdit, setSavingCanvasEdit] = useState(false);
-  const [agentOpen, setAgentOpen] = useState(false);
-  const [agentBusy, setAgentBusy] = useState(false);
-  const [agentCopied, setAgentCopied] = useState(false);
-  const [agentError, setAgentError] = useState('');
-  const [agentSession, setAgentSession] = useState(null);
-  const keyGestureRef = useRef({
-    active: false,
-    pointerId: null,
-    targetRel: 0,
-    startX: 0,
-    anchorX: 0,
-    lastX: 0,
-    lastT: 0,
-    velocityX: 0,
-    movedPx: 0,
-    swiped: false,
-    holdStarted: false
-  });
-  const paintHoldTimerRef = useRef(null);
-  const lastAppliedAgentTsRef = useRef('');
-
-  // Orientation & fallback pan
-  const yawOffsetRef = useRef(0);
-  const rawOrientationRef = useRef(null);
-  const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
-  const dragStartRef = useRef(null);
-  const tapStartRef = useRef(null);
-  const activeCanvasPointersRef = useRef(new Map());
-  const transformPinchRef = useRef(null);
-  const clearedBackupRef = useRef(null);
-  const [hasClearedBackup, setHasClearedBackup] = useState(false);
-  const lastPrereqNotifyRef = useRef({ toolId: '', msg: '', ts: 0 });
-  const toolAvailabilityRef = useRef({});
-  const lastErasedKeyRef = useRef({ key: '', ts: 0 });
   const hintTimerRef = useRef(null);
-  const arTargetedIdRef = useRef('');
-  const voxelsRef = useRef([]);
-  const modeRef = useRef(mode);
-  const toolRef = useRef(tool);
-  const colorRef = useRef(color);
-  const materialRef = useRef(material);
-  const reachRef = useRef(reachMeters);
-  const occlusionEnabledRef = useRef(occlusionEnabled);
-  const cameraReadyRef = useRef(cameraReady);
-  const userRef = useRef(user);
-  const locationRef = useRef(location);
-  const paintingRef = useRef(false);
-  const lastPaintPosRef = useRef(null);
-  const lastStackAtRef = useRef(0);
 
-  useEffect(() => {
-    userRef.current = user;
-  }, [user]);
-
-  useEffect(() => {
-    cameraReadyRef.current = cameraReady;
-  }, [cameraReady]);
-
-  useEffect(() => {
-    occlusionEnabledRef.current = occlusionEnabled;
-  }, [occlusionEnabled]);
-
-  const hasVoxels = voxels.length > 0;
-  const toolAvailability = useMemo(() => {
-    const originBlocked = Boolean(originStatus.originBlocked);
-    const originMsg =
-      originStatus.reason ||
-      'Origin is blocked — clear whatever is in front of the drawing origin first.';
-    const hasLoc = Boolean(location);
-    const needBlocksFor = (verb) =>
-      `Place at least 1 block with Brush (🖌️) or + Seed first before ${verb}.`;
-
-    let publishReason = '';
-    if (!hasVoxels) {
-      publishReason = needBlocksFor('publishing your 3D sculpture');
-    } else if (!hasLoc) {
-      publishReason = 'Wait for a GPS location fix first before publishing on-chain.';
-    } else if (!cameraReady) {
-      publishReason = 'Enable live camera access first for Proof of Location before publishing.';
-    } else if (!sceneScan.optimal) {
-      publishReason = `Move your phone around to finish mapping this space (${sceneScan.scannedCount}/${sceneScan.targetCount} angles for 100% lock) before publishing.`;
-    } else if (!user) {
-      publishReason = 'Sign in with Google first before publishing & minting on-chain.';
-    }
-
-    return {
-      brush: {
-        usable: !originBlocked,
-        reason: originBlocked ? originMsg : ''
-      },
-      stack: {
-        usable: !originBlocked && hasVoxels,
-        reason: originBlocked
-          ? originMsg
-          : !hasVoxels
-          ? needBlocksFor('stacking onto block faces')
-          : ''
-      },
-      erase: {
-        usable: hasVoxels,
-        reason: !hasVoxels ? needBlocksFor('erasing blocks') : ''
-      },
-      clear: {
-        usable: hasVoxels,
-        reason: !hasVoxels ? 'Canvas is already empty — draw blocks first before clearing.' : ''
-      },
-      transform: {
-        usable: hasVoxels || mode === 'transform',
-        reason:
-          !hasVoxels && mode !== 'transform'
-            ? needBlocksFor('locking and scaling your art piece')
-            : ''
-      },
-      undo: {
-        usable: hasVoxels || hasClearedBackup,
-        reason:
-          !hasVoxels && !hasClearedBackup
-            ? 'Nothing to undo yet — place or clear blocks first.'
-            : ''
-      },
-      palette: {
-        usable: mode === 'draw',
-        reason:
-          mode !== 'draw'
-            ? 'Return to drawing mode (🖌️) first to pick colors and block finishes.'
-            : ''
-      },
-      occlusion: {
-        usable: cameraReady,
-        reason: !cameraReady
-          ? 'Enable live camera access first to toggle live foreground occlusion.'
-          : ''
-      },
-      preview: {
-        usable: hasLoc,
-        reason: !hasLoc
-          ? 'Wait for a GPS location fix first to view nearby AR sculptures.'
-          : ''
-      },
-      agent: {
-        usable: hasLoc,
-        reason: !hasLoc
-          ? 'Enable GPS location permission first so the Agent Code locks onto your spot.'
-          : ''
-      },
-      publish: {
-        usable: !publishReason,
-        reason: publishReason
-      },
-      recenter: { usable: true, reason: '' },
-      drafts: { usable: true, reason: '' },
-      pair: { usable: true, reason: '' }
-    };
-  }, [
-    originStatus.originBlocked,
-    originStatus.reason,
-    hasVoxels,
-    hasClearedBackup,
-    location,
-    cameraReady,
-    sceneScan.optimal,
-    sceneScan.scannedCount,
-    sceneScan.targetCount,
-    user,
-    mode
-  ]);
-  toolAvailabilityRef.current = toolAvailability;
-
-  useEffect(() => {
-    locationRef.current = location;
-  }, [location]);
-
-  // Background ECDH key-wrap loop for sculptures whose K_room is held locally on this phone
-  useEffect(() => {
-    if (!user?.id) return;
-    let active = true;
-    async function processPending() {
-      try {
-        const res = await api.listPendingChatGrants();
-        const grants = res.grants || [];
-        if (!grants.length || !active) return;
-        const identity = await getOrCreateDeviceIdentity(user.id);
-        for (const reqGrant of grants) {
-          if (!active) break;
-          if (reqGrant.sightDistanceM > 75 || reqGrant.sightScore < 45) continue;
-          const roomKeyB64 = loadLocalRoomKey(user.id, reqGrant.sculptureId, reqGrant.keyEpoch);
-          if (!roomKeyB64) continue;
-          const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
-            roomKeyB64,
-            sculptureId: reqGrant.sculptureId,
-            keyEpoch: reqGrant.keyEpoch,
-            recipientEcdhPubJwk: reqGrant.requesterEcdhPubJwk,
-            recipientPubFp: reqGrant.requesterPubFp,
-            grantorIdentity: identity
-          });
-          await api.submitSculptureChatGrant(reqGrant.sculptureId, {
-            targetGrantId: reqGrant.id,
-            wrappedKeyJson,
-            grantorEcdhPubJwk: identity.ecdhPublicJwk,
-            grantorSignPubJwk: identity.signPublicJwk,
-            grantSig
-          });
-        }
-      } catch {
-        // non-blocking background auto-grant
-      }
-    }
-    const initTimer = setTimeout(processPending, 1800);
-    const intervalId = setInterval(processPending, 15000);
-    return () => {
-      active = false;
-      clearTimeout(initTimer);
-      clearInterval(intervalId);
-      clearTimeout(hintTimerRef.current);
-    };
-  }, [user?.id]);
-
-  // Publish state
+  // Metadata & Publish Form State
   const [title, setTitle] = useState(initialDraft.title || '');
   const [description, setDescription] = useState(initialDraft.description || '');
   const [cluePrompt, setCluePrompt] = useState(initialDraft.cluePrompt || '');
@@ -495,1840 +89,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
-  const [mcpPairingsState, setMcpPairingsState] = useState({
-    mcpActive: false,
-    activePairing: null,
-    pairings: []
+
+  const [canTouch, setCanTouch] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const coarse = window.matchMedia?.('(any-pointer: coarse), (pointer: coarse)')?.matches;
+    return Boolean(coarse || navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
   });
-  const [mcpPairBusy, setMcpPairBusy] = useState(false);
-  const [mcpPairNotice, setMcpPairNotice] = useState('');
-  const [pendingSignatures, setPendingSignatures] = useState([]);
-  const [pendingSigBusyId, setPendingSigBusyId] = useState('');
-  const [agentPublishPrompt, setAgentPublishPrompt] = useState(null);
-  const draftSnapshotRef = useRef(null);
-  const lastCloudSyncSigRef = useRef('');
-  const activeDraftIdRef = useRef(activeDraftId);
-  useEffect(() => {
-    activeDraftIdRef.current = activeDraftId;
-  }, [activeDraftId]);
-
-  useEffect(() => {
-    voxelsRef.current = voxels;
-    if (wsRef.current?.readyState === 1 && pairedCode) {
-      wsRef.current.send(JSON.stringify({ type: 'voxels_sync', voxels }));
-    }
-  }, [voxels, pairedCode]);
-
-  useEffect(() => {
-    modeRef.current = mode;
-    toolRef.current = tool;
-    colorRef.current = color;
-    materialRef.current = material;
-    reachRef.current = reachMeters;
-  }, [mode, tool, color, material, reachMeters]);
-
-  const refreshMcpPairings = useCallback(async () => {
-    if (!userRef.current?.id) {
-      setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
-      return null;
-    }
-    try {
-      const res = await api.listMcpPairings();
-      setMcpPairingsState(res);
-      return res;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const refreshMyLands = useCallback(async () => {
-    if (!userRef.current?.id) {
-      setMyLands({ parcelCount: 0, sculptureCount: 0, parcels: [] });
-      return null;
-    }
-    try {
-      const res = await api.getMyLands();
-      setMyLands(res || { parcelCount: 0, sculptureCount: 0, parcels: [] });
-      return res;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshMyLands();
-  }, [user?.id, refreshMyLands]);
-
-  const refreshPendingSignatures = useCallback(async () => {
-    if (!userRef.current?.id) {
-      setPendingSignatures([]);
-      return [];
-    }
-    try {
-      const res = await api.listPendingSignatures();
-      const list = res.requests || [];
-      setPendingSignatures(list);
-      return list;
-    } catch {
-      return [];
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!user?.id) {
-      setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
-      setPendingSignatures([]);
-      return undefined;
-    }
-    refreshMcpPairings();
-    refreshPendingSignatures();
-    const timer = setInterval(() => {
-      refreshMcpPairings();
-      refreshPendingSignatures();
-    }, 4500);
-    return () => clearInterval(timer);
-  }, [user?.id, refreshMcpPairings, refreshPendingSignatures]);
-
-  useEffect(() => {
-    const activeCode = mcpPairingsState.activePairing?.code;
-    if (!user?.id || !activeCode) return undefined;
-    let ws;
-    try {
-      ws = new WebSocket(getWsUrl());
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'subscribe_mcp', pairingCode: activeCode }));
-      };
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === 'signature_request') {
-            refreshPendingSignatures();
-            showTemporaryHint(
-              `🔔 Agent requests signature for ${msg.request?.parcelId || 'your land'}`
-            );
-          }
-        } catch {
-          // ignore
-        }
-      };
-    } catch {
-      // fallback to polling
-    }
-    return () => {
-      try {
-        ws?.close();
-      } catch {
-        // ignore
-      }
-    };
-  }, [user?.id, mcpPairingsState.activePairing?.code, refreshPendingSignatures]);
-
-  useEffect(() => {
-    const reqId = agentPublishPrompt?.requestId;
-    if (!reqId || mintReceipt) return undefined;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await api.getSignatureRequest(reqId, agentPublishPrompt.pairingCode);
-        const reqObj = res?.request;
-        if (!cancelled && reqObj?.status === 'executed' && reqObj?.result?.sculpture) {
-          clearLocalDraft();
-          setActiveDraftId('');
-          activeDraftIdRef.current = '';
-          lastCloudSyncSigRef.current = '';
-          setMintReceipt(reqObj.result);
-          setAgentPublishPrompt(null);
-          setVoxels([]);
-          setTitle('');
-          setDescription('');
-          setCluePrompt('');
-          setClueAnswer('');
-          setTermsAccepted(false);
-          setDraftStatusText('');
-          refreshPendingSignatures();
-          refreshMyLands();
-          if (locationRef.current) {
-            api
-              .listSculptures({
-                lat: locationRef.current.lat,
-                lng: locationRef.current.lng,
-                radiusMeters: 300,
-                includeVoxels: false
-              })
-              .then((nRes) => hydrateNearbyList(nRes.sculptures || [], locationRef.current))
-              .catch(() => {});
-          }
-        }
-      } catch {
-        // keep polling
-      }
-    };
-    const timer = setInterval(poll, 2200);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [agentPublishPrompt?.requestId, agentPublishPrompt?.pairingCode, mintReceipt, refreshPendingSignatures]);
-
-  const refreshCloudDrafts = useCallback(async () => {
-    if (!userRef.current?.id) return [];
-    try {
-      const res = await api.listDrafts();
-      const items = res.drafts || [];
-      setCloudDrafts(items);
-      return items;
-    } catch {
-      return [];
-    }
-  }, []);
-
-  const persistCloudDraft = useCallback(
-    async ({ source = 'auto', forceNew = false, previewDataUrl = '' } = {}) => {
-      if (!userRef.current?.id) return null;
-      const currentVoxels = voxelsRef.current || [];
-      const currentTitle = title.trim();
-      const currentDesc = description.trim();
-      if (currentVoxels.length === 0 && !currentTitle && !currentDesc) return null;
-
-      const payload = {
-        ...(!forceNew && activeDraftIdRef.current ? { id: activeDraftIdRef.current } : {}),
-        title: currentTitle,
-        description: currentDesc,
-        voxels: currentVoxels,
-        location: locationRef.current,
-        surfaceAnchor: surfaceAnchorRef.current,
-        previewDataUrl,
-        source
-      };
-      const res = await api.saveDraft(payload);
-      if (res?.draft?.id) {
-        setActiveDraftId(res.draft.id);
-        activeDraftIdRef.current = res.draft.id;
-        setDraftStatusText(
-          `Saved to cloud (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
-        );
-        setCloudDrafts((prev) => [res.draft, ...prev.filter((d) => d.id !== res.draft.id)]);
-      }
-      return res?.draft || null;
-    },
-    [description, title]
-  );
-
-  // Auto-save work locally to device storage + flush on background/close
-  useEffect(() => {
-    const hasContent =
-      voxels.length > 0 ||
-      Boolean(title.trim()) ||
-      Boolean(description.trim()) ||
-      Boolean(surfaceAnchor);
-
-    if (!hasContent) {
-      draftSnapshotRef.current = null;
-      clearLocalDraft();
-      setDraftStatusText(user?.id ? 'Cloud drafts ready' : '');
-      return undefined;
-    }
-
-    const snap = {
-      activeDraftId,
-      title,
-      description,
-      cluePrompt,
-      color,
-      material,
-      reachMeters,
-      surfaceAnchor,
-      voxels,
-      updatedAt: new Date().toISOString()
-    };
-    draftSnapshotRef.current = snap;
-
-    const timer = setTimeout(() => {
-      saveLocalDraft(snap);
-      if (!user?.id) {
-        setDraftStatusText(`Auto-saved on device (${voxels.length} blocks)`);
-      }
-    }, 350);
-
-    return () => clearTimeout(timer);
-  }, [
-    activeDraftId,
-    cluePrompt,
-    color,
-    description,
-    material,
-    reachMeters,
-    surfaceAnchor,
-    title,
-    user?.id,
-    voxels
-  ]);
-
-  useEffect(() => {
-    const flushLocal = () => {
-      if (draftSnapshotRef.current) {
-        saveLocalDraft(draftSnapshotRef.current);
-      }
-    };
-    const onVisChange = () => {
-      if (document.visibilityState === 'hidden') flushLocal();
-    };
-    window.addEventListener('beforeunload', flushLocal);
-    window.addEventListener('pagehide', flushLocal);
-    document.addEventListener('visibilitychange', onVisChange);
-    return () => {
-      window.removeEventListener('beforeunload', flushLocal);
-      window.removeEventListener('pagehide', flushLocal);
-      document.removeEventListener('visibilitychange', onVisChange);
-    };
-  }, []);
-
-  // Cloud auto-save + load ?draft=<id> when authenticated
-  useEffect(() => {
-    if (!user?.id) {
-      setCloudDrafts([]);
-      lastCloudSyncSigRef.current = '';
-      return undefined;
-    }
-
-    let cancelled = false;
-    refreshCloudDrafts();
-
-    const queryDraftId = new URLSearchParams(window.location.search).get('draft');
-    if (queryDraftId && !activeDraftIdRef.current) {
-      api
-        .getDraft(queryDraftId)
-        .then((res) => {
-          if (cancelled || !res?.draft) return;
-          const d = res.draft;
-          setActiveDraftId(d.id);
-          activeDraftIdRef.current = d.id;
-          setVoxels(Array.isArray(d.voxels) ? d.voxels : []);
-          setTitle(d.title || '');
-          setDescription(d.description || '');
-          setSurfaceAnchor(d.surfaceAnchor || null);
-          setDraftStatusText(`Loaded cloud draft (${d.voxelCount} blocks)`);
-        })
-        .catch(() => {});
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshCloudDrafts, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return undefined;
-    const hasContent =
-      voxels.length > 0 || Boolean(title.trim()) || Boolean(description.trim());
-    if (!hasContent) return undefined;
-
-    let hash = 0;
-    for (let i = 0; i < voxels.length; i += 1) {
-      const v = voxels[i];
-      hash = (hash * 31 + Math.round(v.x * 1000) + Math.round(v.y * 1000) * 7 + Math.round(v.z * 1000) * 13 + Math.round((v.scale ?? 1) * 100)) | 0;
-    }
-    const anchorSig = surfaceAnchor
-      ? `${surfaceAnchor.x}:${surfaceAnchor.y}:${surfaceAnchor.z}:${surfaceAnchor.locked}`
-      : '';
-    const sig = `${user.id}|${activeDraftId}|${title}|${description}|${voxels.length}|${hash}|${anchorSig}`;
-    if (lastCloudSyncSigRef.current === sig) return undefined;
-
-    const timer = setTimeout(() => {
-      persistCloudDraft({ source: 'auto' })
-        .then((saved) => {
-          if (saved) lastCloudSyncSigRef.current = sig;
-        })
-        .catch(() => {});
-    }, 2000);
-
-    return () => clearTimeout(timer);
-  }, [activeDraftId, description, persistCloudDraft, surfaceAnchor, title, user?.id, voxels]);
-
-  // Request fullscreen softly on first interaction
-  const enterFullscreen = useCallback(() => {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && el.requestFullscreen) {
-      el.requestFullscreen().catch(() => {});
-    }
-  }, []);
-
-  // Start rear camera + PoL frame sampler
-  useEffect(() => {
-    let stream = null;
-    let samplerId = null;
-
-    async function initCamera() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setSensorBanner('Camera API requires HTTPS on mobile.');
-        return;
-      }
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
-          },
-          audio: false
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
-          setCameraReady(true);
-        }
-      } catch (err) {
-        setSensorBanner(`Camera access needed for 3D AR & Proof of Location (${err.message})`);
-      }
-    }
-
-    initCamera();
-
-    samplerId = setInterval(() => {
-      if (videoRef.current && videoRef.current.readyState >= 2) {
-        const snap = polRef.current.sampleCameraFrame(videoRef.current);
-        if (snap) {
-          setPolStats({
-            frames: snap.cameraFrames,
-            gyro: snap.gyroSamples,
-            flow: Math.round(snap.opticalFlowCorrelation * 100)
-          });
-          const cov = polRef.current.getSceneCoverage();
-          lastScanUiRef.current = {
-            coveragePct: cov.coveragePct,
-            scannedCount: cov.scannedCount,
-            optimal: cov.optimal,
-            cursorX: cov.cursorX,
-            cursorY: cov.cursorY,
-            hint: cov.hint
-          };
-          setSceneScan(cov);
-        }
-      }
-    }, 450);
-
-    return () => {
-      clearInterval(samplerId);
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, []);
-
-  // WebXR capability probe, ORB worker cleanup, and hardware passkey status
-  useEffect(() => {
-    let active = true;
-    if (typeof navigator !== 'undefined' && navigator.xr?.isSessionSupported) {
-      navigator.xr
-        .isSessionSupported('immersive-ar')
-        .then((supported) => {
-          if (active && supported) {
-            setOrbStatus((prev) => ({ ...prev, engine: 'WebXR+ORB' }));
-          }
-        })
-        .catch(() => {});
-    }
-    return () => {
-      active = false;
-      orbTrackerRef.current?.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!user?.id) {
-      setPasskeyCount(0);
-      return;
-    }
-    api
-      .getPasskeyStatus()
-      .then((res) => setPasskeyCount((res?.passkeys || []).length))
-      .catch(() => {});
-  }, [user?.id]);
-
-  // Progressive spatial streaming: fetch full voxels only within <= 65m
-  const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
-    const mergedInitial = (lightList || []).map((sc) => {
-      const cached = hydratedSculptureMapRef.current.get(sc.id);
-      if (cached && Number(cached.currentRev || 1) === Number(sc.currentRev || 1)) {
-        return { ...sc, ...cached };
-      }
-      return sc;
-    });
-    setNearbySculptures(mergedInitial);
-
-    if (!curLoc) return;
-    const toFetch = mergedInitial
-      .filter((sc) => {
-        const d =
-          sc.distanceMeters ?? haversineMeters(curLoc.lat, curLoc.lng, sc.lat, sc.lng);
-        const cached = hydratedSculptureMapRef.current.get(sc.id);
-        const alreadyHydrated =
-          cached &&
-          Number(cached.currentRev || 1) === Number(sc.currentRev || 1) &&
-          (cached.modelType === 'custom-3d' || (cached.voxels && cached.voxels.length > 0));
-        return d <= 65 && !alreadyHydrated;
-      })
-      .slice(0, 8);
-
-    if (toFetch.length === 0) return;
-
-    const fetched = await Promise.all(
-      toFetch.map((sc) =>
-        api
-          .getSculpture(sc.id)
-          .then((r) => r?.sculpture || null)
-          .catch(() => null)
-      )
-    );
-    let updated = false;
-    for (const full of fetched) {
-      if (full?.id) {
-        hydratedSculptureMapRef.current.set(full.id, full);
-        updated = true;
-      }
-    }
-    if (updated) {
-      setNearbySculptures((prev) =>
-        prev.map((sc) => {
-          const cached = hydratedSculptureMapRef.current.get(sc.id);
-          return cached ? { ...sc, ...cached } : sc;
-        })
-      );
-    }
-  }, []);
-
-  // Geolocation watcher + load nearby sculptures at this physical location
-  useEffect(() => {
-    if (!navigator.geolocation) {
-      setSensorBanner('GPS Geolocation not supported on this browser.');
-      return;
-    }
-
-    let lastFetchAt = 0;
-    const watchId = navigator.geolocation.watchPosition(
-      async (pos) => {
-        polRef.current.recordGps(pos);
-        const loc = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-          altitude: pos.coords.altitude,
-          altitudeAccuracy: pos.coords.altitudeAccuracy,
-          heading: pos.coords.heading,
-          speed: pos.coords.speed,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-        };
-        const refined = polRef.current.getRefinedLocation(loc) || loc;
-        setLocation(refined);
-
-        // Align directional sunlight shadow vector to real-world solar azimuth & elevation
-        if (dirLightRef.current) {
-          const sun = computeSolarLightVector(loc.lat, loc.lng, new Date());
-          dirLightRef.current.position.set(sun.x, sun.y, sun.z);
-          dirLightRef.current.intensity = sun.isDaylight ? 1.55 : 0.95;
-        }
-
-        const now = Date.now();
-        if (now - lastFetchAt > 12000) {
-          lastFetchAt = now;
-          try {
-            const res = await api.listSculptures({
-              lat: loc.lat,
-              lng: loc.lng,
-              radiusMeters: 300,
-              includeVoxels: false
-            });
-            await hydrateNearbyList(res.sculptures || [], refined);
-          } catch {
-            // ignore offline fetch retry
-          }
-        }
-      },
-      (err) => {
-        setSensorBanner(`GPS permission required for Virtual Land (${err.message})`);
-      },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
-
-  // DeviceOrientation (Gyro) listener + iOS permission check
-  const attachOrientation = useCallback(() => {
-    const handler = (e) => {
-      if (e.alpha === null && e.beta === null) return;
-      rawOrientationRef.current = {
-        alpha: e.alpha || 0,
-        beta: e.beta || 0,
-        gamma: e.gamma || 0
-      };
-      polRef.current.recordGyro(e.alpha, e.beta, e.gamma);
-    };
-    window.addEventListener('deviceorientation', handler, true);
-    return () => window.removeEventListener('deviceorientation', handler, true);
-  }, []);
-
-  useEffect(() => {
-    if (
-      typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function'
-    ) {
-      setNeedsGyroTap(true);
-      return;
-    }
-    return attachOrientation();
-  }, [attachOrientation]);
-
-  async function enableIosGyro() {
-    enterFullscreen();
-    try {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res === 'granted') {
-        setNeedsGyroTap(false);
-        attachOrientation();
-      } else {
-        setSensorBanner('Gyroscope permission denied; drag screen to aim brush.');
-      }
-    } catch {
-      setNeedsGyroTap(false);
-    }
-  }
-
-  // Incrementally sync Three.js draft voxel meshes (O(1) per block, zero rebuild stutter)
-  const rebuildDraftMesh = useCallback((nextVoxels) => {
-    const group = draftGroupRef.current;
-    if (!group) return;
-    if (!draftUnitGeoRef.current) {
-      draftUnitGeoRef.current = new THREE.BoxGeometry(
-        VOXEL_STEP * 0.96,
-        VOXEL_STEP * 0.96,
-        VOXEL_STEP * 0.96
-      );
-    }
-    const unitGeo = draftUnitGeoRef.current;
-    const matCache = draftMatCacheRef.current;
-    const meshMap = draftMeshMapRef.current;
-
-    const wanted = new Map();
-    for (const v of nextVoxels) {
-      wanted.set(voxelKey(v.x, v.y, v.z), v);
-    }
-
-    for (const [k, mesh] of meshMap.entries()) {
-      if (!wanted.has(k)) {
-        group.remove(mesh);
-        meshMap.delete(k);
-      }
-    }
-
-    for (const [k, v] of wanted.entries()) {
-      if (meshMap.has(k)) {
-        const existing = meshMap.get(k);
-        existing.position.set(v.x, v.y, v.z);
-        existing.scale.setScalar(v.scale ?? 1);
-        existing.userData.voxel = v;
-        continue;
-      }
-      const matKey = `${v.color}|${v.material || 'matte'}|1`;
-      let mat = matCache.get(matKey);
-      if (!mat) {
-        mat = createVoxelMaterial(v.color, v.material || 'matte', 1);
-        matCache.set(matKey, mat);
-      }
-      const mesh = new THREE.Mesh(unitGeo, mat);
-      mesh.position.set(v.x, v.y, v.z);
-      mesh.scale.setScalar(v.scale ?? 1);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData.voxel = v;
-      group.add(mesh);
-      meshMap.set(k, mesh);
-    }
-  }, []);
-
-  useEffect(() => {
-    rebuildDraftMesh(voxels);
-  }, [voxels, rebuildDraftMesh]);
-
-  // Build nearby sculptures in AR Preview mode (honoring horizontal GPS offset + vertical elevation)
-  useEffect(() => {
-    const group = nearbyGroupRef.current;
-    if (!group) return;
-    while (group.children.length > 0) group.remove(group.children[0]);
-
-    if (mode !== 'preview' || !location) return;
-
-    const viewerElev =
-      location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
-        ? location.altitude
-        : null;
-    let cancelled = false;
-
-    for (const sc of nearbySculptures) {
-      const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
-      const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
-      const sub = isCustom3d ? new THREE.Group() : buildVoxelGroup(sc.voxels || []);
-      sub.traverse((obj) => {
-        if (obj.isMesh) obj.userData.sculpture = sc;
-      });
-
-      // Invisible enlarged tap-target bounding box around geometry/base for reliable AR selection
-      const bounds = new THREE.Box3().setFromObject(sub);
-      const boxCenter = new THREE.Vector3();
-      const boxSize = new THREE.Vector3();
-      if (!bounds.isEmpty()) {
-        bounds.getCenter(boxCenter);
-        bounds.getSize(boxSize);
-      } else {
-        boxCenter.set(0, 0.75, 0);
-        boxSize.set(1.4, 1.5, 1.4);
-      }
-      const hitProxy = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.max(1.0, boxSize.x + 0.55),
-          Math.max(1.0, boxSize.y + 0.55),
-          Math.max(1.0, boxSize.z + 0.55)
-        ),
-        new THREE.MeshBasicMaterial({ visible: false })
-      );
-      hitProxy.position.copy(boxCenter);
-      hitProxy.userData.sculpture = sc;
-      sub.add(hitProxy);
-
-      if (isCustom3d) {
-        loadCustomModelObject(sc, resolveApiUrl)
-          .then((loaded) => {
-            if (cancelled || !loaded) return;
-            sub.add(loaded.object3d);
-            const loadedCenter = new THREE.Vector3();
-            const loadedSize = new THREE.Vector3();
-            loaded.bounds.getCenter(loadedCenter);
-            loaded.bounds.getSize(loadedSize);
-            hitProxy.geometry.dispose();
-            hitProxy.geometry = new THREE.BoxGeometry(
-              Math.max(1.0, loadedSize.x + 0.55),
-              Math.max(1.0, loadedSize.y + 0.55),
-              Math.max(1.0, loadedSize.z + 0.55)
-            );
-            hitProxy.position.copy(loadedCenter);
-          })
-          .catch(() => {});
-      }
-
-      // Clamp super distant previews visually within 35m so distant same-block art remains visible
-      const dist = Math.hypot(offset.east, offset.north);
-      const clampFactor = dist > 35 ? 35 / dist : 1;
-
-      // Vertical elevation placement: keep high-sky & upper-level pieces anchored at their real altitude
-      const scElev =
-        sc.elevation?.anchorAltitudeMeters ??
-        (sc.altitude !== null && sc.altitude !== undefined ? sc.altitude : null);
-      let deltaY = 0;
-      if (viewerElev !== null && scElev !== null) {
-        deltaY = Math.max(-35, Math.min(65, scElev - viewerElev));
-      } else if (sc.elevation?.heightAboveGroundMeters) {
-        deltaY = Math.max(-10, Math.min(65, sc.elevation.heightAboveGroundMeters));
-      }
-
-      // Grounded AR shadow catcher + glowing selectable base rings beneath each nearby sculpture
-      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
-      const catcher = new THREE.Mesh(
-        new THREE.CircleGeometry(1.6, 24),
-        new THREE.ShadowMaterial({ opacity: 0.36 })
-      );
-      catcher.rotation.x = -Math.PI / 2;
-      catcher.position.y = baseY;
-      catcher.receiveShadow = true;
-      sub.add(catcher);
-
-      const baseGlowRingMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5d4,
-        transparent: true,
-        opacity: 0.65,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const baseGlowRing = new THREE.Mesh(
-        new THREE.RingGeometry(0.95, 1.32, 48),
-        baseGlowRingMat
-      );
-      baseGlowRing.rotation.x = -Math.PI / 2;
-      baseGlowRing.position.y = baseY + 0.018;
-      baseGlowRing.userData = { sculpture: sc, clickableBase: true };
-      sub.add(baseGlowRing);
-
-      const baseHaloMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5d4,
-        transparent: true,
-        opacity: 0.18,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const baseGlowHalo = new THREE.Mesh(
-        new THREE.CircleGeometry(1.12, 36),
-        baseHaloMat
-      );
-      baseGlowHalo.rotation.x = -Math.PI / 2;
-      baseGlowHalo.position.y = baseY + 0.01;
-      baseGlowHalo.userData = { sculpture: sc, clickableBase: true };
-      sub.add(baseGlowHalo);
-
-      sub.userData = {
-        sculptureId: sc.id,
-        sculpture: sc,
-        baseRingMat: baseGlowRingMat,
-        baseHaloMat,
-        baseGlowRing
-      };
-
-      const ax = Number(sc.anchorOffset?.dx || 0);
-      const ay = Number(sc.anchorOffset?.dy || 0);
-      const az = Number(sc.anchorOffset?.dz || 0);
-      const ayaw = Number(sc.anchorOffset?.yaw || 0);
-      if (Number.isFinite(ayaw) && ayaw !== 0) {
-        sub.rotation.y = ayaw;
-      }
-      sub.position.set(
-        offset.east * clampFactor + ax,
-        deltaY + ay,
-        -offset.north * clampFactor + az
-      );
-      group.add(sub);
-    }
-
-    // Ground-level Virtual Land Perimeter borders (cyan outside, pulsing gold inside parcel)
-    const renderedParcels = new Set();
-    for (const sc of nearbySculptures) {
-      if (!sc.parcelId || renderedParcels.has(sc.parcelId) || !sc.parcelBounds?.sw || !sc.parcelBounds?.ne) {
-        continue;
-      }
-      renderedParcels.add(sc.parcelId);
-      const [swLat, swLng] = sc.parcelBounds.sw;
-      const [neLat, neLng] = sc.parcelBounds.ne;
-      const insideParcel =
-        location.lat >= swLat && location.lat <= neLat && location.lng >= swLng && location.lng <= neLng;
-      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.11;
-      const corners = [
-        [swLat, swLng],
-        [swLat, neLng],
-        [neLat, neLng],
-        [neLat, swLng]
-      ].map(([cLat, cLng]) => {
-        const off = latLngOffsetMeters(location.lat, location.lng, cLat, cLng);
-        const cd = Math.hypot(off.east, off.north);
-        const cf = cd > 55 ? 55 / cd : 1;
-        return new THREE.Vector3(off.east * cf, baseY, -off.north * cf);
-      });
-      const borderGeo = new THREE.BufferGeometry().setFromPoints(corners);
-      const borderMat = new THREE.LineBasicMaterial({
-        color: insideParcel ? 0xffd166 : 0x00f5d4,
-        transparent: true,
-        opacity: insideParcel ? 0.92 : 0.56
-      });
-      const perimeterLoop = new THREE.LineLoop(borderGeo, borderMat);
-      perimeterLoop.userData = {
-        isParcelPerimeter: true,
-        insideParcel,
-        parcelId: sc.parcelId,
-        perimeterMat: borderMat
-      };
-      group.add(perimeterLoop);
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, location, nearbySculptures]);
-
-  // Live ORB visual landmark relocalization loop in AR Preview when inside <= 65m of a mapped parcel
-  useEffect(() => {
-    if (mode !== 'preview' || !location || !cameraReady) return undefined;
-    let cancelled = false;
-    let busy = false;
-
-    async function tickOrbMatch() {
-      if (cancelled || busy || !videoRef.current || videoRef.current.readyState < 2) return;
-      const loc = locationRef.current;
-      if (!loc) return;
-      const targetSc =
-        arTargetedSculpture?.sculpture ||
-        nearbySculptures.find((sc) => haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) <= 65);
-      if (!targetSc?.parcelId) return;
-
-      busy = true;
-      try {
-        let packEntry = orbPackCacheRef.current.get(targetSc.parcelId);
-        if (packEntry === undefined) {
-          const fetched = await api
-            .fetchParcelLandmarkPack(targetSc.parcelId, {
-              lat: loc.lat,
-              lng: loc.lng,
-              deviceProfile: { isMobile: true }
-            })
-            .catch(() => null);
-          packEntry = fetched?.available ? fetched.anchorPack : null;
-          orbPackCacheRef.current.set(targetSc.parcelId, packEntry);
-        }
-        if (!packEntry || cancelled) return;
-
-        const match = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, packEntry);
-        if (!match || cancelled) return;
-        if (match.inlierCount >= 4) {
-          latestOrbProofRef.current = {
-            descriptorDigest: match.descriptorDigest,
-            inlierCount: match.inlierCount,
-            reprojectionErrorPx: match.reprojectionErrorPx
-          };
-        }
-        setOrbStatus((prev) => ({
-          ...prev,
-          relocalizedInliers: match.inlierCount || 0,
-          reprojErrPx: match.inlierCount > 0 ? match.reprojectionErrorPx : null
-        }));
-      } catch {
-        // non-blocking relocalization tick
-      } finally {
-        busy = false;
-      }
-    }
-
-    const timer = setInterval(tickOrbMatch, 480);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [mode, Boolean(location), cameraReady, arTargetedSculpture?.sculpture?.parcelId, nearbySculptures]);
-
-  const computeTargetVoxel = useCallback((forContinuousHold = false) => {
-    const cam = cameraRef.current;
-    const draftGroup = draftGroupRef.current;
-    if (!cam) return null;
-
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
-    const origin = cam.position.clone();
-
-    if (toolRef.current === 'stack' || toolRef.current === 'erase') {
-      const raycaster = new THREE.Raycaster(origin, dir, 0.1, 14);
-      const targets = draftGroup ? draftGroup.children : [];
-      let hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
-      if (hits.length === 0 && toolRef.current === 'erase' && forContinuousHold && targets.length) {
-        const offsets = [
-          [0.025, 0],
-          [-0.025, 0],
-          [0, 0.025],
-          [0, -0.025]
-        ];
-        const sweepNdc = new THREE.Vector2();
-        for (const [ox, oy] of offsets) {
-          sweepNdc.set(ox, oy);
-          raycaster.setFromCamera(sweepNdc, cam);
-          hits = raycaster.intersectObjects(targets, false);
-          if (hits.length > 0) break;
-        }
-      }
-      if (hits.length > 0) {
-        const hit = hits[0];
-        if (toolRef.current === 'erase') {
-          return { action: 'erase', voxel: hit.object.userData.voxel };
-        }
-        const normal = hit.face.normal
-          .clone()
-          .transformDirection(hit.object.matrixWorld)
-          .normalize();
-        const stepOut = VOXEL_STEP * (((hit.object.userData.voxel?.scale ?? 1) + 1) * 0.5);
-        const center = hit.object.position.clone().addScaledVector(normal, stepOut);
-        return {
-          action: 'add',
-          x: snapCoord(center.x),
-          y: snapCoord(center.y),
-          z: snapCoord(center.z),
-          stackedFrom: {
-            x: snapCoord(hit.object.position.x),
-            y: snapCoord(hit.object.position.y),
-            z: snapCoord(hit.object.position.z)
-          }
-        };
-      }
-      if (toolRef.current === 'erase') return null;
-    }
-
-    const anchor = surfaceAnchorRef.current;
-    if (anchor && anchor.locked) {
-      const normal = new THREE.Vector3(anchor.nx, anchor.ny, anchor.nz).normalize();
-      const denom = normal.dot(dir);
-      if (Math.abs(denom) > 0.08) {
-        const t =
-          ((anchor.x - origin.x) * normal.x +
-            (anchor.y - origin.y) * normal.y +
-            (anchor.z - origin.z) * normal.z) /
-          denom;
-        if (t >= 0.4 && t <= 6.5) {
-          const hitPt = origin
-            .clone()
-            .addScaledVector(dir, t)
-            .addScaledVector(normal, VOXEL_STEP * 0.5);
-          return {
-            action: 'add',
-            x: snapCoord(hitPt.x),
-            y: snapCoord(hitPt.y),
-            z: snapCoord(hitPt.z)
-          };
-        }
-      }
-      const fallbackDepth = Math.min(4.5, Math.max(0.5, anchor.depthM || reachRef.current));
-      const fallbackPt = origin.addScaledVector(dir, fallbackDepth);
-      return {
-        action: 'add',
-        x: snapCoord(fallbackPt.x),
-        y: snapCoord(fallbackPt.y),
-        z: snapCoord(fallbackPt.z)
-      };
-    }
-
-    const pt = origin.addScaledVector(dir, reachRef.current);
-    return {
-      action: 'add',
-      x: snapCoord(pt.x),
-      y: snapCoord(pt.y),
-      z: snapCoord(pt.z)
-    };
-  }, []);
-
-  const applyVoxelBatch = useCallback(
-    (targets) => {
-      if (!Array.isArray(targets) || targets.length === 0) return;
-      const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
-      const maxVoxels = config?.policy?.maxVoxels || 4096;
-
-      const uniqueAdds = [];
-      const seenBatch = new Set();
-      let hadOutOfBounds = false;
-
-      for (const t of targets) {
-        if (!t || t.action !== 'add') continue;
-        if (
-          Math.abs(t.x) > halfSpan ||
-          Math.abs(t.y) > halfSpan ||
-          Math.abs(t.z) > halfSpan
-        ) {
-          hadOutOfBounds = true;
-          continue;
-        }
-        const k = voxelKey(t.x, t.y, t.z);
-        if (!seenBatch.has(k)) {
-          seenBatch.add(k);
-          uniqueAdds.push({ x: t.x, y: t.y, z: t.z, key: k });
-        }
-      }
-
-      if (hadOutOfBounds && uniqueAdds.length === 0) {
-        setSensorBanner(
-          `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
-        );
-        return;
-      }
-      if (uniqueAdds.length === 0) return;
-      clearedBackupRef.current = null;
-      setHasClearedBackup(false);
-
-      let limitNotice = '';
-      setVoxels((prev) => {
-        if (prev.length >= maxVoxels) {
-          limitNotice = `Sculpture voxel limit (${maxVoxels}) reached`;
-          return prev;
-        }
-
-        const existingKeys = new Set();
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
-        let minZ = Infinity;
-        let maxZ = -Infinity;
-
-        for (const v of prev) {
-          existingKeys.add(voxelKey(v.x, v.y, v.z));
-          if (v.x < minX) minX = v.x;
-          if (v.x > maxX) maxX = v.x;
-          if (v.y < minY) minY = v.y;
-          if (v.y > maxY) maxY = v.y;
-          if (v.z < minZ) minZ = v.z;
-          if (v.z > maxZ) maxZ = v.z;
-        }
-
-        const additions = [];
-        for (const cand of uniqueAdds) {
-          if (prev.length + additions.length >= maxVoxels) {
-            limitNotice = `Sculpture voxel limit (${maxVoxels}) reached`;
-            break;
-          }
-          if (existingKeys.has(cand.key)) continue;
-
-          const nMinX = Math.min(minX, cand.x);
-          const nMaxX = Math.max(maxX, cand.x);
-          const nMinY = Math.min(minY, cand.y);
-          const nMaxY = Math.max(maxY, cand.y);
-          const nMinZ = Math.min(minZ, cand.z);
-          const nMaxZ = Math.max(maxZ, cand.z);
-
-          const spanX = Math.round((nMaxX - nMinX) / VOXEL_STEP) + 1;
-          const spanY = Math.round((nMaxY - nMinY) / VOXEL_STEP) + 1;
-          const spanZ = Math.round((nMaxZ - nMinZ) / VOXEL_STEP) + 1;
-          if (spanX > AREA_LIMIT_BLOCKS || spanY > AREA_LIMIT_BLOCKS || spanZ > AREA_LIMIT_BLOCKS) {
-            limitNotice = `Area span exceeds ${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks`;
-            continue;
-          }
-
-          minX = nMinX;
-          maxX = nMaxX;
-          minY = nMinY;
-          maxY = nMaxY;
-          minZ = nMinZ;
-          maxZ = nMaxZ;
-          existingKeys.add(cand.key);
-          additions.push({
-            x: cand.x,
-            y: cand.y,
-            z: cand.z,
-            color: colorRef.current,
-            material: materialRef.current,
-            scale: 1
-          });
-        }
-
-        return additions.length > 0 ? [...prev, ...additions] : prev;
-      });
-
-      if (limitNotice || hadOutOfBounds) {
-        queueMicrotask(() => {
-          setSensorBanner(
-            limitNotice ||
-              `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
-          );
-        });
-      }
-    },
-    [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels]
-  );
-
-  const eraseTargetVoxel = useCallback((target) => {
-    if (!target || target.action !== 'erase' || !target.voxel) return false;
-    const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
-    const now = performance.now();
-    if (lastErasedKeyRef.current.key === killKey && now - lastErasedKeyRef.current.ts < 85) {
-      return false;
-    }
-    lastErasedKeyRef.current = { key: killKey, ts: now };
-    setVoxels((prev) => prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey));
-    return true;
-  }, []);
-
-  const applyVoxelAction = useCallback(
-    (target) => {
-      if (!target) return;
-      if (target.action === 'erase') {
-        eraseTargetVoxel(target);
-        return;
-      }
-      if (target.action === 'add') {
-        applyVoxelBatch([target]);
-      }
-    },
-    [applyVoxelBatch, eraseTargetVoxel]
-  );
-
-  // Initialize Three.js transparent AR WebGL scene
-  useEffect(() => {
-    const host = canvasHostRef.current;
-    if (!host) return;
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(68, host.clientWidth / host.clientHeight, 0.05, 120);
-    camera.position.set(0, 0.4, 2.2);
-
-    const renderer = new THREE.WebGLRenderer({
-      alpha: true,
-      antialias: true,
-      preserveDrawingBuffer: true
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(host.clientWidth, host.clientHeight);
-    renderer.setClearColor(0x000000, 0);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-    host.appendChild(renderer.domElement);
-
-    const envUpdater = createLiveEnvUpdater(renderer);
-    envUpdaterRef.current = envUpdater;
-
-    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x334155, 0.85);
-    scene.add(hemiLight);
-    hemiLightRef.current = hemiLight;
-
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.45);
-    dirLight.position.set(4, 8, 3);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 36;
-    const shadowBound = 9;
-    dirLight.shadow.camera.left = -shadowBound;
-    dirLight.shadow.camera.right = shadowBound;
-    dirLight.shadow.camera.top = shadowBound;
-    dirLight.shadow.camera.bottom = -shadowBound;
-    dirLight.shadow.bias = -0.0005;
-    scene.add(dirLight);
-    dirLightRef.current = dirLight;
-
-    // Invisible AR shadow catcher plane projecting real directional shadows onto the street/floor
-    const shadowCatcher = new THREE.Mesh(
-      new THREE.PlaneGeometry(24, 24),
-      new THREE.ShadowMaterial({ opacity: 0.44 })
-    );
-    shadowCatcher.rotation.x = -Math.PI / 2;
-    shadowCatcher.position.y = -0.8;
-    shadowCatcher.receiveShadow = true;
-    scene.add(shadowCatcher);
-    shadowPlaneRef.current = shadowCatcher;
-
-    const grid = new THREE.GridHelper(6, 30, 0x00f5d4, 0x26324d);
-    grid.position.y = -0.805;
-    grid.material.transparent = true;
-    grid.material.opacity = 0.16;
-    scene.add(grid);
-    gridHelperRef.current = grid;
-
-    // Surface start-anchor marker (ring + center dot + normal tick + 5cm base voxel outline)
-    const surfaceMarker = new THREE.Group();
-    const ringGeo = new THREE.RingGeometry(0.13, 0.165, 36);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x00f5d4,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.92
-    });
-    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-    ringMesh.position.z = 0.004;
-    surfaceMarker.add(ringMesh);
-
-    const dotGeo = new THREE.CircleGeometry(0.026, 20);
-    const dotMat = new THREE.MeshBasicMaterial({
-      color: 0xffd166,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.95
-    });
-    const dotMesh = new THREE.Mesh(dotGeo, dotMat);
-    dotMesh.position.z = 0.005;
-    surfaceMarker.add(dotMesh);
-
-    const footGeo = new THREE.EdgesGeometry(
-      new THREE.BoxGeometry(VOXEL_STEP * 1.06, VOXEL_STEP * 1.06, VOXEL_STEP * 1.06)
-    );
-    const footMat = new THREE.LineBasicMaterial({
-      color: 0x00f5d4,
-      transparent: true,
-      opacity: 0.85
-    });
-    const footWire = new THREE.LineSegments(footGeo, footMat);
-    footWire.position.z = VOXEL_STEP * 0.53;
-    surfaceMarker.add(footWire);
-
-    const stemGeo = new THREE.CylinderGeometry(0.004, 0.004, 0.09, 8);
-    const stemMesh = new THREE.Mesh(stemGeo, ringMat);
-    stemMesh.rotation.x = Math.PI / 2;
-    stemMesh.position.z = 0.045;
-    surfaceMarker.add(stemMesh);
-
-    surfaceMarker.visible = false;
-    scene.add(surfaceMarker);
-    surfaceMarkerRef.current = surfaceMarker;
-    originBeaconMatRef.current = { ringMat, dotMat, footMat };
-
-    const draftGroup = new THREE.Group();
-    const nearbyGroup = new THREE.Group();
-    scene.add(draftGroup);
-    scene.add(nearbyGroup);
-
-    const transformBox = new THREE.Box3Helper(new THREE.Box3(), 0x00f5d4);
-    transformBox.visible = false;
-    scene.add(transformBox);
-    transformBoxRef.current = transformBox;
-
-    const ghostGeo = new THREE.BoxGeometry(VOXEL_STEP, VOXEL_STEP, VOXEL_STEP);
-    const ghostMat = new THREE.MeshBasicMaterial({
-      color: 0x00f5d4,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.85
-    });
-    const ghost = new THREE.Mesh(ghostGeo, ghostMat);
-    scene.add(ghost);
-
-    sceneRef.current = scene;
-    cameraRef.current = camera;
-    rendererRef.current = renderer;
-    draftGroupRef.current = draftGroup;
-    nearbyGroupRef.current = nearbyGroup;
-    ghostMeshRef.current = ghost;
-    if (voxelsRef.current?.length) {
-      rebuildDraftMesh(voxelsRef.current);
-    }
-
-    const handleResize = () => {
-      if (!host) return;
-      camera.aspect = host.clientWidth / host.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(host.clientWidth, host.clientHeight);
-      if (occlusionCanvasRef.current) {
-        const occW = Math.min(280, Math.max(96, host.clientWidth));
-        const occH = Math.max(
-          96,
-          Math.round((occW * host.clientHeight) / Math.max(1, host.clientWidth))
-        );
-        occlusionCanvasRef.current.width = occW;
-        occlusionCanvasRef.current.height = occH;
-      }
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-
-    let rafId = 0;
-    let lastWsPush = 0;
-    let lastEnvPush = 0;
-    let lastOcclusionPush = 0;
-    let lastTargetCheck = 0;
-    let lastScanPosePush = 0;
-    let lastOrbExtractPush = 0;
-    let orbExtractBusy = false;
-    const scanFwdVec = new THREE.Vector3();
-    const originProjVec = new THREE.Vector3();
-    const targetRay = new THREE.Raycaster();
-    const centerNdc = new THREE.Vector2(0, 0);
-
-    const animate = () => {
-      rafId = requestAnimationFrame(animate);
-
-      if (rawOrientationRef.current) {
-        const { alpha, beta, gamma } = rawOrientationRef.current;
-        const screenAngle = window.screen?.orientation?.angle || 0;
-        const q = deviceOrientationToQuaternion(
-          alpha - yawOffsetRef.current,
-          beta,
-          gamma,
-          screenAngle
-        );
-        camera.quaternion.slerp(q, 0.45);
-      } else {
-        const euler = new THREE.Euler(
-          fallbackEulerRef.current.pitch,
-          fallbackEulerRef.current.yaw,
-          0,
-          'YXZ'
-        );
-        camera.quaternion.setFromEuler(euler);
-      }
-
-      const showCursor = modeRef.current === 'draw';
-      ghost.visible = showCursor;
-      let latestTarget = null;
-
-      if (showCursor) {
-        const target = computeTargetVoxel(paintingRef.current);
-        latestTarget = target;
-        if (target && target.action === 'add') {
-          ghost.position.set(target.x, target.y, target.z);
-          ghost.material.color.set(
-            originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
-          );
-
-          if (paintingRef.current && (toolRef.current === 'brush' || toolRef.current === 'stack')) {
-            const prev = lastPaintPosRef.current;
-            const selfStackBlocked =
-              toolRef.current === 'stack' &&
-              prev &&
-              target.stackedFrom &&
-              Math.hypot(
-                target.stackedFrom.x - prev.x,
-                target.stackedFrom.y - prev.y,
-                target.stackedFrom.z - prev.z
-              ) <
-                VOXEL_STEP * 0.5 &&
-              now - lastStackAtRef.current < 145;
-
-            if (!selfStackBlocked) {
-              if (!prev) {
-                lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-                lastStackAtRef.current = now;
-                applyVoxelBatch([{ action: 'add', x: target.x, y: target.y, z: target.z }]);
-              } else {
-                const dx = target.x - prev.x;
-                const dy = target.y - prev.y;
-                const dz = target.z - prev.z;
-                const dist = Math.hypot(dx, dy, dz);
-                if (dist >= VOXEL_STEP * 0.75) {
-                  const steps = Math.min(28, Math.max(1, Math.ceil(dist / VOXEL_STEP)));
-                  const batch = [];
-                  for (let i = 1; i <= steps; i += 1) {
-                    const t = i / steps;
-                    batch.push({
-                      action: 'add',
-                      x: snapCoord(prev.x + dx * t),
-                      y: snapCoord(prev.y + dy * t),
-                      z: snapCoord(prev.z + dz * t)
-                    });
-                  }
-                  lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-                  lastStackAtRef.current = now;
-                  applyVoxelBatch(batch);
-                }
-              }
-            }
-          }
-        } else if (target && target.action === 'erase' && target.voxel) {
-          ghost.position.set(target.voxel.x, target.voxel.y, target.voxel.z);
-          ghost.material.color.set(0xff3e7f);
-          if (paintingRef.current && toolRef.current === 'erase') {
-            eraseTargetVoxel(target);
-          }
-        }
-      }
-
-      // Always keep visible 3D sculpture origin beacon positioned & tinted clearly
-      const anchor = surfaceAnchorRef.current;
-      const placedVoxels = voxelsRef.current || [];
-      let originX = null;
-      let originY = null;
-      let originZ = null;
-      let originRequired = false;
-
-      if (anchor) {
-        originX = anchor.x;
-        originY = anchor.y;
-        originZ = anchor.z;
-        originRequired = Boolean(anchor.locked);
-        surfaceMarker.visible = modeRef.current === 'draw';
-      } else if (placedVoxels.length > 0) {
-        originX = placedVoxels[0].x;
-        originY = placedVoxels[0].y;
-        originZ = placedVoxels[0].z;
-        surfaceMarker.visible = modeRef.current === 'draw' || modeRef.current === 'transform';
-        if (modeRef.current === 'draw') {
-          surfaceMarker.position.set(originX, originY, originZ);
-          surfaceMarker.rotation.set(-Math.PI / 2, 0, 0);
-        }
-      } else if (latestTarget && latestTarget.action === 'add') {
-        originX = latestTarget.x;
-        originY = latestTarget.y;
-        originZ = latestTarget.z;
-        originRequired = true;
-        surfaceMarker.visible = modeRef.current === 'draw';
-        surfaceMarker.position.set(originX, originY, originZ);
-        surfaceMarker.rotation.set(-Math.PI / 2, 0, 0);
-      } else {
-        surfaceMarker.visible = false;
-      }
-
-      const beaconMats = originBeaconMatRef.current;
-      if (beaconMats) {
-        const isBlk = originStatusRef.current.originBlocked;
-        beaconMats.ringMat.color.setHex(isBlk ? 0xff3e7f : 0x00f5d4);
-        beaconMats.footMat.color.setHex(isBlk ? 0xff3e7f : 0x00f5d4);
-        beaconMats.dotMat.color.setHex(isBlk ? 0xff3e7f : 0xffd166);
-      }
-
-      const now = performance.now();
-      if (now - lastScanPosePush > 110) {
-        lastScanPosePush = now;
-        scanFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
-        const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
-        const pitchDeg = (Math.asin(Math.max(-1, Math.min(1, scanFwdVec.y))) * 180) / Math.PI;
-        const cov = polRef.current.recordViewPose({
-          yawDeg,
-          pitchDeg,
-          hasCamera: Boolean(videoRef.current && videoRef.current.readyState >= 2)
-        });
-        const prev = lastScanUiRef.current;
-        if (!prev.optimal && cov.optimal && !mappingCompletedNoticeShownRef.current) {
-          mappingCompletedNoticeShownRef.current = true;
-          showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
-        }
-        if (
-          cov.coveragePct !== prev.coveragePct ||
-          cov.scannedCount !== prev.scannedCount ||
-          cov.optimal !== prev.optimal ||
-          cov.hint !== prev.hint ||
-          Math.abs(cov.cursorX - prev.cursorX) >= 0.035 ||
-          Math.abs(cov.cursorY - prev.cursorY) >= 0.035
-        ) {
-          lastScanUiRef.current = {
-            coveragePct: cov.coveragePct,
-            scannedCount: cov.scannedCount,
-            optimal: cov.optimal,
-            cursorX: cov.cursorX,
-            cursorY: cov.cursorY,
-            hint: cov.hint
-          };
-          setSceneScan(cov);
-        }
-
-        const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
-        const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
-        if (lastUnmappedMaskRef.current !== vpKey) {
-          lastUnmappedMaskRef.current = vpKey;
-          setUnmappedGrid(vpGrid);
-        }
-
-        if (
-          now - lastOrbExtractPush > 920 &&
-          !orbExtractBusy &&
-          videoRef.current?.readyState >= 2 &&
-          orbKeyframesRef.current.size < 3
-        ) {
-          const bucket = yawDeg < -18 ? 'left' : yawDeg > 18 ? 'right' : 'center';
-          if (!orbKeyframesRef.current.has(bucket)) {
-            lastOrbExtractPush = now;
-            orbExtractBusy = true;
-            orbTrackerRef.current
-              ?.extractKeyframeFeatures(videoRef.current, { yawDeg, pitchDeg })
-              .then((kf) => {
-                if (kf?.features?.length >= 4 && !orbKeyframesRef.current.has(bucket)) {
-                  orbKeyframesRef.current.set(bucket, kf);
-                  let totalPts = 0;
-                  for (const item of orbKeyframesRef.current.values()) {
-                    totalPts += item.features.length;
-                  }
-                  setOrbStatus((prev) => ({
-                    ...prev,
-                    keyframes: orbKeyframesRef.current.size,
-                    features: totalPts
-                  }));
-                }
-              })
-              .catch(() => {})
-              .finally(() => {
-                orbExtractBusy = false;
-              });
-          }
-        }
-      }
-
-      const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
-      if (!paintingRef.current && now - lastEnvPush > envRefreshMs && videoRef.current && envUpdaterRef.current) {
-        lastEnvPush = now;
-        const envData = envUpdaterRef.current.update(videoRef.current);
-        if (envData) {
-          scene.environment = envData.envTexture;
-          hemiLight.color.setHex(envData.skyColor);
-          hemiLight.groundColor.setHex(envData.groundColor);
-        }
-      }
-
-      if (now - lastOcclusionPush > 110 && occlusionCanvasRef.current) {
-        lastOcclusionPush = now;
-        let originScreen = { x: 0.5, y: 0.5, onScreen: true, requiredVisible: false };
-        if (originX !== null && originY !== null && originZ !== null) {
-          originProjVec.set(originX, originY, originZ).project(camera);
-          const sx = (originProjVec.x + 1) * 0.5;
-          const sy = (1 - originProjVec.y) * 0.5;
-          const onScreen =
-            originProjVec.z >= -1 &&
-            originProjVec.z <= 1 &&
-            sx >= 0.04 &&
-            sx <= 0.96 &&
-            sy >= 0.04 &&
-            sy <= 0.96;
-          originScreen = {
-            x: sx,
-            y: sy,
-            onScreen,
-            requiredVisible: originRequired
-          };
-        }
-        const occStatus = occlusionRef.current.processFrame(
-          videoRef.current,
-          occlusionCanvasRef.current,
-          rawOrientationRef.current,
-          occlusionEnabledRef.current,
-          originScreen
-        );
-        if (
-          occStatus &&
-          (occStatus.originBlocked !== originStatusRef.current.originBlocked ||
-            occStatus.reason !== originStatusRef.current.reason)
-        ) {
-          originStatusRef.current = occStatus;
-          setOriginStatus(occStatus);
-        }
-      }
-
-      if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
-        const activeId = arTargetedIdRef.current;
-        for (const sub of nearbyGroupRef.current.children) {
-          const ud = sub.userData;
-          if (ud?.isParcelPerimeter && ud.perimeterMat) {
-            const pPulse = 0.5 + 0.5 * Math.sin(now * 0.005);
-            ud.perimeterMat.opacity = ud.insideParcel ? 0.68 + pPulse * 0.28 : 0.42 + pPulse * 0.22;
-            continue;
-          }
-          if (!ud?.baseRingMat) continue;
-          const isTargeted = activeId && ud.sculptureId === activeId;
-          const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
-          ud.baseRingMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
-          ud.baseRingMat.opacity = isTargeted ? 0.72 + pulse * 0.25 : 0.46 + pulse * 0.3;
-          if (ud.baseHaloMat) {
-            ud.baseHaloMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
-            ud.baseHaloMat.opacity = isTargeted ? 0.22 + pulse * 0.14 : 0.1 + pulse * 0.1;
-          }
-          if (ud.baseGlowRing) {
-            const s = isTargeted ? 1.08 + pulse * 0.07 : 1 + pulse * 0.03;
-            ud.baseGlowRing.scale.set(s, s, 1);
-          }
-        }
-      }
-
-      if (now - lastTargetCheck > 180) {
-        lastTargetCheck = now;
-        if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
-          targetRay.setFromCamera(centerNdc, camera);
-          const hits = targetRay.intersectObjects(nearbyGroupRef.current.children, true);
-          const hitObj = hits.find((h) => h.object?.userData?.sculpture);
-          const sc = hitObj?.object?.userData?.sculpture || null;
-          if (sc) {
-            const loc = locationRef.current;
-            const d = loc ? haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) : hitObj.distance;
-            if (arTargetedIdRef.current !== sc.id) {
-              arTargetedIdRef.current = sc.id;
-              setArTargetedSculpture({ sculpture: sc, distanceM: d });
-            }
-          } else if (arTargetedIdRef.current) {
-            arTargetedIdRef.current = '';
-            setArTargetedSculpture(null);
-          }
-        } else if (arTargetedIdRef.current) {
-          arTargetedIdRef.current = '';
-          setArTargetedSculpture(null);
-        }
-      }
-
-      if (wsRef.current?.readyState === 1 && now - lastWsPush > 45) {
-        lastWsPush = now;
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'brush_state',
-            q: camera.quaternion.toArray(),
-            cursor: [ghost.position.x, ghost.position.y, ghost.position.z],
-            color: colorRef.current,
-            tool: toolRef.current,
-            mode: modeRef.current
-          })
-        );
-      }
-
-      renderer.render(scene, camera);
-    };
-
-    animate();
-
-    return () => {
-    originBeaconMatRef.current = null;
-      cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', handleResize);
-      envUpdaterRef.current?.dispose();
-      ringGeo.dispose();
-      ringMat.dispose();
-      dotGeo.dispose();
-      dotMat.dispose();
-      footGeo.dispose();
-      footMat.dispose();
-      stemGeo.dispose();
-      ghostGeo.dispose();
-      ghostMat.dispose();
-      transformBox.dispose?.();
-      transformBoxRef.current = null;
-      draftUnitGeoRef.current?.dispose();
-      draftUnitGeoRef.current = null;
-      for (const mat of draftMatCacheRef.current.values()) mat.dispose();
-      draftMatCacheRef.current.clear();
-      draftMeshMapRef.current.clear();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === host) {
-        host.removeChild(renderer.domElement);
-      }
-    };
-  }, [applyVoxelAction, applyVoxelBatch, computeTargetVoxel, eraseTargetVoxel, rebuildDraftMesh]);
-
-  // Keep locked sculpture live transform & bounding cage in sync
-  useEffect(() => {
-    const group = draftGroupRef.current;
-    const cage = transformBoxRef.current;
-    if (!group) return;
-
-    if (mode !== 'transform') {
-      group.position.set(0, 0, 0);
-      group.rotation.set(0, 0, 0);
-      group.scale.set(1, 1, 1);
-      if (cage) cage.visible = false;
-      return;
-    }
-
-    const s = artTransform.scale;
-    const rad = THREE.MathUtils.degToRad(artTransform.rotYDeg);
-    const pivotVec = new THREE.Vector3(transformPivot.x, transformPivot.y, transformPivot.z);
-    const offsetVec = new THREE.Vector3(
-      artTransform.offsetX,
-      artTransform.offsetY,
-      artTransform.offsetZ
-    );
-    const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rad);
-    const transformedPivot = pivotVec.clone().multiplyScalar(s).applyQuaternion(quat);
-
-    group.scale.setScalar(s);
-    group.quaternion.copy(quat);
-    group.position.copy(pivotVec).add(offsetVec).sub(transformedPivot);
-    group.updateMatrixWorld(true);
-
-    if (cage) {
-      if (voxels.length > 0) {
-        cage.box.setFromObject(group);
-        cage.visible = true;
-      } else {
-        cage.visible = false;
-      }
-    }
-  }, [mode, artTransform, transformPivot, voxels]);
-
-  // Keep visible 3D surface anchor ring, shadow catcher plane, and ground grid aligned
-  useEffect(() => {
-    const marker = surfaceMarkerRef.current;
-    const shadowPlane = shadowPlaneRef.current;
-    const grid = gridHelperRef.current;
-    if (!marker || !shadowPlane || !grid) return;
-
-    if (!surfaceAnchor) {
-      shadowPlane.position.set(0, -0.8, 0);
-      shadowPlane.rotation.set(-Math.PI / 2, 0, 0);
-      grid.position.set(0, -0.805, 0);
-      grid.rotation.set(0, 0, 0);
-      return;
-    }
-
-    const pos = new THREE.Vector3(surfaceAnchor.x, surfaceAnchor.y, surfaceAnchor.z);
-    const normal = new THREE.Vector3(surfaceAnchor.nx, surfaceAnchor.ny, surfaceAnchor.nz).normalize();
-
-    marker.visible = mode === 'draw';
-    marker.position.copy(pos);
-    marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-
-    shadowPlane.position.copy(pos).addScaledVector(normal, -0.002);
-    shadowPlane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-
-    grid.position.copy(pos).addScaledVector(normal, -0.004);
-    grid.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-  }, [surfaceAnchor, mode]);
-
-  // WebSocket Pairing connection
-  const connectPairCode = useCallback((codeToJoin) => {
-    const clean = String(codeToJoin || '').trim().toUpperCase();
-    if (!clean) return;
-    setPairError('');
-    if (wsRef.current) wsRef.current.close();
-
-    const ws = new WebSocket(getWsUrl());
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join_pair', code: clean }));
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'pair_connected') {
-          setPairedCode(msg.code);
-          setPairOpen(false);
-          ws.send(JSON.stringify({ type: 'voxels_sync', voxels: voxelsRef.current }));
-        } else if (msg.type === 'pair_error') {
-          setPairError(msg.error);
-        } else if (msg.type === 'pair_ended') {
-          setPairedCode('');
-        } else if (msg.type === 'desktop_command') {
-          if (msg.action === 'set_color' && msg.color) setColor(msg.color);
-          if (msg.action === 'set_tool' && msg.tool) {
-            if (!ensureToolUsable(msg.tool)) return;
-            if (modeRef.current === 'transform') {
-              commitTransformAndExit('draw', msg.tool);
-            } else {
-              setMode('draw');
-              setTool(msg.tool);
-            }
-          }
-          if (msg.action === 'set_mode' && msg.mode) {
-            if (msg.mode === 'publish') {
-              openPublishSheet();
-            } else if (msg.mode === 'preview' && !ensureToolUsable('preview')) {
-              return;
-            } else if (modeRef.current === 'transform') {
-              commitTransformAndExit(msg.mode);
-            } else {
-              setMode(msg.mode);
-            }
-          }
-          if (msg.action === 'undo') handleUndo();
-          if (msg.action === 'clear') clearCanvas();
-          if (msg.action === 'recenter' && rawOrientationRef.current) {
-            yawOffsetRef.current = rawOrientationRef.current.alpha;
-          }
-        }
-      } catch {
-        // ignore malformed
-      }
-    };
-
-    ws.onclose = () => {
-      setPairedCode('');
-    };
-  }, []);
-
-  useEffect(() => {
-    if (pairCodeInput && pairCodeInput.length === 6) {
-      connectPairCode(pairCodeInput);
-    }
-    return () => wsRef.current?.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function recenterAim() {
-    if (rawOrientationRef.current) {
-      yawOffsetRef.current = rawOrientationRef.current.alpha;
-    } else {
-      fallbackEulerRef.current = { yaw: 0, pitch: 0 };
-    }
-  }
-
-  const prevSyncStateRef = useRef({ mode: 'draw', tool: 'brush' });
-  useEffect(() => {
-    const prev = prevSyncStateRef.current;
-    let syncedTool = null;
-    if (mode !== prev.mode) {
-      if (mode === 'transform' || mode === 'preview' || mode === 'publish') {
-        syncedTool = mode;
-      } else if (mode === 'draw') {
-        syncedTool = tool;
-      }
-    } else if (tool !== prev.tool && mode === 'draw') {
-      syncedTool = tool;
-    }
-    if (syncedTool) {
-      activeKeyToolRef.current = syncedTool;
-      setActiveKeyTool(syncedTool);
-    }
-    prevSyncStateRef.current = { mode, tool };
-  }, [mode, tool]);
 
   useEffect(() => {
     const mq = window.matchMedia?.('(pointer: coarse)');
@@ -2345,1442 +111,342 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     return () => {
       mq?.removeEventListener?.('change', syncTouch);
       window.removeEventListener('touchstart', onTouchStart);
+      clearTimeout(hintTimerRef.current);
     };
   }, []);
 
-  async function copyToClipboard(text) {
-    if (!text) return false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // Fallback below
-    }
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.setAttribute('readonly', '');
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-
-  const applyAgentSessionDraft = useCallback(
-    (sess) => {
-      if (!sess || !Array.isArray(sess.draftVoxels) || sess.draftVoxels.length === 0) return;
-      if (sess.updatedAt && lastAppliedAgentTsRef.current === sess.updatedAt) return;
-      lastAppliedAgentTsRef.current = sess.updatedAt || String(Date.now());
-      setVoxels(sess.draftVoxels);
-      if (sess.draftTitle) {
-        setTitle((prev) => (prev.trim() ? prev : sess.draftTitle));
-      }
-      if (sess.draftDescription) {
-        setDescription((prev) => (prev.trim() ? prev : sess.draftDescription));
-      }
-      setSensorBanner(
-        `Agent staged ${sess.draftVoxels.length} voxels (${sess.agentName || 'AI Agent'}) — inspect in AR & publish on your phone.`
-      );
-    },
-    []
-  );
-
-  async function openAgentHandoff() {
-    if (!ensureToolUsable('agent')) return;
-    setAgentOpen(true);
-    setAgentError('');
-    setAgentCopied(false);
-
-    let activeLoc = locationRef.current || location;
-    if (!activeLoc && navigator.geolocation?.getCurrentPosition) {
-      activeLoc = await new Promise((resolve) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) =>
-            resolve({
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-              altitude: pos.coords.altitude,
-              accuracy: pos.coords.accuracy,
-              heading: pos.coords.heading
-            }),
-          () => resolve(null),
-          { enableHighAccuracy: true, timeout: 4500 }
-        );
-      });
-    }
-
-    if (!activeLoc) {
-      setAgentError('Enable GPS location permission first so the agent code locks onto your physical spot.');
-      return;
-    }
-
-    setAgentBusy(true);
-    try {
-      const created = await api.createAgentSession({ location: activeLoc });
-      setAgentSession(created);
-      lastAppliedAgentTsRef.current = '';
-      const ok = await copyToClipboard(created.clipboardText);
-      setAgentCopied(ok);
-      setSensorBanner(
-        ok
-          ? `Copied Agent Code ${created.code} — send it to your agent to stage blocks here.`
-          : `Agent Code ${created.code} ready — tap Copy inside the sheet.`
-      );
-    } catch (err) {
-      setAgentError(err.message);
-    } finally {
-      setAgentBusy(false);
-    }
-  }
-
-  async function refreshAgentDraft() {
-    if (!agentSession?.code) return;
-    setAgentError('');
-    try {
-      const res = await api.getAgentSession(agentSession.code);
-      if (res?.session) {
-        setAgentSession((prev) => ({
-          ...(prev || {}),
-          ...res.session,
-          spec: res.spec || prev?.spec
-        }));
-        if (res.session.status === 'ready' && res.session.draftVoxels?.length) {
-          applyAgentSessionDraft(res.session);
-        }
-      }
-    } catch (err) {
-      setAgentError(err.message);
-    }
-  }
-
-  useEffect(() => {
-    const code = agentSession?.code;
-    if (!code) return undefined;
-    const poll = async () => {
-      try {
-        const res = await api.getAgentSession(code);
-        if (res?.session) {
-          setAgentSession((prev) => ({
-            ...(prev || {}),
-            ...res.session,
-            spec: res.spec || prev?.spec
-          }));
-          if (res.session.status === 'ready' && res.session.draftVoxels?.length) {
-            applyAgentSessionDraft(res.session);
-          }
-        }
-      } catch {
-        // retry on next tick
-      }
-    };
-    const id = setInterval(poll, 2500);
-    return () => clearInterval(id);
-  }, [agentSession?.code, applyAgentSessionDraft]);
-
-  function computeVoxelCentroid(list) {
-    if (!Array.isArray(list) || list.length === 0) {
-      return { x: 0, y: 0, z: 0 };
-    }
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-    for (const v of list) {
-      if (v.x < minX) minX = v.x;
-      if (v.x > maxX) maxX = v.x;
-      if (v.y < minY) minY = v.y;
-      if (v.y > maxY) maxY = v.y;
-      if (v.z < minZ) minZ = v.z;
-      if (v.z > maxZ) maxZ = v.z;
-    }
-    return {
-      x: (minX + maxX) * 0.5,
-      y: (minY + maxY) * 0.5,
-      z: (minZ + maxZ) * 0.5
-    };
-  }
-
-  function hasNonIdentityTransform(tr) {
-    if (!tr) return false;
-    return (
-      Math.abs(tr.scale - 1) > 0.005 ||
-      Math.abs(tr.rotYDeg) > 0.25 ||
-      Math.abs(tr.offsetX) > 0.002 ||
-      Math.abs(tr.offsetY) > 0.002 ||
-      Math.abs(tr.offsetZ) > 0.002
-    );
-  }
-
-  function resetArtTransformState() {
-    setArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
-    activeCanvasPointersRef.current.clear();
-    transformPinchRef.current = null;
-    if (draftGroupRef.current) {
-      draftGroupRef.current.position.set(0, 0, 0);
-      draftGroupRef.current.rotation.set(0, 0, 0);
-      draftGroupRef.current.scale.set(1, 1, 1);
-    }
-    if (transformBoxRef.current) {
-      transformBoxRef.current.visible = false;
-    }
-  }
-
-  function enterTransformMode() {
-    stopBrushPainting();
-    setPaletteOpen(false);
-    const pivot = computeVoxelCentroid(voxelsRef.current);
-    setTransformPivot(pivot);
-    transformPivotRef.current = pivot;
-    resetArtTransformState();
-    setMode('transform');
-    modeRef.current = 'transform';
-    showTemporaryHint(
-      voxelsRef.current.length
-        ? 'Art locked — pinch/drag or use sliders to scale & transform, tap ✅ to draw'
-        : 'Transform locked — tap ✅ again to return to drawing mode'
-    );
-  }
-
-  function commitTransformAndExit(nextMode = 'draw', nextTool = null) {
-    const tr = artTransformRef.current;
-    const pivot = transformPivotRef.current;
-    if (
-      modeRef.current === 'transform' &&
-      voxelsRef.current.length > 0 &&
-      hasNonIdentityTransform(tr)
-    ) {
-      const s = tr.scale;
-      const quat = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        THREE.MathUtils.degToRad(tr.rotYDeg)
-      );
-      const safeLimit = (config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS) - VOXEL_STEP;
-      const vec = new THREE.Vector3();
-      const baked = voxelsRef.current.map((v) => {
-        vec
-          .set(v.x - pivot.x, v.y - pivot.y, v.z - pivot.z)
-          .multiplyScalar(s)
-          .applyQuaternion(quat);
-        return {
-          ...v,
-          x: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.x + tr.offsetX + vec.x) * 1000) / 1000)),
-          y: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.y + tr.offsetY + vec.y) * 1000) / 1000)),
-          z: Math.max(-safeLimit, Math.min(safeLimit, Math.round((pivot.z + tr.offsetZ + vec.z) * 1000) / 1000)),
-          scale: Math.min(2, Math.max(0.25, Math.round(((v.scale ?? 1) * s) * 100) / 100))
-        };
-      });
-      resetArtTransformState();
-      setVoxels(baked);
-    } else {
-      resetArtTransformState();
-    }
-    setMode(nextMode);
-    modeRef.current = nextMode;
-    if (nextTool) {
-      setTool(nextTool);
-      toolRef.current = nextTool;
-    }
-    if (nextMode === 'draw') {
-      showTemporaryHint('Returned to drawing mode');
-    }
-  }
-
-  function toggleTransformLock() {
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('draw');
-    } else {
-      if (!ensureToolUsable('transform')) return;
-      enterTransformMode();
-    }
-  }
-
-  function clearCanvas() {
-    if (!ensureToolUsable('clear')) return;
-    stopBrushPainting();
-    if (voxelsRef.current.length > 0) {
-      clearedBackupRef.current = voxelsRef.current;
-      setHasClearedBackup(true);
-    }
-    lastErasedKeyRef.current = { key: '', ts: 0 };
-    resetArtTransformState();
-    setVoxels([]);
-    if (toolRef.current === 'erase' || toolRef.current === 'stack') {
-      setTool('brush');
-      toolRef.current = 'brush';
-    }
-    if (modeRef.current === 'transform') {
-      setMode('draw');
-      modeRef.current = 'draw';
-    }
-    showTemporaryHint('Canvas cleared (tap Undo ↩️ to restore)');
-  }
-
-  function handleUndo() {
-    if (!ensureToolUsable('undo')) return;
-    if (voxelsRef.current.length === 0 && clearedBackupRef.current?.length) {
-      const restored = clearedBackupRef.current;
-      clearedBackupRef.current = null;
-      setHasClearedBackup(false);
-      setVoxels(restored);
-      showTemporaryHint('Cleared canvas restored');
-      return;
-    }
-    setVoxels((p) => p.slice(0, -1));
-  }
-
-  function assertOriginUnblockedForPaint() {
-    const cam = cameraRef.current;
-    if (cam && occlusionRef.current) {
-      const anchor = surfaceAnchorRef.current;
-      const vList = voxelsRef.current || [];
-      let ox = 0;
-      let oy = 0;
-      let oz = 0;
-      let hasOrigin = false;
-      let requiredVisible = false;
-      if (anchor) {
-        ox = anchor.x;
-        oy = anchor.y;
-        oz = anchor.z;
-        hasOrigin = true;
-        requiredVisible = Boolean(anchor.locked);
-      } else if (vList.length > 0) {
-        ox = vList[0].x;
-        oy = vList[0].y;
-        oz = vList[0].z;
-        hasOrigin = true;
-        requiredVisible = false;
-      } else {
-        const t = computeTargetVoxel();
-        if (t && t.action === 'add') {
-          ox = t.x;
-          oy = t.y;
-          oz = t.z;
-          hasOrigin = true;
-          requiredVisible = true;
-        }
-      }
-      if (hasOrigin) {
-        const proj = new THREE.Vector3(ox, oy, oz).project(cam);
-        const sx = (proj.x + 1) * 0.5;
-        const sy = (1 - proj.y) * 0.5;
-        const onScreen =
-          proj.z >= -1 && proj.z <= 1 && sx >= 0.04 && sx <= 0.96 && sy >= 0.04 && sy <= 0.96;
-        const status = occlusionRef.current.evaluateOriginVisibility({
-          x: sx,
-          y: sy,
-          onScreen,
-          requiredVisible
-        });
-        originStatusRef.current = status;
-        setOriginStatus(status);
-      }
-    }
-
-    if (originStatusRef.current?.originBlocked) {
-      const msg =
-        originStatusRef.current.reason ||
-        'Origin is blocked — clear whatever is in front of the drawing origin to start painting.';
-      showTemporaryHint(msg);
-      setSensorBanner(msg);
-      return false;
-    }
-    return true;
-  }
-
-  function notifyToolUnavailable(toolId, reasonOverride = '') {
-    const info = toolAvailabilityRef.current?.[toolId];
-    const msg =
-      reasonOverride ||
-      info?.reason ||
-      'Complete the required step first before using this tool.';
-    const now = Date.now();
-    const last = lastPrereqNotifyRef.current;
-    if (last.toolId === toolId && last.msg === msg && now - last.ts < 220) {
-      return;
-    }
-    lastPrereqNotifyRef.current = { toolId, msg, ts: now };
-    showTemporaryHint(msg);
-  }
-
-  function ensureToolUsable(toolId) {
-    const info = toolAvailabilityRef.current?.[toolId];
-    if (info && !info.usable) {
-      notifyToolUnavailable(toolId, info.reason);
-      return false;
-    }
-    return true;
-  }
-
-  function startContinuousHoldTool(holdTool) {
-    enterFullscreen();
-    if (!ensureToolUsable(holdTool)) {
-      return;
-    }
-    if ((holdTool === 'brush' || holdTool === 'stack') && !assertOriginUnblockedForPaint()) {
-      return;
-    }
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('draw', holdTool);
-    } else {
-      setMode('draw');
-      modeRef.current = 'draw';
-      setTool(holdTool);
-      toolRef.current = holdTool;
-    }
-    paintingRef.current = true;
-    setPainting(true);
-    const t = computeTargetVoxel(true);
-    if (holdTool === 'erase') {
-      eraseTargetVoxel(t);
-    } else if (t && t.action === 'add') {
-      lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
-      lastStackAtRef.current = performance.now();
-      applyVoxelBatch([t]);
-    }
-  }
-
-  function getDockHoldHandlers(holdTool) {
-    return {
-      onPointerDown: (e) => {
-        if (e.button && e.button !== 0) return;
-        e.preventDefault();
-        if (!ensureToolUsable(holdTool)) return;
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-          // ignore
-        }
-        startContinuousHoldTool(holdTool);
-      },
-      onPointerUp: (e) => {
-        stopBrushPainting();
-        try {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        } catch {
-          // ignore
-        }
-      },
-      onPointerCancel: () => stopBrushPainting(),
-      onContextMenu: (e) => e.preventDefault()
-    };
-  }
-
-  const KEY_CAROUSEL_SLOT_PX = 54;
-
-  function selectKeyTool(toolId, { silent = false } = {}) {
-    activeKeyToolRef.current = toolId;
-    setActiveKeyTool(toolId);
-    const avail = toolAvailabilityRef.current?.[toolId];
-    if (avail && !avail.usable) {
-      if (!silent) {
-        notifyToolUnavailable(toolId, avail.reason);
-      }
-      return;
-    }
-    if (toolId === 'transform') {
-      enterTransformMode();
-      return;
-    }
-    if (toolId === 'brush' || toolId === 'stack' || toolId === 'erase') {
-      if (modeRef.current === 'transform') {
-        commitTransformAndExit('draw', toolId);
-      } else {
-        setMode('draw');
-        setTool(toolId);
-      }
-    } else if (toolId === 'preview') {
-      if (modeRef.current === 'transform') {
-        commitTransformAndExit('preview');
-      } else {
-        setPaletteOpen(false);
-        setMode('preview');
-      }
-    } else if (toolId === 'agent' || toolId === 'publish') {
-      if (modeRef.current === 'transform') {
-        commitTransformAndExit('draw');
-      } else {
-        setMode('draw');
-      }
-    }
-  }
-
-  function stepKeyTool(delta, opts = {}) {
-    const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyToolRef.current);
-    const current = idx >= 0 ? idx : 0;
-    const nextIdx = (((current + delta) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
-    selectKeyTool(KEY_TOOLS[nextIdx].id, opts);
-  }
-
-  function stopBrushPainting() {
-    if (paintHoldTimerRef.current) {
-      clearTimeout(paintHoldTimerRef.current);
-      paintHoldTimerRef.current = null;
-    }
-    paintingRef.current = false;
-    setPainting(false);
-    lastPaintPosRef.current = null;
-  }
-
-  function triggerActiveKeyTool() {
-    enterFullscreen();
-    const curTool = activeKeyToolRef.current;
-    if (!ensureToolUsable(curTool)) {
-      return;
-    }
-    if (curTool === 'transform') {
-      toggleTransformLock();
-    } else if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
-      if ((curTool === 'brush' || curTool === 'stack') && !assertOriginUnblockedForPaint()) {
-        return;
-      }
-      if (modeRef.current === 'transform') {
-        commitTransformAndExit('draw', curTool);
-      } else {
-        setMode('draw');
-        setTool(curTool);
-        toolRef.current = curTool;
-      }
-      applyVoxelAction(computeTargetVoxel());
-    } else if (curTool === 'preview') {
-      const next = modeRef.current === 'preview' ? 'draw' : 'preview';
-      if (modeRef.current === 'transform') {
-        commitTransformAndExit(next);
-      } else {
-        setPaletteOpen(false);
-        setMode(next);
-      }
-    } else if (curTool === 'agent') {
-      openAgentHandoff();
-    } else if (curTool === 'publish') {
-      openPublishSheet();
-    }
-  }
-
-  function handleKeyPointerDown(e) {
-    if (e.button && e.button !== 0) return;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore if synthetic pointer
-    }
-    stopBrushPainting();
-    const relAttr = e.target?.closest?.('[data-tool-rel]')?.getAttribute?.('data-tool-rel');
-    const targetRel = relAttr != null ? Number(relAttr) : 0;
-    const now = performance.now();
-    keyGestureRef.current = {
-      active: true,
-      pointerId: e.pointerId,
-      targetRel: Number.isFinite(targetRel) ? targetRel : 0,
-      startX: e.clientX,
-      anchorX: e.clientX,
-      lastX: e.clientX,
-      lastT: now,
-      velocityX: 0,
-      movedPx: 0,
-      swiped: false,
-      holdStarted: false
-    };
-    setSwipeDragPx(0);
-    setIsDraggingKey(true);
-
-    const curTool = activeKeyToolRef.current;
-    if (targetRel === 0 && (curTool === 'brush' || curTool === 'stack' || curTool === 'erase')) {
-      paintHoldTimerRef.current = setTimeout(() => {
-        if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
-        keyGestureRef.current.holdStarted = true;
-        startContinuousHoldTool(curTool);
-      }, 145);
-    }
-  }
-
-  function handleKeyPointerMove(e) {
-    const g = keyGestureRef.current;
-    if (!g.active || g.pointerId !== e.pointerId) return;
-    const now = performance.now();
-    const dt = Math.max(4, now - g.lastT);
-    const stepVx = (e.clientX - g.lastX) / dt;
-    g.velocityX = g.velocityX * 0.45 + stepVx * 0.55;
-    g.movedPx += Math.abs(e.clientX - g.lastX);
-    g.lastX = e.clientX;
-    g.lastT = now;
-
-    if (!g.swiped && Math.abs(e.clientX - g.startX) >= 7) {
-      g.swiped = true;
-      stopBrushPainting();
-    }
-
-    let dx = e.clientX - g.anchorX;
-    while (dx >= KEY_CAROUSEL_SLOT_PX * 0.58) {
-      stepKeyTool(-1, { silent: true });
-      g.anchorX += KEY_CAROUSEL_SLOT_PX;
-      dx -= KEY_CAROUSEL_SLOT_PX;
-      navigator.vibrate?.(8);
-    }
-    while (dx <= -KEY_CAROUSEL_SLOT_PX * 0.58) {
-      stepKeyTool(1, { silent: true });
-      g.anchorX -= KEY_CAROUSEL_SLOT_PX;
-      dx += KEY_CAROUSEL_SLOT_PX;
-      navigator.vibrate?.(8);
-    }
-    setSwipeDragPx(Math.max(-KEY_CAROUSEL_SLOT_PX, Math.min(KEY_CAROUSEL_SLOT_PX, dx)));
-  }
-
-  function handleKeyPointerUp(e) {
-    const g = keyGestureRef.current;
-    if (!g.active) return;
-    const wasSwiped = g.swiped;
-    const wasHold = g.holdStarted;
-    const movedPx = g.movedPx;
-    const targetRel = g.targetRel;
-    const flickVx = g.velocityX;
-    const residualDx = e.clientX - g.anchorX;
-
-    keyGestureRef.current.active = false;
-    keyGestureRef.current.swiped = false;
-    keyGestureRef.current.holdStarted = false;
-    setIsDraggingKey(false);
-    setSwipeDragPx(0);
-    stopBrushPainting();
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-
-    if (!wasHold) {
-      if (wasSwiped) {
-        if (Math.abs(residualDx) >= 10 && Math.abs(flickVx) > 0.35) {
-          stepKeyTool(flickVx < 0 ? 1 : -1);
-          navigator.vibrate?.(8);
-        } else if (Math.abs(residualDx) >= KEY_CAROUSEL_SLOT_PX * 0.38) {
-          stepKeyTool(residualDx < 0 ? 1 : -1);
-          navigator.vibrate?.(8);
-        } else {
-          const landedAvail = toolAvailabilityRef.current?.[activeKeyToolRef.current];
-          if (landedAvail && !landedAvail.usable) {
-            notifyToolUnavailable(activeKeyToolRef.current, landedAvail.reason);
-          }
-        }
-      } else if (movedPx < 8) {
-        if (targetRel !== 0) {
-          stepKeyTool(targetRel);
-        } else {
-          triggerActiveKeyTool();
-        }
-      }
-    }
-  }
-
-  function handleKeyPointerCancel() {
-    keyGestureRef.current.active = false;
-    keyGestureRef.current.swiped = false;
-    keyGestureRef.current.holdStarted = false;
-    setIsDraggingKey(false);
-    setSwipeDragPx(0);
-    stopBrushPainting();
-  }
-
-  async function loadPublicMapData() {
-    setMapLoading(true);
-    try {
-      const [sRes, pRes] = await Promise.all([
-        api.listSculptures({ includeVoxels: false }),
-        api.listParcels()
-      ]);
-      setMapSculptures(sRes.sculptures || []);
-      setMapParcels(pRes.parcels || []);
-    } catch {
-      // keep existing items
-    } finally {
-      setMapLoading(false);
-    }
-  }
-
-  function openAreaMap() {
-    stopBrushPainting();
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('draw');
-    }
-    setMapOpen(true);
-    loadPublicMapData();
-  }
-
-  const areaSculpturesSorted = useMemo(() => {
-    const withDist = (mapSculptures || []).map((sc) => {
-      const distanceMeters =
-        location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))
-          ? Math.round(haversineMeters(location.lat, location.lng, sc.lat, sc.lng))
-          : null;
-      return { ...sc, distanceMeters };
-    });
-    if (location) {
-      withDist.sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity));
-    }
-    return withDist;
-  }, [mapSculptures, location]);
-
-  const displayedMapSculptures = useMemo(() => {
-    if (areaFilterMode !== 'nearby' || !location) return areaSculpturesSorted;
-    return areaSculpturesSorted.filter(
-      (s) => s.distanceMeters === null || s.distanceMeters <= 5000
-    );
-  }, [areaFilterMode, areaSculpturesSorted, location]);
-
-  function handlePaintStart() {
-    enterFullscreen();
-    if (mode !== 'draw') return;
-    if ((tool === 'brush' || tool === 'stack') && !assertOriginUnblockedForPaint()) {
-      return;
-    }
-    const target = computeTargetVoxel();
-    if (tool === 'brush' || tool === 'stack') {
-      paintingRef.current = true;
-      setPainting(true);
-      lastPaintPosRef.current =
-        target && target.action === 'add' ? { x: target.x, y: target.y, z: target.z } : null;
-      lastStackAtRef.current = performance.now();
-      applyVoxelAction(target);
-    } else {
-      applyVoxelAction(target);
-    }
-  }
-
-  function handlePaintEnd() {
-    paintingRef.current = false;
-    setPainting(false);
-    lastPaintPosRef.current = null;
-  }
-
-  function showTemporaryHint(msg) {
+  const showTemporaryHint = useCallback((msg) => {
     setArSelectHint(msg);
     clearTimeout(hintTimerRef.current);
     hintTimerRef.current = setTimeout(() => setArSelectHint(''), 4200);
-  }
+  }, []);
 
+  const onLocationUpdateBridgeRef = useRef(null);
+
+  const pol = useProofOfLocation({
+    user,
+    dirLightRef,
+    onLocationUpdate: (loc, refined) => onLocationUpdateBridgeRef.current?.(loc, refined)
+  });
+
+  // Refs bridging actions between circularly-related hooks cleanly
+  const openAgentHandoffRef = useRef(null);
+  const openPublishSheetRef = useRef(null);
+  const openCameraSelectedChatRef = useRef(null);
+  const arPinPreviewRef = useRef(null);
+
+  // Brush & Canvas hook (receives AR + Chat bridges via refs initialized right below)
+  const openAgentCaller = useRef((...a) => openAgentHandoffRef.current?.(...a));
+  const openPublishCaller = useRef((...a) => openPublishSheetRef.current?.(...a));
+  const arTargetedIdRef = useRef('');
+  const setArTargetedSculptureBridgeRef = useRef(null);
+
+  const brush = useVoxelBrush({
+    config,
+    initialDraft,
+    user,
+    location: pol.location,
+    locationRef: pol.locationRef,
+    cameraReady: pol.cameraReady,
+    sceneScan: pol.sceneScan,
+    polRef: pol.polRef,
+    rawOrientationRef: pol.rawOrientationRef,
+    fallbackEulerRef: pol.fallbackEulerRef,
+    enterFullscreen: pol.enterFullscreen,
+    setSensorBanner: pol.setSensorBanner,
+    showTemporaryHint,
+    canvasHostRef,
+    cameraRef,
+    draftGroupRef,
+    transformBoxRef,
+    surfaceMarkerRef,
+    shadowPlaneRef,
+    gridHelperRef,
+    nearbyGroupRef,
+    arTargetedIdRef,
+    setArTargetedSculpture: (v) => setArTargetedSculptureBridgeRef.current?.(v),
+    arPinPreview: arPinPreviewRef.current,
+    openCameraSelectedChat: (...args) => openCameraSelectedChatRef.current?.(...args),
+    openAgentHandoffRef: openAgentCaller,
+    openPublishSheetRef: openPublishCaller
+  });
+
+  const ar = useARPreview({
+    mode: brush.mode,
+    location: pol.location,
+    locationRef: pol.locationRef,
+    cameraReady: pol.cameraReady,
+    videoRef: pol.videoRef,
+    orbTrackerRef: pol.orbTrackerRef,
+    orbKeyframesRef: pol.orbKeyframesRef,
+    orbPackCacheRef: pol.orbPackCacheRef,
+    latestOrbProofRef: pol.latestOrbProofRef,
+    setOrbStatus: pol.setOrbStatus,
+    nearbyGroupRef,
+    modeRef: brush.modeRef,
+    commitTransformAndExit: brush.commitTransformAndExit,
+    stopBrushPainting: brush.stopBrushPainting,
+    showTemporaryHint
+  });
+
+  setArTargetedSculptureBridgeRef.current = ar.setArTargetedSculpture;
+  arTargetedIdRef.current = ar.arTargetedIdRef.current;
+
+  onLocationUpdateBridgeRef.current = async (loc, refined) => {
+    const res = await api.listSculptures({
+      lat: loc.lat,
+      lng: loc.lng,
+      radiusMeters: 300,
+      includeVoxels: false
+    });
+    await ar.hydrateNearbyList(res.sculptures || [], refined);
+  };
+
+  // Support deep link ?sculpture=<id> directly on mobile too
+  const { setMapSelectedSculpture } = ar;
   useEffect(() => {
-    const sc = arTargetedSculpture?.sculpture;
-    if (mode !== 'preview' || !sc?.id) {
-      setArPinPreview(null);
-      return;
-    }
-    const summary = sc.pinSummary;
-    const seq = Number(summary?.batchSeq || 0);
-    const cacheKey = `${sc.id}:${seq}`;
-    const cached = arPinCacheRef.current.get(cacheKey);
-    if (cached) {
-      setArPinPreview(cached);
-      return;
-    }
-    if (!summary?.hasPins) {
-      setArPinPreview({
-        sculptureId: sc.id,
-        status: 'none',
-        pins: [],
-        batchSeq: 0,
-        meta: summary || null,
-        error: ''
-      });
-      return;
-    }
-    if (!user?.id) {
-      setArPinPreview({
-        sculptureId: sc.id,
-        status: 'locked',
-        pins: [],
-        batchSeq: seq,
-        meta: summary,
-        error: `Sign in & visit parcel ${sc.parcelId} in person to decrypt Pinned IPFS Messages.`
-      });
-      return;
-    }
+    const deepId = new URLSearchParams(window.location.search).get('sculpture');
+    if (!deepId) return;
+    api
+      .getSculpture(deepId)
+      .then((res) => {
+        if (res?.sculpture) setMapSelectedSculpture(res.sculpture);
+      })
+      .catch(() => {});
+  }, [setMapSelectedSculpture]);
 
-    let cancelled = false;
-    setArPinPreview({
-      sculptureId: sc.id,
-      status: 'loading',
-      pins: [],
-      batchSeq: seq,
-      meta: summary,
-      error: ''
-    });
+  const chat = useChat({
+    user,
+    mode: brush.mode,
+    arTargetedSculpture: ar.arTargetedSculpture,
+    locationRef: pol.locationRef,
+    cameraReadyRef: pol.cameraReadyRef,
+    polRef: pol.polRef,
+    videoRef: pol.videoRef,
+    orbPackCacheRef: pol.orbPackCacheRef,
+    orbTrackerRef: pol.orbTrackerRef,
+    latestOrbProofRef: pol.latestOrbProofRef,
+    handleEnrollPasskey: pol.handleEnrollPasskey,
+    setArSelectHint,
+    showTemporaryHint
+  });
+  arPinPreviewRef.current = chat.arPinPreview;
+  openCameraSelectedChatRef.current = chat.openCameraSelectedChat;
 
-    (async () => {
-      try {
-        const idObj = await getOrCreateDeviceIdentity(user.id);
-        const ownerWallets = [user?.walletAddress, user?.customPayoutAddress]
-          .filter(Boolean)
-          .map((a) => a.toLowerCase());
-        const ownerAddr = String(sc.recipientAddress || sc.ownerAddress || '').toLowerCase();
-        if (ownerAddr && ownerWallets.includes(ownerAddr)) {
-          const sealRes = await api.getOwnerPinSeal(sc.id);
-          if (sealRes.encryptedBatch && !cancelled) {
-            const dec = await decryptPinnedIpfsBatch({
-              encryptedBatch: sealRes.encryptedBatch,
-              parcelSealKeyB64: sealRes.parcelSealKeyB64,
-              sculptureId: sc.id,
-              parcelId: sc.parcelId,
-              geohash: sc.geohash
-            });
-            const nextState = {
-              sculptureId: sc.id,
-              status: 'unlocked',
-              pins: dec.pins || [],
-              batchSeq: dec.batchSeq || seq,
-              meta: sealRes.meta || summary,
-              error: ''
-            };
-            arPinCacheRef.current.set(cacheKey, nextState);
-            setArPinPreview(nextState);
-          }
-          return;
-        }
-
-        const loc = locationRef.current;
-        const polSnap = polRef.current?.getSnapshot ? polRef.current.getSnapshot() : {};
-        if (!cameraReadyRef.current || !loc) {
-          throw new Error(`Point live AR camera on site inside ${sc.parcelId} to decrypt.`);
-        }
-
-        const unsignedSight = {
-          selectionMethod: 'ar-camera-raycast',
-          rayHit: true,
-          inFrustum: true,
-          cameraReady: true,
-          cameraFrames: Math.max(3, polSnap.cameraFrames || 0),
-          opticalFlowCorrelation: polSnap.opticalFlowCorrelation ?? 0.65,
-          visualDHash: polSnap.visualDHash || '',
-          lat: loc.lat,
-          lng: loc.lng,
-          altitude: loc.altitude ?? null,
-          rayHitDistanceM: arTargetedSculpture.distanceM ?? null,
-          selectedAt: new Date().toISOString()
-        };
-        const freshSight = await signSightProof(idObj, {
-          sculptureId: sc.id,
-          parcelId: sc.parcelId,
-          sightProof: unsignedSight
-        });
-        const ch = await api.issueParcelPinChallenge(sc.id, {
-          deviceProfile: { isMobile: true }
-        });
-        let orbProof = latestOrbProofRef.current;
-        const cachedPack = orbPackCacheRef.current.get(sc.parcelId);
-        if (cachedPack && videoRef.current?.readyState >= 2) {
-          const freshOrb = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, cachedPack);
-          if (freshOrb?.descriptorDigest) {
-            orbProof = {
-              descriptorDigest: freshOrb.descriptorDigest,
-              inlierCount: freshOrb.inlierCount,
-              reprojectionErrorPx: freshOrb.reprojectionErrorPx
-            };
-          }
-        }
-        let webauthnAssertion = null;
-        if (ch.webauthnRequired) {
-          webauthnAssertion = await requestPasskeyAssertion(ch.challengeNonce);
-        }
-        const signed = await signParcelPresenceProof(idObj, {
-          sculptureId: sc.id,
-          parcelId: sc.parcelId,
-          geohash: sc.geohash,
-          challengeId: ch.challengeId,
-          challengeNonce: ch.challengeNonce,
-          sightProof: freshSight,
-          polSnapshot: polSnap
-        });
-        const unlocked = await api.unlockPinnedIpfsBatch(sc.id, {
-          ...signed,
-          ...(orbProof ? { orbProof } : {}),
-          ...(webauthnAssertion ? { webauthnAssertion } : {}),
-          deviceProfile: { isMobile: true }
-        });
-        if (!cancelled && unlocked.encryptedBatch && unlocked.parcelSealKeyB64) {
-          const dec = await decryptPinnedIpfsBatch({
-            encryptedBatch: unlocked.encryptedBatch,
-            parcelSealKeyB64: unlocked.parcelSealKeyB64,
-            sculptureId: sc.id,
-            parcelId: sc.parcelId,
-            geohash: sc.geohash
-          });
-          const nextState = {
-            sculptureId: sc.id,
-            status: 'unlocked',
-            pins: dec.pins || [],
-            batchSeq: dec.batchSeq || seq,
-            meta: unlocked.meta || summary,
-            error: ''
-          };
-          arPinCacheRef.current.set(cacheKey, nextState);
-          setArPinPreview(nextState);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setArPinPreview({
-            sculptureId: sc.id,
-            status: 'locked',
-            pins: [],
-            batchSeq: seq,
-            meta: summary,
-            error:
-              err.message ||
-              `Visit parcel ${sc.parcelId} in person to decrypt Pinned IPFS Messages.`
-          });
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [arTargetedSculpture?.sculpture?.id, arTargetedSculpture?.sculpture?.pinSummary?.batchSeq, mode, user]);
-
-  function openCameraSelectedChat(sc, rayHitDistanceM = null, pinPreviewData = null) {
-    if (!sc) return;
-    const loc = locationRef.current;
-    if (!cameraReadyRef.current) {
-      showTemporaryHint('Live mobile camera stream must be active to enter sculpture chat.');
-      return;
-    }
-    if (!loc) {
-      showTemporaryHint('Waiting for GPS fix before unlocking location chat.');
-      return;
-    }
-    const distM = haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng);
-    if (distM > CHAT_SIGHT_CLIENT_DISTANCE_M) {
-      showTemporaryHint(
-        `"${sc.title}" is ${Math.round(distM)}m away — walk within ${CHAT_SIGHT_CLIENT_DISTANCE_M}m in person to unlock.`
-      );
-      return;
-    }
-    const polSnap = polRef.current.getSnapshot();
-    if ((polSnap.cameraFrames || 0) < 2) {
-      showTemporaryHint('Hold live camera steady for a moment to verify Proof of Sight.');
-      return;
-    }
-    setArSelectHint('');
-    setChatSelection({
-      sculpture: sc,
-      pinData:
-        pinPreviewData?.sculptureId === sc.id
-          ? {
-              unlocked: pinPreviewData.status === 'unlocked',
-              pins: pinPreviewData.pins || [],
-              batchSeq: pinPreviewData.batchSeq || 0,
-              meta: pinPreviewData.meta || sc.pinSummary || null,
-              error: pinPreviewData.error || ''
-            }
-          : null,
-      sightProof: {
-        selectionMethod: 'ar-camera-raycast',
-        rayHit: true,
-        inFrustum: true,
-        cameraReady: true,
-        cameraFrames: polSnap.cameraFrames,
-        opticalFlowCorrelation: polSnap.opticalFlowCorrelation,
-        visualDHash: polSnap.visualDHash,
-        lat: loc.lat,
-        lng: loc.lng,
-        altitude: loc.altitude ?? null,
-        rayHitDistanceM: Number.isFinite(rayHitDistanceM) ? Math.round(rayHitDistanceM * 100) / 100 : null,
-        selectedAt: new Date().toISOString()
-      }
-    });
-  }
-
-  function handleCanvasPointerDown(e) {
-    activeCanvasPointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (modeRef.current === 'transform') {
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-      if (activeCanvasPointersRef.current.size >= 2) {
-        const pts = Array.from(activeCanvasPointersRef.current.values());
-        transformPinchRef.current = {
-          dist: Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)),
-          angle: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
-        };
-      } else {
-        transformPinchRef.current = null;
-      }
-      return;
-    }
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
-    tapStartRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
-  }
-
-  function handleCanvasPointerMove(e) {
-    const pointers = activeCanvasPointersRef.current;
-    const prevPt = pointers.get(e.pointerId);
-    if (pointers.has(e.pointerId)) {
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    }
-
-    if (modeRef.current === 'transform') {
-      if (!prevPt || !pointers.size) return;
-      if (pointers.size >= 2) {
-        const pts = Array.from(pointers.values());
-        const dist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
-        const angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
-        if (!transformPinchRef.current) {
-          transformPinchRef.current = { dist, angle };
-          return;
-        }
-        const scaleFactor = dist / Math.max(12, transformPinchRef.current.dist);
-        let dAngleDeg = ((angle - transformPinchRef.current.angle) * 180) / Math.PI;
-        if (dAngleDeg > 180) dAngleDeg -= 360;
-        if (dAngleDeg < -180) dAngleDeg += 360;
-        transformPinchRef.current = { dist, angle };
-        setArtTransform((prev) => ({
-          ...prev,
-          scale: Math.max(0.25, Math.min(2, Number((prev.scale * scaleFactor).toFixed(3)))),
-          rotYDeg: Math.round(((prev.rotYDeg - dAngleDeg + 540) % 360) - 180)
-        }));
-      } else if (pointers.size === 1) {
-        const dx = e.clientX - prevPt.x;
-        const dy = e.clientY - prevPt.y;
-        const cam = cameraRef.current;
-        if (!cam) return;
-        const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion).normalize();
-        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion).normalize();
-        const pivot = transformPivotRef.current;
-        const tr = artTransformRef.current;
-        const worldPos = new THREE.Vector3(
-          pivot.x + tr.offsetX,
-          pivot.y + tr.offsetY,
-          pivot.z + tr.offsetZ
-        );
-        const dist = Math.max(0.8, Math.min(5, cam.position.distanceTo(worldPos)));
-        const moveScale = dist * 0.0022;
-        setArtTransform((prev) => ({
-          ...prev,
-          offsetX: prev.offsetX + (camRight.x * dx - camUp.x * dy) * moveScale,
-          offsetY: prev.offsetY + (camRight.y * dx - camUp.y * dy) * moveScale,
-          offsetZ: prev.offsetZ + (camRight.z * dx - camUp.z * dy) * moveScale
-        }));
-      }
-      return;
-    }
-
-    if (!dragStartRef.current || rawOrientationRef.current) return;
-    const dx = e.clientX - dragStartRef.current.x;
-    const dy = e.clientY - dragStartRef.current.y;
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
-    fallbackEulerRef.current.yaw -= dx * 0.004;
-    fallbackEulerRef.current.pitch = Math.max(
-      -1.2,
-      Math.min(1.2, fallbackEulerRef.current.pitch - dy * 0.004)
-    );
-  }
-
-  function handleCanvasPointerCancel(e) {
-    activeCanvasPointersRef.current.delete(e.pointerId);
-    if (activeCanvasPointersRef.current.size < 2) {
-      transformPinchRef.current = null;
-    }
-    dragStartRef.current = null;
-    tapStartRef.current = null;
-  }
-
-  function selectSurfaceAtScreenPoint(clientX, clientY) {
-    const host = canvasHostRef.current;
-    const cam = cameraRef.current;
-    if (!host || !cam) return;
-
-    const rect = host.getBoundingClientRect();
-    const px = clientX ?? rect.left + rect.width * 0.5;
-    const py = clientY ?? rect.top + rect.height * 0.5;
-    const normX = Math.max(0.05, Math.min(0.95, (px - rect.left) / Math.max(1, rect.width)));
-    const normY = Math.max(0.05, Math.min(0.95, (py - rect.top) / Math.max(1, rect.height)));
-    const ndc = new THREE.Vector2(normX * 2 - 1, -(normY * 2 - 1));
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, cam);
-    const dir = raycaster.ray.direction.clone().normalize();
-    const origin = raycaster.ray.origin.clone();
-
-    const draftTargets = draftGroupRef.current ? draftGroupRef.current.children : [];
-    const voxelHits = draftTargets.length ? raycaster.intersectObjects(draftTargets, false) : [];
-    if (voxelHits.length > 0) {
-      const hit = voxelHits[0];
-      const worldNormal = hit.face.normal
-        .clone()
-        .transformDirection(hit.object.matrixWorld)
-        .normalize();
-      const depthM = Math.max(0.45, Math.min(4.5, hit.distance));
-      setReachMeters(Number(depthM.toFixed(2)));
-      setSurfaceAnchor({
-        x: hit.point.x,
-        y: hit.point.y,
-        z: hit.point.z,
-        nx: worldNormal.x,
-        ny: worldNormal.y,
-        nz: worldNormal.z,
-        depthM: Number(depthM.toFixed(2)),
-        label: 'Sculpture Face',
-        source: 'voxel',
-        sharpnessScore: 1,
-        locked: true
-      });
-      showTemporaryHint(`Start locked to sculpture face (${depthM.toFixed(1)}m)`);
-      return;
-    }
-
-    const patch = polRef.current.analyzeSurfacePatch(normX, normY);
-    const sharpness = patch ? patch.sharpnessScore : 0.35;
-    let label = 'Mid-Air Spot';
-    let depthM = reachRef.current;
-    let nx = -dir.x;
-    let ny = -dir.y;
-    let nz = -dir.z;
-
-    if (dir.y < -0.36) {
-      label = 'Floor';
-      nx = 0;
-      ny = 1;
-      nz = 0;
-      depthM = Math.max(0.75, Math.min(4.0, 1.25 / -dir.y));
-    } else if (dir.y < -0.12) {
-      label = 'Table / Ledge';
-      nx = 0;
-      ny = 1;
-      nz = 0;
-      depthM = Math.max(0.7, Math.min(3.2, 0.65 / -dir.y));
-    } else if (sharpness >= 0.22) {
-      label = 'Wall / Surface';
-      const horizLen = Math.hypot(dir.x, dir.z);
-      if (horizLen > 0.15) {
-        nx = -dir.x / horizLen;
-        ny = 0;
-        nz = -dir.z / horizLen;
-      }
-      depthM = Math.max(0.85, Math.min(3.2, 2.2 - sharpness * 0.7));
-    } else {
-      const len = Math.hypot(nx, ny, nz) || 1;
-      nx /= len;
-      ny /= len;
-      nz /= len;
-    }
-
-    const pt = origin.addScaledVector(dir, depthM);
-    setReachMeters(Number(depthM.toFixed(2)));
-    setSurfaceAnchor({
-      x: pt.x,
-      y: pt.y,
-      z: pt.z,
-      nx,
-      ny,
-      nz,
-      depthM: Number(depthM.toFixed(2)),
-      label,
-      source: 'surface',
-      sharpnessScore: Number(sharpness.toFixed(2)),
-      locked: true
-    });
-    showTemporaryHint(`Start surface set: ${label} (${depthM.toFixed(1)}m)`);
-  }
-
-  function seedVoxelAtAnchor() {
-    if (!surfaceAnchor) return;
-    if (!ensureToolUsable('brush')) return;
-    if (!assertOriginUnblockedForPaint()) return;
-    const normal = new THREE.Vector3(surfaceAnchor.nx, surfaceAnchor.ny, surfaceAnchor.nz).normalize();
-    const p = new THREE.Vector3(surfaceAnchor.x, surfaceAnchor.y, surfaceAnchor.z).addScaledVector(
-      normal,
-      VOXEL_STEP * 0.5
-    );
-    applyVoxelBatch([
-      {
-        action: 'add',
-        x: snapCoord(p.x),
-        y: snapCoord(p.y),
-        z: snapCoord(p.z)
-      }
-    ]);
-  }
-
-  function handleCanvasPointerUp(e) {
-    activeCanvasPointersRef.current.delete(e.pointerId);
-    if (activeCanvasPointersRef.current.size < 2) {
-      transformPinchRef.current = null;
-    }
-    dragStartRef.current = null;
-    const start = tapStartRef.current;
-    tapStartRef.current = null;
-    if (!start || modeRef.current === 'transform') return;
-
-    const moveDist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
-    if (moveDist > 14) return;
-
-    if (modeRef.current === 'draw') {
-      if (!paintingRef.current && !keyGestureRef.current.active) {
-        selectSurfaceAtScreenPoint(e.clientX, e.clientY);
-      }
-      return;
-    }
-
-    if (modeRef.current !== 'preview') return;
-
-    const host = canvasHostRef.current;
-    const cam = cameraRef.current;
-    const nearbyGroup = nearbyGroupRef.current;
-    if (!host || !cam || !nearbyGroup) return;
-
-    const rect = host.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, cam);
-    const hits = raycaster.intersectObjects(nearbyGroup.children, true);
-    const hitWithSculpture = hits.find((h) => h.object?.userData?.sculpture);
-    if (hitWithSculpture) {
-      const hitSc = hitWithSculpture.object.userData.sculpture;
-      arTargetedIdRef.current = hitSc.id;
-      const loc = locationRef.current;
-      const d = loc ? haversineMeters(loc.lat, loc.lng, hitSc.lat, hitSc.lng) : hitWithSculpture.distance;
-      setArTargetedSculpture({ sculpture: hitSc, distanceM: d });
-      openCameraSelectedChat(hitSc, hitWithSculpture.distance, arPinPreview);
-    }
-  }
-
-  async function openDraftsSheet() {
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('draw');
-    }
-    setDraftError('');
-    setDraftsOpen(true);
-    if (userRef.current?.id) {
-      setDraftsBusy(true);
-      try {
-        await refreshCloudDrafts();
-      } finally {
-        setDraftsBusy(false);
-      }
-    }
-  }
-
-  async function handleManualSaveDraft({ forceNew = false, closePublish = false } = {}) {
-    setDraftError('');
-    const currentVoxels = voxelsRef.current || [];
-    if (currentVoxels.length === 0 && !title.trim() && !description.trim()) {
-      setDraftError('Draw at least 1 block or add a title before saving a draft.');
-      return;
-    }
-
-    if (!userRef.current?.id) {
-      saveLocalDraft({
-        activeDraftId,
-        title,
-        description,
-        cluePrompt,
-        color,
-        material,
-        reachMeters,
-        surfaceAnchor,
-        voxels: currentVoxels,
-        updatedAt: new Date().toISOString()
-      });
-      setDraftStatusText(`Saved on device (${currentVoxels.length} blocks)`);
-      showTemporaryHint('Draft saved on device (sign in to sync to cloud)');
-      if (closePublish) setMode('draw');
-      return;
-    }
-
-    setDraftsBusy(true);
-    try {
-      const previewDataUrl = captureSculptureSnapshot();
-      await persistCloudDraft({ source: 'manual', forceNew, previewDataUrl });
-      showTemporaryHint(forceNew ? 'Saved as new cloud draft!' : 'Draft saved to your account!');
-      if (closePublish) setMode('draw');
-    } catch (err) {
-      setDraftError(err.message || 'Failed to save draft');
-    } finally {
-      setDraftsBusy(false);
-    }
-  }
-
-  async function handleLoadDraft(draft) {
-    if (!draft) return;
-    setDraftError('');
-    let full = draft;
-    if (!Array.isArray(draft.voxels) && userRef.current?.id) {
-      setDraftsBusy(true);
-      try {
-        const res = await api.getDraft(draft.id);
-        if (res?.draft) full = res.draft;
-      } catch (err) {
-        setDraftError(err.message || 'Failed to load draft');
-        setDraftsBusy(false);
-        return;
-      } finally {
-        setDraftsBusy(false);
-      }
-    }
-    stopBrushPainting();
-    resetArtTransformState();
-    setActiveDraftId(full.id || '');
-    activeDraftIdRef.current = full.id || '';
-    setVoxels(Array.isArray(full.voxels) ? full.voxels : []);
-    setTitle(full.title || '');
-    setDescription(full.description || '');
-    setCluePrompt('');
-    setClueAnswer('');
-    setSurfaceAnchor(full.surfaceAnchor || null);
-    setMode('draw');
-    modeRef.current = 'draw';
-    setDraftsOpen(false);
-    setDraftStatusText(`Loaded (${(full.voxels || []).length} blocks)`);
-    showTemporaryHint(`Resumed draft: ${full.title || 'Untitled'}`);
-  }
-
-  async function handleDeleteCloudDraft(draftId) {
-    if (!draftId) return;
-    setDraftError('');
-    setDraftsBusy(true);
-    try {
-      await api.deleteDraft(draftId);
-      setCloudDrafts((prev) => prev.filter((d) => d.id !== draftId));
-      if (activeDraftIdRef.current === draftId) {
-        setActiveDraftId('');
-        activeDraftIdRef.current = '';
-      }
-    } catch (err) {
-      setDraftError(err.message || 'Failed to delete draft');
-    } finally {
-      setDraftsBusy(false);
-    }
-  }
-
-  function handleStartNewDraft() {
-    stopBrushPainting();
-    resetArtTransformState();
-    clearLocalDraft();
-    setActiveDraftId('');
-    activeDraftIdRef.current = '';
-    lastCloudSyncSigRef.current = '';
-    setVoxels([]);
-    setTitle('');
-    setDescription('');
-    setCluePrompt('');
-    setClueAnswer('');
-    setSurfaceAnchor(null);
-    setDraftStatusText('');
-    setDraftsOpen(false);
-    setMode('draw');
-    modeRef.current = 'draw';
-    showTemporaryHint('Started fresh blank draft');
-  }
-
-  function openPublishSheet({ skipVoxelCheck = false } = {}) {
-    if (!skipVoxelCheck) {
-      if (!ensureToolUsable('publish')) return;
-    } else {
-      if (!locationRef.current && !location) {
-        notifyToolUnavailable('publish', 'Wait for a GPS location fix first before publishing on-chain.');
-        return;
-      }
-      if (!cameraReadyRef.current) {
-        notifyToolUnavailable(
-          'publish',
-          'Enable live camera access first for Proof of Location before publishing.'
-        );
-        return;
-      }
-      const cov = polRef.current.getSceneCoverage();
-      if (!cov.optimal) {
-        notifyToolUnavailable(
-          'publish',
-          `Move your phone around to finish mapping this space (${cov.scannedCount}/${cov.targetCount} angles for 100% lock) before publishing.`
-        );
-        return;
-      }
-      if (!userRef.current) {
-        notifyToolUnavailable('publish', 'Sign in with Google first before publishing & minting on-chain.');
-        return;
-      }
-    }
-    setPublishError('');
-    setMintReceipt(null);
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('publish');
-    } else {
-      setMode('publish');
-    }
-  }
-
-  function captureSculptureSnapshot() {
+  const captureSculptureSnapshot = useCallback(() => {
     try {
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         if (ghostMeshRef.current) ghostMeshRef.current.visible = false;
         rendererRef.current.render(sceneRef.current, cameraRef.current);
         const url = rendererRef.current.domElement.toDataURL('image/png');
-        if (ghostMeshRef.current && modeRef.current === 'draw') ghostMeshRef.current.visible = true;
+        if (ghostMeshRef.current && brush.modeRef.current === 'draw') {
+          ghostMeshRef.current.visible = true;
+        }
         return url;
       }
     } catch {
-      // ignore
+      // ignore snapshot capture error
     }
     return '';
-  }
+  }, [brush.modeRef]);
 
-  const wordCount = useMemo(
-    () => (description.trim() ? description.trim().split(/\s+/).filter(Boolean).length : 0),
-    [description]
+  const drafts = useDrafts({
+    initialDraft,
+    user,
+    location: pol.location,
+    locationRef: pol.locationRef,
+    voxels: brush.voxels,
+    voxelsRef: brush.voxelsRef,
+    setVoxels: brush.setVoxels,
+    title,
+    setTitle,
+    description,
+    setDescription,
+    cluePrompt,
+    setCluePrompt,
+    setClueAnswer,
+    color: brush.color,
+    material: brush.material,
+    reachMeters: brush.reachMeters,
+    surfaceAnchor: brush.surfaceAnchor,
+    setSurfaceAnchor: brush.setSurfaceAnchor,
+    surfaceAnchorRef: brush.surfaceAnchorRef,
+    modeRef: brush.modeRef,
+    setMode: brush.setMode,
+    commitTransformAndExit: brush.commitTransformAndExit,
+    stopBrushPainting: brush.stopBrushPainting,
+    resetArtTransformState: brush.resetArtTransformState,
+    ensureToolUsable: brush.ensureToolUsable,
+    captureSculptureSnapshot,
+    setSensorBanner: pol.setSensorBanner,
+    showTemporaryHint
+  });
+  openAgentHandoffRef.current = drafts.openAgentHandoff;
+
+  const lands = useLandManagement({
+    user,
+    mintReceipt,
+    voxels: brush.voxels,
+    setVoxels: brush.setVoxels,
+    setMapOpen: ar.setMapOpen,
+    setMapSelectedSculpture: ar.setMapSelectedSculpture,
+    setNearbySculptures: ar.setNearbySculptures,
+    setMapSculptures: ar.setMapSculptures,
+    setMode: brush.setMode,
+    setTool: brush.setTool,
+    captureSculptureSnapshot,
+    showTemporaryHint
+  });
+
+  const openPublishSheet = useCallback(
+    ({ skipVoxelCheck = false } = {}) => {
+      if (!skipVoxelCheck) {
+        if (!brush.ensureToolUsable('publish')) return;
+      } else {
+        if (!pol.locationRef.current && !pol.location) {
+          brush.notifyToolUnavailable(
+            'publish',
+            'Wait for a GPS location fix first before publishing on-chain.'
+          );
+          return;
+        }
+        if (!pol.cameraReadyRef.current) {
+          brush.notifyToolUnavailable(
+            'publish',
+            'Enable live camera access first for Proof of Location before publishing.'
+          );
+          return;
+        }
+        const cov = pol.polRef.current.getSceneCoverage();
+        if (!cov.optimal) {
+          brush.notifyToolUnavailable(
+            'publish',
+            `Move your phone around to finish mapping this space (${cov.scannedCount}/${cov.targetCount} angles for 100% lock) before publishing.`
+          );
+          return;
+        }
+        if (!user) {
+          brush.notifyToolUnavailable(
+            'publish',
+            'Sign in with Google first before publishing & minting on-chain.'
+          );
+          return;
+        }
+      }
+      setPublishError('');
+      setMintReceipt(null);
+      if (brush.modeRef.current === 'transform') {
+        brush.commitTransformAndExit('publish');
+      } else {
+        brush.setMode('publish');
+      }
+    },
+    [brush, pol, user]
+  );
+  openPublishSheetRef.current = openPublishSheet;
+
+  const handleDesktopCommand = useCallback(
+    (msg) => {
+      if (msg.action === 'set_color' && msg.color) brush.setColor(msg.color);
+      if (msg.action === 'set_tool' && msg.tool) {
+        if (!brush.ensureToolUsable(msg.tool)) return;
+        if (brush.modeRef.current === 'transform') {
+          brush.commitTransformAndExit('draw', msg.tool);
+        } else {
+          brush.setMode('draw');
+          brush.setTool(msg.tool);
+        }
+      }
+      if (msg.action === 'set_mode' && msg.mode) {
+        if (msg.mode === 'publish') {
+          openPublishSheet();
+        } else if (msg.mode === 'preview' && !brush.ensureToolUsable('preview')) {
+          return;
+        } else if (brush.modeRef.current === 'transform') {
+          brush.commitTransformAndExit(msg.mode);
+        } else {
+          brush.setMode(msg.mode);
+        }
+      }
+      if (msg.action === 'undo') brush.handleUndo();
+      if (msg.action === 'clear') brush.clearCanvas();
+    },
+    [brush, openPublishSheet]
   );
 
-  async function handlePublishSubmit(e) {
+  const resetFormAfterPublish = useCallback(
+    (resultPayload) => {
+      drafts.markDraftPublished(drafts.activeDraftIdRef.current);
+      setMintReceipt(resultPayload);
+      brush.setVoxels([]);
+      setTitle('');
+      setDescription('');
+      setCluePrompt('');
+      setClueAnswer('');
+      setTermsAccepted(false);
+      lands.refreshMyLands();
+      const loc = pol.locationRef.current || pol.location;
+      if (loc) {
+        api
+          .listSculptures({ lat: loc.lat, lng: loc.lng, radiusMeters: 300, includeVoxels: false })
+          .then((nRes) => ar.hydrateNearbyList(nRes.sculptures || [], loc))
+          .catch(() => {});
+      }
+    },
+    [ar, brush, drafts, lands, pol]
+  );
+
+  const pairing = usePairing({
+    user,
+    voxels: brush.voxels,
+    voxelsRef: brush.voxelsRef,
+    rawOrientationRef: pol.rawOrientationRef,
+    yawOffsetRef: pol.yawOffsetRef,
+    showTemporaryHint,
+    onOpenLogin: () => setLoginOpen(true),
+    onDesktopCommand: handleDesktopCommand,
+    onDelegatedPublishExecuted: resetFormAfterPublish
+  });
+
+  const handlePublishSubmit = async (e) => {
     e.preventDefault();
     setPublishing(true);
     setPublishError('');
     try {
+      const location = pol.location;
       if (!location) {
         throw new Error('Waiting for GPS location fix before publishing.');
       }
       const previewDataUrl = captureSculptureSnapshot();
-      const polSnap = polRef.current.getSnapshot();
-      const refinedAnchor = polRef.current.getRefinedLocation(location) || location;
-      const currentTransform = artTransformRef.current;
+      const polSnap = pol.polRef.current.getSnapshot();
+      const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
+      const tr = brush.artTransformRef.current;
       const anchorOffset = {
-        dx: Number(currentTransform.offsetX || 0),
-        dy: Number(currentTransform.offsetY || 0),
-        dz: Number(currentTransform.offsetZ || 0),
-        yaw: THREE.MathUtils.degToRad(Number(currentTransform.rotYDeg || 0))
+        dx: Number(tr.offsetX || 0),
+        dy: Number(tr.offsetY || 0),
+        dz: Number(tr.offsetZ || 0),
+        yaw: THREE.MathUtils.degToRad(Number(tr.rotYDeg || 0))
       };
       const res = await api.publishSculpture({
         title,
         description,
         termsAccepted,
-        voxels,
+        voxels: brush.voxels,
         anchorOffset,
         previewDataUrl,
-        draftId: activeDraftId || undefined,
+        draftId: drafts.activeDraftId || undefined,
         location: refinedAnchor,
         proofOfLocation: polSnap,
         deviceProfile: {
           isMobile: true,
           screenWidth: window.innerWidth,
           screenHeight: window.innerHeight,
-          hasCamera: cameraReady
+          hasCamera: pol.cameraReady
         }
       });
 
-      // Persist captured non-reversible 3-angle binary ORB landmark descriptors for cross-platform relocalization
-      if (res?.sculpture?.parcelId && orbKeyframesRef.current.size > 0) {
-        const kfs = Array.from(orbKeyframesRef.current.values());
+      if (res?.sculpture?.parcelId && pol.orbKeyframesRef.current.size > 0) {
+        const kfs = Array.from(pol.orbKeyframesRef.current.values());
         const totalFeatures = kfs.reduce((sum, kf) => sum + (kf.features?.length || 0), 0);
         if (totalFeatures >= 12) {
           api
@@ -3790,18 +456,20 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
               allowInitialClaim: true
             })
             .catch(() => {});
-          orbKeyframesRef.current.clear();
-          setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0 }));
+          pol.resetOrbKeyframes();
         }
       }
 
-      // Initialize the sculpture's client-side E2EE chat board (server never sees K_room or clue answer)
       if (user?.id && res?.sculpture?.id) {
         try {
           const idObj = await getOrCreateDeviceIdentity(user.id);
           const roomKeyB64 = generateRoomKeyB64();
           saveLocalRoomKey(user.id, res.sculpture.id, 1, roomKeyB64);
-          const { roomKeyCommit } = await computeRoomPossessionProof(roomKeyB64, res.sculpture.id, 1);
+          const { roomKeyCommit } = await computeRoomPossessionProof(
+            roomKeyB64,
+            res.sculpture.id,
+            1
+          );
           const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
             roomKeyB64,
             sculptureId: res.sculpture.id,
@@ -3831,76 +499,53 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             deviceProfile: { isMobile: true }
           });
         } catch {
-          // Non-blocking: chat board can still be initialized later on first AR tap
+          // Non-blocking
         }
       }
 
-      const publishedDraftId = activeDraftIdRef.current;
-      clearLocalDraft();
-      setActiveDraftId('');
-      activeDraftIdRef.current = '';
-      lastCloudSyncSigRef.current = '';
-      if (publishedDraftId) {
-        setCloudDrafts((prev) => prev.filter((d) => d.id !== publishedDraftId));
-      }
-
-      setMintReceipt(res);
-      setVoxels([]);
-      setTitle('');
-      setDescription('');
-      setCluePrompt('');
-      setClueAnswer('');
-      setTermsAccepted(false);
-      setDraftStatusText('');
-      // Refresh nearby AR sculptures & owned lands
-      const nearbyRes = await api.listSculptures({
-        lat: location.lat,
-        lng: location.lng,
-        radiusMeters: 300,
-        includeVoxels: false
-      });
-      await hydrateNearbyList(nearbyRes.sculptures || [], location);
-      await refreshMyLands();
+      resetFormAfterPublish(res);
     } catch (err) {
       setPublishError(err.message || 'Publish failed');
     } finally {
       setPublishing(false);
     }
-  }
+  };
 
-  async function handleCopyAgentPublishPrompt() {
+  const handleCopyAgentPublishPrompt = async () => {
     setPublishing(true);
     setPublishError('');
     try {
+      const location = pol.location;
       if (!location) {
         throw new Error('Waiting for GPS location fix before creating agent publish request.');
       }
-      const activePairingCode = mcpPairingsState.activePairing?.code;
+      const activePairingCode = pairing.mcpPairingsState.activePairing?.code;
       if (!activePairingCode) {
         throw new Error('Connect a robust MCP pairing code first before delegating signing.');
       }
       const previewDataUrl = captureSculptureSnapshot();
-      const polSnap = polRef.current.getSnapshot();
-      const refinedAnchor = polRef.current.getRefinedLocation(location) || location;
+      const polSnap = pol.polRef.current.getSnapshot();
+      const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
       const out = await api.createPublishSignatureRequest({
         pairingCode: activePairingCode,
         title,
         description,
         termsAccepted,
-        voxels,
+        voxels: brush.voxels,
         previewDataUrl,
-        draftId: activeDraftId || undefined,
+        draftId: drafts.activeDraftId || undefined,
         location: refinedAnchor,
         proofOfLocation: polSnap,
         deviceProfile: {
           isMobile: true,
           screenWidth: window.innerWidth,
           screenHeight: window.innerHeight,
-          hasCamera: cameraReady
+          hasCamera: pol.cameraReady
         }
       });
+      const { copyToClipboard } = await import('../utils/clipboard.js');
       const copied = await copyToClipboard(out.promptText);
-      setAgentPublishPrompt({
+      pairing.setAgentPublishPrompt({
         requestId: out.request?.id,
         pairingCode: activePairingCode,
         promptText: out.promptText,
@@ -3911,1050 +556,219 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     } finally {
       setPublishing(false);
     }
-  }
+  };
 
-  async function handleCreateMcpPairing() {
-    if (!user) {
-      setLoginOpen(true);
-      return;
-    }
-    setMcpPairBusy(true);
-    setMcpPairNotice('');
-    try {
-      const res = await api.createMcpPairing({ apiOrigin: API_BASE || window.location.origin });
-      await refreshMcpPairings();
-      const copied = res.ownerPrompt ? await copyToClipboard(res.ownerPrompt) : false;
-      setMcpPairNotice(
-        `Generated ${res.pairing?.code}${copied ? ' & copied full Owner MCP Prompt!' : ''}`
+  const handleToggleQuickSculpt = useCallback(() => {
+    setQuickSculpt((prev) => {
+      const next = !prev;
+      saveBoolPreference(QUICK_SCULPT_KEY, next);
+      showTemporaryHint(
+        next ? '⚡ Quick Sculpt ON (simplified tools)' : 'Pro Studio HUD restored'
       );
-    } catch (err) {
-      setMcpPairNotice(err.message || 'Failed to generate pairing code');
-    } finally {
-      setMcpPairBusy(false);
-    }
-  }
-
-  async function handleDisconnectMcpPairing(code) {
-    setMcpPairBusy(true);
-    setMcpPairNotice('');
-    try {
-      await api.disconnectMcpPairing(code);
-      await refreshMcpPairings();
-      setMcpPairNotice('Disconnected MCP pairing — MCP service is now inactive.');
-    } catch (err) {
-      setMcpPairNotice(err.message || 'Disconnect failed');
-    } finally {
-      setMcpPairBusy(false);
-    }
-  }
-
-  async function handleMobileSignPending(reqItem) {
-    if (!reqItem?.id) return;
-    setPendingSigBusyId(reqItem.id);
-    try {
-      let extSig = '';
-      if (
-        user?.walletAddress &&
-        reqItem.ownerAddress &&
-        user.walletAddress.toLowerCase() !== reqItem.ownerAddress.toLowerCase() &&
-        window.ethereum
-      ) {
-        extSig = await window.ethereum.request({
-          method: 'personal_sign',
-          params: [reqItem.canonicalMessage, reqItem.ownerAddress]
-        });
-      }
-      await api.mobileSignRequest(reqItem.id, extSig ? { signature: extSig } : {});
-      await refreshPendingSignatures();
-      showTemporaryHint(`✅ Signed & executed ${reqItem.action.replace('_', ' ')} on ${reqItem.parcelId}`);
-    } catch (err) {
-      showTemporaryHint(err.message || 'Could not sign request');
-    } finally {
-      setPendingSigBusyId('');
-    }
-  }
-
-  async function handleMobileRejectPending(reqId) {
-    setPendingSigBusyId(reqId);
-    try {
-      await api.rejectSignatureRequest(reqId);
-      await refreshPendingSignatures();
-      showTemporaryHint('Signature request rejected.');
-    } catch (err) {
-      showTemporaryHint(err.message || 'Could not reject request');
-    } finally {
-      setPendingSigBusyId('');
-    }
-  }
-
-  function startCanvasModification(sc) {
-    if (!sc || !Array.isArray(sc.voxels) || sc.voxels.length === 0) return;
-    setEditingSculpture({
-      id: sc.id,
-      title: sc.title,
-      description: sc.description,
-      parcelId: sc.parcelId
+      return next;
     });
-    setVoxels(sc.voxels.map((v) => ({ ...v })));
-    setMapOpen(false);
-    setMapSelectedSculpture(null);
-    setMode('draw');
-    setTool('brush');
-    showTemporaryHint(`Editing "${sc.title}" on ${sc.parcelId} — draw/erase blocks then tap Save Edit.`);
-  }
-
-  async function handleSaveCanvasModification() {
-    if (!editingSculpture || savingCanvasEdit) return;
-    setSavingCanvasEdit(true);
-    try {
-      const previewDataUrl = captureSculptureSnapshot();
-      const res = await api.updateSculpture(editingSculpture.id, {
-        voxels,
-        previewDataUrl
-      });
-      if (res?.sculpture) {
-        setNearbySculptures((prev) =>
-          prev.map((item) => (item.id === res.sculpture.id ? { ...item, ...res.sculpture } : item))
-        );
-        setMapSculptures((prev) =>
-          prev.map((item) => (item.id === res.sculpture.id ? { ...item, ...res.sculpture } : item))
-        );
-      }
-      setEditingSculpture(null);
-      setVoxels([]);
-      showTemporaryHint(`Saved modification to "${editingSculpture.title}" on IPFS & Virtual Land.`);
-      await refreshMyLands();
-    } catch (err) {
-      showTemporaryHint(err.message || 'Could not save sculpture modification');
-    } finally {
-      setSavingCanvasEdit(false);
-    }
-  }
-
-  const hasOwnedLand = Boolean(
-    user?.id &&
-      (myLands.parcelCount > 0 ||
-        (myLands.parcels && myLands.parcels.length > 0) ||
-        mintReceipt?.sculpture?.parcelId)
-  );
-  const ownedLandCount = Math.max(
-    Number(myLands.parcelCount || 0),
-    myLands.parcels?.length || 0,
-    mintReceipt?.sculpture?.parcelId ? 1 : 0
-  );
-
-  const policy = config?.policy;
+  }, [showTemporaryHint]);
 
   return (
     <div className="mobile-fullscreen">
-      <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
-      {cameraReady && !sceneScan.optimal && (
-        <div className="mapping-grayscale-grid" aria-hidden="true">
-          {unmappedGrid.map((isUnmapped, i) => (
-            <div
-              key={i}
-              className={`mapping-grayscale-cell ${isUnmapped ? 'unmapped' : 'mapped'}`}
-            />
-          ))}
-        </div>
-      )}
-      <div
-        ref={canvasHostRef}
-        className="webgl-overlay"
-        onPointerDown={handleCanvasPointerDown}
-        onPointerMove={handleCanvasPointerMove}
-        onPointerUp={handleCanvasPointerUp}
-        onPointerCancel={handleCanvasPointerCancel}
+      <ARViewportCanvas
+        videoRef={pol.videoRef}
+        occlusionCanvasRef={occlusionCanvasRef}
+        canvasHostRef={canvasHostRef}
+        rendererRef={rendererRef}
+        sceneRef={sceneRef}
+        cameraRef={cameraRef}
+        draftGroupRef={draftGroupRef}
+        nearbyGroupRef={nearbyGroupRef}
+        ghostMeshRef={ghostMeshRef}
+        shadowPlaneRef={shadowPlaneRef}
+        gridHelperRef={gridHelperRef}
+        surfaceMarkerRef={surfaceMarkerRef}
+        transformBoxRef={transformBoxRef}
+        originBeaconMatRef={originBeaconMatRef}
+        dirLightRef={dirLightRef}
+        hemiLightRef={hemiLightRef}
+        envUpdaterRef={envUpdaterRef}
+        draftUnitGeoRef={brush.draftUnitGeoRef}
+        draftMatCacheRef={brush.draftMatCacheRef}
+        draftMeshMapRef={brush.draftMeshMapRef}
+        polRef={pol.polRef}
+        orbTrackerRef={pol.orbTrackerRef}
+        orbKeyframesRef={pol.orbKeyframesRef}
+        occlusionRef={brush.occlusionRef}
+        originStatusRef={brush.originStatusRef}
+        setOriginStatus={brush.setOriginStatus}
+        occlusionEnabledRef={brush.occlusionEnabledRef}
+        rawOrientationRef={pol.rawOrientationRef}
+        yawOffsetRef={pol.yawOffsetRef}
+        fallbackEulerRef={pol.fallbackEulerRef}
+        wsRef={pairing.wsRef}
+        locationRef={pol.locationRef}
+        arTargetedIdRef={ar.arTargetedIdRef}
+        setArTargetedSculpture={ar.setArTargetedSculpture}
+        mode={brush.mode}
+        modeRef={brush.modeRef}
+        toolRef={brush.toolRef}
+        colorRef={brush.colorRef}
+        voxelsRef={brush.voxelsRef}
+        paintingRef={brush.paintingRef}
+        lastPaintPosRef={brush.lastPaintPosRef}
+        lastStackAtRef={brush.lastStackAtRef}
+        surfaceAnchorRef={brush.surfaceAnchorRef}
+        lastScanUiRef={pol.lastScanUiRef}
+        lastUnmappedMaskRef={pol.lastUnmappedMaskRef}
+        mappingCompletedNoticeShownRef={pol.mappingCompletedNoticeShownRef}
+        setSceneScan={pol.setSceneScan}
+        setUnmappedGrid={pol.setUnmappedGrid}
+        setOrbStatus={pol.setOrbStatus}
+        showTemporaryHint={showTemporaryHint}
+        cameraReady={pol.cameraReady}
+        sceneScanOptimal={pol.sceneScan.optimal}
+        unmappedGrid={pol.unmappedGrid}
+        computeTargetVoxel={brush.computeTargetVoxel}
+        applyVoxelBatch={brush.applyVoxelBatch}
+        applyVoxelAction={brush.applyVoxelAction}
+        eraseTargetVoxel={brush.eraseTargetVoxel}
+        rebuildDraftMesh={brush.rebuildDraftMesh}
+        onCanvasPointerDown={brush.handleCanvasPointerDown}
+        onCanvasPointerMove={brush.handleCanvasPointerMove}
+        onCanvasPointerUp={brush.handleCanvasPointerUp}
+        onCanvasPointerCancel={brush.handleCanvasPointerCancel}
       />
-      <canvas ref={occlusionCanvasRef} className="occlusion-overlay" />
-
-      {mode === 'draw' && <div className="reticle" />}
 
       <div className="hud-layer">
-        {/* Minimal "i" info button ALWAYS present */}
-        <button
-          className="info-fab"
-          onClick={() => setInfoOpen(true)}
-          aria-label="Info and Terms"
-          title="Info & Terms"
-        >
-          <XeroIcon emoji="ℹ️" size={24} label="Info" />
-        </button>
+        <StudioHudTopBar
+          user={user}
+          mode={brush.mode}
+          dockOpen={dockOpen}
+          location={pol.location}
+          pairedCode={pairing.pairedCode}
+          voxels={brush.voxels}
+          quickSculpt={quickSculpt}
+          onToggleQuickSculpt={handleToggleQuickSculpt}
+          onOpenTutorial={() => setTutorialOpen(true)}
+          onOpenInfo={() => setInfoOpen(true)}
+          hasOwnedLand={lands.hasOwnedLand}
+          ownedLandCount={lands.ownedLandCount}
+          onOpenLandManage={() => {
+            lands.setLandManageParcelId('');
+            lands.setLandManageOpen(true);
+          }}
+          editingSculpture={lands.editingSculpture}
+          savingCanvasEdit={lands.savingCanvasEdit}
+          onSaveCanvasModification={lands.handleSaveCanvasModification}
+          onCancelCanvasModification={() => {
+            lands.setEditingSculpture(null);
+            brush.setVoxels([]);
+          }}
+          surfaceAnchor={brush.surfaceAnchor}
+          onToggleSurfaceLock={() =>
+            brush.setSurfaceAnchor((prev) => (prev ? { ...prev, locked: !prev.locked } : prev))
+          }
+          brushUsable={brush.toolAvailability.brush.usable}
+          brushUnavailableReason={brush.toolAvailability.brush.reason}
+          onSeedVoxelAtAnchor={brush.seedVoxelAtAnchor}
+          onClearSurfaceAnchor={() => brush.setSurfaceAnchor(null)}
+          onSelectSurfaceCenter={() => brush.selectSurfaceAtScreenPoint()}
+          needsGyroTap={pol.needsGyroTap}
+          gyroFallbackActive={pol.gyroFallbackActive}
+          cameraReady={pol.cameraReady}
+          onEnableIosGyro={pol.enableIosGyro}
+          onRetryCameraAccess={pol.retryCameraAccess}
+          sensorBanner={pol.sensorBanner}
+          arTargetedSculpture={ar.arTargetedSculpture}
+          arPinPreview={chat.arPinPreview}
+          passkeyBusy={pol.passkeyBusy}
+          onEnrollPasskeyAndRetryPin={chat.enrollPasskeyAndRetryPinUnlock}
+          onOpenCameraSelectedChat={chat.openCameraSelectedChat}
+          arSelectHint={arSelectHint}
+          originStatus={brush.originStatus}
+          sceneScan={pol.sceneScan}
+          onOpenLoginFromHint={() => {
+            setArSelectHint('');
+            setLoginOpen(true);
+          }}
+          pendingSignatures={pairing.pendingSignatures}
+          pendingSigBusyId={pairing.pendingSigBusyId}
+          onMobileSignPending={pairing.handleMobileSignPending}
+          onMobileRejectPending={pairing.handleMobileRejectPending}
+          mapOpen={ar.mapOpen}
+          nearbyCount={ar.nearbySculptures.length}
+          onOpenAreaMap={ar.openAreaMap}
+        />
 
-        {/* Land Management button appears directly on the main canvas once user claims their first land */}
-        {hasOwnedLand && (
-          <button
-            type="button"
-            className="land-manage-fab hud-interactive"
-            onClick={() => {
-              setLandManageParcelId('');
-              setLandManageOpen(true);
-            }}
-            aria-label="Land Management"
-            title="Land Management (Contributors, 3D Models & Agent Controls)"
-          >
-            <XeroIcon emoji="🗺️" size={18} label="Land" />
-            <span>Land ({ownedLandCount})</span>
-          </button>
-        )}
+        <ToolCarouselBar
+          quickSculpt={quickSculpt}
+          activeKeyTool={brush.activeKeyTool}
+          toolAvailability={brush.toolAvailability}
+          canTouch={canTouch}
+          swipeDragPx={brush.swipeDragPx}
+          isDraggingKey={brush.isDraggingKey}
+          painting={brush.painting}
+          mode={brush.mode}
+          dockOpen={dockOpen}
+          voxelsLength={brush.voxels.length}
+          artTransform={brush.artTransform}
+          onSetArtTransform={brush.setArtTransform}
+          onToggleTransformLock={brush.toggleTransformLock}
+          onStepKeyTool={brush.stepKeyTool}
+          onKeyPointerDown={brush.handleKeyPointerDown}
+          onKeyPointerMove={brush.handleKeyPointerMove}
+          onKeyPointerUp={brush.handleKeyPointerUp}
+          onKeyPointerCancel={brush.handleKeyPointerCancel}
+        />
 
-        {editingSculpture && (
-          <div
-            className="mobile-hud-banner hud-interactive under-pol"
-            style={{
-              borderColor: 'rgba(0, 245, 212, 0.72)',
-              background: 'rgba(10, 26, 30, 0.92)',
-              zIndex: 28
-            }}
-          >
-            <span className="mobile-hud-banner-text">
-              <XeroIcon emoji="🖌️" size={14} />
-              <span>
-                Editing {editingSculpture.title} ({voxels.length} blocks)
-              </span>
-            </span>
-            <span style={{ display: 'inline-flex', gap: 6 }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ padding: '4px 10px', fontSize: 11 }}
-                disabled={savingCanvasEdit}
-                onClick={handleSaveCanvasModification}
-              >
-                {savingCanvasEdit ? 'Saving...' : 'Save Edit'}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: '4px 8px', fontSize: 11 }}
-                onClick={() => {
-                  setEditingSculpture(null);
-                  setVoxels([]);
-                }}
-              >
-                Cancel
-              </button>
-            </span>
-          </div>
-        )}
+        <SceneCoverageWidget
+          sceneScan={pol.sceneScan}
+          orbStatus={pol.orbStatus}
+          scanBoxCollapsed={pol.scanBoxCollapsed}
+          onToggleCollapse={() => pol.setScanBoxCollapsed((v) => !v)}
+          dockOpen={dockOpen}
+          mode={brush.mode}
+          onRefreshOrbRescan={ar.handleRefreshOrbRescan}
+        />
 
-        {/* Minimal Proof-of-Location / Mode indicator when dock is expanded */}
-        {dockOpen && (
-          <div className="pol-pill">
-            <XeroIcon emoji={location ? '📍' : '⏳'} size={14} />
-            <span>
-              {location
-                ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
-                : 'Acquiring GPS'}
-            </span>
-            {location?.altitude != null && (
-              <>
-                <span>|</span>
-                <XeroIcon emoji="⛰️" size={14} />
-                <span>{Math.round(location.altitude)}m</span>
-              </>
-            )}
-            <span>|</span>
-            <XeroIcon emoji="🧱" size={14} />
-            <span>{voxels.length}</span>
-            {pairedCode && (
-              <>
-                <span>|</span>
-                <XeroIcon emoji="🔗" size={14} />
-                <span>{pairedCode}</span>
-              </>
-            )}
-          </div>
-        )}
-
-        {mode === 'draw' && (
-          <div className={`surface-pill hud-interactive ${dockOpen ? 'under-pol' : ''}`}>
-            {surfaceAnchor ? (
-              <>
-                <XeroIcon emoji="📌" size={13} />
-                <span className="surface-pill-label">
-                  {surfaceAnchor.label} · {surfaceAnchor.depthM.toFixed(1)}m
-                </span>
-                <button
-                  type="button"
-                  className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
-                  onClick={() =>
-                    setSurfaceAnchor((prev) => (prev ? { ...prev, locked: !prev.locked } : prev))
-                  }
-                  title="Toggle start surface plane lock vs Free 3D air drawing"
-                >
-                  <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
-                  <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`surface-pill-btn ${!toolAvailability.brush.usable ? 'is-unavailable' : ''}`}
-                  aria-disabled={!toolAvailability.brush.usable || undefined}
-                  onClick={seedVoxelAtAnchor}
-                  title={
-                    toolAvailability.brush.usable
-                      ? 'Place first block flush on the selected surface'
-                      : toolAvailability.brush.reason
-                  }
-                >
-                  + Seed
-                </button>
-                <button
-                  type="button"
-                  className="surface-pill-btn clear"
-                  onClick={() => setSurfaceAnchor(null)}
-                  aria-label="Clear start surface"
-                  title="Clear start surface"
-                >
-                  <XeroIcon emoji="✖️" size={11} />
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="surface-pill-prompt"
-                onClick={() => selectSurfaceAtScreenPoint()}
-              >
-                <XeroIcon emoji="👆" size={13} />
-                <span>Tap scene to set start surface</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {needsGyroTap && (
-          <button
-            className="btn btn-primary"
-            style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              zIndex: 40
-            }}
-            onClick={enableIosGyro}
-          >
-            <XeroIcon emoji="🧭" size={18} /> Enable Gyroscope 3D Brush
-          </button>
-        )}
-
-        {sensorBanner && dockOpen && (
-          <div
-            className={`mobile-hud-banner hud-interactive is-error ${mode === 'draw' ? 'under-pol' : ''}`}
-            role="status"
-            aria-live="polite"
-            style={{ zIndex: 26 }}
-          >
-            <span className="mobile-hud-banner-text">
-              <XeroIcon emoji="⚠️" size={14} />
-              <span>{sensorBanner}</span>
-            </span>
-          </div>
-        )}
-
-        {mode === 'preview' && arTargetedSculpture && (() => {
-          const targetSc = arTargetedSculpture.sculpture;
-          const activePin = arPinPreview?.sculptureId === targetSc.id ? arPinPreview : null;
-          return (
-            <div
-              className="ar-select-card hud-interactive"
-              role="region"
-              aria-label={`Selected sculpture ${targetSc.title}`}
-              onClick={() =>
-                openCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin)
-              }
-            >
-              <div className="ar-select-card-head">
-                <div style={{ minWidth: 0 }}>
-                  <div className="ar-select-title">{targetSc.title}</div>
-                  <div className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                    {Math.round(arTargetedSculpture.distanceM)}m away · {targetSc.parcelId}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  style={{ fontSize: 12, padding: '6px 10px', flexShrink: 0 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
-                  }}
-                >
-                  <XeroIcon emoji="💬" size={14} /> Open Chatbox
-                </button>
-              </div>
-
-              {targetSc.description && (
-                <div className="ar-select-desc">{targetSc.description}</div>
-              )}
-
-              {activePin?.status === 'loading' && (
-                <div className="ar-select-pin locked">
-                  <XeroIcon emoji="⏳" size={12} /> Unlocking parcel-pinned IPFS messages...
-                </div>
-              )}
-
-              {activePin?.status === 'unlocked' && activePin.pins.length > 0 && (
-                <div className="ar-select-pin unlocked">
-                  <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--accent-gold)', marginBottom: 2 }}>
-                    <XeroIcon emoji="📌" size={12} /> Pinned IPFS Message ({activePin.pins.length})
-                  </div>
-                  {activePin.pins.slice(0, 2).map((p) => (
-                    <div key={p.id} style={{ fontSize: 12, lineHeight: 1.35 }}>
-                      &ldquo;{p.text}&rdquo;
-                    </div>
-                  ))}
-                  {activePin.meta?.ipfsCid && (
-                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--muted)', marginTop: 2 }}>
-                      ipfs://{activePin.meta.ipfsCid.slice(0, 14)}... · v{activePin.batchSeq}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {activePin?.status === 'locked' && (
-                <div className="ar-select-pin locked">
-                  <XeroIcon emoji="🔒" size={12} /> {activePin.error}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {arSelectHint && (
-          <div
-            className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''} ${
-              originStatus.originBlocked
-                ? 'is-error'
-                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
-                ? 'is-success'
-                : ''
-            }`}
-            role="status"
-            aria-live="polite"
-          >
-            <span className="mobile-hud-banner-text">
-              <XeroIcon
-                emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
-                size={14}
-              />
-              <span>{arSelectHint}</span>
-            </span>
-            {!user && arSelectHint.includes('Sign in') && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ padding: '4px 10px', fontSize: 11 }}
-                onClick={() => {
-                  setArSelectHint('');
-                  setLoginOpen(true);
-                }}
-              >
-                Sign In
-              </button>
-            )}
-          </div>
-        )}
-
-        {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
-          <div
-            className={`mobile-hud-banner origin-blocked-banner is-error ${dockOpen ? 'under-pol' : ''}`}
-            role="status"
-            aria-live="polite"
-          >
-            <span className="mobile-hud-banner-text">
-              <XeroIcon emoji="⚠️" size={14} />
-              <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
-            </span>
-          </div>
-        )}
-
-        {pendingSignatures.length > 0 && !arSelectHint && (
-          <div
-            className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''}`}
-            role="status"
-            aria-live="polite"
-            style={{
-              borderColor: 'rgba(255, 209, 102, 0.72)',
-              background: 'rgba(32, 24, 10, 0.94)',
-              zIndex: 29
-            }}
-          >
-            {(() => {
-              const reqItem = pendingSignatures[0];
-              const busy = pendingSigBusyId === reqItem.id;
-              return (
-                <>
-                  <span className="mobile-hud-banner-text">
-                    <XeroIcon emoji="✍️" size={14} />
-                    <span>
-                      Agent <strong>{reqItem.agentName || 'MCP Agent'}</strong> requests signature to{' '}
-                      <strong>{reqItem.action.replace(/_/g, ' ')}</strong> on{' '}
-                      <span className="mono">{reqItem.parcelId}</span>
-                    </span>
-                  </span>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ padding: '4px 10px', fontSize: 11 }}
-                      disabled={busy}
-                      onClick={() => handleMobileSignPending(reqItem)}
-                    >
-                      {busy ? 'Signing...' : '✍️ Sign & Approve'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      style={{ padding: '4px 9px', fontSize: 11 }}
-                      disabled={busy}
-                      onClick={() => handleMobileRejectPending(reqItem.id)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        )}
-
-        {/* Bottom-Left Public Area Map Button */}
-        <button
-          type="button"
-          className={`floating-map-btn hud-interactive ${mapOpen ? 'active' : ''}`}
-          onClick={openAreaMap}
-          aria-label="Open Public Area Map"
-          title="Public Area Sculpture Map & Directions"
-        >
-          <XeroIcon emoji="🗺️" size={22} />
-          {nearbySculptures.length > 0 && (
-            <span className="floating-map-badge">{nearbySculptures.length}</span>
-          )}
-        </button>
-
-        {/* Centered Fluid Swipe Tool Carousel */}
-        {(() => {
-          const idx = KEY_TOOLS.findIndex((t) => t.id === activeKeyTool);
-          const safeIdx = idx >= 0 ? idx : 0;
-          const activeItem = KEY_TOOLS[safeIdx];
-          const slots = [-2, -1, 0, 1, 2];
-          const activeAvail = toolAvailability[activeItem.id] || { usable: true, reason: '' };
-          const activeUnavailable = !activeAvail.usable;
-          return (
-            <div className="key-carousel hud-interactive">
-              <div className={`key-tool-caption ${activeUnavailable ? 'is-unavailable' : ''}`}>
-                <XeroIcon emoji={activeUnavailable ? '🔒' : '🔑'} size={12} />
-                <span>{activeItem.label}</span>
-                <span className="key-tool-hint">
-                  {activeUnavailable
-                    ? '· Tap for requirement'
-                    : canTouch
-                    ? '· Swipe'
-                    : '· Arrows / Swipe'}
-                </span>
-              </div>
-              <div className="key-carousel-row">
-                {!canTouch && (
-                  <button
-                    type="button"
-                    className="key-arrow-btn"
-                    onClick={() => stepKeyTool(-1)}
-                    aria-label="Previous tool"
-                    title="Previous tool"
-                  >
-                    <XeroIcon emoji="◀️" size={13} />
-                  </button>
-                )}
-
-                <div
-                  className={`key-carousel-track ${isDraggingKey ? 'dragging' : ''}`}
-                  onPointerDown={handleKeyPointerDown}
-                  onPointerMove={handleKeyPointerMove}
-                  onPointerUp={handleKeyPointerUp}
-                  onPointerCancel={handleKeyPointerCancel}
-                  onContextMenu={(e) => e.preventDefault()}
-                  role="group"
-                  aria-label="Fluid bottom tool switcher (swipe left or right)"
-                >
-                  {slots.map((rel) => {
-                    const toolIdx =
-                      (((safeIdx + rel) % KEY_TOOLS.length) + KEY_TOOLS.length) % KEY_TOOLS.length;
-                    const item = KEY_TOOLS[toolIdx];
-                    const itemAvail = toolAvailability[item.id] || { usable: true, reason: '' };
-                    const isUnavailable = !itemAvail.usable;
-                    const offsetPx = rel * KEY_CAROUSEL_SLOT_PX + swipeDragPx;
-                    const distNorm = Math.min(2, Math.abs(offsetPx) / KEY_CAROUSEL_SLOT_PX);
-                    const scale = Math.max(0.46, 1 - distNorm * 0.34);
-                    const opacity = Math.max(0.16, 1 - distNorm * 0.44);
-                    const isCenterSlot = rel === 0;
-                    return (
-                      <button
-                        key={`${rel}-${item.id}`}
-                        type="button"
-                        data-tool-rel={rel}
-                        aria-disabled={isUnavailable || undefined}
-                        className={`key-slot-btn ${isCenterSlot ? `is-center tool-${item.id} ${painting ? 'painting' : ''}` : 'is-neighbor'} ${isUnavailable ? 'is-unavailable' : ''}`}
-                        style={{
-                          transform: `translate(-50%, -50%) translateX(${offsetPx}px) scale(${scale})`,
-                          opacity: isUnavailable ? opacity * 0.44 : opacity,
-                          zIndex: isCenterSlot ? 4 : 3 - Math.abs(rel),
-                          transition: isDraggingKey
-                            ? 'none'
-                            : 'transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease'
-                        }}
-                        aria-label={
-                          isCenterSlot
-                            ? `${item.label} tool button (${isUnavailable ? itemAvail.reason : item.hint})`
-                            : `Switch to ${item.label}${isUnavailable ? ` — ${itemAvail.reason}` : ''}`
-                        }
-                        title={isUnavailable ? itemAvail.reason : item.hint}
-                      >
-                        <XeroIcon emoji={item.emoji} size={28} />
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {!canTouch && (
-                  <button
-                    type="button"
-                    className="key-arrow-btn"
-                    onClick={() => stepKeyTool(1)}
-                    aria-label="Next tool"
-                    title="Next tool"
-                  >
-                    <XeroIcon emoji="▶️" size={13} />
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* Scale & Transform Control Bar when art is locked */}
-        {mode === 'transform' && (
-          <div
-            className={`transform-bar hud-interactive ${dockOpen ? 'with-dock' : ''}`}
-            role="region"
-            aria-label="Scale and transform art piece"
-          >
-            <div className="transform-bar-top">
-              <span className="transform-bar-title">
-                <XeroIcon emoji="📐" size={14} />
-                <span>Lock &amp; Transform ({voxels.length})</span>
-              </span>
-              <div className="transform-nudge-row">
-                <button
-                  type="button"
-                  className="transform-chip-btn"
-                  onClick={() =>
-                    setArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY - 0.1).toFixed(2)) }))
-                  }
-                  title="Lower art (-10cm)"
-                >
-                  -Y
-                </button>
-                <button
-                  type="button"
-                  className="transform-chip-btn"
-                  onClick={() =>
-                    setArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY + 0.1).toFixed(2)) }))
-                  }
-                  title="Raise art (+10cm)"
-                >
-                  +Y
-                </button>
-                <button
-                  type="button"
-                  className="transform-chip-btn"
-                  onClick={() =>
-                    setArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ + 0.15).toFixed(2)) }))
-                  }
-                  title="Bring closer"
-                >
-                  Near
-                </button>
-                <button
-                  type="button"
-                  className="transform-chip-btn"
-                  onClick={() =>
-                    setArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ - 0.15).toFixed(2)) }))
-                  }
-                  title="Push further"
-                >
-                  Far
-                </button>
-                <button
-                  type="button"
-                  className="transform-chip-btn"
-                  onClick={() =>
-                    setArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 })
-                  }
-                  title="Reset transform"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            <div className="transform-sliders">
-              <label className="transform-slider-field">
-                <span>
-                  <XeroIcon emoji="🔍" size={12} /> {artTransform.scale.toFixed(2)}x
-                </span>
-                <input
-                  type="range"
-                  min={0.25}
-                  max={2}
-                  step={0.05}
-                  value={artTransform.scale}
-                  onChange={(e) =>
-                    setArtTransform((p) => ({ ...p, scale: Number(e.target.value) }))
-                  }
-                  aria-label="Scale sculpture"
-                />
-              </label>
-
-              <label className="transform-slider-field">
-                <span>
-                  <XeroIcon emoji="🔄" size={12} /> {artTransform.rotYDeg}°
-                </span>
-                <input
-                  type="range"
-                  min={-180}
-                  max={180}
-                  step={2}
-                  value={artTransform.rotYDeg}
-                  onChange={(e) =>
-                    setArtTransform((p) => ({ ...p, rotYDeg: Number(e.target.value) }))
-                  }
-                  aria-label="Rotate sculpture"
-                />
-              </label>
-
-              <button
-                type="button"
-                className="transform-done-btn"
-                onClick={toggleTransformLock}
-                title="Confirm transform & return to drawing mode"
-              >
-                <XeroIcon emoji="✅" size={14} />
-                <span>Draw</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Bottom-Right Scene Analysis Coverage Window */}
-        <div
-          className={`scene-scan-box hud-interactive ${sceneScan.optimal ? 'optimal' : 'scanning'} ${scanBoxCollapsed ? 'collapsed' : ''} ${dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''}`}
-          role="region"
-          aria-label="Scene analysis coverage window"
-        >
-          <div className="scene-scan-header">
-            <div className="scene-scan-title">
-              <XeroIcon emoji={sceneScan.optimal ? '✅' : '📡'} size={12} />
-              <span className="mono">{sceneScan.coveragePct}%</span>
-              <span className="scene-scan-tag">
-                {sceneScan.optimal ? 'LOCKED' : `${sceneScan.scannedCount}/${sceneScan.targetCount}`}
-              </span>
-            </div>
-            <button
-              type="button"
-              className="scene-scan-collapse"
-              onClick={() => setScanBoxCollapsed((v) => !v)}
-              aria-label={scanBoxCollapsed ? 'Expand scene coverage window' : 'Collapse scene coverage window'}
-              title={scanBoxCollapsed ? 'Show scene scan window' : 'Minimize'}
-            >
-              <XeroIcon emoji={scanBoxCollapsed ? '🔍' : '➖'} size={11} />
-            </button>
-          </div>
-
-          {!scanBoxCollapsed && (
-            <>
-              <div className="scene-scan-window" aria-hidden="true">
-                <div className="scene-scan-grid">
-                  {sceneScan.sectors.map((lit, i) => (
-                    <span
-                      key={i}
-                      className={`scene-scan-cell ${lit ? 'scanned' : ''}`}
-                    />
-                  ))}
-                </div>
-                <span
-                  className="scene-scan-dot"
-                  style={{
-                    left: `${sceneScan.cursorX * 100}%`,
-                    top: `${sceneScan.cursorY * 100}%`
-                  }}
-                />
-              </div>
-
-              <div className="scene-scan-bar">
-                <div
-                  className="scene-scan-bar-fill"
-                  style={{ width: `${sceneScan.coveragePct}%` }}
-                />
-              </div>
-
-              <div className="scene-scan-hint">{sceneScan.hint}</div>
-              <div className="scene-scan-precision mono">
-                ±{sceneScan.precisionMeters.toFixed(2)}m · {orbStatus.engine} ({orbStatus.keyframes}/3)
-                {orbStatus.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Floating Toggle for Ultra-Minimal vs Active Dock */}
-        <button
-          className="floating-tools-toggle"
-          onClick={() => setDockOpen((v) => !v)}
-          aria-label="Toggle tools"
-          title="Tools"
-        >
-          <XeroIcon emoji={dockOpen ? '➖' : '🎨'} size={22} />
-        </button>
-
-        {dockOpen && paletteOpen && mode === 'draw' && (
-          <div className="palette-strip hud-interactive">
-            {GRAFFITI_PALETTE.map((hex) => (
-              <button
-                key={hex}
-                className={`swatch ${color === hex ? 'active' : ''}`}
-                style={{ backgroundColor: hex }}
-                onClick={() => setColor(hex)}
-                aria-label={`Color ${hex}`}
-              />
-            ))}
-            <button
-              className="dock-btn"
-              style={{ width: 28, height: 28 }}
-              onClick={() =>
-                setMaterial((m) => (m === 'matte' ? 'neon' : m === 'neon' ? 'glass' : 'matte'))
-              }
-              title={`Material: ${material}`}
-            >
-              <XeroIcon emoji={material === 'neon' ? '✨' : material === 'glass' ? '🧊' : '🎨'} size={15} />
-            </button>
-            <button
-              className="dock-btn"
-              style={{ width: 28, height: 28 }}
-              onClick={() => setReachMeters((r) => (r >= 2.8 ? 1.2 : Number((r + 0.6).toFixed(1))))}
-              title={`Reach ${reachMeters}m`}
-            >
-              <XeroIcon emoji="🎯" size={15} />
-            </button>
-          </div>
-        )}
-
-        {dockOpen && (
-          <div className="floating-dock hud-interactive">
-            <button
-              className={`dock-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''} ${!toolAvailability.brush.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.brush.usable || undefined}
-              onClick={() => {
-                if (!ensureToolUsable('brush')) return;
-                if (modeRef.current === 'transform') {
-                  commitTransformAndExit('draw', 'brush');
-                } else {
-                  setMode('draw');
-                  setTool('brush');
-                }
-              }}
-              title={toolAvailability.brush.usable ? '3D Brush' : toolAvailability.brush.reason}
-            >
-              <XeroIcon emoji="🖌️" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''} ${!toolAvailability.stack.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.stack.usable || undefined}
-              {...getDockHoldHandlers('stack')}
-              onClick={() => {
-                if (!ensureToolUsable('stack')) return;
-                if (modeRef.current === 'transform') {
-                  commitTransformAndExit('draw', 'stack');
-                } else {
-                  setMode('draw');
-                  setTool('stack');
-                }
-              }}
-              aria-label="Stack (Hold to Draw)"
-              title={
-                toolAvailability.stack.usable
-                  ? 'Stack Voxels — Tap to select, hold down to continuously stack & draw'
-                  : toolAvailability.stack.reason
-              }
-            >
-              <XeroIcon emoji="🧱" size={19} />
-            </button>
-            <button
-              className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''} ${!toolAvailability.erase.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.erase.usable || undefined}
-              {...getDockHoldHandlers('erase')}
-              onClick={() => {
-                if (!ensureToolUsable('erase')) return;
-                if (modeRef.current === 'transform') {
-                  commitTransformAndExit('draw', 'erase');
-                } else {
-                  setMode('draw');
-                  setTool('erase');
-                }
-              }}
-              aria-label="Eraser (Hold to Erase)"
-              title={
-                toolAvailability.erase.usable
-                  ? 'Eraser — Tap to select, hold down to continuously erase'
-                  : toolAvailability.erase.reason
-              }
-            >
-              <XeroIcon emoji="🧽" size={19} />
-            </button>
-            <button
-              className={`dock-btn pink ${!toolAvailability.clear.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.clear.usable || undefined}
-              onClick={clearCanvas}
-              aria-label="Trash Bin — Erase Current Canvas"
-              title={
-                toolAvailability.clear.usable
-                  ? 'Trash Bin — Erase Current Canvas'
-                  : toolAvailability.clear.reason
-              }
-            >
-              <XeroIcon emoji="🗑️" size={19} />
-            </button>
-            <button
-              className={`dock-btn check-btn ${mode === 'transform' ? 'active' : ''} ${!toolAvailability.transform.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.transform.usable || undefined}
-              onClick={toggleTransformLock}
-              aria-label={
-                mode === 'transform'
-                  ? 'Confirm Transform & Back to Draw'
-                  : 'Lock Art to Scale & Transform'
-              }
-              title={
-                !toolAvailability.transform.usable
-                  ? toolAvailability.transform.reason
-                  : mode === 'transform'
-                  ? 'Check — Return to Drawing Mode'
-                  : 'Check — Lock Art, Scale & Transform'
-              }
-            >
-              <XeroIcon emoji="✅" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${paletteOpen ? 'active' : ''} ${!toolAvailability.palette.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.palette.usable || undefined}
-              onClick={() => {
-                if (!ensureToolUsable('palette')) return;
-                setPaletteOpen((p) => !p);
-              }}
-              title={
-                toolAvailability.palette.usable
-                  ? 'Colors & Finish'
-                  : toolAvailability.palette.reason
-              }
-            >
-              <XeroIcon emoji="🎨" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${!toolAvailability.undo.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.undo.usable || undefined}
-              onClick={handleUndo}
-              title={
-                toolAvailability.undo.usable
-                  ? 'Undo / Restore Clear'
-                  : toolAvailability.undo.reason
-              }
-            >
-              <XeroIcon emoji="↩️" size={18} />
-            </button>
-            <button className="dock-btn" onClick={recenterAim} title="Recenter Aim">
-              <XeroIcon emoji="🧭" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${occlusionEnabled ? 'active' : ''} ${!toolAvailability.occlusion.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.occlusion.usable || undefined}
-              onClick={() => {
-                if (!ensureToolUsable('occlusion')) return;
-                setOcclusionEnabled((v) => !v);
-              }}
-              title={
-                toolAvailability.occlusion.usable
-                  ? 'Toggle Foreground Occlusion'
-                  : toolAvailability.occlusion.reason
-              }
-              aria-label="Toggle Foreground Occlusion"
-            >
-              <XeroIcon emoji="🪞" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${mode === 'preview' ? 'active' : ''} ${!toolAvailability.preview.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.preview.usable || undefined}
-              onClick={() => {
-                if (!ensureToolUsable('preview')) return;
-                if (modeRef.current === 'transform') {
-                  commitTransformAndExit('preview');
-                } else {
-                  setPaletteOpen(false);
-                  setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
-                }
-              }}
-              title={
-                toolAvailability.preview.usable
-                  ? 'AR Preview Nearby Sculptures'
-                  : toolAvailability.preview.reason
-              }
-            >
-              <XeroIcon emoji="👁️" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${draftsOpen || activeDraftId ? 'active' : ''}`}
-              onClick={openDraftsSheet}
-              title={draftStatusText ? `Saved Drafts · ${draftStatusText}` : 'Saved Drafts'}
-              aria-label="Saved Drafts"
-            >
-              <XeroIcon emoji="💾" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${pairedCode ? 'active' : ''}`}
-              onClick={() => setPairOpen(true)}
-              title="Pair Desktop"
-            >
-              <XeroIcon emoji="🔗" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${agentOpen || agentSession?.code ? 'active' : ''} ${!toolAvailability.agent.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.agent.usable || undefined}
-              onClick={openAgentHandoff}
-              title={
-                toolAvailability.agent.usable
-                  ? 'Copy Agent Code'
-                  : toolAvailability.agent.reason
-              }
-              aria-label="Copy Agent Code"
-            >
-              <XeroIcon emoji="📋" size={19} />
-            </button>
-            <button
-              className={`dock-btn ${mode === 'publish' ? 'active' : ''} ${!toolAvailability.publish.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.publish.usable || undefined}
-              onClick={openPublishSheet}
-              title={
-                toolAvailability.publish.usable
-                  ? 'Publish & Mint'
-                  : toolAvailability.publish.reason
-              }
-            >
-              <XeroIcon emoji="🚀" size={19} />
-            </button>
-          </div>
-        )}
+        <StudioDockDrawer
+          quickSculpt={quickSculpt}
+          dockOpen={dockOpen}
+          onToggleDock={() => setDockOpen((v) => !v)}
+          paletteOpen={brush.paletteOpen}
+          onTogglePalette={() => brush.setPaletteOpen((p) => !p)}
+          mode={brush.mode}
+          modeRef={brush.modeRef}
+          tool={brush.tool}
+          setMode={brush.setMode}
+          setTool={brush.setTool}
+          color={brush.color}
+          setColor={brush.setColor}
+          material={brush.material}
+          setMaterial={brush.setMaterial}
+          reachMeters={brush.reachMeters}
+          setReachMeters={brush.setReachMeters}
+          occlusionEnabled={brush.occlusionEnabled}
+          setOcclusionEnabled={brush.setOcclusionEnabled}
+          draftsOpen={drafts.draftsOpen}
+          activeDraftId={drafts.activeDraftId}
+          draftStatusText={drafts.draftStatusText}
+          pairedCode={pairing.pairedCode}
+          agentOpen={drafts.agentOpen}
+          agentSessionCode={drafts.agentSession?.code}
+          toolAvailability={brush.toolAvailability}
+          ensureToolUsable={brush.ensureToolUsable}
+          getDockHoldHandlers={brush.getDockHoldHandlers}
+          commitTransformAndExit={brush.commitTransformAndExit}
+          onClearCanvas={brush.clearCanvas}
+          onToggleTransformLock={brush.toggleTransformLock}
+          onUndo={brush.handleUndo}
+          onRecenterAim={pol.recenterAim}
+          onOpenDraftsSheet={drafts.openDraftsSheet}
+          onOpenPairModal={() => pairing.setPairOpen(true)}
+          onOpenAgentHandoff={drafts.openAgentHandoff}
+          onOpenPublishSheet={openPublishSheet}
+        />
       </div>
 
-      {/* AR Preview Mode subtle badge */}
-      {mode === 'preview' && (
+      {brush.mode === 'preview' && (
         <div
           style={{
             position: 'fixed',
@@ -4969,913 +783,206 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
             fontSize: 12,
             display: 'flex',
             alignItems: 'center',
-            gap: 6
+            gap: 8
           }}
         >
-          <XeroIcon emoji="👁️" size={15} />
-          <span>AR Preview: {nearbySculptures.length} nearby sculptures + your draft</span>
+          <span>AR Preview: {ar.nearbySculptures.length} nearby sculptures + your draft</span>
         </div>
       )}
 
-      {/* Pair Desktop & Robust MCP Agent Modal */}
-      {pairOpen && (
-        <div className="modal-backdrop" onClick={() => setPairOpen(false)}>
-          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">
-                <XeroIcon emoji="🔗" size={22} /> Pair Desktop &amp; MCP Agent
-              </h3>
-              <button className="btn" onClick={() => setPairOpen(false)}>
-                <XeroIcon emoji="❌" size={15} />
-              </button>
-            </div>
-
-            <div className="card" style={{ padding: 12, marginBottom: 12 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-                Desktop Live 3D View Pair (6-char)
-              </div>
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
-                Enter the 6-character code from Desktop to mirror your 3D drawing live on a big screen.
-              </p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  className="input mono"
-                  value={pairCodeInput}
-                  onChange={(e) => setPairCodeInput(e.target.value.toUpperCase())}
-                  placeholder="ABC123"
-                  maxLength={6}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={() => connectPairCode(pairCodeInput)}
-                >
-                  <XeroIcon emoji="🔗" size={16} /> Connect
-                </button>
-              </div>
-              {pairedCode && (
-                <div className="badge teal" style={{ marginTop: 10 }}>
-                  <XeroIcon emoji="✅" size={14} /> Paired to {pairedCode}
-                </div>
-              )}
-              {pairError && (
-                <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 12 }}>{pairError}</div>
-              )}
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                <strong style={{ fontSize: 13 }}>Robust Agent MCP Pairing</strong>
-                <span className={`badge ${mcpPairingsState.mcpActive ? 'teal' : 'gold'}`}>
-                  {mcpPairingsState.mcpActive
-                    ? mcpPairingsState.activePairing?.keyConnected
-                      ? '🟢 MCP Active · Keys Connected'
-                      : '🟢 MCP Active'
-                    : '🟡 Inactive Until Connected'}
-                </span>
-              </div>
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
-                MCP tools stay inactive until an AI agent connects using your robust{' '}
-                <code>GLP-...</code> pairing code.
-              </p>
-
-              {mcpPairingsState.activePairing ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
-                    Active Code: {mcpPairingsState.activePairing.code}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={async () => {
-                        const txt = buildPropertyOwnerPrompt({
-                          apiOrigin: API_BASE || window.location.origin,
-                          pairingCode: mcpPairingsState.activePairing.code,
-                          ownerAddress: user?.activeMintRecipient || user?.walletAddress
-                        });
-                        const ok = await copyToClipboard(txt);
-                        setMcpPairNotice(ok ? 'Copied full Owner MCP Prompt!' : 'Copy prompt from README.');
-                      }}
-                    >
-                      <XeroIcon emoji="📋" size={14} /> Copy Owner MCP Prompt
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      disabled={mcpPairBusy}
-                      onClick={() => handleDisconnectMcpPairing(mcpPairingsState.activePairing.code)}
-                    >
-                      Disconnect MCP
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {mcpPairingsState.pairings?.[0]?.status === 'pending' && (
-                    <div className="mono" style={{ fontSize: 12, color: 'var(--accent-gold)', wordBreak: 'break-all' }}>
-                      Pending Code: {mcpPairingsState.pairings[0].code}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={mcpPairBusy}
-                    onClick={handleCreateMcpPairing}
-                  >
-                    <XeroIcon emoji="🔑" size={14} />{' '}
-                    {mcpPairBusy ? 'Generating...' : 'Generate Robust Pairing Code & Copy Prompt'}
-                  </button>
-                </div>
-              )}
-
-              {mcpPairNotice && (
-                <div className="mono" style={{ marginTop: 8, fontSize: 11, color: 'var(--accent)' }}>
-                  {mcpPairNotice}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Agent Location Handoff Modal */}
-      {agentOpen && (
-        <div className="modal-backdrop" onClick={() => setAgentOpen(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">
-                <XeroIcon emoji="🤖" size={22} /> Agent Sculpture Code
-              </h3>
-              <button className="btn" onClick={() => setAgentOpen(false)}>
-                <XeroIcon emoji="❌" size={15} />
-              </button>
-            </div>
-
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
-              Give this location-locked code to your AI agent so it can read our 4x voxel tools,
-              12 colors, and 3 block types to build a 3D sculpture here. You must inspect and tap{' '}
-              <strong>Publish</strong> on your phone to mint.
-            </p>
-
-            {agentBusy && (
-              <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-                Generating location code...
-              </div>
-            )}
-
-            {agentError && (
-              <div style={{ color: '#ffb3c1', fontSize: 12, marginBottom: 8 }}>
-                <XeroIcon emoji="⚠️" size={14} /> {agentError}
-              </div>
-            )}
-
-            {agentSession?.code && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span className="mono" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.06em' }}>
-                      {agentSession.code}
-                    </span>
-                    <span className={`badge ${agentSession.status === 'ready' ? 'teal' : 'gold'}`}>
-                      {agentSession.status === 'ready'
-                        ? `Loaded ${agentSession.voxelCount || agentSession.draftVoxels?.length || 0} voxels`
-                        : 'Waiting for agent build...'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Parcel <span className="mono">{agentSession.parcelId}</span> · 4x (0.05m/block) · 10000×10000×10000 limit
-                  </div>
-                  {agentSession.endpoints?.spec && (
-                    <div style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>
-                      Spec: <span className="mono">{agentSession.endpoints.spec}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={async () => {
-                      const ok = await copyToClipboard(agentSession.clipboardText);
-                      setAgentCopied(ok);
-                    }}
-                  >
-                    <XeroIcon emoji="📋" size={15} />{' '}
-                    {agentCopied ? 'Copied Prompt & Code!' : 'Copy Agent Prompt & Code'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={async () => {
-                      const ok = await copyToClipboard(agentSession.code);
-                      setAgentCopied(ok);
-                    }}
-                  >
-                    Copy Code Only
-                  </button>
-                  <button type="button" className="btn" onClick={refreshAgentDraft}>
-                    <XeroIcon emoji="🔄" size={15} /> Check Draft
-                  </button>
-                </div>
-
-                {agentSession.status === 'ready' && (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => {
-                        applyAgentSessionDraft(agentSession);
-                        setAgentOpen(false);
-                        setMode('draw');
-                      }}
-                    >
-                      <XeroIcon emoji="👁️" size={15} /> Inspect in AR
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-pink"
-                      onClick={() => {
-                        applyAgentSessionDraft(agentSession);
-                        setAgentOpen(false);
-                        openPublishSheet({ skipVoxelCheck: true });
-                      }}
-                    >
-                      <XeroIcon emoji="🚀" size={15} /> Publish on Phone
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Publish Mode Sheet */}
-      {mode === 'publish' && (
-        <div className="modal-backdrop" onClick={() => setMode('draw')}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">
-                <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
-              </h3>
-              <button className="btn" onClick={() => setMode('draw')}>
-                <XeroIcon emoji="❌" size={15} />
-              </button>
-            </div>
-
-            {mintReceipt ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-                  <XeroIcon emoji="✅" size={15} /> Minted directly to your wallet!
-                </div>
-                <div className="card" style={{ fontSize: 12 }}>
-                  <div><strong>Title:</strong> {mintReceipt.sculpture.title}</div>
-                  <div><strong>Virtual Land:</strong> <span className="mono">{mintReceipt.sculpture.parcelId}</span></div>
-                  <div><strong>Token ID:</strong> <span className="mono">#{mintReceipt.mint.tokenId}</span></div>
-                  <div><strong>Resale Fee:</strong> 5% (ERC-2981)</div>
-                  <div style={{ wordBreak: 'break-all' }}>
-                    <strong>IPFS CID:</strong> <span className="mono">{mintReceipt.ipfs.metadataCid}</span>
-                  </div>
-                  <div style={{ wordBreak: 'break-all' }}>
-                    <strong>Tx Hash:</strong> <span className="mono">{mintReceipt.mint.txHash}</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button className="btn btn-primary" onClick={() => setMode('preview')}>
-                    <XeroIcon emoji="👁️" size={16} /> View in AR Preview
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ borderColor: 'rgba(255, 209, 102, 0.6)', color: 'var(--accent-gold)' }}
-                    onClick={() => {
-                      setMode('draw');
-                      setLandManageParcelId(mintReceipt.sculpture.parcelId || '');
-                      setLandManageOpen(true);
-                    }}
-                  >
-                    <XeroIcon emoji="🗺️" size={16} /> Manage Land &amp; Contributors
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handlePublishSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <span className="badge teal">
-                    <XeroIcon emoji="🧱" size={13} /> {voxels.length} voxels
-                  </span>
-                  <span className="badge gold">
-                    <XeroIcon emoji="📷" size={13} /> {polStats.frames} frames / {polStats.flow}% flow
-                  </span>
-                  {location?.altitude != null && (
-                    <span className="badge teal">
-                      <XeroIcon emoji="⛰️" size={13} /> {Math.round(location.altitude)}m alt
-                    </span>
-                  )}
-                  <span className="badge">
-                    <XeroIcon emoji="🪙" size={13} /> Gas Free · 5% Resale Fee
-                  </span>
-                  {orbStatus.features >= 12 && (
-                    <span className="badge teal">
-                      <XeroIcon emoji="📡" size={13} /> {orbStatus.keyframes}/3 ORB Angles ({orbStatus.features} pts)
-                    </span>
-                  )}
-                  {user && isWebAuthnSupported() && (
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ fontSize: 11, padding: '3px 9px' }}
-                      disabled={passkeyBusy}
-                      onClick={async () => {
-                        setPasskeyBusy(true);
-                        setPublishError('');
-                        try {
-                          await registerHardwarePasskey('Mobile Biometric Passkey');
-                          const st = await api.getPasskeyStatus();
-                          setPasskeyCount((st?.passkeys || []).length);
-                        } catch (err) {
-                          setPublishError(err.message || 'Passkey registration failed');
-                        } finally {
-                          setPasskeyBusy(false);
-                        }
-                      }}
-                    >
-                      <XeroIcon emoji="🛡️" size={12} />{' '}
-                      {passkeyCount > 0 ? `Passkey Ready (${passkeyCount})` : 'Enroll Biometric Passkey'}
-                    </button>
-                  )}
-                </div>
-
-                <div>
-                  <div className="field-label">
-                    <span>Title</span>
-                    <span className="mono">{title.length}/{policy?.titleMax || 48}</span>
-                  </div>
-                  <input
-                    className="input"
-                    required
-                    maxLength={policy?.titleMax || 48}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Name your 3D street sculpture"
-                  />
-                </div>
-
-                <div>
-                  <div className="field-label">
-                    <span>Description (Limited Terms)</span>
-                    <span className="mono">
-                      {description.length}/{policy?.descriptionMax || 240} chars · {wordCount}/{policy?.descriptionMaxWords || 45} words
-                    </span>
-                  </div>
-                  <textarea
-                    className="textarea"
-                    rows={3}
-                    required
-                    maxLength={policy?.descriptionMax || 240}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Short story or inspiration for this Virtual Land piece..."
-                  />
-                </div>
-
-                <div>
-                  <div className="field-label">
-                    <span>Optional On-Site Chat Clue (24/7 Solo Unlock)</span>
-                    <span className="mono">E2EE · PBKDF2</span>
-                  </div>
-                  <input
-                    className="input"
-                    maxLength={140}
-                    value={cluePrompt}
-                    onChange={(e) => setCluePrompt(e.target.value)}
-                    placeholder="Question visible at this spot (leave blank for peer-only)"
-                  />
-                  {cluePrompt.trim() && (
-                    <input
-                      className="input"
-                      style={{ marginTop: 6 }}
-                      value={clueAnswer}
-                      onChange={(e) => setClueAnswer(e.target.value)}
-                      placeholder="Answer visible in person (never sent to server)"
-                      required
-                    />
-                  )}
-                </div>
-
-                {user && (
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Minted NFT Recipient ({user.email}):
-                    <div className="mono" style={{ color: 'var(--accent)', wordBreak: 'break-all' }}>
-                      {user.activeMintRecipient}
-                    </div>
-                  </div>
-                )}
-
-                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={termsAccepted}
-                    onChange={(e) => setTermsAccepted(e.target.checked)}
-                  />
-                  <span>
-                    I accept the{' '}
-                    <button
-                      type="button"
-                      onClick={() => setInfoOpen(true)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--accent)',
-                        padding: 0,
-                        textDecoration: 'underline',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      GRAFFILAND Terms &amp; Virtual Land Policy
-                    </button>
-                    , confirm real physical presence, and acknowledge the 5% Robinhood resale royalty.
-                  </span>
-                </label>
-
-                {publishError && (
-                  <div style={{ color: '#ffb3c1', fontSize: 12 }}>
-                    <XeroIcon emoji="⚠️" size={14} /> {publishError}
-                  </div>
-                )}
-
-                {mcpPairingsState.mcpActive && mcpPairingsState.activePairing && (
-                  <div className="card" style={{ padding: 10, fontSize: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                      <span className="badge teal">
-                        <XeroIcon emoji="🔑" size={12} /> Agent Keys Connected ({mcpPairingsState.activePairing.code})
-                      </span>
-                      <span style={{ color: 'var(--muted)' }}>
-                        Sign here on mobile OR delegate signing to your agent
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="submit"
-                    className="btn btn-pink"
-                    style={{ flex: '1 1 180px' }}
-                    disabled={publishing || voxels.length === 0}
-                  >
-                    <XeroIcon emoji="🚀" size={16} />
-                    {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
-                  </button>
-                  {mcpPairingsState.mcpActive && (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ flex: '1 1 180px' }}
-                      disabled={publishing || voxels.length === 0}
-                      onClick={handleCopyAgentPublishPrompt}
-                    >
-                      <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={publishing || draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
-                    onClick={() => handleManualSaveDraft({ closePublish: true })}
-                  >
-                    <XeroIcon emoji="💾" size={15} />
-                    <span>{draftsBusy ? 'Saving...' : 'Save Draft'}</span>
-                  </button>
-                </div>
-
-                {agentPublishPrompt && (
-                  <div className="card" style={{ padding: 10, fontSize: 12, borderColor: 'rgba(0, 245, 212, 0.45)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <strong style={{ color: 'var(--accent)' }}>
-                        ⏳ Waiting for Agent Signature ({agentPublishPrompt.requestId.slice(0, 14)}...)
-                      </strong>
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{ padding: '4px 8px', fontSize: 11 }}
-                        onClick={() => copyToClipboard(agentPublishPrompt.promptText)}
-                      >
-                        📋 Re-copy Prompt
-                      </button>
-                    </div>
-                    <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 10, maxHeight: 140, overflowY: 'auto', color: 'var(--muted)' }}>
-                      {agentPublishPrompt.promptText}
-                    </pre>
-                  </div>
-                )}
-
-                {!mcpPairingsState.mcpActive && (
-                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                    Want your AI agent to sign on your behalf? Pair a robust <code>GLP-...</code> code under{' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMode('draw');
-                        setPairOpen(true);
-                      }}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--accent)',
-                        padding: 0,
-                        textDecoration: 'underline',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Pair Desktop &amp; MCP Agent
-                    </button>
-                    .
-                  </div>
-                )}
-
-                {draftStatusText && (
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
-                    <XeroIcon emoji="💾" size={12} /> Auto-draft: {draftStatusText}
-                  </div>
-                )}
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Saved Drafts Modal */}
-      {draftsOpen && (
-        <div className="modal-backdrop" onClick={() => setDraftsOpen(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">
-                <XeroIcon emoji="💾" size={22} /> Saved Drafts
-              </h3>
-              <button className="btn" onClick={() => setDraftsOpen(false)}>
-                <XeroIcon emoji="❌" size={15} />
-              </button>
-            </div>
-
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
-              Your canvas auto-saves on this device as you work, and syncs to your account when
-              signed in so you never lose unfinished sculptures before publishing.
-            </p>
-
-            <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <div>
-                  <strong style={{ fontSize: 13 }}>
-                    {title.trim() || 'Current Workspace Draft'}
-                  </strong>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
-                    {voxels.length} blocks · {draftStatusText || 'Ready'}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
-                    onClick={() => handleManualSaveDraft({ forceNew: false })}
-                  >
-                    <XeroIcon emoji="💾" size={14} /> Save Draft
-                  </button>
-                  {user && activeDraftId && (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
-                      onClick={() => handleManualSaveDraft({ forceNew: true })}
-                    >
-                      <XeroIcon emoji="📄" size={14} /> Save Copy
-                    </button>
-                  )}
-                  <button type="button" className="btn" onClick={handleStartNewDraft}>
-                    <XeroIcon emoji="📝" size={14} /> New Blank
-                  </button>
-                </div>
-              </div>
-              {!user && (
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ alignSelf: 'flex-start' }}
-                  onClick={() => {
-                    setDraftsOpen(false);
-                    setLoginOpen(true);
-                  }}
-                >
-                  <XeroIcon emoji="🔐" size={14} /> Sign in with Google to Sync Cloud Drafts
-                </button>
-              )}
-            </div>
-
-            {draftError && (
-              <div style={{ color: '#ffb3c1', fontSize: 12, marginBottom: 10 }}>
-                <XeroIcon emoji="⚠️" size={14} /> {draftError}
-              </div>
-            )}
-
-            {user && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong style={{ fontSize: 13 }}>Cloud Saved Drafts ({cloudDrafts.length})</strong>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={draftsBusy}
-                    onClick={refreshCloudDrafts}
-                  >
-                    <XeroIcon emoji="🔄" size={13} /> Refresh
-                  </button>
-                </div>
-
-                {cloudDrafts.length === 0 ? (
-                  <div className="card" style={{ padding: 14, fontSize: 12, color: 'var(--muted)' }}>
-                    {draftsBusy
-                      ? 'Loading cloud drafts...'
-                      : 'No cloud drafts yet. Start sculpting or tap Save Draft to back up your work.'}
-                  </div>
-                ) : (
-                  cloudDrafts.map((d) => (
-                    <div
-                      key={d.id}
-                      className="card"
-                      style={{
-                        padding: 10,
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: 10,
-                        borderColor: d.id === activeDraftId ? 'var(--accent)' : undefined
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {d.title || 'Untitled Draft'}
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                          <span className="badge teal">
-                            <XeroIcon emoji="🧱" size={11} /> {d.voxelCount} blocks
-                          </span>
-                          {d.parcelId && (
-                            <span className="badge">
-                              <XeroIcon emoji="📍" size={11} /> {d.parcelId}
-                            </span>
-                          )}
-                          <span className="mono" style={{ fontSize: 10, color: 'var(--muted)', alignSelf: 'center' }}>
-                            {d.updatedAt ? new Date(d.updatedAt).toLocaleString() : ''}
-                          </span>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          disabled={draftsBusy}
-                          onClick={() => handleLoadDraft(d)}
-                        >
-                          <XeroIcon emoji="📂" size={13} /> Load
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-pink"
-                          disabled={draftsBusy}
-                          onClick={() => handleDeleteCloudDraft(d.id)}
-                          aria-label={`Delete draft ${d.title || d.id}`}
-                        >
-                          <XeroIcon emoji="🗑️" size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Public Area Map View + 3D Review + Google Maps Directions */}
-      {mapOpen && (
-        <div className="mobile-map-overlay" role="dialog" aria-label="Public Area Sculpture Map">
-          <div className="mobile-map-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <XeroIcon emoji="🗺️" size={22} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>Public Area Map</div>
-                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  Tap any pin or card to inspect 3D &amp; navigate
-                </div>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <button
-                type="button"
-                className={`btn ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
-                onClick={() => setAreaFilterMode('nearby')}
-              >
-                Area (5km)
-              </button>
-              <button
-                type="button"
-                className={`btn ${areaFilterMode === 'all' ? 'btn-primary' : ''}`}
-                onClick={() => setAreaFilterMode('all')}
-              >
-                All ({areaSculpturesSorted.length})
-              </button>
-              <button
-                type="button"
-                className="btn"
-                disabled={mapLoading}
-                onClick={loadPublicMapData}
-                aria-label="Refresh public map"
-              >
-                <XeroIcon emoji="🔄" size={14} />
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setMapOpen(false)}
-                aria-label="Close map"
-              >
-                <XeroIcon emoji="❌" size={15} />
-              </button>
-            </div>
-          </div>
-
-          <div className="mobile-map-canvas">
-            <MapView
-              sculptures={displayedMapSculptures}
-              parcels={mapParcels}
-              userLocation={location}
-              focusArea={areaFilterMode === 'nearby'}
-              areaRadiusMeters={5000}
-              selectedSculptureId={mapSelectedSculpture?.id || ''}
-              config={config}
-              compact
-              onSelectSculpture={(sc) => setMapSelectedSculpture(sc)}
-            />
-          </div>
-
-          <div className="mobile-map-list">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 13 }}>
-                Sculptures {areaFilterMode === 'nearby' && location ? 'in Your Area' : 'Worldwide'} ({displayedMapSculptures.length})
-              </strong>
-              {areaFilterMode === 'nearby' &&
-                displayedMapSculptures.length === 0 &&
-                areaSculpturesSorted.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => setAreaFilterMode('all')}
-                  >
-                    Show All Public ({areaSculpturesSorted.length})
-                  </button>
-                )}
-            </div>
-
-            {mapLoading && displayedMapSculptures.length === 0 ? (
-              <div className="card" style={{ padding: 12, fontSize: 12, color: 'var(--muted)' }}>
-                Loading nearby sculptures...
-              </div>
-            ) : displayedMapSculptures.length === 0 ? (
-              <div className="card" style={{ padding: 12, fontSize: 12, color: 'var(--muted)' }}>
-                No public sculptures in this area yet. Be the first to paint &amp; mint here!
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {displayedMapSculptures.map((sc) => {
-                  const chainLinks = getSculptureChainLinks(sc, config);
-                  const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : '';
-                  const distText =
-                    sc.distanceMeters == null
-                      ? ''
-                      : sc.distanceMeters >= 1000
-                      ? `${(sc.distanceMeters / 1000).toFixed(1)} km`
-                      : `${sc.distanceMeters} m`;
-                  return (
-                    <div
-                      key={sc.id}
-                      className="card mobile-map-item"
-                      onClick={() => setMapSelectedSculpture(sc)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setMapSelectedSculpture(sc);
-                        }
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>{sc.title}</div>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                          {distText && (
-                            <span className="badge teal">
-                              <XeroIcon emoji="📍" size={11} /> {distText}
-                            </span>
-                          )}
-                          <span className="badge gold">
-                            <XeroIcon emoji="🗺️" size={11} /> Land {sc.parcelId}
-                          </span>
-                          <span className="badge">
-                            <XeroIcon emoji="🧱" size={11} /> {sc.voxelCount} blocks
-                          </span>
-                          {chainLinks.txUrl ? (
-                            <a
-                              className="badge teal"
-                              href={chainLinks.txUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              title="View mint transaction on chain"
-                            >
-                              <XeroIcon emoji="⛓️" size={11} /> Tx {txShort}
-                            </a>
-                          ) : txShort ? (
-                            <span className="badge">
-                              <XeroIcon emoji="⛓️" size={11} />{' '}
-                              {chainLinks.isSimulated ? 'Pre-chain' : 'Tx'} {txShort}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMapSelectedSculpture(sc);
-                        }}
-                      >
-                        <XeroIcon emoji="🧊" size={14} /> Review 3D
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {mapSelectedSculpture && (
-        <SculptureModal
-          sculpture={mapSelectedSculpture}
-          user={user}
-          config={config}
-          userLocation={location}
-          onSculptureUpdated={(updated) => {
-            setMapSelectedSculpture(updated);
-            setMapSculptures((prev) =>
-              prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
-            );
-            refreshMyLands();
+      {tutorialOpen && (
+        <FirstRunTutorialModal
+          quickSculpt={quickSculpt}
+          onToggleQuickSculpt={handleToggleQuickSculpt}
+          onClose={(dontShow) => {
+            if (dontShow) saveBoolPreference(TUTORIAL_SEEN_KEY, true);
+            setTutorialOpen(false);
           }}
-          onModifyInCanvas={startCanvasModification}
-          onOpenLandManagement={(pid) => {
-            setMapOpen(false);
-            setLandManageParcelId(pid || '');
-            setLandManageOpen(true);
-          }}
-          onClose={() => setMapSelectedSculpture(null)}
         />
       )}
 
-      {landManageOpen && user && (
+      {pairing.pairOpen && (
+        <PairDesktopMcpModal
+          user={user}
+          pairCodeInput={pairing.pairCodeInput}
+          setPairCodeInput={pairing.setPairCodeInput}
+          pairedCode={pairing.pairedCode}
+          pairError={pairing.pairError}
+          onConnectPairCode={pairing.connectPairCode}
+          mcpPairingsState={pairing.mcpPairingsState}
+          mcpPairBusy={pairing.mcpPairBusy}
+          mcpPairNotice={pairing.mcpPairNotice}
+          setMcpPairNotice={pairing.setMcpPairNotice}
+          onCreateMcpPairing={pairing.handleCreateMcpPairing}
+          onDisconnectMcpPairing={pairing.handleDisconnectMcpPairing}
+          onClose={() => pairing.setPairOpen(false)}
+        />
+      )}
+
+      {drafts.agentOpen && (
+        <AgentHandoffModal
+          agentBusy={drafts.agentBusy}
+          agentError={drafts.agentError}
+          agentSession={drafts.agentSession}
+          agentCopied={drafts.agentCopied}
+          setAgentCopied={drafts.setAgentCopied}
+          onRefreshAgentDraft={drafts.refreshAgentDraft}
+          onInspectInAR={() => {
+            drafts.applyAgentSessionDraft(drafts.agentSession);
+            drafts.setAgentOpen(false);
+            brush.setMode('draw');
+          }}
+          onPublishOnPhone={() => {
+            drafts.applyAgentSessionDraft(drafts.agentSession);
+            drafts.setAgentOpen(false);
+            openPublishSheet({ skipVoxelCheck: true });
+          }}
+          onClose={() => drafts.setAgentOpen(false)}
+        />
+      )}
+
+      {brush.mode === 'publish' && (
+        <PublishSculptureModal
+          config={config}
+          user={user}
+          voxels={brush.voxels}
+          polStats={pol.polStats}
+          location={pol.location}
+          orbStatus={pol.orbStatus}
+          passkeyCount={pol.passkeyCount}
+          passkeyBusy={pol.passkeyBusy}
+          onEnrollPasskey={pol.handleEnrollPasskey}
+          title={title}
+          setTitle={setTitle}
+          description={description}
+          setDescription={setDescription}
+          cluePrompt={cluePrompt}
+          setCluePrompt={setCluePrompt}
+          clueAnswer={clueAnswer}
+          setClueAnswer={setClueAnswer}
+          termsAccepted={termsAccepted}
+          setTermsAccepted={setTermsAccepted}
+          publishing={publishing}
+          publishError={publishError}
+          setPublishError={setPublishError}
+          mintReceipt={mintReceipt}
+          mcpPairingsState={pairing.mcpPairingsState}
+          agentPublishPrompt={pairing.agentPublishPrompt}
+          draftsBusy={drafts.draftsBusy}
+          draftStatusText={drafts.draftStatusText}
+          onSubmitPublish={handlePublishSubmit}
+          onCopyAgentPublishPrompt={handleCopyAgentPublishPrompt}
+          onManualSaveDraft={drafts.handleManualSaveDraft}
+          onOpenInfo={() => setInfoOpen(true)}
+          onOpenPair={() => {
+            brush.setMode('draw');
+            pairing.setPairOpen(true);
+          }}
+          onOpenManageLand={(parcelId) => {
+            brush.setMode('draw');
+            lands.setLandManageParcelId(parcelId);
+            lands.setLandManageOpen(true);
+          }}
+          onViewInARPreview={() => brush.setMode('preview')}
+          onShowHint={showTemporaryHint}
+          onClose={() => brush.setMode('draw')}
+        />
+      )}
+
+      {drafts.draftsOpen && (
+        <SavedDraftsModal
+          user={user}
+          title={title}
+          description={description}
+          voxelsLength={brush.voxels.length}
+          activeDraftId={drafts.activeDraftId}
+          draftStatusText={drafts.draftStatusText}
+          draftsBusy={drafts.draftsBusy}
+          draftError={drafts.draftError}
+          cloudDrafts={drafts.cloudDrafts}
+          onManualSaveDraft={drafts.handleManualSaveDraft}
+          onStartNewDraft={drafts.handleStartNewDraft}
+          onRefreshCloudDrafts={drafts.refreshCloudDrafts}
+          onLoadDraft={drafts.handleLoadDraft}
+          onDeleteCloudDraft={drafts.handleDeleteCloudDraft}
+          onOpenLogin={() => {
+            drafts.setDraftsOpen(false);
+            setLoginOpen(true);
+          }}
+          onClose={() => drafts.setDraftsOpen(false)}
+        />
+      )}
+
+      {ar.mapOpen && (
+        <MobileMapSheet
+          config={config}
+          location={pol.location}
+          areaFilterMode={ar.areaFilterMode}
+          setAreaFilterMode={ar.setAreaFilterMode}
+          mapLoading={ar.mapLoading}
+          loadPublicMapData={ar.loadPublicMapData}
+          displayedMapSculptures={ar.displayedMapSculptures}
+          areaSculpturesSorted={ar.areaSculpturesSorted}
+          mapParcels={ar.mapParcels}
+          mapSelectedSculpture={ar.mapSelectedSculpture}
+          onSelectSculpture={ar.setMapSelectedSculpture}
+          onShowHint={showTemporaryHint}
+          onClose={() => ar.setMapOpen(false)}
+        />
+      )}
+
+      {ar.mapSelectedSculpture && (
+        <SculptureModal
+          sculpture={ar.mapSelectedSculpture}
+          user={user}
+          config={config}
+          userLocation={pol.location}
+          onSculptureUpdated={(updated) => {
+            ar.setMapSelectedSculpture(updated);
+            ar.setMapSculptures((prev) =>
+              prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+            );
+            lands.refreshMyLands();
+          }}
+          onModifyInCanvas={lands.startCanvasModification}
+          onOpenLandManagement={(pid) => {
+            ar.setMapOpen(false);
+            lands.setLandManageParcelId(pid || '');
+            lands.setLandManageOpen(true);
+          }}
+          onClose={() => ar.setMapSelectedSculpture(null)}
+        />
+      )}
+
+      {lands.landManageOpen && user && (
         <LandManagementModal
           user={user}
-          initialParcelId={landManageParcelId}
-          onSelectSculpture={(sc) => setMapSelectedSculpture(sc)}
+          initialParcelId={lands.landManageParcelId}
+          onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
           onWorkspaceChanged={async () => {
-            await refreshMyLands();
-            if (location) {
+            await lands.refreshMyLands();
+            if (pol.location) {
               api
-                .listSculptures({ lat: location.lat, lng: location.lng, radiusMeters: 300 })
-                .then((res) => setNearbySculptures(res.sculptures || []))
+                .listSculptures({ lat: pol.location.lat, lng: pol.location.lng, radiusMeters: 300 })
+                .then((res) => ar.setNearbySculptures(res.sculptures || []))
                 .catch(() => {});
             }
           }}
-          onClose={() => setLandManageOpen(false)}
+          onClose={() => lands.setLandManageOpen(false)}
         />
       )}
 
-      {chatSelection && (
+      {chat.chatSelection && (
         <SculptureChatDrawer
-          sculpture={chatSelection.sculpture}
+          sculpture={chat.chatSelection.sculpture}
           user={user}
-          location={location}
-          polTracker={polRef.current}
-          cameraReady={cameraReady}
-          initialSightProof={chatSelection.sightProof}
-          initialPinData={chatSelection.pinData}
+          location={pol.location}
+          polTracker={pol.polRef.current}
+          cameraReady={pol.cameraReady}
+          initialSightProof={chat.chatSelection.sightProof}
+          initialPinData={chat.chatSelection.pinData}
           onRequestLogin={() => setLoginOpen(true)}
-          onClose={() => setChatSelection(null)}
+          onClose={() => chat.setChatSelection(null)}
         />
       )}
 

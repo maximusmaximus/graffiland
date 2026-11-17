@@ -2648,5 +2648,212 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     });
     assert.equal(failRollback.status, 403);
     assert.match(failRollback.body.error, /rollback|cloned/i);
+
+    // Attempt 6: Server-side ORB matchedDescriptors Hamming check (forged -> 403, valid -> 200)
+    const p6Bad = await buildSignedPresence();
+    const badMatches = [];
+    const okMatches = [];
+    for (let k = 0; k < 2; k += 1) {
+      for (let f = 0; f < 5; f += 1) {
+        const feat = validKeyframes[k].features[f];
+        const origBytes = new Uint8Array(Buffer.from(feat.descB64, 'base64'));
+        const invBytes = origBytes.map((b) => (~b) & 0xff);
+        badMatches.push({
+          keyframeIndex: k,
+          featureIndex: f,
+          liveDescB64: Buffer.from(invBytes).toString('base64')
+        });
+        okMatches.push({
+          keyframeIndex: k,
+          featureIndex: f,
+          liveDescB64: feat.descB64
+        });
+      }
+    }
+
+    const badOrbDesc = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p6Bad.signed,
+        orbProof: {
+          descriptorDigest,
+          inlierCount: 10,
+          reprojectionErrorPx: 1.6,
+          matchedDescriptors: badMatches
+        },
+        webauthnAssertion: await signWebAuthnAssertion(p6Bad.ch.challengeNonce, 3),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(badOrbDesc.status, 403);
+    assert.match(badOrbDesc.body.error, /descriptor verification/i);
+
+    const p6Ok = await buildSignedPresence();
+    const okOrbDesc = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p6Ok.signed,
+        orbProof: {
+          descriptorDigest,
+          inlierCount: 10,
+          reprojectionErrorPx: 1.6,
+          matchedDescriptors: okMatches
+        },
+        webauthnAssertion: await signWebAuthnAssertion(p6Ok.ch.challengeNonce, 4),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(okOrbDesc.status, 200, JSON.stringify(okOrbDesc.body));
+    assert.ok(okOrbDesc.body.orbCheck.serverVerifiedMatches >= 8);
+
+    // Passkey deletion works & prevents deletion by other users
+    const pkListBefore = await apiJson('/api/passkeys/status', {
+      headers: { Authorization: `Bearer ${visitorToken}` }
+    });
+    assert.ok((pkListBefore.body.passkeys || []).length >= 1);
+    const delPasskey = await apiJson(`/api/passkeys/${pkListBefore.body.passkeys[0].id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${visitorToken}` }
+    });
+    assert.equal(delPasskey.status, 200);
+    const pkListAfter = await apiJson('/api/passkeys/status', {
+      headers: { Authorization: `Bearer ${visitorToken}` }
+    });
+    assert.equal((pkListAfter.body.passkeys || []).length, 0);
+  });
+
+  test('Operational health, admin telemetry metrics, spatial SQL filter, rate limiting (429), and quota refund', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
+
+    // 1. /api/health & /api/admin/metrics
+    const healthRes = await apiJson('/api/health');
+    assert.equal(healthRes.status, 200);
+    assert.equal(healthRes.body.ok, true);
+    assert.equal(healthRes.body.db, 'connected');
+
+    const metricsNonAdmin = await apiJson('/api/admin/metrics', {
+      headers: { Authorization: `Bearer ${artistToken}` }
+    });
+    assert.equal(metricsNonAdmin.status, 403);
+
+    const metricsAdmin = await apiJson('/api/admin/metrics', {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.equal(metricsAdmin.status, 200);
+    assert.ok(metricsAdmin.body.counts.sculptures >= 1);
+    assert.equal(typeof metricsAdmin.body.relayerTodayOps, 'number');
+
+    // 2. Spatial bounding box SQL query + includeVoxels=0
+    const sfSpatial = await apiJson('/api/sculptures?lat=37.7749&lng=-122.4194&radiusMeters=250&includeVoxels=0');
+    assert.equal(sfSpatial.status, 200);
+    assert.ok(
+      sfSpatial.body.sculptures.every(
+        (s) => (!s.voxels || s.voxels.length === 0) && Number(s.distanceMeters) <= 250
+      )
+    );
+
+    // 3. Isolated server enforcing rate limit = 2 / min and relayer quota = 2 with refund on error
+    const rlApp = createAppServer({ publishRateLimit: 2, relayerDailyQuota: 2 });
+    let rlBaseUrl;
+    await new Promise((resolve) => {
+      rlApp.server.listen(0, '127.0.0.1', () => {
+        rlBaseUrl = `http://127.0.0.1:${rlApp.server.address().port}`;
+        resolve();
+      });
+    });
+    try {
+      const rlLogin = await fetch(`${rlBaseUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ devProfile: { email: 'ratelimit-user@graffiland.test', name: 'RL User' } })
+      }).then((r) => r.json());
+      const tok = rlLogin.token;
+
+      // Bad PoL (teleporting GPS trajectory > 60 m/s) increments publish RL 1/2 & fails 422 before consuming quota
+      const badPol = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        body: JSON.stringify({
+          title: 'Quota Safe Sculpture',
+          description: 'Verifies relayer quota is not lost on failed attempts.',
+          termsAccepted: true,
+          location: { lat: 37.775, lng: -122.418, accuracy: 850 },
+          proofOfLocation: {
+            frameHashes: [],
+            gyroSamples: [],
+            flowCorrelation: 0,
+            gpsSamples: [
+              { lat: 37.775, lng: -122.418, t: 1000 },
+              { lat: 37.905, lng: -122.418, t: 1500 }
+            ]
+          },
+          voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'matte' }]
+        })
+      });
+      assert.equal(badPol.status, 422);
+
+      // Valid publish #1 succeeds (publish RL 2/2, relayer quota 1/2)
+      const okBody = {
+        title: 'Quota & RL Valid Piece',
+        description: 'Valid mobile Proof of Location sculpture for ops check.',
+        termsAccepted: true,
+        location: { lat: 37.775, lng: -122.418, accuracy: 5 },
+        proofOfLocation: {
+          frameHashes: ['a1', 'a2', 'a3', 'a4'],
+          gyroSamples: [{ alpha: 1, beta: 2, gamma: 3 }, { alpha: 9, beta: 4, gamma: 2 }],
+          flowCorrelation: 0.85,
+          skyPalette: ['#00f5d4'],
+          visualDHash: '1111000011110000',
+          frameCount: 6,
+          flowScore: 0.85
+        },
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      };
+      const rl1 = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        body: JSON.stringify(okBody)
+      });
+      assert.equal(rl1.status, 201);
+      const rl1Body = await rl1.json();
+      const parcelIdRl = rl1Body.sculpture.parcelId;
+
+      // Invalid land creation fails AFTER consuming quota -> refundRelayerQuota refunds back to 1/2!
+      const badLandPut = await fetch(`${rlBaseUrl}/api/lands/${parcelIdRl}/sculptures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          title: 'X',
+          description: 'Invalid short title triggering quota refund.',
+          voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'matte' }]
+        })
+      });
+      assert.equal(badLandPut.status, 400);
+
+      // Valid land creation succeeds ONLY because failed request refunded relayer quota (now 2/2)!
+      const goodLandPut = await fetch(`${rlBaseUrl}/api/lands/${parcelIdRl}/sculptures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          title: 'Quota Refund Verified',
+          description: 'Proves relayer quota was refunded after failed 400 call.',
+          voxels: [{ x: 0, y: 0.05, z: 0, color: '#ffd166', material: 'matte' }]
+        })
+      });
+      assert.equal(goodLandPut.status, 200);
+
+      // Next publish hits publishRateLimit (3 > 2/min) -> 429 + Retry-After header!
+      const rl2 = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        body: JSON.stringify(okBody)
+      });
+      assert.equal(rl2.status, 429);
+      assert.ok(Number(rl2.headers.get('retry-after')) >= 1);
+    } finally {
+      await new Promise((resolve) => rlApp.server.close(resolve));
+    }
   });
 });

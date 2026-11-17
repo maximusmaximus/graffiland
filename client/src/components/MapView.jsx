@@ -22,6 +22,7 @@ export default function MapView({
   const mapRef = useRef(null);
   const layerRef = useRef(null);
   const initialViewRef = useRef(initialView);
+  const initialUserLocationRef = useRef(userLocation);
   const onViewportChangeRef = useRef(onViewportChange);
   const userAdjustedViewRef = useRef(
     Boolean(
@@ -41,6 +42,7 @@ export default function MapView({
     if (!mapHostRef.current || mapRef.current) return;
 
     const saved = initialViewRef.current;
+    const initLoc = initialUserLocationRef.current;
     const hasSaved =
       saved &&
       Number.isFinite(Number(saved.lat)) &&
@@ -49,10 +51,10 @@ export default function MapView({
 
     const initialCenter = hasSaved
       ? [Number(saved.lat), Number(saved.lng)]
-      : userLocation && Number.isFinite(userLocation.lat) && Number.isFinite(userLocation.lng)
-      ? [userLocation.lat, userLocation.lng]
+      : initLoc && Number.isFinite(initLoc.lat) && Number.isFinite(initLoc.lng)
+      ? [initLoc.lat, initLoc.lng]
       : [37.7749, -122.4194];
-    const initialZoom = hasSaved ? Number(saved.zoom) : userLocation ? 14 : 3;
+    const initialZoom = hasSaved ? Number(saved.zoom) : initLoc ? 14 : 3;
 
     const map = L.map(mapHostRef.current, {
       center: initialCenter,

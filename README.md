@@ -160,12 +160,21 @@ Every icon across mobile HUD triggers, map pins, desktop tabs, and modals is ren
 
 | Path | Purpose |
 | :--- | :--- |
-| `client/` | React + Three.js + Leaflet + Vite frontend (`MobileStudio`, `DesktopHub`, `MapView`, `PairWorkbench3D`, `AdminPanel`) |
-| `worker/` | Cloudflare Worker API, D1 schema (`schema.sql`), WebCrypto JWT/AES (`crypto.js`), and `PairCoordinator` Durable Object |
+| `client/` | React + Three.js + Leaflet + Vite frontend (`MobileStudio` orchestrator + `hooks/*` + `studio/*` subcomponents, `DesktopHub`, `MapView`, `PairWorkbench3D`, `LandManagementModal`, `AdminPanel`, `SceneErrorBoundary`) |
+| `worker/` | Cloudflare Worker API, D1 schema (`schema.sql`), WebCrypto JWT/AES (`crypto.js`), and `PairCoordinator` Durable Object with persisted DO state |
 | `server/` | Standalone Node/Express + `node:sqlite` + WebSocket server for local HTTPS development |
-| `shared/` | Shared constants, Robinhood Chain configs, and Limited Terms moderation policy |
-| `contracts/` | `GraffilandNFT.sol` (ERC-721 + 5% ERC-2981 royalty) plus `solc`/`ethers` compile & deploy scripts |
-| `tests/` | End-to-end automated verification suite (`node --test`) |
+| `shared/` | Modular domain services (`mcp/*` split from `mcpService.mjs`, `monitoringService.mjs`, `landmarkService.mjs`, `passkeyService.mjs`, `pinService.mjs`, `types.d.ts`) |
+| `contracts/` | `GraffilandNFT.sol` (ERC-721 + 5% ERC-2981 royalty + ERC-4906) plus `solc`/`ethers` compile & deploy scripts |
+| `tests/` | Backend integration (`tests/graffiland.test.mjs`), React Testing Library UI unit tests (`tests/ui.test.mjs`), and headless Chrome Playwright E2E (`tests/e2e.playwright.mjs`) |
+
+---
+
+## Security Threat Model, Performance & Operational Readiness
+
+- **Proof of Location Threat Model**: GRAFFILAND fuses live rear-camera frames, optical-flow correlation, gyroscope motion, GPS/geohash proximity, **server-verified binary ORB Hamming matching** (`matchedDescriptors` against parcel `landmark_anchors`), and optional hardware **ES256 WebAuthn Passkeys**. Because web browsers supply client sensor streams, a determined attacker with a virtual camera + simulated GPS/gyro could spoof weak checks on public parcels; high-value parcels should require strict **ORB + Passkey unlock** policies.
+- **Takedown & Virtual Land Dispute Resolution**: Prohibited content, physical-safety hazards, and verified IP complaints can be immediately suppressed from public feeds via Admin visibility controls with audit reasons while preserving immutable on-chain ERC-721 history. First-valid PoL claims win initial Virtual Land parcel anchoring.
+- **3D Rendering & Mobile AR Quality**: Voxel sculptures batch via `THREE.InstancedMesh` per color/material bucket with `>25m` distance LOD simplification, WebGL `webglcontextlost` recovery + `SceneErrorBoundary`, smoothed visual ORB heading yaw correction in Preview, and a manual touch-drag fallback when iOS/Android gyroscope permissions are unavailable or denied.
+- **Rate Limiting, Telemetry & Hygiene**: API publish, land-create, and MCP routes enforce sliding-window DB rate limiting (`api_rate_limits`), relayer quotas refund automatically on failed mints, `ops_events` feeds `/api/admin/metrics` alerts, `ALLOW_DEV_GOOGLE_AUTH` is disabled in production Wrangler config, and CI runs `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `npm run contract:compile` (see `.github/workflows/ci.yml` / `deploy/ci-workflow.yml`).
 
 ---
 
@@ -209,10 +218,13 @@ npx wrangler secret put ROBINHOOD_CONTRACT_ADDRESS --config worker/wrangler.toml
    npm run contract:deploy
    ```
 
-3. **Run Tests & Build**:
+3. **Run Tests, Lint, Typecheck & E2E**:
    ```bash
    npm test
+   npm run lint
+   npm run typecheck
    npm run build
+   npm run test:e2e
    ```
 
 ---

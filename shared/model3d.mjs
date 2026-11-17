@@ -215,7 +215,7 @@ export function inspectCustomModelStats(format, bytes) {
 }
 
 export function validateAnchorOffset(raw = {}) {
-  const src = raw && typeof raw === 'object' ? raw : {};
+  const src = /** @type {Record<string, any>} */ (raw && typeof raw === 'object' ? raw : {});
   const dx = Number(src.dx ?? 0);
   const dy = Number(src.dy ?? 0);
   const dz = Number(src.dz ?? 0);

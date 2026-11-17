@@ -13,6 +13,8 @@ import { buildSculptureGlb } from '../../shared/glb.mjs';
 import {
   buildContractMetadata,
   buildIpfsMetadata,
+  buildSculptureSelectSql,
+  buildSpatialBoundingWhere,
   computeVerticalBounds,
   formatMarketplaceTokenMetadata,
   serializeSculptureRow
@@ -79,21 +81,28 @@ import { b64ToModelBytes, validateAnchorOffset } from '../../shared/model3d.mjs'
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
+  refundRelayerQuota,
   saveParcelLandmarkAnchor,
   updateLandSecurityPolicy
 } from '../../shared/landmarkService.mjs';
 import {
+  deleteUserPasskey,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
   verifyAndStorePasskeyRegistration
 } from '../../shared/passkeyService.mjs';
+import {
+  checkRateLimit,
+  getOperationalHealthReport,
+  logStructured,
+  recordOpsEvent
+} from '../../shared/monitoringService.mjs';
 import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
 } from '../../shared/landSignatureMessage.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
-  decodeGeohashBounds,
   haversineMeters,
   verifyAndEnrichLocation
 } from '../../server/services/pol.mjs';
@@ -572,6 +581,7 @@ export class PairCoordinator {
           meta.mcpCode = mCode;
           if (!this.mcpSubscribers.has(mCode)) this.mcpSubscribers.set(mCode, new Set());
           this.mcpSubscribers.get(mCode).add(server);
+          this.state.storage?.put?.(`mcp:${mCode}`, { updatedAt: Date.now() }).catch(() => {});
           this.sendJson(server, { type: 'mcp_subscribed', pairingCode: mCode });
         }
         return;
@@ -581,6 +591,7 @@ export class PairCoordinator {
         const code = this.generateCode();
         this.rooms.set(code, { code, desktopWs: server, mobileWs: null });
         meta = { ...meta, role: 'desktop', code };
+        this.state.storage?.put?.(`room:${code}`, { code, createdAt: Date.now() }).catch(() => {});
         this.sendJson(server, { type: 'pair_created', code });
         return;
       }
@@ -594,6 +605,7 @@ export class PairCoordinator {
         }
         room.mobileWs = server;
         meta = { ...meta, role: 'mobile', code };
+        this.state.storage?.put?.(`room:${code}:connected`, { connectedAt: Date.now() }).catch(() => {});
         this.sendJson(server, { type: 'pair_connected', code, role: 'mobile' });
         this.sendJson(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
         return;
@@ -645,11 +657,16 @@ export default {
     }
 
     if (pathname === '/api/health') {
-      return jsonResponse(
-        { ok: true, service: 'graffiland-worker', timestamp: new Date().toISOString() },
-        200,
-        request
-      );
+      try {
+        await env.DB.prepare('SELECT 1 AS ok').first();
+        return jsonResponse(
+          { ok: true, db: 'connected', service: 'graffiland-worker', timestamp: new Date().toISOString() },
+          200,
+          request
+        );
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message || 'D1 check failed' }, 500, request);
+      }
     }
 
     if (pathname === '/api/config') {
@@ -934,23 +951,28 @@ export default {
 
     // List public sculptures
     if (pathname === '/api/sculptures' && request.method === 'GET') {
-      const { results } = await env.DB.prepare(
-        `${WORKER_SCULPTURE_SELECT_SQL} WHERE s.hidden = 0 ORDER BY s.created_at DESC`
-      ).all();
       const includeVoxelsParam = url.searchParams.get('includeVoxels');
       const includeVoxels = includeVoxelsParam !== '0' && includeVoxelsParam !== 'false';
-      let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels }));
-
-      const parcelFilter = url.searchParams.get('parcel')?.toUpperCase();
-      if (parcelFilter) {
-        items = items.filter((item) => item.parcelId === parcelFilter);
-      }
-
+      const parcelFilter = url.searchParams.get('parcel')?.toUpperCase() || '';
       const latParam = url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null;
       const lngParam = url.searchParams.has('lng') ? Number(url.searchParams.get('lng')) : null;
       const radiusMeters = url.searchParams.has('radiusMeters')
         ? Math.max(10, Number(url.searchParams.get('radiusMeters')))
         : null;
+
+      const selectSql = buildSculptureSelectSql({ includeVoxels });
+      const { whereSql, params } = buildSpatialBoundingWhere({
+        lat: latParam,
+        lng: lngParam,
+        radiusMeters,
+        parcel: parcelFilter
+      });
+      const { results } = await env.DB.prepare(
+        `${selectSql} WHERE ${whereSql} ORDER BY s.created_at DESC`
+      )
+        .bind(...params)
+        .all();
+      let items = (results || []).map((r) => serializeSculptureRow(r, { includeVoxels }));
 
       if (Number.isFinite(latParam) && Number.isFinite(lngParam)) {
         items = items
@@ -1085,10 +1107,18 @@ export default {
       const rpcBody = await request.json().catch(() => ({}));
       const id = rpcBody?.id ?? null;
       try {
+        const pairingCode = extractPairingCode(request, rpcBody);
+        const clientIp = request.headers.get('CF-Connecting-IP') || 'anon';
+        await checkRateLimit(d1Adapter, {
+          scope: 'mcp',
+          key: pairingCode || clientIp,
+          windowSec: 60,
+          maxRequests: 120
+        });
         const caller = await getAuthUser(request, env, cfg);
         const out = await handleMcpJsonRpc(d1Adapter, {
           rpcBody,
-          pairingCode: extractPairingCode(request, rpcBody),
+          pairingCode,
           callerUser: caller,
           apiOrigin: url.origin,
           pinSculptureFn: makeWorkerPinHook(),
@@ -1222,13 +1252,21 @@ export default {
     if (landCreateMatch && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      let quotaConsumed = false;
       try {
         const body = await request.json().catch(() => ({}));
-        await checkAndConsumeRelayerQuota(d1Adapter, {
+        await checkRateLimit(d1Adapter, {
+          scope: 'land_create',
+          key: user.id,
+          windowSec: 60,
+          maxRequests: 30
+        });
+        const qRes = await checkAndConsumeRelayerQuota(d1Adapter, {
           userId: user.id,
           isAdmin: Boolean(user.is_admin),
           dailyQuota: cfg.relayerDailyQuota
         });
+        quotaConsumed = Boolean(qRes?.consumed);
         const out = await directOwnerCreateSculptureOnLand(d1Adapter, {
           parcelId: decodeURIComponent(landCreateMatch[1]),
           user,
@@ -1238,6 +1276,7 @@ export default {
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
+        if (quotaConsumed) await refundRelayerQuota(d1Adapter, { userId: user.id });
         return jsonResponse(
           { error: err.message || 'Create sculpture on land failed', ...(err?.extra || {}) },
           err?.statusCode || 400,
@@ -1305,11 +1344,11 @@ export default {
     if (pathname === '/api/passkeys/register/options' && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
-      return jsonResponse(
-        issuePasskeyRegistrationOptions(user, { rpId: resolveWorkerRpId(request, url) }),
-        200,
-        request
-      );
+      const opts = await issuePasskeyRegistrationOptions(user, {
+        db: d1Adapter,
+        rpId: resolveWorkerRpId(request, url)
+      });
+      return jsonResponse(opts, 200, request);
     }
 
     if (pathname === '/api/passkeys/register/verify' && request.method === 'POST') {
@@ -1317,14 +1356,40 @@ export default {
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
         const body = await request.json().catch(() => ({}));
+        const reqOrigin = request.headers.get('Origin') || '';
+        const allowedOrigins = reqOrigin
+          ? [cfg.publicUrl, reqOrigin].map((u) => {
+              try {
+                return new URL(u).origin;
+              } catch {
+                return '';
+              }
+            }).filter(Boolean)
+          : [];
         const out = await verifyAndStorePasskeyRegistration(d1Adapter, {
           user,
           body,
-          rpId: resolveWorkerRpId(request, url)
+          rpId: resolveWorkerRpId(request, url),
+          allowedOrigins
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Passkey registration failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const pkDelMatch = pathname.match(/^\/api\/passkeys\/([^/]+)$/);
+    if (pkDelMatch && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await deleteUserPasskey(d1Adapter, {
+          userId: user.id,
+          passkeyId: decodeURIComponent(pkDelMatch[1])
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Passkey removal failed' }, err?.statusCode || 400, request);
       }
     }
 
@@ -1479,6 +1544,7 @@ export default {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
 
+      let quotaConsumed = false;
       try {
         const body = await request.json().catch(() => ({}));
         const ua = request.headers.get('User-Agent') || '';
@@ -1506,10 +1572,11 @@ export default {
           return jsonResponse({ error: anchorCheck.error }, 400, request);
         }
 
-        await checkAndConsumeRelayerQuota(d1Adapter, {
-          userId: user.id,
-          isAdmin: Boolean(user.is_admin),
-          dailyQuota: cfg.relayerDailyQuota
+        await checkRateLimit(d1Adapter, {
+          scope: 'publish',
+          key: user.id,
+          windowSec: 60,
+          maxRequests: 30
         });
 
         const verticalBounds = computeVerticalBounds(validation.cleanVoxels);
@@ -1533,39 +1600,76 @@ export default {
           );
         }
 
+        const qRes = await checkAndConsumeRelayerQuota(d1Adapter, {
+          userId: user.id,
+          isAdmin: Boolean(user.is_admin),
+          dailyQuota: cfg.relayerDailyQuota
+        });
+        quotaConsumed = Boolean(qRes?.consumed);
+
         const sculptureId = crypto.randomUUID();
         const recipientAddress =
           user.custom_payout_address && ethers.isAddress(user.custom_payout_address)
             ? ethers.getAddress(user.custom_payout_address)
             : ethers.getAddress(user.wallet_address);
 
-        const ipfsResult = await pinSculptureBundle(
-          {
-            sculptureId,
-            title: validation.title,
-            description: validation.description,
-            voxels: validation.cleanVoxels,
-            previewDataUrl: body?.previewDataUrl || '',
-            locationBundle,
-            creatorAddress: recipientAddress
-          },
-          url.origin,
-          env,
-          cfg
-        );
+        let ipfsResult;
+        let mintResult;
+        try {
+          ipfsResult = await pinSculptureBundle(
+            {
+              sculptureId,
+              title: validation.title,
+              description: validation.description,
+              voxels: validation.cleanVoxels,
+              previewDataUrl: body?.previewDataUrl || '',
+              locationBundle,
+              creatorAddress: recipientAddress
+            },
+            url.origin,
+            env,
+            cfg
+          );
 
-        const mintResult = await mintOnChainOrSimulate(
-          {
-            recipientAddress,
-            metadataUri: ipfsResult.metadataUri,
-            parcelBytes32: locationBundle.parcelBytes32,
-            proofHash: locationBundle.proofHash,
-            lat: locationBundle.lat,
-            lng: locationBundle.lng
-          },
-          env,
-          cfg
-        );
+          mintResult = await mintOnChainOrSimulate(
+            {
+              recipientAddress,
+              metadataUri: ipfsResult.metadataUri,
+              parcelBytes32: locationBundle.parcelBytes32,
+              proofHash: locationBundle.proofHash,
+              lat: locationBundle.lat,
+              lng: locationBundle.lng
+            },
+            env,
+            cfg
+          );
+        } catch (err) {
+          if (quotaConsumed) {
+            await refundRelayerQuota(d1Adapter, { userId: user.id });
+            quotaConsumed = false;
+          }
+          await recordOpsEvent(d1Adapter, {
+            category: /pinata|ipfs/i.test(err?.message || '') ? 'pinata' : 'relayer_mint',
+            status: 'error',
+            actorId: user.id,
+            parcelId: locationBundle.parcelId,
+            detail: err?.message || 'Worker publish pipeline failure'
+          }).catch(() => {});
+          throw err;
+        }
+
+        await recordOpsEvent(d1Adapter, {
+          category: 'relayer_mint',
+          status: 'ok',
+          actorId: user.id,
+          parcelId: locationBundle.parcelId,
+          detail: `Minted ${sculptureId} (${mintResult.simulated ? 'sim' : 'live'})`
+        }).catch(() => {});
+        logStructured('info', 'worker_sculpture_published', {
+          sculptureId,
+          parcelId: locationBundle.parcelId,
+          simulated: Boolean(mintResult.simulated)
+        });
 
         const now = new Date().toISOString();
         await env.DB.prepare(`
@@ -1694,6 +1798,18 @@ export default {
           request
         );
       }
+    }
+
+    // Admin operational telemetry & metrics
+    if (pathname === '/api/admin/metrics' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      if (!user.is_admin) return jsonResponse({ error: 'Admin access required' }, 403, request);
+      const report = await getOperationalHealthReport(d1Adapter, {
+        chain: { network: cfg.network, contractAddress: cfg.contractAddress, liveReady: cfg.liveChainReady },
+        ipfsProvider: env.PINATA_JWT ? 'pinata' : 'cloudflare-cid'
+      });
+      return jsonResponse(report, 200, request);
     }
 
     // Admin list

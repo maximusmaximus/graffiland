@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { api, API_BASE } from '../utils/api.js';
+import {
+  buildSculptureShareUrl,
+  buildShareToXUrl,
+  copyToClipboard
+} from '../utils/clipboard.js';
 import AdminPanel from './AdminPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
@@ -77,6 +82,8 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   const [areaFilter, setAreaFilter] = useState(() =>
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
+  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'gallery' | 'leaders'
+  const [copiedId, setCopiedId] = useState('');
   const [mapViewport, setMapViewport] = useState(() => initialSession.mapViewport || null);
   const [lastSculpture, setLastSculpture] = useState(
     () => initialSession.lastSculptureSnapshot || null
@@ -159,6 +166,18 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   useEffect(() => {
     refreshData();
     refreshMyLands();
+    const deepId = new URLSearchParams(window.location.search).get('sculpture');
+    if (deepId) {
+      api
+        .getSculpture(deepId)
+        .then((res) => {
+          if (res?.sculpture) {
+            setSelected(res.sculpture);
+            setLastSculpture(res.sculpture);
+          }
+        })
+        .catch(() => {});
+    }
   }, [refreshData, refreshMyLands]);
 
   useEffect(() => {
@@ -224,6 +243,30 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
     return sculpturesSorted;
   }, [areaFilter, userLocation, nearbyMatches, sculpturesSorted]);
+
+  const creatorLeaderboard = useMemo(() => {
+    const byCreator = new Map();
+    for (const sc of sculptures || []) {
+      const key = sc.creatorEmail || sc.creatorName || sc.recipientAddress || 'anonymous';
+      if (!byCreator.has(key)) {
+        byCreator.set(key, {
+          key,
+          name: sc.creatorName || 'Street Artist',
+          sculptures: 0,
+          voxels: 0,
+          parcels: new Set()
+        });
+      }
+      const entry = byCreator.get(key);
+      entry.sculptures += 1;
+      entry.voxels += Number(sc.voxelCount || sc.voxels?.length || 0);
+      if (sc.parcelId) entry.parcels.add(sc.parcelId);
+    }
+    return Array.from(byCreator.values())
+      .map((item) => ({ ...item, parcelCount: item.parcels.size }))
+      .sort((a, b) => b.sculptures - a.sculptures || b.voxels - a.voxels)
+      .slice(0, 15);
+  }, [sculptures]);
 
   const handleViewportChange = useCallback((vp) => {
     setMapViewport(vp);
@@ -383,32 +426,61 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
               <button
                 type="button"
-                className={`btn ${areaFilter === 'nearby' ? 'btn-primary' : ''}`}
-                style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
-                onClick={() => setAreaFilter('nearby')}
+                className={`btn ${sidebarTab === 'list' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                onClick={() => setSidebarTab('list')}
               >
-                Near Me {userLocation ? `(${nearbyMatches.length})` : ''}
+                <XeroIcon emoji="📍" size={11} /> List
               </button>
               <button
                 type="button"
-                className={`btn ${areaFilter === 'all' ? 'btn-primary' : ''}`}
-                style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
-                onClick={() => setAreaFilter('all')}
+                className={`btn ${sidebarTab === 'gallery' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                onClick={() => setSidebarTab('gallery')}
               >
-                Global ({sculptures.length})
+                <XeroIcon emoji="🎨" size={11} /> Gallery
+              </button>
+              <button
+                type="button"
+                className={`btn ${sidebarTab === 'leaders' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                onClick={() => setSidebarTab('leaders')}
+              >
+                <XeroIcon emoji="🏆" size={11} /> Leaders
               </button>
             </div>
 
-            {areaFilter === 'nearby' && userLocation && nearbyMatches.length === 0 && sculptures.length > 0 && (
+            {sidebarTab !== 'leaders' && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className={`btn ${areaFilter === 'nearby' ? 'btn-primary' : ''}`}
+                  style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
+                  onClick={() => setAreaFilter('nearby')}
+                >
+                  Near Me {userLocation ? `(${nearbyMatches.length})` : ''}
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${areaFilter === 'all' ? 'btn-primary' : ''}`}
+                  style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
+                  onClick={() => setAreaFilter('all')}
+                >
+                  Global ({sculptures.length})
+                </button>
+              </div>
+            )}
+
+            {sidebarTab === 'list' && areaFilter === 'nearby' && userLocation && nearbyMatches.length === 0 && sculptures.length > 0 && (
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>
                 No sculptures within 5km yet — showing all {sculptures.length} global sculptures sorted closest first.
               </div>
             )}
 
-            {lastSculpture && (
+            {sidebarTab === 'list' && lastSculpture && (
               <button
                 type="button"
                 className="desktop-nearby-item is-last-viewed"
@@ -428,7 +500,94 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               </button>
             )}
 
-            <div className="desktop-nearby-list">
+            {sidebarTab === 'leaders' ? (
+              <div className="desktop-nearby-list" aria-label="Creator Leaderboard">
+                {creatorLeaderboard.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
+                    No builders ranked yet.
+                  </div>
+                ) : (
+                  creatorLeaderboard.map((entry, idx) => (
+                    <div key={entry.key} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                        <strong style={{ fontSize: 12.5 }}>
+                          #{idx + 1} {entry.name}
+                        </strong>
+                        <span className="badge teal" style={{ fontSize: 10 }}>
+                          {entry.sculptures} art · {entry.parcelCount} land
+                        </span>
+                      </div>
+                      <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                        {entry.voxels.toLocaleString()} total 3D blocks
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : sidebarTab === 'gallery' ? (
+              <div className="desktop-nearby-list" aria-label="Sculpture Gallery">
+                {displayedSculptures.map((sc) => (
+                  <div
+                    key={sc.id}
+                    className="desktop-nearby-item"
+                    onClick={() => openSculpture(sc)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openSculpture(sc);
+                      }
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                      <strong style={{ fontSize: 13 }}>{sc.title}</strong>
+                      <span className="badge gold" style={{ fontSize: 10 }}>{sc.parcelId}</span>
+                    </div>
+                    {sc.description && (
+                      <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left' }}>
+                        {sc.description}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, width: '100%', marginTop: 4 }}>
+                      <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                        {sc.modelType === 'custom-3d' ? '3D File' : `${sc.voxelCount || 0} blocks`} · PoL {sc.polScore}
+                      </span>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ padding: '2px 7px', fontSize: 10.5 }}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await copyToClipboard(buildSculptureShareUrl(sc.id));
+                            setCopiedId(sc.id);
+                            setTimeout(() => setCopiedId(''), 1800);
+                          }}
+                        >
+                          {copiedId === sc.id ? 'Copied!' : 'Copy Link'}
+                        </button>
+                        <a
+                          className="btn"
+                          style={{ padding: '2px 7px', fontSize: 10.5 }}
+                          href={buildShareToXUrl({
+                            title: sc.title,
+                            parcelId: sc.parcelId,
+                            sculptureId: sc.id
+                          })}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          𝕏
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="desktop-nearby-list">
               {displayedSculptures.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
                   No published sculptures on the map yet. Pair or open GRAFFILAND on your mobile phone to create the first piece nearby!
@@ -464,6 +623,7 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
                 })
               )}
             </div>
+            )}
           </aside>
         </div>
       </main>

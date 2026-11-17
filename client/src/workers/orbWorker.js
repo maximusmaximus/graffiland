@@ -216,6 +216,11 @@ function matchAgainstKeyframes(liveFeatures, keyframes, width, height, maxReproj
       // Lowe-style Hamming ratio + ceiling
       if (bestJ >= 0 && bestDist <= 68 && bestDist <= secondDist * 0.86) {
         matches.push({
+          keyframeIndex: kIdx,
+          featureIndex: bestJ,
+          liveDescB64: lf.descB64,
+          u: lf.u,
+          v: lf.v,
           lx: lf.u * width,
           ly: lf.v * height,
           kx: kfFeats[bestJ].u * (kf.frameWidth || width),
@@ -268,7 +273,14 @@ function matchAgainstKeyframes(liveFeatures, keyframes, width, height, maxReproj
         inlierCount: bestInliers,
         reprojectionErrorPx: Math.round(avgErr * 100) / 100,
         poseCorrectionYawRad: Math.round((bestDx / width) * ((62 * Math.PI) / 180) * 1000) / 1000,
-        matchedKeyframeIndex: kIdx
+        matchedKeyframeIndex: kIdx,
+        matchedDescriptors: matches.slice(0, 32).map((m) => ({
+          keyframeIndex: m.keyframeIndex,
+          featureIndex: m.featureIndex,
+          liveDescB64: m.liveDescB64,
+          u: m.u,
+          v: m.v
+        }))
       };
     }
   }

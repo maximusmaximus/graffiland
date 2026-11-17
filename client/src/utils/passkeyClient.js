@@ -42,12 +42,17 @@ export async function registerHardwarePasskey(deviceLabel = 'Mobile Device Passk
       id: b64UrlToUint8(options.user.id)
     }
   };
-  const cred = await navigator.credentials.create({ publicKey });
+  const cred = /** @type {PublicKeyCredential | null} */ (
+    await navigator.credentials.create({ publicKey })
+  );
   if (!cred || !cred.response) {
     throw new Error('Passkey registration was cancelled.');
   }
+  const attResp = /** @type {AuthenticatorAttestationResponse & { getPublicKey?: () => ArrayBuffer | null }} */ (
+    cred.response
+  );
   const spkiBuf =
-    typeof cred.response.getPublicKey === 'function' ? cred.response.getPublicKey() : null;
+    typeof attResp.getPublicKey === 'function' ? attResp.getPublicKey() : null;
   if (!spkiBuf) {
     throw new Error(
       'Browser did not expose SPKI ECDSA P-256 public key (update iOS/Android/Chrome).'
@@ -56,29 +61,39 @@ export async function registerHardwarePasskey(deviceLabel = 'Mobile Device Passk
   return api.verifyPasskeyRegistration({
     credentialId: cred.id || bufferToB64Url(cred.rawId),
     publicKeySpkiB64: bufferToB64Url(spkiBuf),
-    clientDataJSON: bufferToB64Url(cred.response.clientDataJSON),
+    clientDataJSON: bufferToB64Url(attResp.clientDataJSON),
     deviceLabel
   });
 }
 
-export async function requestPasskeyAssertion(challengeB64Url) {
+export async function requestPasskeyAssertion(challengeB64Url, allowedCredentialIds = []) {
   if (!isWebAuthnSupported()) {
     throw new Error('Hardware Passkeys (WebAuthn) are required on this parcel.');
   }
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64UrlToUint8(challengeB64Url),
-      userVerification: 'preferred',
-      timeout: 45000
-    }
-  });
+  /** @type {PublicKeyCredentialDescriptor[]} */
+  const allowCredentials = Array.isArray(allowedCredentialIds)
+    ? allowedCredentialIds
+        .filter(Boolean)
+        .map((id) => ({ type: /** @type {const} */ ('public-key'), id: b64UrlToUint8(id) }))
+    : [];
+  const assertion = /** @type {PublicKeyCredential | null} */ (
+    await navigator.credentials.get({
+      publicKey: {
+        challenge: b64UrlToUint8(challengeB64Url),
+        ...(allowCredentials.length > 0 ? { allowCredentials } : {}),
+        userVerification: 'preferred',
+        timeout: 45000
+      }
+    })
+  );
   if (!assertion || !assertion.response) {
     throw new Error('Passkey biometric verification was cancelled.');
   }
+  const assertResp = /** @type {AuthenticatorAssertionResponse} */ (assertion.response);
   return {
     credentialId: assertion.id || bufferToB64Url(assertion.rawId),
-    clientDataJSON: bufferToB64Url(assertion.response.clientDataJSON),
-    authenticatorData: bufferToB64Url(assertion.response.authenticatorData),
-    signature: bufferToB64Url(assertion.response.signature)
+    clientDataJSON: bufferToB64Url(assertResp.clientDataJSON),
+    authenticatorData: bufferToB64Url(assertResp.authenticatorData),
+    signature: bufferToB64Url(assertResp.signature)
   };
 }

@@ -32,6 +32,15 @@ export default function LandManagementModal({
   const [eraseConfirmInput, setEraseConfirmInput] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
 
+  // Direct browser custom 3D model uploader + anchorOffset calibration
+  const [uploadTitle, setUploadTitle] = useState('');
+  const [uploadDesc, setUploadDesc] = useState('');
+  const [uploadFormat, setUploadFormat] = useState('glb');
+  const [uploadBase64, setUploadBase64] = useState('');
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadScale, setUploadScale] = useState(1);
+  const [anchorOffset, setAnchorOffset] = useState({ dx: 0, dy: 0, dz: 0, yaw: 0 });
+
   const loadWorkspace = useCallback(async () => {
     setLoading(true);
     setErrorMsg('');
@@ -99,6 +108,90 @@ export default function LandManagementModal({
       setNotice(`Registered hardware ES256 Passkey (${out.passkey?.deviceLabel || 'Device'}).`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not register hardware Passkey');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleDeletePasskey(pkId) {
+    setBusy('passkey');
+    setNotice('');
+    setErrorMsg('');
+    try {
+      await api.deletePasskey(pkId);
+      const pkRes = await api.getPasskeyStatus();
+      setPasskeys(pkRes?.passkeys || []);
+      setNotice('Removed Passkey credential.');
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not remove Passkey');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function handleModelFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (!['glb', 'gltf', 'obj', 'stl', 'ply'].includes(ext)) {
+      setErrorMsg('Unsupported 3D file type. Use .glb, .gltf, .obj, .stl, or .ply.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMsg('3D file exceeds 5 MB upload cap. Compress meshes or use Draco.');
+      return;
+    }
+    setErrorMsg('');
+    setUploadFormat(ext);
+    setUploadFileName(file.name);
+    if (!uploadTitle.trim()) {
+      setUploadTitle(file.name.replace(/\.[^.]+$/, '').slice(0, 48));
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      setUploadBase64(btoa(bin));
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  async function handleUpload3DModelSubmit(e) {
+    e.preventDefault();
+    if (!activeParcel || !uploadBase64) return;
+    setBusy('upload');
+    setNotice('');
+    setErrorMsg('');
+    try {
+      const res = await api.createSculptureOnLand(activeParcel.parcelId, {
+        title: uploadTitle.trim() || uploadFileName || '3D Model Sculpture',
+        description:
+          uploadDesc.trim() ||
+          `Custom ${uploadFormat.toUpperCase()} 3D model placed directly on Virtual Land ${activeParcel.parcelId}.`,
+        modelFormat: uploadFormat,
+        modelBase64: uploadBase64,
+        modelScale: Number(uploadScale || 1),
+        anchorOffset: {
+          dx: Number(anchorOffset.dx || 0),
+          dy: Number(anchorOffset.dy || 0),
+          dz: Number(anchorOffset.dz || 0),
+          yaw: Number(anchorOffset.yaw || 0)
+        }
+      });
+      setUploadTitle('');
+      setUploadDesc('');
+      setUploadBase64('');
+      setUploadFileName('');
+      await loadWorkspace();
+      onWorkspaceChanged?.();
+      setNotice(
+        `Uploaded "${res?.sculpture?.title || '3D Model'}" (${uploadFormat.toUpperCase()}) onto ${activeParcel.parcelId}.`
+      );
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not upload 3D model');
     } finally {
       setBusy('');
     }
@@ -376,6 +469,36 @@ export default function LandManagementModal({
                         )}
                       </div>
                     </div>
+                    {passkeys.length > 0 && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {passkeys.map((pk) => (
+                          <span
+                            key={pk.id}
+                            className="badge"
+                            style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                          >
+                            <XeroIcon emoji="🛡️" size={11} />
+                            <span>{pk.deviceLabel || pk.id.slice(0, 8)}</span>
+                            <button
+                              type="button"
+                              aria-label={`Delete passkey ${pk.deviceLabel || pk.id}`}
+                              disabled={busy !== ''}
+                              onClick={() => handleDeletePasskey(pk.id)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: '#ffb3c1',
+                                cursor: 'pointer',
+                                padding: 0,
+                                fontWeight: 700
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
                       <input
                         type="checkbox"
@@ -542,10 +665,119 @@ export default function LandManagementModal({
                     Items on {activeParcel.parcelId} ({activeParcel.sculptures?.length || 0})
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                    Your paired MCP agent can also load any <code>.glb</code>, <code>.gltf</code>,{' '}
-                    <code>.obj</code>, <code>.stl</code>, or <code>.ply</code> non-voxel 3D model here via{' '}
+                    Upload a non-voxel 3D file (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>,{' '}
+                    <code>.stl</code>, <code>.ply</code>, max 5 MB) directly or via paired MCP{' '}
                     <code>load_3d_model_on_land</code>.
                   </div>
+
+                  <form
+                    onSubmit={handleUpload3DModelSubmit}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      padding: 10,
+                      borderRadius: 8,
+                      background: 'rgba(0, 245, 212, 0.05)',
+                      border: '1px solid rgba(0, 245, 212, 0.22)'
+                    }}
+                  >
+                    <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                      <XeroIcon emoji="🗿" size={13} /> Upload Custom 3D Model (.GLB/.OBJ/.STL/.PLY)
+                    </strong>
+                    <input
+                      type="file"
+                      accept=".glb,.gltf,.obj,.stl,.ply"
+                      onChange={handleModelFileSelected}
+                      style={{ fontSize: 11.5 }}
+                    />
+                    {uploadFileName && (
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+                        Loaded {uploadFileName} ({uploadFormat.toUpperCase()})
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <input
+                        className="input"
+                        style={{ flex: '1 1 160px' }}
+                        maxLength={48}
+                        value={uploadTitle}
+                        onChange={(e) => setUploadTitle(e.target.value)}
+                        placeholder="Sculpture title"
+                      />
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                        <span>Scale</span>
+                        <input
+                          type="number"
+                          className="input"
+                          style={{ width: 68 }}
+                          min={0.1}
+                          max={20}
+                          step={0.1}
+                          value={uploadScale}
+                          onChange={(e) => setUploadScale(Number(e.target.value || 1))}
+                        />
+                      </label>
+                    </div>
+                    <input
+                      className="input"
+                      maxLength={240}
+                      value={uploadDesc}
+                      onChange={(e) => setUploadDesc(e.target.value)}
+                      placeholder="Short Limited Terms description (10-240 chars)"
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, fontSize: 10.5 }}>
+                      <label>
+                        dx (m)
+                        <input
+                          type="number"
+                          step={0.1}
+                          className="input"
+                          value={anchorOffset.dx}
+                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }))}
+                        />
+                      </label>
+                      <label>
+                        dy (m)
+                        <input
+                          type="number"
+                          step={0.1}
+                          className="input"
+                          value={anchorOffset.dy}
+                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }))}
+                        />
+                      </label>
+                      <label>
+                        dz (m)
+                        <input
+                          type="number"
+                          step={0.1}
+                          className="input"
+                          value={anchorOffset.dz}
+                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }))}
+                        />
+                      </label>
+                      <label>
+                        yaw (rad)
+                        <input
+                          type="number"
+                          step={0.1}
+                          className="input"
+                          value={anchorOffset.yaw}
+                          onChange={(e) => setAnchorOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }))}
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      style={{ fontSize: 11.5 }}
+                      disabled={busy !== '' || !uploadBase64}
+                    >
+                      <XeroIcon emoji="📤" size={13} />{' '}
+                      {busy === 'upload' ? 'Pinning to IPFS...' : 'Place 3D Model on Land'}
+                    </button>
+                  </form>
                   {(activeParcel.sculptures || []).map((sc) => {
                     const revOpen = Boolean(expandedRevIds[sc.id]);
                     return (

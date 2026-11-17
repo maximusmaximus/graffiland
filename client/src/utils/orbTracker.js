@@ -112,7 +112,8 @@ export class OrbLandmarkTracker {
       inlierCount: res.inlierCount || 0,
       reprojectionErrorPx: res.reprojectionErrorPx || 999,
       poseCorrectionYawRad: res.poseCorrectionYawRad || 0,
-      matchedKeyframeIndex: res.matchedKeyframeIndex ?? -1
+      matchedKeyframeIndex: res.matchedKeyframeIndex ?? -1,
+      matchedDescriptors: res.matchedDescriptors || []
     };
   }
 

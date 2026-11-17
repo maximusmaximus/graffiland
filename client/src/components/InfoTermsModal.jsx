@@ -222,7 +222,20 @@ export default function InfoTermsModal({
                 <li>
                   <strong>Hardware ES256 Passkeys &amp; KEK Seals:</strong> Landholders can enforce WebAuthn Passkeys, live ORB PnP inlier proofs, and server <code>PIN_MASTER_KEK</code> envelope protection before unlocking on-site encrypted IPFS pinned batches.
                 </li>
+                <li>
+                  <strong>Quick Sculpt Mode, First-Run Guide &amp; Instanced AR Engine:</strong> Toggle <code>⚡ Quick</code> for a streamlined beginner HUD or tap <code>❓</code> for the interactive tutorial. Nearby voxel sculptures render via batched <code>InstancedMesh</code> draw calls with 25m distance LOD and a WebGL recovery boundary.
+                </li>
               </ul>
+            </div>
+
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="⚠️" size={18} /> Proof of Location Threat Model &amp; Transparency
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                {policy?.threatModelSummary ||
+                  'GRAFFILAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB Hamming landmark matching, and optional hardware ES256 WebAuthn Passkeys. Because client browsers supply raw camera/sensor streams, determined adversaries with virtual cameras + emulated GPS/gyro remain a residual risk on public parcels; enable strict ORB + Passkey requirements and relayer quotas on high-value parcels.'}
+              </p>
             </div>
 
             <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 4 }}>
@@ -245,6 +258,13 @@ export default function InfoTermsModal({
               <strong>Limited Terms Rules:</strong> Title {policy?.titleMin}–{policy?.titleMax} chars;
               Description {policy?.descriptionMin}–{policy?.descriptionMax} chars (max{' '}
               {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs, scams, or hate speech.
+            </div>
+            <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
+              <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}
+              {Array.isArray(policy?.takedownAndDisputePolicy)
+                ? policy.takedownAndDisputePolicy.join(' ')
+                : policy?.takedownAndDisputePolicy ||
+                  'GRAFFILAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history. Virtual Land disputes resolve first-valid Proof-of-Location claim on-chain with admin abuse suppression for spoofed claims.'}
             </div>
           </div>
         )}

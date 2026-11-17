@@ -15,6 +15,11 @@ import {
   getOrCreateDeviceIdentity
 } from '../utils/chatCrypto.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
+import {
+  buildSculptureShareUrl,
+  buildShareToXUrl,
+  copyToClipboard
+} from '../utils/clipboard.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
@@ -109,11 +114,17 @@ export default function SculptureModal({
     };
   }, [initialSculpture]);
 
+  const scMapId = sculpture?.id;
+  const scMapLat = sculpture?.lat;
+  const scMapLng = sculpture?.lng;
+  const scMapBounds = sculpture?.parcelBounds;
+  const scMapParcelId = sculpture?.parcelId;
+
   useEffect(() => {
     const host = landMapHostRef.current;
-    const latNum = Number(sculpture?.lat);
-    const lngNum = Number(sculpture?.lng);
-    if (!host || !sculpture || !Number.isFinite(latNum) || !Number.isFinite(lngNum)) return;
+    const latNum = Number(scMapLat);
+    const lngNum = Number(scMapLng);
+    if (!host || !scMapId || !Number.isFinite(latNum) || !Number.isFinite(lngNum)) return undefined;
 
     const map = L.map(host, {
       center: [latNum, lngNum],
@@ -126,14 +137,14 @@ export default function SculptureModal({
       maxZoom: 19
     }).addTo(map);
 
-    if (sculpture.parcelBounds?.sw && sculpture.parcelBounds?.ne) {
-      L.rectangle([sculpture.parcelBounds.sw, sculpture.parcelBounds.ne], {
+    if (scMapBounds?.sw && scMapBounds?.ne) {
+      L.rectangle([scMapBounds.sw, scMapBounds.ne], {
         color: '#ffd166',
         weight: 2.5,
         fillColor: '#00f5d4',
         fillOpacity: 0.25
       })
-        .bindTooltip(`Virtual Land ${sculpture.parcelId}`)
+        .bindTooltip(`Virtual Land ${scMapParcelId}`)
         .addTo(map);
     }
 
@@ -156,21 +167,19 @@ export default function SculptureModal({
       clearTimeout(timer);
       map.remove();
     };
-  }, [sculpture?.id, sculpture?.lat, sculpture?.lng, sculpture?.parcelBounds, sculpture?.parcelId]);
+  }, [scMapId, scMapLat, scMapLng, scMapBounds, scMapParcelId]);
 
-  if (!sculpture) return null;
-
-  const pol = sculpture.proofOfLocation || {};
+  const pol = sculpture?.proofOfLocation || {};
   const geo = pol.geoInfo || {};
   const sensors = pol.sensors || {};
   const solar = pol.solar || {};
-  const elevation = sculpture.elevation || pol.elevation || {};
-  const ownerAddr = sculpture.recipientAddress || sculpture.ownerAddress || '';
+  const elevation = sculpture?.elevation || pol.elevation || {};
+  const ownerAddr = sculpture?.recipientAddress || sculpture?.ownerAddress || '';
   const ownerWallets = [user?.walletAddress, user?.customPayoutAddress]
     .filter(Boolean)
     .map((a) => a.toLowerCase());
   const isPropertyOwner = Boolean(ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()));
-  const isContributor = !isPropertyOwner && Boolean(sculpture.viewerCanContribute);
+  const isContributor = !isPropertyOwner && Boolean(sculpture?.viewerCanContribute);
   const canModifySculpture = isPropertyOwner || isContributor;
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
@@ -202,6 +211,8 @@ export default function SculptureModal({
       cancelled = true;
     };
   }, [isPropertyOwner, sculpture?.geohash, sculpture?.id, sculpture?.parcelId, user?.id]);
+
+  if (!sculpture) return null;
 
   async function saveOwnerPinnedIpfsBatch(nextPins) {
     if (!user?.id || !sculpture?.id) return;
@@ -540,6 +551,30 @@ export default function SculptureModal({
               </span>
             </a>
           )}
+          <button
+            type="button"
+            className="btn"
+            onClick={async () => {
+              const ok = await copyToClipboard(buildSculptureShareUrl(sculpture.id));
+              setPropNotice(ok ? 'Copied shareable deep link (?sculpture=...)!' : 'Copy unavailable');
+            }}
+            title="Copy direct share link to this sculpture"
+          >
+            <XeroIcon emoji="📤" size={14} /> Copy Link
+          </button>
+          <a
+            className="btn"
+            href={buildShareToXUrl({
+              title: sculpture.title,
+              parcelId: sculpture.parcelId,
+              sculptureId: sculpture.id
+            })}
+            target="_blank"
+            rel="noreferrer"
+            title="Share this Virtual Land sculpture to X"
+          >
+            𝕏 Share to X
+          </a>
           {explorerTxUrl ? (
             <a className="btn" href={explorerTxUrl} target="_blank" rel="noreferrer">
               <XeroIcon emoji="⛓️" size={14} />

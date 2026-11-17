@@ -86,7 +86,7 @@ export function haversineMeters(lat1, lng1, lat2, lng2) {
 
 export function computeSolarPosition(lat, lng, date = new Date()) {
   const start = new Date(Date.UTC(date.getUTCFullYear(), 0, 0));
-  const diff = date - start;
+  const diff = date.getTime() - start.getTime();
   const dayOfYear = Math.floor(diff / 86400000);
   const utcHours =
     date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;

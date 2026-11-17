@@ -1,0 +1,357 @@
+import React, { useMemo } from 'react';
+import {
+  buildSculptureShareUrl,
+  buildShareToXUrl,
+  copyToClipboard
+} from '../../utils/clipboard.js';
+import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
+import XeroIcon from '../XeroIcon.jsx';
+
+export default function PublishSculptureModal({
+  config,
+  user,
+  voxels,
+  polStats,
+  location,
+  orbStatus,
+  passkeyCount,
+  passkeyBusy,
+  onEnrollPasskey,
+  title,
+  setTitle,
+  description,
+  setDescription,
+  cluePrompt,
+  setCluePrompt,
+  clueAnswer,
+  setClueAnswer,
+  termsAccepted,
+  setTermsAccepted,
+  publishing,
+  publishError,
+  setPublishError,
+  mintReceipt,
+  mcpPairingsState,
+  agentPublishPrompt,
+  draftsBusy,
+  draftStatusText,
+  onSubmitPublish,
+  onCopyAgentPublishPrompt,
+  onManualSaveDraft,
+  onOpenInfo,
+  onOpenPair,
+  onOpenManageLand,
+  onViewInARPreview,
+  onShowHint,
+  onClose
+}) {
+  const policy = config?.policy;
+  const wordCount = useMemo(
+    () => (description.trim() ? description.trim().split(/\s+/).filter(Boolean).length : 0),
+    [description]
+  );
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 className="modal-title">
+            <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
+          </h3>
+          <button className="btn" onClick={onClose} aria-label="Close publish sheet">
+            <XeroIcon emoji="❌" size={15} />
+          </button>
+        </div>
+
+        {mintReceipt ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
+              <XeroIcon emoji="✅" size={15} /> Minted directly to your wallet!
+            </div>
+            <div className="card" style={{ fontSize: 12 }}>
+              <div><strong>Title:</strong> {mintReceipt.sculpture.title}</div>
+              <div><strong>Virtual Land:</strong> <span className="mono">{mintReceipt.sculpture.parcelId}</span></div>
+              <div><strong>Token ID:</strong> <span className="mono">#{mintReceipt.mint.tokenId}</span></div>
+              <div><strong>Resale Fee:</strong> 5% (ERC-2981)</div>
+              <div style={{ wordBreak: 'break-all' }}>
+                <strong>IPFS CID:</strong> <span className="mono">{mintReceipt.ipfs.metadataCid}</span>
+              </div>
+              <div style={{ wordBreak: 'break-all' }}>
+                <strong>Tx Hash:</strong> <span className="mono">{mintReceipt.mint.txHash}</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" onClick={onViewInARPreview}>
+                <XeroIcon emoji="👁️" size={16} /> View in AR Preview
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={async () => {
+                  const ok = await copyToClipboard(buildSculptureShareUrl(mintReceipt.sculpture.id));
+                  onShowHint?.(ok ? 'Copied shareable deep link!' : 'Copy unavailable');
+                }}
+              >
+                <XeroIcon emoji="📤" size={15} /> Copy Link
+              </button>
+              <a
+                className="btn"
+                href={buildShareToXUrl({
+                  title: mintReceipt.sculpture.title,
+                  parcelId: mintReceipt.sculpture.parcelId,
+                  sculptureId: mintReceipt.sculpture.id
+                })}
+                target="_blank"
+                rel="noreferrer"
+              >
+                𝕏 Share to X
+              </a>
+              <button
+                type="button"
+                className="btn"
+                style={{ borderColor: 'rgba(255, 209, 102, 0.6)', color: 'var(--accent-gold)' }}
+                onClick={() => onOpenManageLand(mintReceipt.sculpture.parcelId || '')}
+              >
+                <XeroIcon emoji="🗺️" size={16} /> Manage Land &amp; Contributors
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={onSubmitPublish} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <span className="badge teal">
+                <XeroIcon emoji="🧱" size={13} /> {voxels.length} voxels
+              </span>
+              <span className="badge gold">
+                <XeroIcon emoji="📷" size={13} /> {polStats.frames} frames / {polStats.flow}% flow
+              </span>
+              {location?.altitude != null && (
+                <span className="badge teal">
+                  <XeroIcon emoji="⛰️" size={13} /> {Math.round(location.altitude)}m alt
+                </span>
+              )}
+              <span className="badge">
+                <XeroIcon emoji="🪙" size={13} /> Gas Free · 5% Resale Fee
+              </span>
+              {orbStatus.features >= 12 && (
+                <span className="badge teal">
+                  <XeroIcon emoji="📡" size={13} /> {orbStatus.keyframes}/3 ORB Angles ({orbStatus.features} pts)
+                </span>
+              )}
+              {user && isWebAuthnSupported() && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ fontSize: 11, padding: '3px 9px' }}
+                  disabled={passkeyBusy}
+                  onClick={async () => {
+                    setPublishError('');
+                    try {
+                      await onEnrollPasskey();
+                    } catch (err) {
+                      setPublishError(err.message || 'Passkey registration failed');
+                    }
+                  }}
+                >
+                  <XeroIcon emoji="🛡️" size={12} />{' '}
+                  {passkeyCount > 0 ? `Passkey Ready (${passkeyCount})` : 'Enroll Biometric Passkey'}
+                </button>
+              )}
+            </div>
+
+            <div>
+              <div className="field-label">
+                <span>Title</span>
+                <span className="mono">{title.length}/{policy?.titleMax || 48}</span>
+              </div>
+              <input
+                className="input"
+                required
+                maxLength={policy?.titleMax || 48}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Name your 3D street sculpture"
+              />
+            </div>
+
+            <div>
+              <div className="field-label">
+                <span>Description (Limited Terms)</span>
+                <span className="mono">
+                  {description.length}/{policy?.descriptionMax || 240} chars · {wordCount}/{policy?.descriptionMaxWords || 45} words
+                </span>
+              </div>
+              <textarea
+                className="textarea"
+                rows={3}
+                required
+                maxLength={policy?.descriptionMax || 240}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Short story or inspiration for this Virtual Land piece..."
+              />
+            </div>
+
+            <div>
+              <div className="field-label">
+                <span>Optional On-Site Chat Clue (24/7 Solo Unlock)</span>
+                <span className="mono">E2EE · PBKDF2</span>
+              </div>
+              <input
+                className="input"
+                maxLength={140}
+                value={cluePrompt}
+                onChange={(e) => setCluePrompt(e.target.value)}
+                placeholder="Question visible at this spot (leave blank for peer-only)"
+              />
+              {cluePrompt.trim() && (
+                <input
+                  className="input"
+                  style={{ marginTop: 6 }}
+                  value={clueAnswer}
+                  onChange={(e) => setClueAnswer(e.target.value)}
+                  placeholder="Answer visible in person (never sent to server)"
+                  required
+                />
+              )}
+            </div>
+
+            {user && (
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                Minted NFT Recipient ({user.email}):
+                <div className="mono" style={{ color: 'var(--accent)', wordBreak: 'break-all' }}>
+                  {user.activeMintRecipient}
+                </div>
+              </div>
+            )}
+
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={termsAccepted}
+                onChange={(e) => setTermsAccepted(e.target.checked)}
+              />
+              <span>
+                I accept the{' '}
+                <button
+                  type="button"
+                  onClick={onOpenInfo}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--accent)',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    cursor: 'pointer'
+                  }}
+                >
+                  GRAFFILAND Terms &amp; Virtual Land Policy
+                </button>
+                , confirm real physical presence, and acknowledge the 5% Robinhood resale royalty.
+              </span>
+            </label>
+
+            {publishError && (
+              <div style={{ color: '#ffb3c1', fontSize: 12 }}>
+                <XeroIcon emoji="⚠️" size={14} /> {publishError}
+              </div>
+            )}
+
+            {mcpPairingsState.mcpActive && mcpPairingsState.activePairing && (
+              <div className="card" style={{ padding: 10, fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span className="badge teal">
+                    <XeroIcon emoji="🔑" size={12} /> Agent Keys Connected ({mcpPairingsState.activePairing.code})
+                  </span>
+                  <span style={{ color: 'var(--muted)' }}>
+                    Sign here on mobile OR delegate signing to your agent
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                className="btn btn-pink"
+                style={{ flex: '1 1 180px' }}
+                disabled={publishing || voxels.length === 0}
+              >
+                <XeroIcon emoji="🚀" size={16} />
+                {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
+              </button>
+              {mcpPairingsState.mcpActive && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: '1 1 180px' }}
+                  disabled={publishing || voxels.length === 0}
+                  onClick={onCopyAgentPublishPrompt}
+                >
+                  <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn"
+                disabled={publishing || draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
+                onClick={() => onManualSaveDraft({ closePublish: true })}
+              >
+                <XeroIcon emoji="💾" size={15} />
+                <span>{draftsBusy ? 'Saving...' : 'Save Draft'}</span>
+              </button>
+            </div>
+
+            {agentPublishPrompt && (
+              <div className="card" style={{ padding: 10, fontSize: 12, borderColor: 'rgba(0, 245, 212, 0.45)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <strong style={{ color: 'var(--accent)' }}>
+                    ⏳ Waiting for Agent Signature ({agentPublishPrompt.requestId.slice(0, 14)}...)
+                  </strong>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: '4px 8px', fontSize: 11 }}
+                    onClick={() => copyToClipboard(agentPublishPrompt.promptText)}
+                  >
+                    📋 Re-copy Prompt
+                  </button>
+                </div>
+                <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 10, maxHeight: 140, overflowY: 'auto', color: 'var(--muted)' }}>
+                  {agentPublishPrompt.promptText}
+                </pre>
+              </div>
+            )}
+
+            {!mcpPairingsState.mcpActive && (
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                Want your AI agent to sign on your behalf? Pair a robust <code>GLP-...</code> code under{' '}
+                <button
+                  type="button"
+                  onClick={onOpenPair}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--accent)',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Pair Desktop &amp; MCP Agent
+                </button>
+                .
+              </div>
+            )}
+
+            {draftStatusText && (
+              <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+                <XeroIcon emoji="💾" size={12} /> Auto-draft: {draftStatusText}
+              </div>
+            )}
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

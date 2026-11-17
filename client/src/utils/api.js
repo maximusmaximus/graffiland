@@ -1,5 +1,6 @@
 const TOKEN_KEY = 'graffiland_jwt';
-export const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const ENV_META = /** @type {any} */ (import.meta)?.env || {};
+export const API_BASE = String(ENV_META.VITE_API_BASE || '').replace(/\/$/, '');
 
 export function resolveApiUrl(pathOrUrl) {
   if (!pathOrUrl) return '';
@@ -26,6 +27,7 @@ async function request(url, options = {}) {
   const res = await fetch(resolveApiUrl(url), { ...options, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    /** @type {any} */
     const err = new Error(data.error || `Request failed (${res.status})`);
     err.status = res.status;
     err.data = data;
@@ -250,5 +252,8 @@ export const api = {
     request('/api/passkeys/register/verify', {
       method: 'POST',
       body: JSON.stringify(payload)
-    })
+    }),
+  deletePasskey: (id) =>
+    request(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getAdminMetrics: () => request('/api/admin/metrics')
 };

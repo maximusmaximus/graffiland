@@ -80,12 +80,34 @@ export async function listUserPasskeys(db, userId) {
   }));
 }
 
-export function issuePasskeyRegistrationOptions(user, { rpId = 'localhost' } = {}) {
+export async function issuePasskeyRegistrationOptions(
+  user,
+  { db = null, rpId = 'localhost' } = {}
+) {
   if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
   const challengeBytes = new Uint8Array(32);
   crypto.getRandomValues(challengeBytes);
+  const challenge = uint8ToB64Url(challengeBytes);
+
+  if (db) {
+    const nowMs = Date.now();
+    await db
+      .run(
+        `INSERT INTO webauthn_reg_challenges (challenge, user_id, rp_id, created_at, expires_at, used)
+         VALUES (?, ?, ?, ?, ?, 0)`,
+        [
+          challenge,
+          user.id,
+          rpId,
+          new Date(nowMs).toISOString(),
+          new Date(nowMs + 5 * 60 * 1000).toISOString()
+        ]
+      )
+      .catch(() => {});
+  }
+
   return {
-    challenge: uint8ToB64Url(challengeBytes),
+    challenge,
     rp: { id: rpId, name: 'GRAFFILAND' },
     user: {
       id: uint8ToB64Url(new TextEncoder().encode(user.id)),
@@ -102,7 +124,10 @@ export function issuePasskeyRegistrationOptions(user, { rpId = 'localhost' } = {
   };
 }
 
-export async function verifyAndStorePasskeyRegistration(db, { user, body, rpId = '' }) {
+export async function verifyAndStorePasskeyRegistration(
+  db,
+  { user, body, rpId = '', allowedOrigins = [] }
+) {
   if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
   const credentialId = String(body?.credentialId || body?.id || '').trim();
   const publicKeySpkiB64 = String(body?.publicKeySpkiB64 || '').trim();
@@ -121,6 +146,26 @@ export async function verifyAndStorePasskeyRegistration(db, { user, body, rpId =
   }
   if (clientData?.type !== 'webauthn.create') {
     throw new PasskeyError('Expected WebAuthn creation ceremony.', 400);
+  }
+  if (allowedOrigins.length > 0 && !allowedOrigins.includes(clientData?.origin)) {
+    throw new PasskeyError(`Untrusted WebAuthn registration origin (${clientData?.origin || 'none'}).`, 403);
+  }
+
+  // Verify stored single-use registration challenge if challenges table is present
+  const actualCh = String(clientData?.challenge || '').trim();
+  if (actualCh) {
+    const chRow = await db
+      .get('SELECT * FROM webauthn_reg_challenges WHERE challenge = ? AND user_id = ?', [
+        actualCh,
+        user.id
+      ])
+      .catch(() => null);
+    if (chRow) {
+      if (Number(chRow.used) !== 0 || Date.now() > new Date(chRow.expires_at).getTime()) {
+        throw new PasskeyError('WebAuthn registration challenge expired or already used.', 400);
+      }
+      await db.run('UPDATE webauthn_reg_challenges SET used = 1 WHERE challenge = ?', [actualCh]);
+    }
   }
 
   try {
@@ -159,9 +204,20 @@ export async function verifyAndStorePasskeyRegistration(db, { user, body, rpId =
   };
 }
 
+export async function deleteUserPasskey(db, { userId, passkeyId }) {
+  if (!userId) throw new PasskeyError('Google sign-in required.', 401);
+  const res = await db.run('DELETE FROM user_passkeys WHERE id = ? AND user_id = ?', [
+    passkeyId,
+    userId
+  ]);
+  const changes = Number(res?.changes ?? res?.meta?.changes ?? 0);
+  if (changes < 1) throw new PasskeyError('Passkey not found for this account.', 404);
+  return { ok: true, deletedId: passkeyId };
+}
+
 export async function verifyPasskeyAssertion(
   db,
-  { user, assertion, expectedChallengeB64, expectedRpId = '' }
+  { user, assertion, expectedChallengeB64, expectedRpId = '', allowedOrigins = [] }
 ) {
   if (!user?.id) throw new PasskeyError('Authentication required.', 401);
   const credentialId = String(assertion?.credentialId || assertion?.id || '').trim();
@@ -190,6 +246,9 @@ export async function verifyPasskeyAssertion(
   }
   if (clientData?.type !== 'webauthn.get') {
     throw new PasskeyError('Invalid WebAuthn ceremony type (expected webauthn.get).', 403);
+  }
+  if (allowedOrigins.length > 0 && !allowedOrigins.includes(clientData?.origin)) {
+    throw new PasskeyError(`Untrusted WebAuthn assertion origin (${clientData?.origin || 'none'}).`, 403);
   }
 
   // Normalize base64url challenge comparison

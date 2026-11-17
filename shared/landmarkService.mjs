@@ -33,7 +33,7 @@ export async function checkAndConsumeRelayerQuota(
   { userId, isAdmin = false, dailyQuota = 25 }
 ) {
   if (!userId || isAdmin || !Number.isFinite(dailyQuota) || dailyQuota <= 0) {
-    return { allowed: true, used: 0, limit: dailyQuota };
+    return { allowed: true, used: 0, limit: dailyQuota, consumed: false };
   }
   const dayKey = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
@@ -57,7 +57,18 @@ export async function checkAndConsumeRelayerQuota(
        updated_at = excluded.updated_at`,
     [userId, dayKey, now]
   );
-  return { allowed: true, used: currentCount + 1, limit: dailyQuota };
+  return { allowed: true, used: currentCount + 1, limit: dailyQuota, consumed: true };
+}
+
+export async function refundRelayerQuota(db, { userId }) {
+  if (!db || !userId) return;
+  const dayKey = new Date().toISOString().slice(0, 10);
+  await db
+    .run(
+      'UPDATE relayer_usage SET op_count = MAX(0, op_count - 1), updated_at = ? WHERE user_id = ? AND day_key = ?',
+      [new Date().toISOString(), userId, dayKey]
+    )
+    .catch(() => {});
 }
 
 export async function getLandSecurityPolicy(db, parcelId) {
@@ -316,6 +327,10 @@ export async function saveParcelLandmarkAnchor(
  * Gates ORB landmark pack retrieval strictly to mobile devices physically near/inside the parcel (<= 65m)
  * so remote scrapers cannot synthesize AR relocalization spoofs off-site.
  */
+/**
+ * @param {any} db
+ * @param {{ parcelId: string, body?: Record<string, any>, userAgent?: string }} opts
+ */
 export async function fetchParcelLandmarkAnchor(
   db,
   { parcelId, body = {}, userAgent = '' }
@@ -358,13 +373,33 @@ export async function fetchParcelLandmarkAnchor(
   };
 }
 
+function hammingDistB64(b64A, b64B) {
+  try {
+    const a = atob(String(b64A || ''));
+    const b = atob(String(b64B || ''));
+    const len = Math.min(a.length, b.length);
+    if (len < 8) return 999;
+    let d = 0;
+    for (let i = 0; i < len; i += 1) {
+      let x = a.charCodeAt(i) ^ b.charCodeAt(i);
+      while (x) {
+        d += x & 1;
+        x >>= 1;
+      }
+    }
+    return d;
+  } catch {
+    return 999;
+  }
+}
+
 export async function verifyOrbProofAgainstParcel(
   db,
   { parcelId, orbProof, policy }
 ) {
   const cleanId = normalizeParcelId(parcelId);
   const anchorRow = await db.get(
-    'SELECT descriptor_digest, feature_count FROM parcel_landmark_anchors WHERE parcel_id = ?',
+    'SELECT descriptor_digest, feature_count, anchor_pack_json FROM parcel_landmark_anchors WHERE parcel_id = ?',
     [cleanId]
   );
   if (!anchorRow) {
@@ -404,8 +439,35 @@ export async function verifyOrbProofAgainstParcel(
     );
   }
 
+  let serverVerifiedMatches = 0;
+  if (Array.isArray(orbProof.matchedDescriptors) && anchorRow.anchor_pack_json) {
+    const pack = JSON.parse(anchorRow.anchor_pack_json);
+    const keyframes = Array.isArray(pack?.keyframes) ? pack.keyframes : [];
+    const seen = new Set();
+    for (const item of orbProof.matchedDescriptors.slice(0, 48)) {
+      const kIdx = Number(item?.keyframeIndex ?? 0);
+      const fIdx = Number(item?.featureIndex ?? -1);
+      const feat = keyframes[kIdx]?.features?.[fIdx];
+      if (!feat?.descB64 || !item?.liveDescB64) continue;
+      const key = `${kIdx}:${fIdx}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const hd = hammingDistB64(item.liveDescB64, feat.descB64);
+      if (hd <= 76) {
+        serverVerifiedMatches += 1;
+      }
+    }
+    if (serverVerifiedMatches < minInliers) {
+      throw new LandmarkServiceError(
+        `Server ORB descriptor verification failed (${serverVerifiedMatches} < ${minInliers} valid binary matches).`,
+        403
+      );
+    }
+  }
+
   return {
     verified: true,
+    serverVerifiedMatches,
     descriptorDigest: digest,
     inlierCount: inliers,
     reprojectionErrorPx: Math.round(reprojErr * 100) / 100
