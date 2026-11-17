@@ -1330,4 +1330,340 @@ describe('GRAFFILAND Full-Stack Verification', () => {
 
     subWs.close();
   });
+
+  test('Land holder pins updatable encrypted IPFS message batches unlocked only by unspoofable physical parcel presence', async () => {
+    const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
+    const holderAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'pin-holder@graffiland.test', name: 'Pin Holder' } })
+    });
+    const visitorAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'pin-visitor@graffiland.test', name: 'Pin Visitor' } })
+    });
+    const thiefAuth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ devProfile: { email: 'pin-thief@graffiland.test', name: 'Challenge Thief' } })
+    });
+    assert.equal(holderAuth.status, 200);
+    assert.equal(visitorAuth.status, 200);
+    assert.equal(thiefAuth.status, 200);
+
+    const holderToken = holderAuth.body.token;
+    const visitorToken = visitorAuth.body.token;
+    const thiefToken = thiefAuth.body.token;
+    const holderId = await chatCrypto.getOrCreateDeviceIdentity(holderAuth.body.user.id);
+    const visitorId = await chatCrypto.getOrCreateDeviceIdentity(visitorAuth.body.user.id);
+
+    const parcelLat = 37.7655;
+    const parcelLng = -122.4321;
+    const samplePol = {
+      frameHashes: ['p11', 'p22', 'p33', 'p44'],
+      gyroSamples: [
+        { alpha: 12, beta: 14, gamma: 4 },
+        { alpha: 20, beta: 16, gamma: 6 }
+      ],
+      flowCorrelation: 0.87,
+      visualDHash: 'a1b2c3d4e5f60718',
+      frameCount: 6,
+      flowScore: 0.87
+    };
+
+    // 1. Land holder publishes sculpture claiming the parcel
+    const pub = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'IPFS Pin Vault Sculpture',
+        description: 'Stores encrypted pinned IPFS batch unlockable only on this parcel.',
+        termsAccepted: true,
+        location: { lat: parcelLat, lng: parcelLng, altitude: 22, accuracy: 5 },
+        proofOfLocation: samplePol,
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(pub.status, 201);
+    const pinSc = pub.body.sculpture;
+
+    // 2. Non-land-holder cannot obtain owner seal
+    const nonOwnerSeal = await apiJson(`/api/sculptures/${pinSc.id}/pins/owner-seal`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(nonOwnerSeal.status, 403);
+
+    // 3. Land holder obtains owner seal & rejects plaintext submissions
+    const sealRes = await apiJson(`/api/sculptures/${pinSc.id}/pins/owner-seal`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(sealRes.status, 200);
+    assert.ok(sealRes.body.parcelSealKeyB64);
+    assert.equal(sealRes.body.nextBatchSeq, 1);
+
+    const plainReject = await apiJson(`/api/sculptures/${pinSc.id}/pins/batch`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ text: 'Unencrypted secret leak!' })
+    });
+    assert.equal(plainReject.status, 400);
+
+    // 4. Land holder encrypts batch v1 client-side & pins to IPFS; verify zero plaintext leaks anywhere
+    const v1Secret = 'Secret meetup behind the cedar mural at 21:00!';
+    const batchV1 = await chatCrypto.encryptPinnedIpfsBatch({
+      pins: [
+        {
+          id: 'pin-v1-a',
+          text: v1Secret,
+          authorName: holderAuth.body.user.name,
+          authorAddress: holderAuth.body.user.walletAddress
+        }
+      ],
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      batchSeq: sealRes.body.nextBatchSeq,
+      parcelSealKeyB64: sealRes.body.parcelSealKeyB64,
+      identity: holderId
+    });
+    const saveV1 = await apiJson(`/api/sculptures/${pinSc.id}/pins/batch`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ encryptedBatch: batchV1 })
+    });
+    assert.equal(saveV1.status, 200);
+    assert.equal(saveV1.body.meta.hasPins, true);
+    assert.equal(saveV1.body.meta.batchSeq, 1);
+    assert.equal(saveV1.body.meta.pinCount, 1);
+    const cidV1 = saveV1.body.ipfs.cid;
+    assert.ok(cidV1);
+
+    const ipfsRawV1 = await fetch(`${baseUrl}/ipfs/${cidV1}`).then((r) => r.text());
+    assert.equal(ipfsRawV1.includes(v1Secret), false);
+    assert.ok(JSON.parse(ipfsRawV1).ciphertextB64);
+
+    const detailRes = await apiJson(`/api/sculptures/${pinSc.id}`);
+    assert.equal(detailRes.status, 200);
+    assert.equal(detailRes.body.sculpture.pinSummary.batchSeq, 1);
+    assert.equal(detailRes.body.sculpture.pinSummary.ipfsCid, cidV1);
+    assert.equal(JSON.stringify(detailRes.body).includes(v1Secret), false);
+    assert.equal(JSON.stringify(detailRes.body).includes(sealRes.body.parcelSealKeyB64), false);
+
+    // 5. Enter chat returns isLandHolder flag + pinMeta cleanly
+    const sightMaker = async (idObj, overrides = {}) => {
+      const base = {
+        selectionMethod: 'ar-camera-raycast',
+        rayHit: true,
+        inFrustum: true,
+        cameraReady: true,
+        cameraFrames: 6,
+        opticalFlowCorrelation: 0.85,
+        visualDHash: 'f0e1d2c3b4a59687',
+        accuracy: 6,
+        lat: parcelLat,
+        lng: parcelLng,
+        altitude: 22,
+        selectedAt: new Date().toISOString(),
+        ...overrides
+      };
+      return chatCrypto.signSightProof(idObj, {
+        sculptureId: pinSc.id,
+        parcelId: pinSc.parcelId,
+        sightProof: base
+      });
+    };
+
+    const enterHolder = await apiJson(`/api/sculptures/${pinSc.id}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ sightProof: await sightMaker(holderId), deviceProfile: { isMobile: true } })
+    });
+    assert.equal(enterHolder.status, 200);
+    assert.equal(enterHolder.body.isLandHolder, true);
+    assert.equal(enterHolder.body.pinMeta.ipfsCid, cidV1);
+
+    // 6. Enforce anti-spoofing defenses on unlock
+    const desktopChallenge = await apiJson(`/api/sculptures/${pinSc.id}/pins/challenge`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}` },
+      body: JSON.stringify({ deviceProfile: { isMobile: false } })
+    });
+    assert.equal(desktopChallenge.status, 403);
+
+    const ch1Res = await apiJson(`/api/sculptures/${pinSc.id}/pins/challenge`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ deviceProfile: { isMobile: true } })
+    });
+    assert.equal(ch1Res.status, 200);
+
+    const goodPolSnap = {
+      cameraFrames: 6,
+      visualDHash: 'f0e1d2c3b4a59687',
+      gyroSamples: [
+        { alpha: 5, beta: 10, gamma: 2 },
+        { alpha: 11, beta: 12, gamma: 3 }
+      ],
+      opticalFlowCorrelation: 0.82,
+      gpsSamples: [
+        { lat: parcelLat, lng: parcelLng, accuracy: 6, t: Date.now() - 2000 },
+        { lat: parcelLat + 0.00001, lng: parcelLng + 0.00001, accuracy: 5, t: Date.now() }
+      ]
+    };
+
+    // Wrong parcel / off-site GPS rejected (403)
+    const offSiteSight = await sightMaker(visitorId, { lat: parcelLat + 0.003, lng: parcelLng });
+    const offSiteSigned = await chatCrypto.signParcelPresenceProof(visitorId, {
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      challengeId: ch1Res.body.challengeId,
+      challengeNonce: ch1Res.body.challengeNonce,
+      sightProof: offSiteSight,
+      polSnapshot: goodPolSnap
+    });
+    const offSiteUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...offSiteSigned, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(offSiteUnlock.status, 403);
+
+    // Low camera/gyro motion telemetry rejected (403)
+    const onSiteSight = await sightMaker(visitorId);
+    const lowSensorPol = { ...goodPolSnap, opticalFlowCorrelation: 0.05, cameraFrames: 1 };
+    const lowSensorSight = await sightMaker(visitorId, { cameraFrames: 1, opticalFlowCorrelation: 0.05 });
+    const lowSensorSigned = await chatCrypto.signParcelPresenceProof(visitorId, {
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      challengeId: ch1Res.body.challengeId,
+      challengeNonce: ch1Res.body.challengeNonce,
+      sightProof: lowSensorSight,
+      polSnapshot: lowSensorPol
+    });
+    const lowSensorUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...lowSensorSigned, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(lowSensorUnlock.status, 403);
+
+    // Tampered ECDSA presence signature rejected (403)
+    const legitSigned = await chatCrypto.signParcelPresenceProof(visitorId, {
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      challengeId: ch1Res.body.challengeId,
+      challengeNonce: ch1Res.body.challengeNonce,
+      sightProof: onSiteSight,
+      polSnapshot: goodPolSnap
+    });
+    const forgedUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...legitSigned,
+        presenceSignatureB64: btoa('forged-ecdsa-signature-bytes'),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(forgedUnlock.status, 403);
+
+    // Wrong user attempting to use visitor's challenge rejected (403)
+    const stolenChallengeUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${thiefToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...legitSigned, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(stolenChallengeUnlock.status, 403);
+
+    // 7. Legitimate in-parcel visitor unlocks & decrypts v1 IPFS batch cleanly!
+    const validUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...legitSigned, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(validUnlock.status, 200, JSON.stringify(validUnlock.body));
+    assert.equal(validUnlock.body.unlocked, true);
+    const decV1 = await chatCrypto.decryptPinnedIpfsBatch({
+      encryptedBatch: validUnlock.body.encryptedBatch,
+      parcelSealKeyB64: validUnlock.body.parcelSealKeyB64,
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash
+    });
+    assert.equal(decV1.pins.length, 1);
+    assert.equal(decV1.pins[0].text, v1Secret);
+    assert.equal(decV1.sigVerified, true);
+
+    // Replay of consumed single-use challenge MUST fail (403)
+    const replayUnlock = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...legitSigned, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(replayUnlock.status, 403);
+
+    // 8. Land holder alters/updates the pinned messages -> new IPFS CID v2 -> visitor decrypts updated batch
+    const v2Secret = 'UPDATED: Meetup moved to North Plaza Fountain at 22:00!';
+    const v2Second = 'Bring warm neon glowsticks.';
+    const batchV2 = await chatCrypto.encryptPinnedIpfsBatch({
+      pins: [
+        { id: 'pin-v1-a', text: v2Secret, authorName: holderAuth.body.user.name },
+        { id: 'pin-v2-b', text: v2Second, authorName: holderAuth.body.user.name }
+      ],
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      batchSeq: 2,
+      parcelSealKeyB64: sealRes.body.parcelSealKeyB64,
+      identity: holderId
+    });
+    const saveV2 = await apiJson(`/api/sculptures/${pinSc.id}/pins/batch`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${holderToken}` },
+      body: JSON.stringify({ encryptedBatch: batchV2 })
+    });
+    assert.equal(saveV2.status, 200);
+    assert.equal(saveV2.body.meta.batchSeq, 2);
+    assert.equal(saveV2.body.meta.pinCount, 2);
+    assert.notEqual(saveV2.body.ipfs.cid, cidV1);
+
+    const ch2Res = await apiJson(`/api/sculptures/${pinSc.id}/pins/challenge`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ deviceProfile: { isMobile: true } })
+    });
+    assert.equal(ch2Res.status, 200);
+    const signedV2 = await chatCrypto.signParcelPresenceProof(visitorId, {
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash,
+      challengeId: ch2Res.body.challengeId,
+      challengeNonce: ch2Res.body.challengeNonce,
+      sightProof: await sightMaker(visitorId),
+      polSnapshot: goodPolSnap
+    });
+    const unlockV2 = await apiJson(`/api/sculptures/${pinSc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({ ...signedV2, deviceProfile: { isMobile: true } })
+    });
+    assert.equal(unlockV2.status, 200);
+    const decV2 = await chatCrypto.decryptPinnedIpfsBatch({
+      encryptedBatch: unlockV2.body.encryptedBatch,
+      parcelSealKeyB64: unlockV2.body.parcelSealKeyB64,
+      sculptureId: pinSc.id,
+      parcelId: pinSc.parcelId,
+      geohash: pinSc.geohash
+    });
+    assert.equal(decV2.batchSeq, 2);
+    assert.deepEqual(
+      decV2.pins.map((p) => p.text),
+      [v2Secret, v2Second]
+    );
+  });
 });

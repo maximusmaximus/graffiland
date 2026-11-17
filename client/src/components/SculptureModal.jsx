@@ -9,6 +9,11 @@ import {
   ERC721_TRANSFER_ABI
 } from '../../../shared/transferMessage.mjs';
 import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
+import {
+  decryptPinnedIpfsBatch,
+  encryptPinnedIpfsBatch,
+  getOrCreateDeviceIdentity
+} from '../utils/chatCrypto.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
@@ -64,6 +69,11 @@ export default function SculptureModal({
   const [propNotice, setPropNotice] = useState('');
   const [propError, setPropError] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [modalPins, setModalPins] = useState([]);
+  const [pinDraftText, setPinDraftText] = useState('');
+  const [editModalPinId, setEditModalPinId] = useState('');
+  const [editModalPinText, setEditModalPinText] = useState('');
+  const [pinBatchInfo, setPinBatchInfo] = useState(initialSculpture?.pinSummary || null);
 
   useEffect(() => {
     setSculpture(initialSculpture);
@@ -74,6 +84,10 @@ export default function SculptureModal({
     setPropNotice('');
     setPropError('');
     setPromptCopied(false);
+    setModalPins([]);
+    setPinDraftText('');
+    setEditModalPinId('');
+    setPinBatchInfo(initialSculpture?.pinSummary || null);
     if (!initialSculpture?.id) return;
     let cancelled = false;
     api
@@ -81,6 +95,9 @@ export default function SculptureModal({
       .then((res) => {
         if (!cancelled && res?.sculpture) {
           setSculpture(res.sculpture);
+          if (res.sculpture.pinSummary) {
+            setPinBatchInfo(res.sculpture.pinSummary);
+          }
         }
       })
       .catch(() => {});
@@ -155,6 +172,69 @@ export default function SculptureModal({
       ownerAddr &&
       user.walletAddress.toLowerCase() === ownerAddr.toLowerCase()
   );
+
+  useEffect(() => {
+    if (!isPropertyOwner || !user?.id || !sculpture?.id) return;
+    let cancelled = false;
+    api
+      .getOwnerPinSeal(sculpture.id)
+      .then(async (sealRes) => {
+        if (cancelled) return;
+        if (sealRes.meta) setPinBatchInfo(sealRes.meta);
+        if (sealRes.encryptedBatch) {
+          const dec = await decryptPinnedIpfsBatch({
+            encryptedBatch: sealRes.encryptedBatch,
+            parcelSealKeyB64: sealRes.parcelSealKeyB64,
+            sculptureId: sculpture.id,
+            parcelId: sculpture.parcelId,
+            geohash: sculpture.geohash
+          });
+          if (!cancelled) setModalPins(dec.pins || []);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isPropertyOwner, sculpture?.geohash, sculpture?.id, sculpture?.parcelId, user?.id]);
+
+  async function saveOwnerPinnedIpfsBatch(nextPins) {
+    if (!user?.id || !sculpture?.id) return;
+    setPropBusy('pins');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const idObj = await getOrCreateDeviceIdentity(user.id);
+      const sealRes = await api.getOwnerPinSeal(sculpture.id);
+      const encryptedBatch = await encryptPinnedIpfsBatch({
+        pins: nextPins,
+        sculptureId: sculpture.id,
+        parcelId: sculpture.parcelId,
+        geohash: sculpture.geohash,
+        batchSeq: sealRes.nextBatchSeq,
+        parcelSealKeyB64: sealRes.parcelSealKeyB64,
+        identity: idObj
+      });
+      const saved = await api.saveEncryptedPinBatch(sculpture.id, { encryptedBatch });
+      if (saved.meta) setPinBatchInfo(saved.meta);
+      const dec = await decryptPinnedIpfsBatch({
+        encryptedBatch,
+        parcelSealKeyB64: sealRes.parcelSealKeyB64,
+        sculptureId: sculpture.id,
+        parcelId: sculpture.parcelId,
+        geohash: sculpture.geohash
+      });
+      setModalPins(dec.pins || []);
+      onSculptureUpdated?.({ ...sculpture, pinSummary: saved.meta });
+      setPropNotice(
+        `Encrypted pin batch v${saved.meta?.batchSeq || sealRes.nextBatchSeq} saved to IPFS (${saved.ipfs?.cid?.slice(0, 14)}...).`
+      );
+    } catch (err) {
+      setPropError(err.message || 'Could not pin encrypted batch to IPFS');
+    } finally {
+      setPropBusy('');
+    }
+  }
 
   async function handleSaveSculptureEdit(e) {
     e.preventDefault();
@@ -894,6 +974,137 @@ export default function SculptureModal({
               </button>
             </form>
 
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                marginTop: 12,
+                paddingTop: 10,
+                borderTop: '1px solid rgba(255,255,255,0.08)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-gold)' }}>
+                  <XeroIcon emoji="📌" size={14} /> Pinned IPFS Messages (Real-Life Parcel Visitors Only)
+                </span>
+                {pinBatchInfo?.ipfsCid && (
+                  <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    ipfs://{pinBatchInfo.ipfsCid.slice(0, 12)}... · v{pinBatchInfo.batchSeq}
+                  </span>
+                )}
+              </div>
+
+              {modalPins.map((pin) => (
+                <div
+                  key={pin.id}
+                  className="card"
+                  style={{ padding: '7px 9px', borderColor: 'rgba(255, 209, 102, 0.32)' }}
+                >
+                  {editModalPinId === pin.id ? (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="input"
+                        maxLength={500}
+                        value={editModalPinText}
+                        onChange={(e) => setEditModalPinText(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ fontSize: 11 }}
+                        disabled={propBusy !== ''}
+                        onClick={async () => {
+                          const txt = editModalPinText.trim();
+                          if (!txt) return;
+                          await saveOwnerPinnedIpfsBatch(
+                            modalPins.map((m) =>
+                              m.id === pin.id ? { ...m, text: txt, updatedAt: new Date().toISOString() } : m
+                            )
+                          );
+                          setEditModalPinId('');
+                          setEditModalPinText('');
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ fontSize: 11 }}
+                        onClick={() => setEditModalPinId('')}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 12 }}>{pin.text}</div>
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ padding: '2px 6px', fontSize: 10 }}
+                          disabled={propBusy !== ''}
+                          onClick={() => {
+                            setEditModalPinId(pin.id);
+                            setEditModalPinText(pin.text);
+                          }}
+                        >
+                          <XeroIcon emoji="✏️" size={10} /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          style={{ padding: '2px 6px', fontSize: 10 }}
+                          disabled={propBusy !== ''}
+                          onClick={() =>
+                            saveOwnerPinnedIpfsBatch(modalPins.filter((m) => m.id !== pin.id))
+                          }
+                        >
+                          <XeroIcon emoji="🗑️" size={10} /> Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  className="input"
+                  maxLength={500}
+                  value={pinDraftText}
+                  onChange={(e) => setPinDraftText(e.target.value)}
+                  placeholder="Pin message stored encrypted on IPFS for real-life parcel visitors..."
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={propBusy !== '' || !pinDraftText.trim()}
+                  onClick={async () => {
+                    const txt = pinDraftText.trim();
+                    if (!txt) return;
+                    const nowIso = new Date().toISOString();
+                    await saveOwnerPinnedIpfsBatch([
+                      ...modalPins,
+                      {
+                        id: crypto.randomUUID(),
+                        text: txt,
+                        authorName: user?.name || 'Land Holder',
+                        authorAddress: ownerAddr,
+                        pinnedAt: nowIso,
+                        updatedAt: nowIso
+                      }
+                    ]);
+                    setPinDraftText('');
+                  }}
+                >
+                  <XeroIcon emoji="📌" size={13} /> Pin to IPFS
+                </button>
+              </div>
+            </div>
+
             {propNotice && (
               <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--accent)' }}>
                 {propNotice}
@@ -915,8 +1126,11 @@ export default function SculptureModal({
             <span className="badge">
               <XeroIcon emoji="🔒" size={12} /> {sculpture.chatSummary?.messageCount ?? 0} encrypted messages
             </span>
+            <span className="badge gold">
+              <XeroIcon emoji="📌" size={12} /> {pinBatchInfo?.pinCount ?? sculpture.pinSummary?.pinCount ?? 0} pinned IPFS note(s) (in-person parcel unlock)
+            </span>
             <span>
-              Locked to physical in-person mobile AR camera selection only. Neither desktop browsers nor our servers can decrypt past chat history.
+              Locked to physical in-person mobile AR camera selection only. Neither desktop browsers nor our servers can decrypt past chat history or parcel-pinned IPFS batches.
             </span>
           </div>
         </div>

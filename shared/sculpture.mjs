@@ -95,6 +95,20 @@ export function serializeSculptureRow(
           }
         }
       : {}),
+    ...(row.pin_batch_seq !== undefined ||
+    row.pin_count !== undefined ||
+    row.pin_ipfs_cid !== undefined
+      ? {
+          pinSummary: {
+            hasPins: Number(row.pin_count || 0) > 0 && Boolean(row.pin_ipfs_cid),
+            batchSeq: Number(row.pin_batch_seq || 0),
+            pinCount: Number(row.pin_count || 0),
+            ipfsCid: row.pin_ipfs_cid || '',
+            ipfsUri: row.pin_ipfs_uri || '',
+            updatedAt: row.pin_updated_at || ''
+          }
+        }
+      : {}),
     ...(includeAdminFields
       ? {
           hiddenReason: row.hidden_reason || '',

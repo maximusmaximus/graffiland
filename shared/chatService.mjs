@@ -5,6 +5,7 @@ import {
   looksMobileRequest,
   verifyCameraSightProof
 } from './chatPolicy.mjs';
+import { getPinnedBatchMeta, isUserLandHolder } from './pinService.mjs';
 
 function sanitizePublicEcJwk(raw) {
   const jwk = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -256,10 +257,17 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     sculpture
   });
 
+  const [isLandHolder, pinMetaResult] = await Promise.all([
+    isUserLandHolder(db, { sculpture, user }),
+    getPinnedBatchMeta(db, { sculptureId: sculpture.id })
+  ]);
+
   const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (!board) {
     return {
       initialized: false,
+      isLandHolder,
+      pinMeta: pinMetaResult.meta,
       sight,
       board: null,
       myGrant: null,
@@ -305,6 +313,8 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
 
   return {
     initialized: true,
+    isLandHolder,
+    pinMeta: pinMetaResult.meta,
     sight,
     board: sanitizeBoardRow(board),
     myGrant: formatGrantRow(myGrantRow),

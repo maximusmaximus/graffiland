@@ -115,7 +115,10 @@ export default function InfoTermsModal({
                   <XeroIcon emoji="📋" size={14} /> <strong>Agent Sculpture Code (Final Tool Before Publish):</strong> Generate and copy a location-anchored code (<code>GRF-...</code>) so an AI agent can read <code>/api/agent/spec</code> (colors, blocks, 4x limits) and stage a 3D draft at your exact GPS spot — then inspect it in AR and tap Publish on your phone to mint.
                 </li>
                 <li>
-                  <XeroIcon emoji="💬" size={14} /> <strong>Camera-Locked Encrypted Chat Boards:</strong> Tap any sculpture you see through your live AR camera to enter its private location chat &amp; past history. Secured client-side with AES-256-GCM &amp; ECDH P-256 — neither desktop browsers nor our server can read any chat messages.
+                  <XeroIcon emoji="💬" size={14} /> <strong>Camera-Locked Encrypted Chat &amp; Glowing AR Bases:</strong> Every sculpture rendered in real-life AR Preview displays an animated <strong>glowing ground base</strong> showing it is clickable — tap the sculpture or its base (or center it in your view) to inspect its title, description, and pinned messages, and automatically join its chatbox. Secured client-side with AES-256-GCM &amp; ECDH P-256 so neither desktop browsers nor our server can read chat history.
+                </li>
+                <li>
+                  <XeroIcon emoji="📌" size={14} /> <strong>Parcel-Locked Pinned IPFS Messages (Unspoofable):</strong> Land holders on a <code>GLAND-...</code> parcel can pin, update, or alter messages stored exclusively as client-encrypted <code>AES-256-GCM</code> batches on <strong>IPFS</strong>. Visitors can decrypt those pinned messages <strong>only in real life at that exact Geohash-8 parcel</strong> after passing single-use signed challenge + multi-sensor Proof of Location (live camera frames, perceptual frame hash, gyro optical-flow correlation, GPS accuracy, and teleport checks).
                 </li>
                 <li>
                   <XeroIcon emoji="🪞" size={14} /> <strong>Foreground Occlusion:</strong> Objects or hands passing close in front of the lens naturally occlude your anchored 3D art (toggleable via the mirror icon).

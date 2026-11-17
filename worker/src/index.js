@@ -33,6 +33,13 @@ import {
   updateBoardClue
 } from '../../shared/chatService.mjs';
 import {
+  getOwnerPinSeal,
+  getPinnedBatchMeta,
+  issueParcelPresenceChallenge,
+  saveEncryptedPinBatch,
+  unlockPinnedBatchForParcelVisitor
+} from '../../shared/pinService.mjs';
+import {
   consumeDraftOnPublish,
   deleteUserDraft,
   getUserDraft,
@@ -828,7 +835,12 @@ export default {
         `SELECT s.*,
           (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
           (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
          FROM sculptures s
          WHERE s.hidden = 0
          ORDER BY s.created_at DESC`
@@ -1443,6 +1455,89 @@ export default {
       }
     }
 
+    // Encrypted IPFS Pinned Messages (Land Holder Updateable, Non-Spoofable Physical Parcel Unlock)
+    const pinMatch = pathname.match(
+      /^\/api\/sculptures\/([^/]+)\/pins\/(meta|owner-seal|batch|challenge|unlock)$/
+    );
+    if (pinMatch) {
+      const sculptureId = decodeURIComponent(pinMatch[1]);
+      const action = pinMatch[2];
+      const userAgent = request.headers.get('User-Agent') || '';
+      const readWorkerIpfsJson = async (cid) => {
+        if (!env.IPFS_KV) return null;
+        try {
+          const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
+          if (!value) return null;
+          const bin = atob(value);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+          return JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          return null;
+        }
+      };
+      const pinWorkerJson = async (obj, fileName) => {
+        if (env.PINATA_JWT) {
+          return pinToPinataJson(obj, fileName, env, cfg);
+        }
+        return pinToKv(
+          new TextEncoder().encode(JSON.stringify(obj, null, 2)),
+          'application/json',
+          url.origin,
+          env
+        );
+      };
+
+      try {
+        if (action === 'meta' && request.method === 'GET') {
+          return jsonResponse(await getPinnedBatchMeta(d1Adapter, { sculptureId }), 200, request);
+        }
+        if (request.method !== 'POST') {
+          return jsonResponse({ error: 'Method not allowed' }, 405, request);
+        }
+        const user = await getAuthUser(request, env, cfg);
+        if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+        const body = await request.json().catch(() => ({}));
+        let out;
+        if (action === 'owner-seal') {
+          out = await getOwnerPinSeal(d1Adapter, {
+            sculptureId,
+            user,
+            readIpfsJsonFn: readWorkerIpfsJson
+          });
+        } else if (action === 'batch') {
+          out = await saveEncryptedPinBatch(d1Adapter, {
+            sculptureId,
+            user,
+            body,
+            pinJsonFn: pinWorkerJson
+          });
+        } else if (action === 'challenge') {
+          out = await issueParcelPresenceChallenge(d1Adapter, {
+            sculptureId,
+            user,
+            body,
+            userAgent
+          });
+        } else if (action === 'unlock') {
+          out = await unlockPinnedBatchForParcelVisitor(d1Adapter, {
+            sculptureId,
+            user,
+            body,
+            userAgent,
+            readIpfsJsonFn: readWorkerIpfsJson
+          });
+        }
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Pinned IPFS message request failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
     // Sculpture 3D GLB Export & ERC-721 Marketplace Metadata
     const glbMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/model\.glb$/);
     if (glbMatch && request.method === 'GET') {
@@ -1573,7 +1668,12 @@ export default {
         `SELECT s.*,
           (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
           (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
          FROM sculptures s
          WHERE s.id = ?`
       )

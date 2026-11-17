@@ -19,7 +19,7 @@ import {
   verifyGoogleSignIn
 } from './services/auth.mjs';
 import { getChainStatus, mintOnRobinhoodChain } from './services/blockchain.mjs';
-import { pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
+import { pinJsonDocumentToIpfs, pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
 import { validatePublishPayload } from './services/moderation.mjs';
 import {
   decodeGeohashBounds,
@@ -54,6 +54,13 @@ import {
   submitPeerGrant,
   updateBoardClue
 } from '../shared/chatService.mjs';
+import {
+  getOwnerPinSeal,
+  getPinnedBatchMeta,
+  issueParcelPresenceChallenge,
+  saveEncryptedPinBatch,
+  unlockPinnedBatchForParcelVisitor
+} from '../shared/pinService.mjs';
 import {
   consumeDraftOnPublish,
   deleteUserDraft,
@@ -243,7 +250,12 @@ export function createAppServer() {
         `SELECT s.*,
           (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
           (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
          FROM sculptures s
          WHERE s.hidden = 0
          ORDER BY s.created_at DESC`
@@ -281,7 +293,12 @@ export function createAppServer() {
         `SELECT s.*,
           (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
           (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue
+          (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+          (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
+          (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
+          (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,
+          (SELECT b.ipfs_uri FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_uri,
+          (SELECT b.updated_at FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_updated_at
          FROM sculptures s
          WHERE s.id = ?`
       )
@@ -487,6 +504,75 @@ export function createAppServer() {
       });
       return out;
     })
+  );
+
+  async function readIpfsJsonDoc(cid) {
+    const local = readLocalIpfsCid(cid);
+    if (local?.buffer) {
+      try {
+        return JSON.parse(local.buffer.toString('utf8'));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  app.get(
+    '/api/sculptures/:id/pins/meta',
+    handleChatRoute((req) => getPinnedBatchMeta(chatDb, { sculptureId: req.params.id }))
+  );
+
+  app.post(
+    '/api/sculptures/:id/pins/owner-seal',
+    requireAuth,
+    handleChatRoute((req) =>
+      getOwnerPinSeal(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        readIpfsJsonFn: readIpfsJsonDoc
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/pins/batch',
+    requireAuth,
+    handleChatRoute((req) =>
+      saveEncryptedPinBatch(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        pinJsonFn: (obj, name) => pinJsonDocumentToIpfs(obj, name)
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/pins/challenge',
+    requireAuth,
+    handleChatRoute((req) =>
+      issueParcelPresenceChallenge(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || ''
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/pins/unlock',
+    requireAuth,
+    handleChatRoute((req) =>
+      unlockPinnedBatchForParcelVisitor(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        body: req.body,
+        userAgent: req.headers['user-agent'] || '',
+        readIpfsJsonFn: readIpfsJsonDoc
+      })
+    )
   );
 
   app.get(

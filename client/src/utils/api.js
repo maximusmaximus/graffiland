@@ -169,5 +169,27 @@ export const api = {
     request(`/api/signatures/requests/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
       body: JSON.stringify({})
+    }),
+  getSculpturePinMeta: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/pins/meta`),
+  getOwnerPinSeal: (id) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/pins/owner-seal`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  saveEncryptedPinBatch: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/pins/batch`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  issueParcelPinChallenge: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/pins/challenge`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  unlockPinnedIpfsBatch: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/pins/unlock`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
 };

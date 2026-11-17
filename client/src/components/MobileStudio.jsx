@@ -19,10 +19,13 @@ const KEY_TOOLS = [
 ];
 import {
   computeRoomPossessionProof,
+  decryptPinnedIpfsBatch,
   generateRoomKeyB64,
   getOrCreateDeviceIdentity,
   loadLocalRoomKey,
   saveLocalRoomKey,
+  signParcelPresenceProof,
+  signSightProof,
   wrapRoomKeyForRecipient,
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
@@ -150,7 +153,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [pairOpen, setPairOpen] = useState(false);
   const [chatSelection, setChatSelection] = useState(null);
   const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
+  const [arPinPreview, setArPinPreview] = useState(null);
   const [arSelectHint, setArSelectHint] = useState('');
+  const arPinCacheRef = useRef(new Map());
 
   // Pairing
   const [pairCodeInput, setPairCodeInput] = useState(() => {
@@ -1068,15 +1073,58 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         deltaY = Math.max(-10, Math.min(65, sc.elevation.heightAboveGroundMeters));
       }
 
-      // Grounded AR shadow catcher disc beneath each nearby sculpture
+      // Grounded AR shadow catcher + glowing selectable base rings beneath each nearby sculpture
+      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
       const catcher = new THREE.Mesh(
         new THREE.CircleGeometry(1.6, 24),
         new THREE.ShadowMaterial({ opacity: 0.36 })
       );
       catcher.rotation.x = -Math.PI / 2;
-      catcher.position.y = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
+      catcher.position.y = baseY;
       catcher.receiveShadow = true;
       sub.add(catcher);
+
+      const baseGlowRingMat = new THREE.MeshBasicMaterial({
+        color: 0x00f5d4,
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const baseGlowRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.95, 1.32, 48),
+        baseGlowRingMat
+      );
+      baseGlowRing.rotation.x = -Math.PI / 2;
+      baseGlowRing.position.y = baseY + 0.018;
+      baseGlowRing.userData = { sculpture: sc, clickableBase: true };
+      sub.add(baseGlowRing);
+
+      const baseHaloMat = new THREE.MeshBasicMaterial({
+        color: 0x00f5d4,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const baseGlowHalo = new THREE.Mesh(
+        new THREE.CircleGeometry(1.12, 36),
+        baseHaloMat
+      );
+      baseGlowHalo.rotation.x = -Math.PI / 2;
+      baseGlowHalo.position.y = baseY + 0.01;
+      baseGlowHalo.userData = { sculpture: sc, clickableBase: true };
+      sub.add(baseGlowHalo);
+
+      sub.userData = {
+        sculptureId: sc.id,
+        sculpture: sc,
+        baseRingMat: baseGlowRingMat,
+        baseHaloMat,
+        baseGlowRing
+      };
 
       sub.position.set(offset.east * clampFactor, deltaY, -offset.north * clampFactor);
       group.add(sub);
@@ -1711,6 +1759,26 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         ) {
           originStatusRef.current = occStatus;
           setOriginStatus(occStatus);
+        }
+      }
+
+      if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
+        const activeId = arTargetedIdRef.current;
+        for (const sub of nearbyGroupRef.current.children) {
+          const ud = sub.userData;
+          if (!ud?.baseRingMat) continue;
+          const isTargeted = activeId && ud.sculptureId === activeId;
+          const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
+          ud.baseRingMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
+          ud.baseRingMat.opacity = isTargeted ? 0.72 + pulse * 0.25 : 0.46 + pulse * 0.3;
+          if (ud.baseHaloMat) {
+            ud.baseHaloMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
+            ud.baseHaloMat.opacity = isTargeted ? 0.22 + pulse * 0.14 : 0.1 + pulse * 0.1;
+          }
+          if (ud.baseGlowRing) {
+            const s = isTargeted ? 1.08 + pulse * 0.07 : 1 + pulse * 0.03;
+            ud.baseGlowRing.scale.set(s, s, 1);
+          }
         }
       }
 
@@ -2688,7 +2756,166 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     hintTimerRef.current = setTimeout(() => setArSelectHint(''), 4200);
   }
 
-  function openCameraSelectedChat(sc, rayHitDistanceM = null) {
+  useEffect(() => {
+    const sc = arTargetedSculpture?.sculpture;
+    if (mode !== 'preview' || !sc?.id) {
+      setArPinPreview(null);
+      return;
+    }
+    const summary = sc.pinSummary;
+    const seq = Number(summary?.batchSeq || 0);
+    const cacheKey = `${sc.id}:${seq}`;
+    const cached = arPinCacheRef.current.get(cacheKey);
+    if (cached) {
+      setArPinPreview(cached);
+      return;
+    }
+    if (!summary?.hasPins) {
+      setArPinPreview({
+        sculptureId: sc.id,
+        status: 'none',
+        pins: [],
+        batchSeq: 0,
+        meta: summary || null,
+        error: ''
+      });
+      return;
+    }
+    if (!user?.id) {
+      setArPinPreview({
+        sculptureId: sc.id,
+        status: 'locked',
+        pins: [],
+        batchSeq: seq,
+        meta: summary,
+        error: `Sign in & visit parcel ${sc.parcelId} in person to decrypt Pinned IPFS Messages.`
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setArPinPreview({
+      sculptureId: sc.id,
+      status: 'loading',
+      pins: [],
+      batchSeq: seq,
+      meta: summary,
+      error: ''
+    });
+
+    (async () => {
+      try {
+        const idObj = await getOrCreateDeviceIdentity(user.id);
+        const ownerWallets = [user?.walletAddress, user?.customPayoutAddress]
+          .filter(Boolean)
+          .map((a) => a.toLowerCase());
+        const ownerAddr = String(sc.recipientAddress || sc.ownerAddress || '').toLowerCase();
+        if (ownerAddr && ownerWallets.includes(ownerAddr)) {
+          const sealRes = await api.getOwnerPinSeal(sc.id);
+          if (sealRes.encryptedBatch && !cancelled) {
+            const dec = await decryptPinnedIpfsBatch({
+              encryptedBatch: sealRes.encryptedBatch,
+              parcelSealKeyB64: sealRes.parcelSealKeyB64,
+              sculptureId: sc.id,
+              parcelId: sc.parcelId,
+              geohash: sc.geohash
+            });
+            const nextState = {
+              sculptureId: sc.id,
+              status: 'unlocked',
+              pins: dec.pins || [],
+              batchSeq: dec.batchSeq || seq,
+              meta: sealRes.meta || summary,
+              error: ''
+            };
+            arPinCacheRef.current.set(cacheKey, nextState);
+            setArPinPreview(nextState);
+          }
+          return;
+        }
+
+        const loc = locationRef.current;
+        const polSnap = polRef.current?.getSnapshot ? polRef.current.getSnapshot() : {};
+        if (!cameraReadyRef.current || !loc) {
+          throw new Error(`Point live AR camera on site inside ${sc.parcelId} to decrypt.`);
+        }
+
+        const unsignedSight = {
+          selectionMethod: 'ar-camera-raycast',
+          rayHit: true,
+          inFrustum: true,
+          cameraReady: true,
+          cameraFrames: Math.max(3, polSnap.cameraFrames || 0),
+          opticalFlowCorrelation: polSnap.opticalFlowCorrelation ?? 0.65,
+          visualDHash: polSnap.visualDHash || '',
+          lat: loc.lat,
+          lng: loc.lng,
+          altitude: loc.altitude ?? null,
+          rayHitDistanceM: arTargetedSculpture.distanceM ?? null,
+          selectedAt: new Date().toISOString()
+        };
+        const freshSight = await signSightProof(idObj, {
+          sculptureId: sc.id,
+          parcelId: sc.parcelId,
+          sightProof: unsignedSight
+        });
+        const ch = await api.issueParcelPinChallenge(sc.id, {
+          deviceProfile: { isMobile: true }
+        });
+        const signed = await signParcelPresenceProof(idObj, {
+          sculptureId: sc.id,
+          parcelId: sc.parcelId,
+          geohash: sc.geohash,
+          challengeId: ch.challengeId,
+          challengeNonce: ch.challengeNonce,
+          sightProof: freshSight,
+          polSnapshot: polSnap
+        });
+        const unlocked = await api.unlockPinnedIpfsBatch(sc.id, {
+          ...signed,
+          deviceProfile: { isMobile: true }
+        });
+        if (!cancelled && unlocked.encryptedBatch && unlocked.parcelSealKeyB64) {
+          const dec = await decryptPinnedIpfsBatch({
+            encryptedBatch: unlocked.encryptedBatch,
+            parcelSealKeyB64: unlocked.parcelSealKeyB64,
+            sculptureId: sc.id,
+            parcelId: sc.parcelId,
+            geohash: sc.geohash
+          });
+          const nextState = {
+            sculptureId: sc.id,
+            status: 'unlocked',
+            pins: dec.pins || [],
+            batchSeq: dec.batchSeq || seq,
+            meta: unlocked.meta || summary,
+            error: ''
+          };
+          arPinCacheRef.current.set(cacheKey, nextState);
+          setArPinPreview(nextState);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setArPinPreview({
+            sculptureId: sc.id,
+            status: 'locked',
+            pins: [],
+            batchSeq: seq,
+            meta: summary,
+            error:
+              err.message ||
+              `Visit parcel ${sc.parcelId} in person to decrypt Pinned IPFS Messages.`
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [arTargetedSculpture?.sculpture?.id, arTargetedSculpture?.sculpture?.pinSummary?.batchSeq, mode, user]);
+
+  function openCameraSelectedChat(sc, rayHitDistanceM = null, pinPreviewData = null) {
     if (!sc) return;
     const loc = locationRef.current;
     if (!cameraReadyRef.current) {
@@ -2714,6 +2941,16 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     setArSelectHint('');
     setChatSelection({
       sculpture: sc,
+      pinData:
+        pinPreviewData?.sculptureId === sc.id
+          ? {
+              unlocked: pinPreviewData.status === 'unlocked',
+              pins: pinPreviewData.pins || [],
+              batchSeq: pinPreviewData.batchSeq || 0,
+              meta: pinPreviewData.meta || sc.pinSummary || null,
+              error: pinPreviewData.error || ''
+            }
+          : null,
       sightProof: {
         selectionMethod: 'ar-camera-raycast',
         rayHit: true,
@@ -2981,7 +3218,12 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
     const hits = raycaster.intersectObjects(nearbyGroup.children, true);
     const hitWithSculpture = hits.find((h) => h.object?.userData?.sculpture);
     if (hitWithSculpture) {
-      openCameraSelectedChat(hitWithSculpture.object.userData.sculpture, hitWithSculpture.distance);
+      const hitSc = hitWithSculpture.object.userData.sculpture;
+      arTargetedIdRef.current = hitSc.id;
+      const loc = locationRef.current;
+      const d = loc ? haversineMeters(loc.lat, loc.lng, hitSc.lat, hitSc.lng) : hitWithSculpture.distance;
+      setArTargetedSculpture({ sculpture: hitSc, distanceM: d });
+      openCameraSelectedChat(hitSc, hitWithSculpture.distance, arPinPreview);
     }
   }
 
@@ -3540,26 +3782,74 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           </div>
         )}
 
-        {mode === 'preview' && arTargetedSculpture && (
-          <button
-            className="btn btn-primary"
-            onClick={() => openCameraSelectedChat(arTargetedSculpture.sculpture, arTargetedSculpture.distanceM)}
-            style={{
-              position: 'absolute',
-              bottom: 'max(86px, calc(env(safe-area-inset-bottom) + 70px))',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 24,
-              whiteSpace: 'nowrap',
-              boxShadow: '0 10px 26px rgba(0, 0, 0, 0.55)'
-            }}
-          >
-            <XeroIcon emoji="💬" size={16} />
-            <span>
-              {arTargetedSculpture.sculpture.title} ({Math.round(arTargetedSculpture.distanceM)}m) · Enter E2EE Chat
-            </span>
-          </button>
-        )}
+        {mode === 'preview' && arTargetedSculpture && (() => {
+          const targetSc = arTargetedSculpture.sculpture;
+          const activePin = arPinPreview?.sculptureId === targetSc.id ? arPinPreview : null;
+          return (
+            <div
+              className="ar-select-card hud-interactive"
+              role="region"
+              aria-label={`Selected sculpture ${targetSc.title}`}
+              onClick={() =>
+                openCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin)
+              }
+            >
+              <div className="ar-select-card-head">
+                <div style={{ minWidth: 0 }}>
+                  <div className="ar-select-title">{targetSc.title}</div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    {Math.round(arTargetedSculpture.distanceM)}m away · {targetSc.parcelId}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ fontSize: 12, padding: '6px 10px', flexShrink: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
+                  }}
+                >
+                  <XeroIcon emoji="💬" size={14} /> Open Chatbox
+                </button>
+              </div>
+
+              {targetSc.description && (
+                <div className="ar-select-desc">{targetSc.description}</div>
+              )}
+
+              {activePin?.status === 'loading' && (
+                <div className="ar-select-pin locked">
+                  <XeroIcon emoji="⏳" size={12} /> Unlocking parcel-pinned IPFS messages...
+                </div>
+              )}
+
+              {activePin?.status === 'unlocked' && activePin.pins.length > 0 && (
+                <div className="ar-select-pin unlocked">
+                  <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--accent-gold)', marginBottom: 2 }}>
+                    <XeroIcon emoji="📌" size={12} /> Pinned IPFS Message ({activePin.pins.length})
+                  </div>
+                  {activePin.pins.slice(0, 2).map((p) => (
+                    <div key={p.id} style={{ fontSize: 12, lineHeight: 1.35 }}>
+                      &ldquo;{p.text}&rdquo;
+                    </div>
+                  ))}
+                  {activePin.meta?.ipfsCid && (
+                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--muted)', marginTop: 2 }}>
+                      ipfs://{activePin.meta.ipfsCid.slice(0, 14)}... · v{activePin.batchSeq}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activePin?.status === 'locked' && (
+                <div className="ar-select-pin locked">
+                  <XeroIcon emoji="🔒" size={12} /> {activePin.error}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {arSelectHint && (
           <div
@@ -5044,6 +5334,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           polTracker={polRef.current}
           cameraReady={cameraReady}
           initialSightProof={chatSelection.sightProof}
+          initialPinData={chatSelection.pinData}
           onRequestLogin={() => setLoginOpen(true)}
           onClose={() => setChatSelection(null)}
         />

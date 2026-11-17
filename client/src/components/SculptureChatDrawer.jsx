@@ -3,11 +3,14 @@ import { api } from '../utils/api.js';
 import {
   computeRoomPossessionProof,
   decryptChatMessage,
+  decryptPinnedIpfsBatch,
   encryptChatMessage,
+  encryptPinnedIpfsBatch,
   generateRoomKeyB64,
   getOrCreateDeviceIdentity,
   loadLocalRoomKey,
   saveLocalRoomKey,
+  signParcelPresenceProof,
   signSightProof,
   unwrapRoomKeyFromGrant,
   unwrapRoomKeyWithClue,
@@ -23,6 +26,7 @@ export default function SculptureChatDrawer({
   polTracker,
   cameraReady,
   initialSightProof,
+  initialPinData,
   onRequestLogin,
   onClose
 }) {
@@ -33,6 +37,17 @@ export default function SculptureChatDrawer({
   const [messages, setMessages] = useState([]);
   const [pendingGrants, setPendingGrants] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const [pinMeta, setPinMeta] = useState(initialPinData?.meta || sculpture.pinSummary || null);
+  const [pinnedItems, setPinnedItems] = useState(initialPinData?.pins || []);
+  const [pinUnlockStatus, setPinUnlockStatus] = useState(
+    initialPinData?.unlocked ? 'unlocked' : initialPinData?.error ? 'locked' : 'idle'
+  );
+  const [pinUnlockError, setPinUnlockError] = useState(initialPinData?.error || '');
+  const [pinInput, setPinInput] = useState('');
+  const [editingPinId, setEditingPinId] = useState('');
+  const [editingPinText, setEditingPinText] = useState('');
+  const [pinBusy, setPinBusy] = useState(false);
 
   const [clueInput, setClueInput] = useState('');
   const [clueBusy, setClueBusy] = useState(false);
@@ -47,6 +62,9 @@ export default function SculptureChatDrawer({
   const [savingClue, setSavingClue] = useState(false);
 
   const reqSentRef = useRef(false);
+  const autoInitRef = useRef(false);
+  const pinAttemptedRef = useRef(false);
+  const lastUnlockedSeqRef = useRef(Number(initialPinData?.batchSeq || 0));
   const sightRef = useRef(initialSightProof);
   const listEndRef = useRef(null);
 
@@ -114,6 +132,102 @@ export default function SculptureChatDrawer({
     [sculpture.id]
   );
 
+  const syncPinnedBatch = useCallback(
+    async (res, idObj, freshSight) => {
+      const nextMeta = res?.pinMeta || null;
+      if (nextMeta) setPinMeta(nextMeta);
+      const serverSeq = Number(nextMeta?.batchSeq || 0);
+
+      if (res?.isLandHolder) {
+        if (lastUnlockedSeqRef.current === serverSeq && serverSeq > 0 && pinUnlockStatus === 'unlocked') {
+          return;
+        }
+        try {
+          const sealRes = await api.getOwnerPinSeal(sculpture.id);
+          if (sealRes.meta) setPinMeta(sealRes.meta);
+          if (sealRes.encryptedBatch) {
+            const dec = await decryptPinnedIpfsBatch({
+              encryptedBatch: sealRes.encryptedBatch,
+              parcelSealKeyB64: sealRes.parcelSealKeyB64,
+              sculptureId: sculpture.id,
+              parcelId: sculpture.parcelId,
+              geohash: sculpture.geohash
+            });
+            setPinnedItems(dec.pins || []);
+            lastUnlockedSeqRef.current = Number(dec.batchSeq || serverSeq);
+          } else {
+            setPinnedItems([]);
+            lastUnlockedSeqRef.current = serverSeq;
+          }
+          setPinUnlockStatus('unlocked');
+          setPinUnlockError('');
+        } catch (err) {
+          setPinUnlockError(err.message || 'Could not load owner IPFS pins');
+        }
+        return;
+      }
+
+      if (!nextMeta?.hasPins) {
+        setPinnedItems([]);
+        setPinUnlockStatus('no-pins');
+        setPinUnlockError('');
+        return;
+      }
+
+      if (lastUnlockedSeqRef.current === serverSeq && pinUnlockStatus === 'unlocked') {
+        return;
+      }
+      if (pinAttemptedRef.current && serverSeq <= lastUnlockedSeqRef.current) {
+        return;
+      }
+
+      pinAttemptedRef.current = true;
+      try {
+        const ch = await api.issueParcelPinChallenge(sculpture.id, {
+          deviceProfile: { isMobile: true }
+        });
+        const snap = polTracker?.getSnapshot ? polTracker.getSnapshot() : {};
+        const signed = await signParcelPresenceProof(idObj, {
+          sculptureId: sculpture.id,
+          parcelId: sculpture.parcelId,
+          geohash: sculpture.geohash,
+          challengeId: ch.challengeId,
+          challengeNonce: ch.challengeNonce,
+          sightProof: freshSight,
+          polSnapshot: snap
+        });
+        const unlocked = await api.unlockPinnedIpfsBatch(sculpture.id, {
+          ...signed,
+          deviceProfile: { isMobile: true }
+        });
+        if (unlocked.meta) setPinMeta(unlocked.meta);
+        if (unlocked.encryptedBatch && unlocked.parcelSealKeyB64) {
+          const dec = await decryptPinnedIpfsBatch({
+            encryptedBatch: unlocked.encryptedBatch,
+            parcelSealKeyB64: unlocked.parcelSealKeyB64,
+            sculptureId: sculpture.id,
+            parcelId: sculpture.parcelId,
+            geohash: sculpture.geohash
+          });
+          setPinnedItems(dec.pins || []);
+          lastUnlockedSeqRef.current = Number(dec.batchSeq || serverSeq);
+          setPinUnlockStatus('unlocked');
+          setPinUnlockError('');
+        } else {
+          setPinnedItems([]);
+          setPinUnlockStatus('no-pins');
+        }
+      } catch (err) {
+        setPinUnlockStatus('locked');
+        setPinUnlockError(
+          err.message ||
+            'Stand physically inside this parcel with live AR camera and GPS to decrypt pinned IPFS messages.'
+        );
+      }
+    },
+    [pinUnlockStatus, polTracker, sculpture.geohash, sculpture.id, sculpture.parcelId]
+  );
+
   const syncBoard = useCallback(async () => {
     if (!user) {
       setLoading(false);
@@ -123,13 +237,57 @@ export default function SculptureChatDrawer({
       const idObj = await getOrCreateDeviceIdentity(user.id);
       setIdentity(idObj);
       const freshSight = await buildFreshSightProof(idObj);
-      const res = await api.enterSculptureChat(sculpture.id, {
+      let res = await api.enterSculptureChat(sculpture.id, {
         requesterPubFp: idObj.pubFingerprint,
         sightProof: freshSight,
         deviceProfile: { isMobile: true }
       });
+
+      // Automatically join/initialize the sculpture's chatbox on selection so the selector is immediately part of it
+      if (!res.initialized && !autoInitRef.current) {
+        autoInitRef.current = true;
+        try {
+          const keyB64 = generateRoomKeyB64();
+          const epoch = 1;
+          saveLocalRoomKey(user.id, sculpture.id, epoch, keyB64);
+          const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, sculpture.id, epoch);
+          const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
+            roomKeyB64: keyB64,
+            sculptureId: sculpture.id,
+            keyEpoch: epoch,
+            recipientEcdhPubJwk: idObj.ecdhPublicJwk,
+            recipientPubFp: idObj.pubFingerprint,
+            grantorIdentity: idObj
+          });
+          await api.initSculptureChat(sculpture.id, {
+            ownerEcdhPubJwk: idObj.ecdhPublicJwk,
+            ownerSignPubJwk: idObj.signPublicJwk,
+            ownerPubFp: idObj.pubFingerprint,
+            selfGrantEnvelope: wrappedKeyJson,
+            selfGrantSig: grantSig,
+            roomKeyCommit,
+            sightProof: freshSight,
+            deviceProfile: { isMobile: true }
+          });
+          res = await api.enterSculptureChat(sculpture.id, {
+            requesterPubFp: idObj.pubFingerprint,
+            sightProof: freshSight,
+            deviceProfile: { isMobile: true }
+          });
+        } catch {
+          // Another user may have initialized concurrently; re-enter cleanly
+          res = await api.enterSculptureChat(sculpture.id, {
+            requesterPubFp: idObj.pubFingerprint,
+            sightProof: freshSight,
+            deviceProfile: { isMobile: true }
+          });
+        }
+      }
+
       setEntered(res);
       setErrorMsg('');
+
+      await syncPinnedBatch(res, idObj, freshSight);
 
       if (!res.initialized || !res.board) {
         setRoomKeyB64('');
@@ -208,7 +366,7 @@ export default function SculptureChatDrawer({
     } finally {
       setLoading(false);
     }
-  }, [autoWrapPendingGrants, buildFreshSightProof, sculpture.id, user]);
+  }, [autoWrapPendingGrants, buildFreshSightProof, sculpture.id, syncPinnedBatch, user]);
 
   useEffect(() => {
     syncBoard();
@@ -366,6 +524,76 @@ export default function SculptureChatDrawer({
     }
   }
 
+  async function persistPinBatch(nextPins) {
+    if (!identity) return;
+    setPinBusy(true);
+    setPinUnlockError('');
+    try {
+      const sealRes = await api.getOwnerPinSeal(sculpture.id);
+      const encryptedBatch = await encryptPinnedIpfsBatch({
+        pins: nextPins,
+        sculptureId: sculpture.id,
+        parcelId: sculpture.parcelId,
+        geohash: sculpture.geohash,
+        batchSeq: sealRes.nextBatchSeq,
+        parcelSealKeyB64: sealRes.parcelSealKeyB64,
+        identity
+      });
+      const saved = await api.saveEncryptedPinBatch(sculpture.id, { encryptedBatch });
+      if (saved.meta) setPinMeta(saved.meta);
+      const dec = await decryptPinnedIpfsBatch({
+        encryptedBatch,
+        parcelSealKeyB64: sealRes.parcelSealKeyB64,
+        sculptureId: sculpture.id,
+        parcelId: sculpture.parcelId,
+        geohash: sculpture.geohash
+      });
+      setPinnedItems(dec.pins || []);
+      lastUnlockedSeqRef.current = Number(saved.meta?.batchSeq || sealRes.nextBatchSeq);
+      setPinUnlockStatus('unlocked');
+    } catch (err) {
+      setPinUnlockError(err.message || 'Failed to save encrypted IPFS pin batch');
+    } finally {
+      setPinBusy(false);
+    }
+  }
+
+  async function handleAddPin(e) {
+    e.preventDefault();
+    const text = pinInput.trim();
+    if (!text) return;
+    const nowIso = new Date().toISOString();
+    const next = [
+      ...pinnedItems,
+      {
+        id: crypto.randomUUID(),
+        text,
+        authorName: user?.name || 'Land Holder',
+        authorAddress: user?.customPayoutAddress || user?.walletAddress || '',
+        pinnedAt: nowIso,
+        updatedAt: nowIso
+      }
+    ];
+    await persistPinBatch(next);
+    setPinInput('');
+  }
+
+  async function handleSavePinEdit(pinId) {
+    const clean = editingPinText.trim();
+    if (!clean) return;
+    const next = pinnedItems.map((p) =>
+      p.id === pinId ? { ...p, text: clean, updatedAt: new Date().toISOString() } : p
+    );
+    await persistPinBatch(next);
+    setEditingPinId('');
+    setEditingPinText('');
+  }
+
+  async function handleDeletePin(pinId) {
+    const next = pinnedItems.filter((p) => p.id !== pinId);
+    await persistPinBatch(next);
+  }
+
   const distLabel =
     entered?.sight?.distanceMeters != null
       ? `${entered.sight.distanceMeters}m away`
@@ -381,12 +609,20 @@ export default function SculptureChatDrawer({
             <h3 className="modal-title" style={{ fontSize: 16 }}>
               <XeroIcon emoji="💬" size={20} /> {sculpture.title}
             </h3>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+            {sculpture.description && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3, lineHeight: 1.35 }}>
+                {sculpture.description}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
               <span className="badge teal">
                 <XeroIcon emoji="🔐" size={12} /> Server-Blind E2EE
               </span>
               <span className="badge">
                 <XeroIcon emoji="👁️" size={12} /> {distLabel}
+              </span>
+              <span className="badge gold">
+                <XeroIcon emoji="📍" size={12} /> {sculpture.parcelId}
               </span>
             </div>
           </div>
@@ -394,6 +630,134 @@ export default function SculptureChatDrawer({
             <XeroIcon emoji="❌" size={15} />
           </button>
         </div>
+
+        {(pinMeta?.hasPins || entered?.isLandHolder || pinUnlockStatus === 'locked' || pinnedItems.length > 0) && (
+          <div className="pin-batch-box" style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+              <span style={{ fontWeight: 700, fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent-gold)' }}>
+                <XeroIcon emoji="📌" size={14} /> Land Holder Pinned IPFS Batch
+              </span>
+              {pinMeta?.ipfsCid && (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                  ipfs://{pinMeta.ipfsCid.slice(0, 12)}... · v{pinMeta.batchSeq}
+                </span>
+              )}
+            </div>
+
+            {pinUnlockError && (
+              <div style={{ fontSize: 11, color: 'var(--accent-gold)', marginBottom: 6 }}>
+                <XeroIcon emoji="🔒" size={12} /> {pinUnlockError}
+                {pinUnlockStatus === 'locked' && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ marginLeft: 8, padding: '2px 7px', fontSize: 10 }}
+                    onClick={() => {
+                      pinAttemptedRef.current = false;
+                      syncBoard();
+                    }}
+                  >
+                    Retry Parcel Unlock
+                  </button>
+                )}
+              </div>
+            )}
+
+            {pinnedItems.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {pinnedItems.map((pin) => (
+                  <div
+                    key={pin.id}
+                    className="card"
+                    style={{ padding: '7px 9px', borderColor: 'rgba(255, 209, 102, 0.35)' }}
+                  >
+                    {editingPinId === pin.id ? (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          className="input"
+                          value={editingPinText}
+                          maxLength={500}
+                          onChange={(e) => setEditingPinText(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          disabled={pinBusy}
+                          onClick={() => handleSavePinEdit(pin.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          onClick={() => setEditingPinId('')}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{pin.text}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, fontSize: 10, color: 'var(--muted)' }}>
+                          <span>
+                            {pin.authorName} · Encrypted on IPFS for {sculpture.parcelId}
+                          </span>
+                          {entered?.isLandHolder && (
+                            <span style={{ display: 'flex', gap: 4 }}>
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{ padding: '2px 6px', fontSize: 10 }}
+                                disabled={pinBusy}
+                                onClick={() => {
+                                  setEditingPinId(pin.id);
+                                  setEditingPinText(pin.text);
+                                }}
+                              >
+                                <XeroIcon emoji="✏️" size={10} /> Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger"
+                                style={{ padding: '2px 6px', fontSize: 10 }}
+                                disabled={pinBusy}
+                                onClick={() => handleDeletePin(pin.id)}
+                              >
+                                <XeroIcon emoji="🗑️" size={10} /> Remove
+                              </button>
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : entered?.isLandHolder ? (
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
+                No pinned messages yet. Add an encrypted note below that only real-life visitors on this parcel can decrypt.
+              </div>
+            ) : null}
+
+            {entered?.isLandHolder && (
+              <form onSubmit={handleAddPin} style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <input
+                  className="input"
+                  value={pinInput}
+                  maxLength={500}
+                  onChange={(e) => setPinInput(e.target.value)}
+                  placeholder="Pin encrypted IPFS message for on-site visitors..."
+                  required
+                />
+                <button className="btn btn-primary" type="submit" disabled={pinBusy} style={{ fontSize: 11 }}>
+                  <XeroIcon emoji="📌" size={13} /> {pinBusy ? '...' : 'Pin'}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
 
         {!user ? (
           <div className="card" style={{ textAlign: 'center', padding: 16 }}>

@@ -250,6 +250,44 @@ export function getDb() {
       last_signed_tx_hash TEXT DEFAULT '',
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS sculpture_pin_batches (
+      sculpture_id TEXT PRIMARY KEY,
+      parcel_id TEXT NOT NULL,
+      geohash TEXT NOT NULL,
+      batch_seq INTEGER NOT NULL DEFAULT 0,
+      pin_count INTEGER NOT NULL DEFAULT 0,
+      seal_secret_b64 TEXT NOT NULL,
+      key_commitment TEXT NOT NULL,
+      ipfs_cid TEXT DEFAULT '',
+      ipfs_uri TEXT DEFAULT '',
+      ipfs_gateway_url TEXT DEFAULT '',
+      encrypted_batch_json TEXT NOT NULL DEFAULT '{}',
+      updated_by_sub TEXT DEFAULT '',
+      updated_by_address TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pin_batches_parcel
+      ON sculpture_pin_batches (parcel_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS parcel_presence_challenges (
+      id TEXT PRIMARY KEY,
+      sculpture_id TEXT NOT NULL,
+      parcel_id TEXT NOT NULL,
+      geohash TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      consumed INTEGER NOT NULL DEFAULT 0,
+      requester_pub_fp TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_parcel_challenges_user
+      ON parcel_presence_challenges (sculpture_id, user_id, consumed);
   `);
 
   dbInstance = db;

@@ -1,7 +1,12 @@
+import { encodeGeohash } from '../server/services/pol.mjs';
+
 export const CHAT_SIGHT_MAX_DISTANCE_M = 75;
 export const CHAT_SIGHT_CLIENT_DISTANCE_M = 60;
 export const CHAT_SIGHT_MAX_ALT_DELTA_M = 65;
 export const CHAT_SIGHT_MAX_AGE_MS = 5 * 60 * 1000;
+export const PIN_PARCEL_PRESENCE_MAX_AGE_MS = 90 * 1000;
+export const PIN_PARCEL_MAX_DISTANCE_M = 45;
+export const PIN_BATCH_MAX_CIPHERTEXT_LEN = 48000;
 export const CHAT_MSG_MAX_CIPHERTEXT_LEN = 12000;
 export const CHAT_CLUE_PROMPT_MAX = 140;
 export const CHAT_CLUE_PBKDF2_ITERATIONS = 210000;
@@ -152,5 +157,187 @@ export function verifyCameraSightProof({
       selectedAt: new Date(selectedMs).toISOString(),
       sightSignatureB64: String(sightProof.sightSignatureB64 || '').slice(0, 256)
     }
+  };
+}
+
+export function buildParcelPresenceSignPayload({
+  sculptureId,
+  parcelId,
+  geohash,
+  challengeId,
+  challengeNonce,
+  pubFingerprint,
+  lat,
+  lng,
+  cameraFrames,
+  visualDHash,
+  selectedAt
+}) {
+  return [
+    'GRAFFILAND-PARCEL-PRESENCE-V1',
+    sculptureId,
+    parcelId,
+    String(geohash || '').toLowerCase(),
+    challengeId,
+    challengeNonce,
+    pubFingerprint,
+    String(lat),
+    String(lng),
+    String(cameraFrames),
+    String(visualDHash || ''),
+    selectedAt
+  ].join('|');
+}
+
+function b64ToUint8(b64) {
+  const bin = atob(String(b64 || ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export async function verifyParcelPresenceSignature({
+  ecdhPublicJwk,
+  signPublicJwk,
+  pubFingerprint,
+  payload,
+  signatureB64
+}) {
+  if (!ecdhPublicJwk || !signPublicJwk || !pubFingerprint || !signatureB64) {
+    throw new ChatHttpError(403, 'Signed device presence proof is required.');
+  }
+  const canonicalFpInput = JSON.stringify({
+    e: [ecdhPublicJwk.x, ecdhPublicJwk.y],
+    s: [signPublicJwk.x, signPublicJwk.y]
+  });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalFpInput));
+  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, 16)
+    .toUpperCase();
+  const expectedFp = `${hex.slice(0, 4)}-${hex.slice(4, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`;
+  if (expectedFp !== pubFingerprint) {
+    throw new ChatHttpError(403, 'Device identity fingerprint mismatch.');
+  }
+
+  let ok = false;
+  try {
+    const key = await crypto.subtle.importKey(
+      'jwk',
+      { kty: 'EC', crv: 'P-256', x: String(signPublicJwk.x), y: String(signPublicJwk.y) },
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify']
+    );
+    ok = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      key,
+      b64ToUint8(signatureB64),
+      new TextEncoder().encode(payload)
+    );
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    throw new ChatHttpError(403, 'Invalid cryptographic parcel presence signature.');
+  }
+  return true;
+}
+
+export function verifyParcelPhysicalPresence({
+  sightProof,
+  polSnapshot,
+  deviceProfile,
+  userAgent = '',
+  sculpture
+}) {
+  const baseSight = verifyCameraSightProof({
+    sightProof,
+    deviceProfile,
+    userAgent,
+    sculpture
+  });
+
+  const selectedMs = new Date(sightProof.selectedAt || 0).getTime();
+  if (!Number.isFinite(selectedMs) || Math.abs(Date.now() - selectedMs) > PIN_PARCEL_PRESENCE_MAX_AGE_MS) {
+    throw new ChatHttpError(
+      403,
+      'Parcel presence proof expired. Point your live AR camera at the sculpture again.'
+    );
+  }
+
+  const lat = Number(sightProof.lat);
+  const lng = Number(sightProof.lng);
+  const visitorGeohash = encodeGeohash(lat, lng, 8).toLowerCase();
+  const targetGeohash = String(sculpture.geohash || '').toLowerCase();
+  if (!targetGeohash || visitorGeohash !== targetGeohash) {
+    throw new ChatHttpError(
+      403,
+      `Location proof failed: you must stand physically inside Virtual Land ${sculpture.parcel_id} (detected parcel GLAND-${visitorGeohash.toUpperCase()}).`
+    );
+  }
+
+  if (baseSight.distanceMeters > PIN_PARCEL_MAX_DISTANCE_M) {
+    throw new ChatHttpError(
+      403,
+      `Stand right at the sculpture on parcel ${sculpture.parcel_id} (${baseSight.distanceMeters}m away; max ${PIN_PARCEL_MAX_DISTANCE_M}m).`
+    );
+  }
+
+  const camFrames = Math.max(
+    Number(polSnapshot?.cameraFrames || 0),
+    Number(sightProof?.cameraFrames || 0)
+  );
+  if (camFrames < 3) {
+    throw new ChatHttpError(
+      403,
+      'Live camera frames required (keep camera pointed at sculpture to decrypt pinned messages).'
+    );
+  }
+
+  const visualDHash = String(polSnapshot?.visualDHash || sightProof?.visualDHash || '').trim();
+  if (!/^[0-9a-f]{8,64}$/i.test(visualDHash)) {
+    throw new ChatHttpError(403, 'Live camera perceptual fingerprint (visualDHash) is required.');
+  }
+
+  const gyroCount = Array.isArray(polSnapshot?.gyroSamples)
+    ? polSnapshot.gyroSamples.length
+    : Number(polSnapshot?.gyroSamples || 0);
+  const opticalFlow = Number(
+    polSnapshot?.opticalFlowCorrelation ?? sightProof?.opticalFlowCorrelation ?? 0
+  );
+  if (gyroCount < 2 || !Number.isFinite(opticalFlow) || opticalFlow < 0.3) {
+    throw new ChatHttpError(
+      403,
+      'Anti-spoof camera/gyro motion telemetry check failed. Move your phone gently while aiming at the sculpture.'
+    );
+  }
+
+  const gpsSamples = Array.isArray(polSnapshot?.gpsSamples) ? polSnapshot.gpsSamples : [];
+  for (let i = 1; i < gpsSamples.length; i += 1) {
+    const a = gpsSamples[i - 1];
+    const b = gpsSamples[i];
+    const dt = Math.max(0.5, (Number(b.t || 0) - Number(a.t || 0)) / 1000);
+    const speed = haversineMeters(Number(a.lat), Number(a.lng), Number(b.lat), Number(b.lng)) / dt;
+    if (speed >= 60) {
+      throw new ChatHttpError(403, 'Suspicious GPS teleport detected; presence proof rejected.');
+    }
+  }
+
+  const rawAcc = sightProof?.accuracy ?? gpsSamples.at?.(-1)?.accuracy;
+  if (rawAcc !== undefined && rawAcc !== null) {
+    const acc = Number(rawAcc);
+    if (!Number.isFinite(acc) || acc <= 0 || acc > 50) {
+      throw new ChatHttpError(403, 'High-accuracy GPS fix (<= 50m) is required inside the parcel.');
+    }
+  }
+
+  return {
+    ...baseSight,
+    visitorGeohash,
+    cameraFrames: camFrames,
+    opticalFlowCorrelation: opticalFlow,
+    visualDHash,
+    selectedAt: baseSight.proofSummary.selectedAt
   };
 }

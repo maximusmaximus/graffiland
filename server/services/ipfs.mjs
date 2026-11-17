@@ -168,20 +168,7 @@ export async function pinSculptureToIpfs({
     royaltyReceiver
   });
 
-  let metadataPin;
-  if (CONFIG.pinataJwt) {
-    metadataPin = await pinJsonToPinata(metadata, `${sculptureId}-metadata.json`);
-  } else if (CONFIG.ipfsApiUrl) {
-    metadataPin = await pinBufferToKubo(
-      Buffer.from(JSON.stringify(metadata, null, 2), 'utf8'),
-      `${sculptureId}-metadata.json`
-    );
-  } else {
-    metadataPin = await pinBufferToLocal(
-      Buffer.from(JSON.stringify(metadata, null, 2), 'utf8'),
-      'application/json'
-    );
-  }
+  const metadataPin = await pinJsonDocumentToIpfs(metadata, `${sculptureId}-metadata.json`);
 
   return {
     provider: metadataPin.provider,
@@ -194,6 +181,16 @@ export async function pinSculptureToIpfs({
     imageUri: imagePin.uri,
     metadata
   };
+}
+
+export async function pinJsonDocumentToIpfs(obj, fileName = 'document.json') {
+  if (CONFIG.pinataJwt) {
+    return pinJsonToPinata(obj, fileName);
+  }
+  if (CONFIG.ipfsApiUrl) {
+    return pinBufferToKubo(Buffer.from(JSON.stringify(obj, null, 2), 'utf8'), fileName);
+  }
+  return pinBufferToLocal(Buffer.from(JSON.stringify(obj, null, 2), 'utf8'), 'application/json');
 }
 
 export function readLocalIpfsCid(cid) {

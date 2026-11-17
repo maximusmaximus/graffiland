@@ -1,4 +1,7 @@
-import { CHAT_CLUE_PBKDF2_ITERATIONS } from '../../../shared/chatPolicy.mjs';
+import {
+  buildParcelPresenceSignPayload,
+  CHAT_CLUE_PBKDF2_ITERATIONS
+} from '../../../shared/chatPolicy.mjs';
 
 const ID_PREFIX = 'graffiland_e2ee_id_v1_';
 const ROOM_PREFIX = 'graffiland_e2ee_room_v1_';
@@ -529,5 +532,231 @@ export async function decryptChatMessage({ msg, roomKeyB64, sculptureId }) {
     sightDistM: data.sightDistM ?? null,
     altM: data.altM ?? null,
     sentAt: data.sentAt || msg.createdAt
+  };
+}
+
+async function derivePinBatchKey({ parcelSealKeyB64, sculptureId, parcelId, geohash, usages }) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    b64ToBytes(parcelSealKeyB64),
+    'HKDF',
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: textEnc.encode(`graffiland-ipfs-pin-batch-v1:${sculptureId}:${parcelId}`),
+      info: textEnc.encode(String(geohash || '').toLowerCase())
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    usages
+  );
+}
+
+export async function computeSealKeyCommitment(parcelSealKeyB64) {
+  const digest = await crypto.subtle.digest('SHA-256', b64ToBytes(parcelSealKeyB64));
+  return bytesToHex(digest);
+}
+
+export async function encryptPinnedIpfsBatch({
+  pins,
+  sculptureId,
+  parcelId,
+  geohash,
+  batchSeq = 1,
+  parcelSealKeyB64,
+  identity
+}) {
+  const cleanPins = (Array.isArray(pins) ? pins : [])
+    .map((p) => ({
+      id: String(p?.id || crypto.randomUUID()),
+      text: String(p?.text || '').trim().slice(0, 500),
+      authorName: String(p?.authorName || 'Land Holder').slice(0, 80),
+      authorAddress: String(p?.authorAddress || ''),
+      pinnedAt: p?.pinnedAt || new Date().toISOString(),
+      updatedAt: p?.updatedAt || new Date().toISOString()
+    }))
+    .filter((p) => p.text.length > 0);
+
+  const updatedAt = new Date().toISOString();
+  const aadJson = JSON.stringify({
+    version: 'graffiland-pins-ipfs-v1',
+    sculptureId,
+    parcelId,
+    geohash: String(geohash || '').toLowerCase(),
+    batchSeq: Number(batchSeq)
+  });
+
+  const aesKey = await derivePinBatchKey({
+    parcelSealKeyB64,
+    sculptureId,
+    parcelId,
+    geohash,
+    usages: ['encrypt']
+  });
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = JSON.stringify({
+    pins: cleanPins,
+    updatedAt
+  });
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: textEnc.encode(aadJson), tagLength: 128 },
+    aesKey,
+    textEnc.encode(plaintext)
+  );
+
+  const ivB64 = bytesToB64(iv);
+  const ciphertextB64 = bytesToB64(ct);
+  const keyCommitment = await computeSealKeyCommitment(parcelSealKeyB64);
+
+  let ownerSignatureB64 = '';
+  let ownerSignPubJwk = null;
+  let ownerPubFp = '';
+  if (identity?.signPrivateKey && identity?.signPublicJwk) {
+    const signInput = `${aadJson}|${ivB64}|${ciphertextB64}|${keyCommitment}`;
+    const sig = await crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      identity.signPrivateKey,
+      textEnc.encode(signInput)
+    );
+    ownerSignatureB64 = bytesToB64(sig);
+    ownerSignPubJwk = stripPrivateJwk(identity.signPublicJwk);
+    ownerPubFp = identity.pubFingerprint;
+  }
+
+  return {
+    version: 'graffiland-pins-ipfs-v1',
+    alg: 'AES-GCM-HKDF-PARCEL-SEAL',
+    sculptureId,
+    parcelId,
+    geohash: String(geohash || '').toLowerCase(),
+    batchSeq: Number(batchSeq),
+    pinCount: cleanPins.length,
+    aadJson,
+    ivB64,
+    ciphertextB64,
+    keyCommitment,
+    ownerPubFp,
+    ownerSignPubJwk,
+    ownerSignatureB64,
+    updatedAt
+  };
+}
+
+export async function decryptPinnedIpfsBatch({
+  encryptedBatch,
+  parcelSealKeyB64,
+  sculptureId,
+  parcelId,
+  geohash
+}) {
+  if (!encryptedBatch?.ivB64 || !encryptedBatch?.ciphertextB64 || !encryptedBatch?.aadJson) {
+    throw new Error('Invalid encrypted IPFS pin batch envelope.');
+  }
+  const parsedAad = JSON.parse(encryptedBatch.aadJson);
+  if (
+    parsedAad.sculptureId !== sculptureId ||
+    parsedAad.parcelId !== parcelId ||
+    String(parsedAad.geohash || '').toLowerCase() !== String(geohash || '').toLowerCase()
+  ) {
+    throw new Error('Encrypted IPFS batch parcel mismatch.');
+  }
+
+  if (encryptedBatch.keyCommitment) {
+    const actualCommit = await computeSealKeyCommitment(parcelSealKeyB64);
+    if (actualCommit !== encryptedBatch.keyCommitment) {
+      throw new Error('Parcel seal key commitment mismatch.');
+    }
+  }
+
+  let sigVerified = false;
+  if (encryptedBatch.ownerSignPubJwk && encryptedBatch.ownerSignatureB64) {
+    const signPub = await crypto.subtle.importKey(
+      'jwk',
+      stripPrivateJwk(encryptedBatch.ownerSignPubJwk),
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify']
+    );
+    const signInput = `${encryptedBatch.aadJson}|${encryptedBatch.ivB64}|${encryptedBatch.ciphertextB64}|${encryptedBatch.keyCommitment || ''}`;
+    sigVerified = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      signPub,
+      b64ToBytes(encryptedBatch.ownerSignatureB64),
+      textEnc.encode(signInput)
+    );
+    if (!sigVerified) {
+      throw new Error('Land holder signature verification failed on IPFS pin batch.');
+    }
+  }
+
+  const aesKey = await derivePinBatchKey({
+    parcelSealKeyB64,
+    sculptureId,
+    parcelId,
+    geohash,
+    usages: ['decrypt']
+  });
+
+  const plain = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: b64ToBytes(encryptedBatch.ivB64),
+      additionalData: textEnc.encode(encryptedBatch.aadJson),
+      tagLength: 128
+    },
+    aesKey,
+    b64ToBytes(encryptedBatch.ciphertextB64)
+  );
+
+  const data = JSON.parse(textDec.decode(plain));
+  return {
+    pins: Array.isArray(data.pins) ? data.pins : [],
+    updatedAt: data.updatedAt || encryptedBatch.updatedAt || '',
+    batchSeq: Number(parsedAad.batchSeq || encryptedBatch.batchSeq || 1),
+    sigVerified
+  };
+}
+
+export async function signParcelPresenceProof(
+  identity,
+  { sculptureId, parcelId, geohash, challengeId, challengeNonce, sightProof, polSnapshot }
+) {
+  const cameraFrames = Math.max(
+    Number(polSnapshot?.cameraFrames || 0),
+    Number(sightProof?.cameraFrames || 0)
+  );
+  const visualDHash = String(polSnapshot?.visualDHash || sightProof?.visualDHash || '');
+  const payload = buildParcelPresenceSignPayload({
+    sculptureId,
+    parcelId,
+    geohash,
+    challengeId,
+    challengeNonce,
+    pubFingerprint: identity.pubFingerprint,
+    lat: sightProof.lat,
+    lng: sightProof.lng,
+    cameraFrames,
+    visualDHash,
+    selectedAt: sightProof.selectedAt
+  });
+  const sig = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    identity.signPrivateKey,
+    textEnc.encode(payload)
+  );
+  return {
+    challengeId,
+    requesterPubFp: identity.pubFingerprint,
+    requesterEcdhPubJwk: identity.ecdhPublicJwk,
+    requesterSignPubJwk: identity.signPublicJwk,
+    presenceSignatureB64: bytesToB64(sig),
+    sightProof,
+    polSnapshot
   };
 }
