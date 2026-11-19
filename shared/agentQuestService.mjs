@@ -255,11 +255,20 @@ export async function scoutLands(
 }
 
 /**
- * Claims an unclaimed or expired Virtual Land parcel for free (gas-sponsored) under a 7-day dormant lease.
+ * Claims an unclaimed or expired Virtual Land parcel with 0 platform fee (agents pay their own chain gas) under a 7-day dormant lease.
  */
 export async function claimDormantLand(
   db,
-  { agentUser, parcelId = '', lat = null, lng = null, customName = '', curationNote = '' }
+  {
+    agentUser,
+    parcelId = '',
+    lat = null,
+    lng = null,
+    customName = '',
+    curationNote = '',
+    txHash = '',
+    chainCfg = null
+  }
 ) {
   await releaseExpiredDormantLands(db);
 
@@ -426,9 +435,30 @@ export async function claimDormantLand(
     ]);
   }
 
+  const parcelBytes32 = ethers.keccak256(ethers.toUtf8Bytes(cleanParcelId));
+  const latE6 = Math.round(bounds.center[0] * 1e6);
+  const lngE6 = Math.round(bounds.center[1] * 1e6);
+  const ttlSeconds = STEWARD_DEFAULTS.dormantLeaseTtlHours * 3600;
+  const suppliedTxHash = /^0x[0-9a-fA-F]{64}$/.test(String(txHash || '').trim())
+    ? String(txHash).trim()
+    : '';
+  const chainTxRequest = {
+    method: 'claimDormantLand',
+    network: chainCfg?.network?.name || 'Robinhood Chain',
+    chainId: Number(chainCfg?.network?.chainId || 46630),
+    contractAddress:
+      chainCfg?.contractAddress || '0x0000000000000000000000000000000000466300',
+    from: stewardAddress,
+    args: [parcelBytes32, stewardAddress, latE6, lngE6, ttlSeconds]
+  };
+
   return {
     claimed: true,
-    gasSponsored: true,
+    protocolFeeEth: 0,
+    gasSponsored: false,
+    gasPaidBy: 'agent',
+    txHash: suppliedTxHash,
+    chainTxRequest,
     parcelId: cleanParcelId,
     geohash,
     status: 'dormant',
@@ -561,6 +591,7 @@ export async function batchBuildLand(
 
   const built = [];
   const generatedSlots = [];
+  const chainTxRequests = [];
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i] || {};
@@ -572,7 +603,8 @@ export async function batchBuildLand(
       lat: item.lat,
       lng: item.lng,
       altitude: item.altitude,
-      previewDataUrl: item.previewDataUrl
+      previewDataUrl: item.previewDataUrl,
+      txHash: String(item.txHash || '').trim()
     };
 
     if (item.prefab) {
@@ -614,6 +646,13 @@ export async function batchBuildLand(
       layerRole: item.layerRole === 'artist_work' ? 'artist_work' : 'steward_stage'
     });
     built.push(res.sculpture);
+    if (res.mint?.chainTxRequest) {
+      chainTxRequests.push({
+        sculptureId: res.sculpture.id,
+        title: res.sculpture.title,
+        ...res.mint.chainTxRequest
+      });
+    }
   }
 
   let createdQuest = null;
@@ -637,7 +676,10 @@ export async function batchBuildLand(
   return {
     parcelId: parcelCtx.parcelId,
     builtCount: built.length,
+    gasSponsored: false,
+    gasPaidBy: 'agent',
     sculptures: built,
+    chainTxRequests,
     suggestedSlotOffsets: generatedSlots,
     quest: createdQuest
   };

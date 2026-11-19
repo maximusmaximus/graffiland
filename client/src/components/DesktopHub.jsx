@@ -116,7 +116,9 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
   });
   const [introRoleTab, setIntroRoleTab] = useState(() =>
-    initialSession.introRoleTab === 'agent' ? 'agent' : 'human'
+    ['agent', 'collector'].includes(initialSession.introRoleTab)
+      ? initialSession.introRoleTab
+      : 'human'
   );
 
   const activeView = selected
@@ -430,6 +432,8 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             onRoleTabChange={setIntroRoleTab}
             onOpenPair={openPairModal}
             onOpenQuests={() => setSidebarTab('quests')}
+            onOpenMarket={() => setSidebarTab('market')}
+            onOpenLeaders={() => setSidebarTab('leaders')}
             onOpenInfo={openInfoModal}
             onRequestLogin={() => setLoginOpen(true)}
             onDismiss={dismissMobileNotice}
@@ -561,11 +565,11 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             {sidebarTab === 'quests' ? (
               <div className="desktop-nearby-list" aria-label="Agent Land Quests">
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', padding: '2px 2px 6px' }}>
-                  Visit Agent-claimed Virtual Lands IRL on mobile to earn 2x First-Spark XP &amp; permanent 2% Human Pool royalties.
+                  Visit these AI agent lands IRL with your phone to earn 2x XP, bounties, and a 2% Human Pool share.
                 </div>
                 {quests.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
-                    No active quests yet. AI stewards can deploy stages &amp; quests via graffiland-mcp!
+                    No active quests yet. AI agents can create stages &amp; quests via graffiland-mcp.
                   </div>
                 ) : (
                   quests.map((q) => {
@@ -611,7 +615,7 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             ) : sidebarTab === 'market' ? (
               <div className="desktop-nearby-list" aria-label="GRAFFILAND Marketplace">
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--accent)', padding: '2px 2px 6px' }}>
-                  Every sale allocates 5% Platform · 3% Agent Steward · 2% Human Contributors Pool · 90% Seller
+                  Every trade pays: 5% Platform · 3% Agent Steward · 2% Human Contributors Pool · 90% Seller
                 </div>
                 {marketNotice && (
                   <div className="card" style={{ padding: 8, fontSize: 11, color: 'var(--accent)', marginBottom: 6 }}>

@@ -101,8 +101,17 @@ export default function MapView({
       map.invalidateSize();
     }, 90);
 
+    let observer = null;
+    if (typeof ResizeObserver === 'function' && mapHostRef.current) {
+      observer = new ResizeObserver(() => {
+        map.invalidateSize({ animate: false });
+      });
+      observer.observe(mapHostRef.current);
+    }
+
     return () => {
       clearTimeout(resizeTimer);
+      observer?.disconnect();
       map.off('dragstart', markUserAdjusted);
       map.off('zoomstart', markUserAdjusted);
       map.off('moveend', emitViewport);
@@ -271,7 +280,16 @@ export default function MapView({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        height: compact ? 'auto' : '100%',
+        flex: compact ? undefined : 1,
+        minHeight: 0
+      }}
+    >
       {!compact && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -166,12 +166,38 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
     assert.ok(bodyText.includes('E2E Lighthouse Cube'));
 
-    // Exercise Desktop Intro Banner tabs (Human Creator <-> Agentic User / AI Steward) & Prompt Preview
+    // Exercise Desktop Intro Banner tabs (Human Creator <-> Agentic User / AI Steward <-> Collectors & Scouts) & Prompt Preview
     await page.getByRole('button', { name: /Copy Property-Agent Prompt/i }).waitFor();
+    await page.getByRole('tab', { name: /Collectors & Scouts/i }).click();
+    await page.waitForSelector('text=Collect Real-World Verified 3D NFTs');
     await page.getByRole('tab', { name: /Agentic User \/ AI Steward/i }).click();
     await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
     await page.getByRole('button', { name: /Preview Prompt/i }).click();
     await page.waitForSelector('text=Zero-OAuth Autonomous Agent Steward');
+
+    // Verify 100% full-viewport framing even when Intro + Prompt Preview are expanded
+    const viewportMetrics = await page.evaluate(() => {
+      const shell = globalThis.document.querySelector('.desktop-shell');
+      const mapEl = globalThis.document.querySelector('.desktop-map-stage .map-container');
+      const sideEl = globalThis.document.querySelector('.desktop-nearby-panel');
+      return {
+        innerWidth: globalThis.window.innerWidth,
+        innerHeight: globalThis.window.innerHeight,
+        docScrollHeight: globalThis.document.documentElement.scrollHeight,
+        shellHeight: shell?.getBoundingClientRect().height || 0,
+        mapHeight: mapEl?.getBoundingClientRect().height || 0,
+        sideHeight: sideEl?.getBoundingClientRect().height || 0
+      };
+    });
+    assert.ok(
+      viewportMetrics.docScrollHeight <= viewportMetrics.innerHeight + 2,
+      `Expected 100% viewport fit without page scroll, got docScrollHeight=${viewportMetrics.docScrollHeight} vs innerHeight=${viewportMetrics.innerHeight}`
+    );
+    assert.ok(
+      viewportMetrics.mapHeight >= 300 && viewportMetrics.sideHeight >= 300,
+      `Expected map & sidebar to share full height cleanly, got map=${viewportMetrics.mapHeight}, side=${viewportMetrics.sideHeight}`
+    );
+
     await page.getByRole('button', { name: /Copy Autonomous Agent Prompt/i }).click();
     await page.waitForSelector('text=Copied Autonomous Agent Prompt');
     await page.getByRole('button', { name: /Dismiss mobile notice/i }).click();

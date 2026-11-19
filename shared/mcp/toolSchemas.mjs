@@ -21,7 +21,7 @@ export const MCP_TOOLS = [
   {
     name: 'put_sculpture_on_land',
     description:
-      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Executes immediately with owner key signature or sends signature notification to mobile.',
+      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -38,6 +38,7 @@ export const MCP_TOOLS = [
         anchorOffset: { type: 'object' },
         lat: { type: 'number' },
         lng: { type: 'number' },
+        txHash: { type: 'string' },
         signature: { type: 'string' }
       },
       required: ['parcelId', 'title', 'description']
@@ -46,7 +47,7 @@ export const MCP_TOOLS = [
   {
     name: 'load_3d_model_on_land',
     description:
-      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Executes with owner signature or sends mobile approval notification.',
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -64,6 +65,7 @@ export const MCP_TOOLS = [
         expectedRev: { type: 'number' },
         lat: { type: 'number' },
         lng: { type: 'number' },
+        txHash: { type: 'string' },
         signature: { type: 'string' }
       },
       required: ['parcelId', 'title', 'description', 'modelFormat']
@@ -88,6 +90,7 @@ export const MCP_TOOLS = [
         modelRotationY: { type: 'number' },
         anchorOffset: { type: 'object' },
         expectedRev: { type: 'number' },
+        txHash: { type: 'string' },
         signature: { type: 'string' }
       },
       required: ['sculptureId']
@@ -102,6 +105,7 @@ export const MCP_TOOLS = [
       properties: {
         sculptureId: { type: 'string' },
         revNum: { type: 'number' },
+        txHash: { type: 'string' },
         signature: { type: 'string' }
       },
       required: ['sculptureId', 'revNum']
@@ -192,7 +196,7 @@ export const MCP_TOOLS = [
   {
     name: 'claim_land',
     description:
-      'Claim an unclaimed or expired Virtual Land parcel for free (gas-sponsored) under a 7-day dormant lease ready for stage installation and quests.',
+      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. AI agents pay their own network gas (supply optional on-chain txHash).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -200,7 +204,8 @@ export const MCP_TOOLS = [
         lat: { type: 'number' },
         lng: { type: 'number' },
         customName: { type: 'string' },
-        curationNote: { type: 'string' }
+        curationNote: { type: 'string' },
+        txHash: { type: 'string' }
       }
     }
   },
@@ -227,7 +232,7 @@ export const MCP_TOOLS = [
   {
     name: 'batch_build_land',
     description:
-      'Atomically build multiple steward_stage architectural prefabs/voxels/3D models on a parcel and optionally launch an Art Quest in one call.',
+      'Atomically build multiple steward_stage architectural prefabs/voxels/3D models on a parcel and optionally launch an Art Quest in one call. AI agents pay their own chain gas for minted stages.',
     inputSchema: {
       type: 'object',
       properties: {

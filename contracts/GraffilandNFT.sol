@@ -123,8 +123,8 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
     }
 
     /**
-     * @notice Allows autonomous agents to claim an unoccupied parcel for free with a Dormant Lease TTL.
-     *         If no verified IRL human visits and adds art before `expiresAt`, the parcel releases.
+     * @notice Allows autonomous agents (paying their own gas) or relayer to claim an unoccupied parcel
+     *         with a Dormant Lease TTL. Unawakened parcels release after `expiresAt`.
      */
     function claimDormantLand(
         bytes32 landParcelId,
@@ -132,7 +132,11 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         int32 latE6,
         int32 lngE6,
         uint64 ttlSeconds
-    ) external onlyRelayerOrOwner {
+    ) external {
+        require(
+            msg.sender == steward || msg.sender == relayer || msg.sender == owner(),
+            "GraffilandNFT: unauthorized steward claim"
+        );
         require(landParcelId != bytes32(0), "GraffilandNFT: invalid parcel");
         require(steward != address(0), "GraffilandNFT: zero steward");
         require(ttlSeconds >= 1 hours && ttlSeconds <= 30 days, "GraffilandNFT: invalid TTL");
@@ -191,7 +195,20 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
     }
 
     /**
-     * @notice Gas-sponsored mint called by platform relayer; transfers ERC-721 custody immediately to `recipient`.
+     * @notice Self-funded stage/sculpture mint called directly by an AI agent steward (agent pays own gas).
+     */
+    function mintAgentStage(
+        string calldata metadataURI,
+        bytes32 landParcelId,
+        bytes32 proofOfLocationHash,
+        int32 latE6,
+        int32 lngE6
+    ) external returns (uint256 tokenId) {
+        return _mintSculptureInternal(msg.sender, metadataURI, landParcelId, proofOfLocationHash, latE6, lngE6);
+    }
+
+    /**
+     * @notice Gas-sponsored mint called by platform relayer for IRL human artists; transfers ERC-721 custody immediately to `recipient`.
      *         Routes ERC-2981 10% total royalties (5% Platform + 3% Agent + 2% Human) through `royaltyRouter` when set.
      */
     function mintSculpture(
@@ -202,6 +219,17 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         int32 latE6,
         int32 lngE6
     ) external onlyRelayerOrOwner returns (uint256 tokenId) {
+        return _mintSculptureInternal(recipient, metadataURI, landParcelId, proofOfLocationHash, latE6, lngE6);
+    }
+
+    function _mintSculptureInternal(
+        address recipient,
+        string calldata metadataURI,
+        bytes32 landParcelId,
+        bytes32 proofOfLocationHash,
+        int32 latE6,
+        int32 lngE6
+    ) internal returns (uint256 tokenId) {
         require(recipient != address(0), "GraffilandNFT: zero recipient");
         require(bytes(metadataURI).length > 0, "GraffilandNFT: empty URI");
         require(landParcelId != bytes32(0), "GraffilandNFT: invalid parcel");
@@ -240,9 +268,14 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
 
     /**
      * @notice Updates tokenURI after an owner/contributor revision or rollback, emitting ERC-4906 MetadataUpdate.
+     *         Owners can pay their own gas directly, or the relayer may submit for mobile humans.
      */
-    function updateTokenURI(uint256 tokenId, string calldata newURI) external onlyRelayerOrOwner {
-        require(_ownerOf(tokenId) != address(0), "GraffilandNFT: non-existent token");
+    function updateTokenURI(uint256 tokenId, string calldata newURI) external {
+        address tokenOwner = ownerOf(tokenId);
+        require(
+            msg.sender == tokenOwner || msg.sender == relayer || msg.sender == owner(),
+            "GraffilandNFT: unauthorized metadata updater"
+        );
         require(bytes(newURI).length > 0, "GraffilandNFT: empty URI");
         _setTokenURI(tokenId, newURI);
     }

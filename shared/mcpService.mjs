@@ -278,7 +278,8 @@ export async function handleMcpJsonRpc(
             lat: args.lat,
             lng: args.lng,
             altitude: args.altitude,
-            previewDataUrl: args.previewDataUrl
+            previewDataUrl: args.previewDataUrl,
+            ...(args.txHash ? { txHash: args.txHash } : {})
           };
         } else {
           const validation = validatePublishPayload({
@@ -298,7 +299,8 @@ export async function handleMcpJsonRpc(
             lat: args.lat,
             lng: args.lng,
             altitude: args.altitude,
-            previewDataUrl: args.previewDataUrl
+            previewDataUrl: args.previewDataUrl,
+            ...(args.txHash ? { txHash: args.txHash } : {})
           };
         }
         toolResult = await handlePairedLandMutationViaMcp(db, {
@@ -482,7 +484,8 @@ export async function handleMcpJsonRpc(
         lat: args.lat,
         lng: args.lng,
         customName: args.customName || '',
-        curationNote: args.curationNote || ''
+        curationNote: args.curationNote || '',
+        txHash: args.txHash || ''
       });
     } else if (toolName === 'generate_voxel_prefab') {
       toolResult = generateVoxelPrefab(args);

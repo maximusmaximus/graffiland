@@ -154,6 +154,18 @@ export async function executeValidatedSignatureRow(
   }
 ) {
   const payload = JSON.parse(reqRow.payload_json || '{}');
+  const suppliedTxHash = String(txHash || payload?.txHash || '').trim();
+  const isAgentOwner =
+    String(ownerUser?.id || '').startsWith('agent:') || ownerUser?.actorType === 'agent';
+  const safeEmitMetadataUpdateFn = isAgentOwner
+    ? async () => ({
+        simulated: true,
+        erc4906Emitted: Boolean(suppliedTxHash),
+        txHash: suppliedTxHash,
+        gasSponsored: false,
+        gasPaidBy: 'agent'
+      })
+    : emitMetadataUpdateFn;
   let result;
 
   if (reqRow.action === 'create_sculpture') {
@@ -166,7 +178,7 @@ export async function executeValidatedSignatureRow(
       parcelCtx,
       ownerUser,
       ownerAddress: reqRow.owner_address,
-      payload,
+      payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
       pinSculptureFn,
       mintSculptureFn,
       proofSeed: reqRow.id
@@ -179,9 +191,9 @@ export async function executeValidatedSignatureRow(
     });
     result = await applyUpdateSculpture(db, {
       sculptureRow,
-      payload,
+      payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
       pinSculptureFn,
-      emitMetadataUpdateFn,
+      emitMetadataUpdateFn: safeEmitMetadataUpdateFn,
       editorUser: ownerUser,
       editorRole: 'mcp-agent'
     });
@@ -195,7 +207,7 @@ export async function executeValidatedSignatureRow(
       sculptureRow,
       revNum: payload.revNum,
       ownerUser,
-      emitMetadataUpdateFn
+      emitMetadataUpdateFn: safeEmitMetadataUpdateFn
     });
   } else if (reqRow.action === 'delete_sculpture') {
     const sculptureRow = await checkSculptureOwnership(db, {

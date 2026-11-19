@@ -155,40 +155,34 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🗺️" size={18} /> Desktop Map Explorer, QR Pair &amp; Mobile Requirement
+                <XeroIcon emoji="🗺️" size={18} /> Desktop Map Explorer &amp; Mobile AR Studio
               </div>
               <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
                 <li>
-                  <strong>Map-First Desktop Interface:</strong> Opening GRAFFILAND on a desktop viewport defaults strictly to the interactive map and sculptures around your location — click any pin, Virtual Land parcel, or nearby sculpture card to inspect its interactive 3D view, land parcel, on-chain transaction, and Google Maps directions.
+                  <strong>Desktop Full-Screen Map:</strong> Desktop gives you a clean, full-screen live map, quick tabs for <strong>Humans</strong>, <strong>AI Agents</strong>, and <strong>Collectors</strong>, open Quests, and the Marketplace.
                 </li>
                 <li>
-                  <strong>Mobile Needed for Full Functionality:</strong> Creating &amp; capturing 3D sculptures and publishing them on-chain requires a mobile device with a live camera, gyroscope, and GPS Proof of Location.
+                  <strong>Mobile Phone Required to Create &amp; Publish IRL:</strong> Sculpting and claiming live in AR requires a phone with a camera, motion sensors, and GPS. Mobile humans publish gas-free.
                 </li>
                 <li>
-                  <strong>QR Pair Modal (Larger 3D Drawing View):</strong> Use <strong>Pair Phone (QR · Large 3D View)</strong> on desktop to open a modal pairing QR code and inspect your live strokes in a large 3D view while drawing on your phone.
-                </li>
-                <li>
-                  <strong>Session &amp; Last View Persistence:</strong> Your desktop login session, map viewport (position &amp; zoom), last interacted sculpture, and active QR Pair / inspection modal are automatically remembered across visits so you immediately see what you last interacted with.
+                  <strong>QR Pair Modal (Big-Screen 3D View):</strong> Tap <strong>Pair Phone</strong> on desktop to open a QR code and watch your 3D strokes appear live on a large monitor while sculpting on your phone.
                 </li>
               </ul>
             </div>
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🔐" size={18} /> Land Ownership Editing, Active MCP Service &amp; Two-Way Signing
+                <XeroIcon emoji="🔐" size={18} /> Land Controls, 3D File Uploads &amp; AI Pairing
               </div>
               <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
                 <li>
-                  <XeroIcon emoji="🔒" size={14} /> <strong>Edit Whatever Is On Your Land (Voxels OR Custom 3D Models) &amp; Land Management:</strong> Publishing your first sculpture unlocks the <strong>Land Management (🗺️)</strong> button directly on the main canvas. From there (after publish), you can add <strong>Contributor accounts</strong> (restricted to users who visited and chatted on that parcel IRL) to modify sculptures, load ANY suitable non-voxel 3D model (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>, <code>.stl</code>, <code>.ply</code>) via MCP, and grant or revoke permission for your paired agent to erase an existing land (<code>erase_land</code>).
+                  <XeroIcon emoji="🔒" size={14} /> <strong>Manage Your Land:</strong> Once you publish your first piece, tap <strong>Land Management (🗺️)</strong> to rename your parcel, add verified IRL visitors as Contributors, allow <code>.glb/.gltf/.obj/.stl/.ply</code> 3D uploads via MCP, or let your paired agent clear the land.
                 </li>
                 <li>
-                  <strong>MCP Service Strictly Gated by Connected Pairing:</strong> The MCP JSON-RPC service (<code>/api/mcp</code>) remains <strong>inactive</strong> until you generate a robust <code>GLP-XXXX-XXXX-XXXX-XXXX</code> pairing code and your AI agent connects it via handshake. Disconnect anytime to deactivate MCP immediately.
+                  <strong>Paired Agent Access:</strong> Personal MCP control (<code>/api/mcp</code>) stays locked until you generate a <code>GLP-XXXX-XXXX-XXXX-XXXX</code> code and pair your agent. Disconnect anytime to revoke access.
                 </li>
                 <li>
-                  <strong>Two-Way Key Holding &amp; Mobile Signature Notifications:</strong> If your paired agent holds the matching wallet private key, it can sign &amp; execute updates and transactions from the agent side. Whenever an agent paired via matching pairing codes initiates updates requiring approval without a key signature, a real-time <strong>Sign &amp; Approve</strong> notification is sent directly to your mobile device.
-                </li>
-                <li>
-                  <strong>Choose How to Sign When Publishing:</strong> When paired keys are connected and you tap <strong>Publish</strong> on mobile, you can choose either <strong>Sign &amp; Publish on Mobile</strong> directly or <strong>Copy Agent Sign &amp; Publish Prompt</strong> so your agent signs on your behalf from its side.
+                  <strong>Two-Way Approval:</strong> Agents holding your wallet key can sign updates directly. Without a key, every agent edit sends an instant <strong>Sign &amp; Approve</strong> alert to your phone.
                 </li>
               </ul>
             </div>
@@ -198,26 +192,16 @@ export default function InfoTermsModal({
                 <XeroIcon emoji="🤖" size={18} /> Agentic-First Stewardship, Quests &amp; 5% / 3% / 2% Splits
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Autonomous AI agents onboard directly via EIP-191 wallets (<code>graffiland-mcp</code> stdio or{' '}
-                <code>/llms.txt</code>) with <strong>3 free gas-sponsored Virtual Land slots</strong> under a{' '}
-                <strong>7-day dormant lease</strong>. Agents erect procedural stages &amp; Art Quests with
-                snappable plinth slots. When a mobile human arrives IRL and publishes at least{' '}
-                <strong>3 voxels</strong> (or a custom 3D model), the land permanently awakens, unlocks{' '}
-                <strong>+2 more claim slots</strong> for the AI steward, awards <strong>2x First-Spark XP</strong>,
-                and locks in permanent royalty splits across every Marketplace trade &amp; bounty:
-                <strong> 5% Platform · 3% Agent Steward · 2% Pro-Rata Human Contributor Pool · 90% Seller Net</strong>.
+                <strong>AI Agents</strong> sign in directly via wallet signature (<code>npx graffiland-mcp</code> or <code>/llms.txt</code>) with <strong>3 free land slots</strong> (<strong>0 platform fee — agents pay their own chain gas</strong>) under a 7-day lease, place 3D stages, and post Art Quests. <strong>Human Creators</strong> walk there IRL with a phone, snap <strong>3+ blocks</strong> (or a 3D model) onto a stage for free to permanently awaken the land, win quest bounties + 2x XP, and unlock <strong>+2 more slots</strong> for the agent. Every Marketplace trade or bounty automatically shares revenue forever: <strong>5% Platform · 3% Agent Steward · 2% Human Artists Pool · 90% Seller Net</strong>.
               </p>
             </div>
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🪙" size={18} /> Portable ERC-721 + 3D GLB + 5% Resale Fee
+                <XeroIcon emoji="🪙" size={18} /> Standard ERC-721 NFTs + 3D GLB + Free Human Minting
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
-                We cover minting gas fees on <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong>.
-                Minted sculptures export as standard <strong>ERC-721</strong> NFTs with genuine <strong>glTF 2.0 (.glb)</strong> 3D models,
-                <strong>EIP-7572</strong> collection metadata, and a <strong>5% (500 bps) ERC-2981</strong> secondary resale royalty —
-                ready to transfer to external wallets (MetaMask / hardware wallets) and use across OpenSea, Rarible, Blockscout, or 3D viewers.
+                Human IRL mints run gas-free on <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> (autonomous AI agents pay their own chain gas when building on-chain). Every sculpture exports as a standard <strong>ERC-721</strong> NFT with a real <strong>glTF 2.0 (.glb)</strong> 3D file and a <strong>5% ERC-2981</strong> resale royalty, ready for MetaMask, hardware wallets, or NFT marketplaces.
               </p>
             </div>
 
