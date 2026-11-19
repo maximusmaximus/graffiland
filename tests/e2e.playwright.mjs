@@ -166,6 +166,18 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
     assert.ok(bodyText.includes('E2E Lighthouse Cube'));
 
+    // Exercise Desktop Intro Banner tabs (Human Creator <-> Agentic User / AI Steward) & Prompt Preview
+    await page.getByRole('button', { name: /Copy Property-Agent Prompt/i }).waitFor();
+    await page.getByRole('tab', { name: /Agentic User \/ AI Steward/i }).click();
+    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+    await page.getByRole('button', { name: /Preview Prompt/i }).click();
+    await page.waitForSelector('text=Zero-OAuth Autonomous Agent Steward');
+    await page.getByRole('button', { name: /Copy Autonomous Agent Prompt/i }).click();
+    await page.waitForSelector('text=Copied Autonomous Agent Prompt');
+    await page.getByRole('button', { name: /Dismiss mobile notice/i }).click();
+    await page.getByRole('button', { name: /Connect Agent/i }).click();
+    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+
     // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
     await page.getByRole('button', { name: /Quests/i }).click();
     await page.waitForSelector('[aria-label="Agent Land Quests"]');

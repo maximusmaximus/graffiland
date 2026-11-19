@@ -8,6 +8,7 @@ import {
   copyToClipboard
 } from '../utils/clipboard.js';
 import AdminPanel from './AdminPanel.jsx';
+import DesktopIntroBanner from './DesktopIntroBanner.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
@@ -114,6 +115,9 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
       return false;
     }
   });
+  const [introRoleTab, setIntroRoleTab] = useState(() =>
+    initialSession.introRoleTab === 'agent' ? 'agent' : 'human'
+  );
 
   const activeView = selected
     ? 'sculpture'
@@ -127,11 +131,12 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     saveDesktopSession({
       areaFilter,
       mapViewport,
+      introRoleTab,
       lastSculptureId: lastSculpture?.id || '',
       lastSculptureSnapshot: summarizeSculptureSnapshot(lastSculpture),
       activeView
     });
-  }, [areaFilter, mapViewport, lastSculpture, activeView]);
+  }, [areaFilter, mapViewport, introRoleTab, lastSculpture, activeView]);
 
   const refreshData = useCallback(async () => {
     try {
@@ -195,7 +200,7 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
   }, [refreshData, refreshMyLands]);
 
   useEffect(() => {
-    if (!user?.id || !pairOpen) return;
+    if (!user?.id) return;
     api
       .listMcpPairings()
       .then(setMcpState)
@@ -335,6 +340,16 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  function openAgentConnectIntro() {
+    setMobileNoticeDismissed(false);
+    setIntroRoleTab('agent');
+    try {
+      sessionStorage.removeItem(DESKTOP_NOTICE_SESSION_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <div className="desktop-shell">
       <header className="desktop-nav">
@@ -357,6 +372,14 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
           )}
           <button type="button" className="btn btn-primary" onClick={openPairModal}>
             <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={openAgentConnectIntro}
+            title="Show human/agent onboarding & copy agent connection prompts"
+          >
+            <XeroIcon emoji="🤖" size={16} /> Connect Agent
           </button>
           {(myLands.parcelCount > 0 || (myLands.parcels && myLands.parcels.length > 0)) && (
             <button
@@ -399,33 +422,18 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
 
       <main className="desktop-main">
         {!mobileNoticeDismissed && (
-          <div className="desktop-mobile-notice" role="status" aria-live="polite">
-            <div className="desktop-mobile-notice-body">
-              <XeroIcon emoji="📱" size={20} />
-              <div>
-                <strong>Mobile Required for Full Functionality</strong> — Desktop displays only the
-                interactive map and large-screen viewing. Use a mobile device (camera, gyroscope
-                &amp; GPS) to create/capture sculptures and publish them on-chain.
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button type="button" className="btn btn-primary" onClick={openPairModal}>
-                <XeroIcon emoji="🔗" size={14} /> Pair with QR Code
-              </button>
-              <button type="button" className="btn" onClick={openInfoModal}>
-                <XeroIcon emoji="ℹ️" size={14} /> Learn More
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={dismissMobileNotice}
-                aria-label="Dismiss mobile notice"
-                title="Dismiss notice"
-              >
-                <XeroIcon emoji="❌" size={13} />
-              </button>
-            </div>
-          </div>
+          <DesktopIntroBanner
+            user={user}
+            mcpState={mcpState}
+            onMcpStateChange={setMcpState}
+            roleTab={introRoleTab}
+            onRoleTabChange={setIntroRoleTab}
+            onOpenPair={openPairModal}
+            onOpenQuests={() => setSidebarTab('quests')}
+            onOpenInfo={openInfoModal}
+            onRequestLogin={() => setLoginOpen(true)}
+            onDismiss={dismissMobileNotice}
+          />
         )}
 
         <div className="desktop-map-layout">
