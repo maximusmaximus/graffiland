@@ -129,47 +129,6 @@ export default function MobileStudio({
     };
   }, []);
 
-  useEffect(() => {
-    const loc = pol.location;
-    if (!loc || !Number.isFinite(Number(loc.lat)) || !Number.isFinite(Number(loc.lng))) return;
-    let cancelled = false;
-    api
-      .getNearbyQuests({ lat: loc.lat, lng: loc.lng, radiusMeters: 150, status: 'open' })
-      .then((res) => {
-        if (cancelled) return;
-        const firstQuest = res?.quests?.[0] || null;
-        setActiveQuest(firstQuest);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [pol.location]);
-
-  const handleSnapToPlinthSlot = useCallback(
-    (slot) => {
-      if (!slot) return;
-      setSelectedPlinthSlot(slot);
-      brush.setArtTransform((prev) => ({
-        ...prev,
-        offsetX: Number(slot.dx || 0),
-        offsetY: Number(slot.dy || 0),
-        offsetZ: Number(slot.dz || 0),
-        rotYDeg: Math.round(((Number(slot.yaw || 0) * 180) / Math.PI) * 10) / 10
-      }));
-      brush.setSurfaceAnchor({
-        label: slot.label || 'AI Plinth',
-        depthM: 1.5,
-        point: new THREE.Vector3(Number(slot.dx || 0), Number(slot.dy || 0), Number(slot.dz || 0)),
-        normal: new THREE.Vector3(0, 1, 0),
-        locked: true,
-        autoDetected: false
-      });
-      showTemporaryHint(`Snapped canvas onto plinth "${slot.label}"! Draw & publish 3+ voxels.`);
-    },
-    [brush, showTemporaryHint]
-  );
-
   const showTemporaryHint = useCallback((msg) => {
     setArSelectHint(msg);
     clearTimeout(hintTimerRef.current);
@@ -256,6 +215,47 @@ export default function MobileStudio({
     });
     await ar.hydrateNearbyList(res.sculptures || [], refined);
   };
+
+  useEffect(() => {
+    const loc = pol.location;
+    if (!loc || !Number.isFinite(Number(loc.lat)) || !Number.isFinite(Number(loc.lng))) return;
+    let cancelled = false;
+    api
+      .getNearbyQuests({ lat: loc.lat, lng: loc.lng, radiusMeters: 150, status: 'open' })
+      .then((res) => {
+        if (cancelled) return;
+        const firstQuest = res?.quests?.[0] || null;
+        setActiveQuest(firstQuest);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pol.location]);
+
+  const handleSnapToPlinthSlot = useCallback(
+    (slot) => {
+      if (!slot) return;
+      setSelectedPlinthSlot(slot);
+      brush.setArtTransform((prev) => ({
+        ...prev,
+        offsetX: Number(slot.dx || 0),
+        offsetY: Number(slot.dy || 0),
+        offsetZ: Number(slot.dz || 0),
+        rotYDeg: Math.round(((Number(slot.yaw || 0) * 180) / Math.PI) * 10) / 10
+      }));
+      brush.setSurfaceAnchor({
+        label: slot.label || 'AI Plinth',
+        depthM: 1.5,
+        point: new THREE.Vector3(Number(slot.dx || 0), Number(slot.dy || 0), Number(slot.dz || 0)),
+        normal: new THREE.Vector3(0, 1, 0),
+        locked: true,
+        autoDetected: false
+      });
+      showTemporaryHint(`Snapped canvas onto plinth "${slot.label}"! Draw & publish 3+ voxels.`);
+    },
+    [brush, showTemporaryHint]
+  );
 
   // Support deep link ?sculpture=<id> directly on mobile too
   const { setMapSelectedSculpture } = ar;
