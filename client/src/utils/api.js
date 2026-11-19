@@ -1,6 +1,7 @@
 const TOKEN_KEY = 'graffiland_jwt';
-const ENV_META = /** @type {any} */ (import.meta)?.env || {};
-export const API_BASE = String(ENV_META.VITE_API_BASE || '').replace(/\/$/, '');
+// @ts-expect-error Vite statically replaces literal import.meta.env.VITE_API_BASE during builds
+const VITE_API_BASE_VALUE = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_BASE : '';
+export const API_BASE = String(VITE_API_BASE_VALUE || '').replace(/\/$/, '');
 
 export function resolveApiUrl(pathOrUrl) {
   if (!pathOrUrl) return '';
