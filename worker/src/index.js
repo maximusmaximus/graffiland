@@ -26,6 +26,8 @@ import {
 } from '../../shared/marketplaceService.mjs';
 import {
   buildAgentSpec,
+  buildLlmsTxt,
+  buildWellKnownAgentCard,
   createAgentSession,
   getAgentSession,
   submitAgentSculpture
@@ -690,6 +692,21 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const cfg = getRuntimeConfig(env);
+
+    // LLM & A2A Agent Discovery Manifests
+    if (pathname === '/llms.txt' && request.method === 'GET') {
+      return new Response(buildLlmsTxt(url.origin), {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          ...corsHeaders(request)
+        }
+      });
+    }
+
+    if (pathname === '/.well-known/agent.json' && request.method === 'GET') {
+      return jsonResponse(buildWellKnownAgentCard(url.origin), 200, request);
+    }
 
     // WebSocket Pairing Gateway
     if (pathname === '/ws') {

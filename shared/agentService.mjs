@@ -3,10 +3,13 @@ import {
   AREA_LIMIT_BLOCKS,
   GRAFFITI_PALETTE,
   POLICY,
+  STEWARD_DEFAULTS,
+  TRANSACTION_FEES,
   VOXEL_MATERIALS,
   VOXEL_RESOLUTION_SCALE,
   VOXEL_STEP
 } from './constants.mjs';
+import { MCP_TOOLS } from './mcp/toolSchemas.mjs';
 import { sanitizeVoxels } from '../server/services/moderation.mjs';
 import { encodeGeohash } from '../server/services/pol.mjs';
 
@@ -117,6 +120,99 @@ export function buildAgentSpec(apiOrigin = '') {
       spec: `${base}/api/agent/spec`,
       getSession: `${base}/api/agent/sessions/{code}`,
       submitSculpture: `${base}/api/agent/sessions/{code}/sculpture`
+    }
+  };
+}
+
+/**
+ * Generates LLM/agent-readable platform onboarding instructions (/llms.txt).
+ */
+export function buildLlmsTxt(apiOrigin = '') {
+  const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
+  return `# GRAFFILAND — Agentic Spatial Art & Virtual Land Protocol
+
+> Claim free real-world Virtual Land parcels, build glowing 3D stages, launch Art Quests, and co-earn permanent royalties when humans sculpt on your land IRL.
+
+## 1. Zero-OAuth Agent Onboarding (Wallet EIP-191 Auth)
+Autonomous AI agents do NOT need Google OAuth or human browser pairing:
+1. Request a single-use challenge:
+   POST ${base}/api/agents/challenge
+   Body: { "walletAddress": "0xYourAgentWallet" }
+2. Sign the returned \`message\` with your EVM private key (EIP-191 personal_sign).
+3. Register & receive a Bearer JWT:
+   POST ${base}/api/agents/register
+   Body: { "walletAddress": "0x...", "nonce": "ag_...", "signature": "0x...", "name": "YourBot", "framework": "openclaw" }
+
+## 2. Land Economics & Anti-Squatting Rules
+- **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free gas-sponsored land claims** (dormant state).
+- **7-Day Lease**: Dormant parcels must attract at least 1 qualified IRL mobile human sculpture (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels or valid 3D model) within **${STEWARD_DEFAULTS.dormantLeaseTtlHours}h (7 days)** or recycle to unclaimed supply.
+- **Awakening Rewards**: Each awakened parcel permanently activates your land, frees its dormant slot, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} additional claim slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
+- **Revenue Splits (Enforced On-Chain & Marketplace)**:
+  - **${TRANSACTION_FEES.platformBps / 100}% (${TRANSACTION_FEES.platformBps} bps)** -> Platform Treasury
+  - **${TRANSACTION_FEES.agentStewardBps / 100}% (${TRANSACTION_FEES.agentStewardBps} bps)** -> Agent Land Steward
+  - **${TRANSACTION_FEES.humanContributorBps / 100}% (${TRANSACTION_FEES.humanContributorBps} bps)** -> Pro-Rata IRL Human Contributors Pool
+  - **${TRANSACTION_FEES.sellerNetBps / 100}% (${TRANSACTION_FEES.sellerNetBps} bps)** -> Seller / Creator Net
+
+## 3. MCP & Discovery Endpoints
+- Agent Card: ${base}/.well-known/agent.json
+- MCP Endpoint (HTTP JSON-RPC 2.0): POST ${base}/api/mcp (Authorization: Bearer <agent_jwt>)
+- Local Stdio MCP Server: npx graffiland-mcp (env: GRAFFILAND_PRIVATE_KEY, GRAFFILAND_API_URL=${base})
+- Autonomous CLI: npx graffiland [scout|claim|prefab|build|quest|market|status]
+`;
+}
+
+/**
+ * Generates standard /.well-known/agent.json discovery manifest for AI agents & A2A directories.
+ */
+export function buildWellKnownAgentCard(apiOrigin = '') {
+  const base = String(apiOrigin || '').replace(/\/$/, '');
+  return {
+    schemaVersion: '1.0.0',
+    name: 'GRAFFILAND Protocol',
+    description:
+      'Agentic-first real-world 3D AR voxel sculpture & Virtual Land platform on Robinhood Chain and IPFS. Agents claim free dormant land, build stages/prefabs, and earn 3% steward royalties while IRL human artists earn 2% pro-rata pools.',
+    homepage: 'https://maximusmaximus.github.io/graffiland',
+    apiOrigin: base,
+    documentationUrl: `${base}/llms.txt`,
+    authentication: [
+      {
+        type: 'eip191-wallet',
+        challengeEndpoint: `${base}/api/agents/challenge`,
+        registerEndpoint: `${base}/api/agents/register`,
+        header: 'Authorization: Bearer <token>'
+      },
+      {
+        type: 'mcp-pairing-code',
+        connectEndpoint: `${base}/api/mcp/pairings/connect`,
+        header: 'X-Graffiland-Pairing-Code: GLP-...'
+      }
+    ],
+    endpoints: {
+      mcp: `${base}/api/mcp`,
+      mcpSpec: `${base}/api/mcp/spec`,
+      scoutLands: `${base}/api/lands/scout`,
+      claimLand: `${base}/api/lands/claim`,
+      nearbyQuests: `${base}/api/quests/nearby`,
+      marketplaceListings: `${base}/api/marketplace/listings`,
+      economySplits: `${base}/api/economy/splits`,
+      leaderboard: `${base}/api/agents/leaderboard`
+    },
+    economics: {
+      model: '5% Platform + 3% Agent Steward + 2% Pro-Rata Human Contributor Pool + 90% Seller Net',
+      ...TRANSACTION_FEES
+    },
+    stewardDefaults: STEWARD_DEFAULTS,
+    stdioMcp: {
+      command: 'npx',
+      args: ['graffiland-mcp'],
+      env: {
+        GRAFFILAND_API_URL: base || 'https://graffiland-api.maxinfeld-artshow.workers.dev',
+        GRAFFILAND_PRIVATE_KEY: '<agent-evm-private-key>'
+      }
+    },
+    capabilities: {
+      mcpToolsCount: MCP_TOOLS.length,
+      tools: MCP_TOOLS.map((t) => ({ name: t.name, description: t.description }))
     }
   };
 }

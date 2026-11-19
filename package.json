@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "description": "GRAFFILAND — Location-bound 3D AR voxel graffiti & Virtual Land NFTs on IPFS and Robinhood Chain",
+  "bin": {
+    "graffiland-mcp": "./bin/graffiland-mcp.mjs",
+    "graffiland": "./bin/graffiland.mjs"
+  },
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c cyan,magenta \"node server/index.mjs\" \"vite --host\"",
     "dev:server": "node server/index.mjs",
     "dev:client": "vite --host",
-    "lint": "eslint shared server client/src worker/src contracts tests",
+    "lint": "eslint shared server bin client/src worker/src contracts tests",
     "format": "prettier --write \"shared/**/*.mjs\" \"server/**/*.mjs\" \"worker/src/**/*.js\" \"client/src/**/*.{js,jsx}\"",
     "format:check": "prettier --check \"shared/**/*.mjs\" \"server/**/*.mjs\" \"worker/src/**/*.js\"",
     "typecheck": "tsc -p tsconfig.json",

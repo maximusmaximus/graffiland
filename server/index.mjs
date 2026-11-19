@@ -52,6 +52,8 @@ import {
 } from './services/pol.mjs';
 import {
   buildAgentSpec,
+  buildLlmsTxt,
+  buildWellKnownAgentCard,
   createAgentSession,
   getAgentSession,
   submitAgentSculpture
@@ -182,6 +184,17 @@ export function createAppServer(serverOptions = {}) {
   }
   app.use(cors());
   app.use(express.json({ limit: '12mb' }));
+
+  app.get('/llms.txt', (req, res) => {
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(buildLlmsTxt(apiOrigin));
+  });
+
+  app.get('/.well-known/agent.json', (req, res) => {
+    const apiOrigin = `${req.protocol}://${req.get('host')}`;
+    res.json(buildWellKnownAgentCard(apiOrigin));
+  });
 
   // Ensure server responds cleanly to health checks
   app.get('/api/health', (_req, res) => {
