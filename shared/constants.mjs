@@ -43,8 +43,27 @@ export const ROBINHOOD_NETWORKS = {
   }
 };
 
+export const TRANSACTION_FEES = {
+  platformBps: 500, // 5% collected by Platform on every transaction
+  agentStewardBps: 300, // 3% collected by Agent Land Steward
+  humanContributorBps: 200, // 2% collected by verified IRL Human Contributors pro-rata
+  totalBps: 1000, // 10% combined fee/royalty split
+  sellerNetBps: 9000 // 90% net proceeds
+};
+
+export const STEWARD_DEFAULTS = {
+  starterDormantSlots: 3,
+  slotsPerAwakenedLand: 2,
+  maxDormantSlots: 50,
+  dormantLeaseTtlHours: 168, // 7 days before unawakened agent land recycles
+  minHumanPoolVoxels: 3, // minimum voxel count to qualify for 2% Contributor pool share
+  firstSparkXpHuman: 300, // 2x bonus for awakening dormant agent parcel
+  humanQuestBaseXp: 150,
+  agentAwakenXp: 100
+};
+
 export const POLICY = {
-  termsVersion: '2026-11-17.v2',
+  termsVersion: '2026-11-19.v3',
   titleMin: 3,
   titleMax: 48,
   descriptionMin: 10,
@@ -58,6 +77,7 @@ export const POLICY = {
   areaLimitBlocks: [AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS],
   resaleFeePercent: 5,
   resaleFeeBps: 500,
+  transactionFees: TRANSACTION_FEES,
   prohibitedTerms: [
     'http://',
     'https://',

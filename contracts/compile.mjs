@@ -5,8 +5,13 @@ import solc from 'solc';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
-const contractPath = path.join(__dirname, 'GraffilandNFT.sol');
 const outDir = path.join(__dirname, 'build');
+
+const CONTRACT_SOURCES = [
+  { file: 'GraffilandNFT.sol', contractName: 'GraffilandNFT' },
+  { file: 'GraffilandRoyaltyRouter.sol', contractName: 'GraffilandRoyaltyRouter' },
+  { file: 'GraffilandMarketplace.sol', contractName: 'GraffilandMarketplace' }
+];
 
 function findImports(importPath) {
   const candidates = [
@@ -21,15 +26,20 @@ function findImports(importPath) {
   return { error: `File not found: ${importPath}` };
 }
 
-export function compileContract() {
-  const source = fs.readFileSync(contractPath, 'utf8');
+export function compileAllContracts() {
+  const sources = {};
+  for (const item of CONTRACT_SOURCES) {
+    sources[item.file] = {
+      content: fs.readFileSync(path.join(__dirname, item.file), 'utf8')
+    };
+  }
+
   const input = {
     language: 'Solidity',
-    sources: {
-      'GraffilandNFT.sol': { content: source }
-    },
+    sources,
     settings: {
       optimizer: { enabled: true, runs: 200 },
+      viaIR: true,
       outputSelection: {
         '*': {
           '*': ['abi', 'evm.bytecode.object']
@@ -49,18 +59,32 @@ export function compileContract() {
     }
   }
 
-  const compiled = output.contracts['GraffilandNFT.sol']['GraffilandNFT'];
   fs.mkdirSync(outDir, { recursive: true });
-  const artifact = {
-    contractName: 'GraffilandNFT',
-    abi: compiled.abi,
-    bytecode: `0x${compiled.evm.bytecode.object}`
-  };
-  fs.writeFileSync(path.join(outDir, 'GraffilandNFT.json'), JSON.stringify(artifact, null, 2));
-  console.log('Compiled GraffilandNFT.sol -> contracts/build/GraffilandNFT.json');
-  return artifact;
+  const artifacts = {};
+  for (const item of CONTRACT_SOURCES) {
+    const compiled = output.contracts[item.file][item.contractName];
+    const artifact = {
+      contractName: item.contractName,
+      abi: compiled.abi,
+      bytecode: `0x${compiled.evm.bytecode.object}`
+    };
+    fs.writeFileSync(
+      path.join(outDir, `${item.contractName}.json`),
+      JSON.stringify(artifact, null, 2)
+    );
+    artifacts[item.contractName] = artifact;
+  }
+  console.log(
+    'Compiled GraffilandNFT.sol, GraffilandRoyaltyRouter.sol, GraffilandMarketplace.sol -> contracts/build/'
+  );
+  return artifacts;
+}
+
+export function compileContract() {
+  const artifacts = compileAllContracts();
+  return artifacts.GraffilandNFT;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  compileContract();
+  compileAllContracts();
 }
