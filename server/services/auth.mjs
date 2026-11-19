@@ -1,5 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import { formatAgentProfile } from '../../shared/agentAuthService.mjs';
 import { CONFIG } from '../config.mjs';
 import { getDb } from '../db.mjs';
 import { createEncryptedWallet } from './wallet.mjs';
@@ -110,7 +111,28 @@ export function getAuthUserFromRequest(req) {
   try {
     const decoded = jwt.verify(token, CONFIG.sessionSecret);
     const db = getDb();
-    return db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.sub) || null;
+    const userRow = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.sub) || null;
+    if (!userRow) return null;
+    if (decoded.actorType === 'agent' || String(userRow.id).startsWith('agent:')) {
+      const agentRow = db
+        .prepare('SELECT * FROM agent_accounts WHERE agent_id = ?')
+        .get(userRow.id);
+      if (agentRow) {
+        const slotRow = db
+          .prepare(
+            `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`
+          )
+          .get(agentRow.agent_id);
+        return {
+          ...userRow,
+          actorType: 'agent',
+          agent: formatAgentProfile(agentRow, {
+            activeDormantSlots: Number(slotRow?.cnt || 0)
+          })
+        };
+      }
+    }
+    return userRow;
   } catch {
     return null;
   }

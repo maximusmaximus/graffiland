@@ -624,6 +624,29 @@ export async function handlePairedLandMutationViaMcp(
     };
   }
 
+  if (
+    pairing.code === 'DIRECT-AGENT-WALLET' &&
+    ownerUser?.actorType === 'agent' &&
+    action !== 'erase_land'
+  ) {
+    const reqRow = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [reqObj.id]);
+    const execOut = await executeValidatedSignatureRow(db, {
+      reqRow,
+      ownerUser,
+      signedBy: 'agent-wallet-jwt',
+      signerAddress: ownerAddress,
+      signature: 'jwt-session-authenticated',
+      txHash: String(txHash || auth?.txHash || '').trim(),
+      pinSculptureFn,
+      mintSculptureFn,
+      emitMetadataUpdateFn
+    });
+    return {
+      status: 'executed_by_agent',
+      ...execOut
+    };
+  }
+
   if (typeof notifyMobileFn === 'function') {
     try {
       await notifyMobileFn({
