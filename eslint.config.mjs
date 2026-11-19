@@ -17,7 +17,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ['shared/**/*.mjs', 'server/**/*.mjs', 'contracts/**/*.mjs', 'tests/**/*.mjs'],
+    files: ['shared/**/*.mjs', 'server/**/*.mjs', 'bin/**/*.mjs', 'contracts/**/*.mjs', 'tests/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
