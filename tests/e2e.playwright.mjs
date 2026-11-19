@@ -152,7 +152,171 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     }
   });
 
-  test('Desktop defaults to Map Explorer, switches Gallery/Leaders tabs, opens Pair QR & ?sculpture= deep link', async () => {
+  test('First-time visitor welcome overlay stays visibly above Leaflet map until closed, clicked off, or Escaped', async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.desktop-nav');
+    await page.waitForSelector('.leaflet-top');
+    await page.waitForSelector('.leaflet-control-zoom-in');
+    // Allow Leaflet async mount/layout effects to settle; overlay must remain on top
+    await page.waitForTimeout(1500);
+
+    const welcomeSelector = '[aria-label="Welcome to GRAFFILAND first-visit overview"]';
+    const welcomeVisible = await page.isVisible(welcomeSelector);
+    assert.equal(welcomeVisible, true);
+    const initialLs = await page.evaluate(() =>
+      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
+    );
+    assert.equal(initialLs, null);
+
+    const layerAudit = await page.evaluate(() => {
+      const backdrop = globalThis.document.querySelector('.welcome-overlay-backdrop');
+      const card = globalThis.document.querySelector('.welcome-overlay-card');
+      const mapCont = globalThis.document.querySelector('.map-container');
+      const leafCont = globalThis.document.querySelector('.leaflet-container');
+      const zoomIn = globalThis.document.querySelector('.leaflet-control-zoom-in');
+      const cardRect = card?.getBoundingClientRect();
+      const zoomRect = zoomIn?.getBoundingClientRect();
+      const zoomX = zoomRect ? zoomRect.left + zoomRect.width / 2 : 0;
+      const zoomY = zoomRect ? zoomRect.top + zoomRect.height / 2 : 0;
+      const hitAtZoom = zoomRect ? globalThis.document.elementFromPoint(zoomX, zoomY) : null;
+      const samplePoints = cardRect
+        ? [
+            [cardRect.left + cardRect.width / 2, cardRect.top + cardRect.height / 2],
+            [cardRect.left + 16, cardRect.top + 16],
+            [cardRect.right - 16, cardRect.top + 16],
+            [cardRect.left + 16, cardRect.bottom - 16],
+            [cardRect.right - 16, cardRect.bottom - 16]
+          ]
+        : [];
+      const allPointsInsideCard =
+        samplePoints.length === 5 &&
+        samplePoints.every(([x, y]) => {
+          const hit = globalThis.document.elementFromPoint(x, y);
+          return Boolean(card && hit && card.contains(hit));
+        });
+      return {
+        mapIsolation: mapCont ? globalThis.getComputedStyle(mapCont).isolation : null,
+        mapZ: mapCont ? globalThis.getComputedStyle(mapCont).zIndex : null,
+        leafIsolation: leafCont ? globalThis.getComputedStyle(leafCont).isolation : null,
+        leafZ: leafCont ? globalThis.getComputedStyle(leafCont).zIndex : null,
+        backdropZ: backdrop ? Number(globalThis.getComputedStyle(backdrop).zIndex) : 0,
+        innerWidth: globalThis.window.innerWidth,
+        innerHeight: globalThis.window.innerHeight,
+        cardRect: cardRect
+          ? {
+              top: cardRect.top,
+              left: cardRect.left,
+              right: cardRect.right,
+              bottom: cardRect.bottom
+            }
+          : null,
+        zoomCoord: { x: zoomX, y: zoomY },
+        zoomOutsideCard: Boolean(
+          cardRect &&
+            zoomRect &&
+            (zoomX < cardRect.left ||
+              zoomX > cardRect.right ||
+              zoomY < cardRect.top ||
+              zoomY > cardRect.bottom)
+        ),
+        hitAtZoomIsLeaflet: Boolean(
+          hitAtZoom?.closest('.leaflet-pane, .leaflet-control, .leaflet-container')
+        ),
+        hitAtZoomCoveredByOverlay: Boolean(
+          backdrop && hitAtZoom && (hitAtZoom === backdrop || backdrop.contains(hitAtZoom))
+        ),
+        allPointsInsideCard
+      };
+    });
+
+    assert.equal(layerAudit.mapIsolation, 'isolate');
+    assert.equal(layerAudit.mapZ, '0');
+    assert.equal(layerAudit.leafIsolation, 'isolate');
+    assert.equal(layerAudit.leafZ, '0');
+    assert.ok(layerAudit.backdropZ >= 2000, `Expected backdrop z >= 2000, got ${layerAudit.backdropZ}`);
+    assert.ok(layerAudit.cardRect.top >= 0 && layerAudit.cardRect.left >= 0);
+    assert.ok(
+      layerAudit.cardRect.bottom <= layerAudit.innerHeight + 1 &&
+        layerAudit.cardRect.right <= layerAudit.innerWidth + 1
+    );
+    assert.equal(layerAudit.zoomOutsideCard, true);
+    assert.equal(layerAudit.hitAtZoomIsLeaflet, false);
+    assert.equal(layerAudit.hitAtZoomCoveredByOverlay, true);
+    assert.equal(layerAudit.allPointsInsideCard, true);
+
+    // Clicking inside the welcome card keeps it open
+    await page.getByText('What Humans Can Do').click();
+    await page.waitForTimeout(300);
+    assert.equal(await page.isVisible(welcomeSelector), true);
+
+    // Uncheck "Don't show automatically again" and click off card onto the dark backdrop (at zoom coord)
+    await page.getByRole('checkbox').uncheck();
+    await page.mouse.click(layerAudit.zoomCoord.x, layerAudit.zoomCoord.y);
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    const afterUncheckedClose = await page.evaluate(() =>
+      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
+    );
+    assert.equal(afterUncheckedClose, null);
+
+    // Reloading shows the banner again because checkbox was unchecked
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.leaflet-top');
+    await page.waitForTimeout(1000);
+    assert.equal(await page.isVisible(welcomeSelector), true);
+
+    // Pressing Escape with default checked "Don't show again" persists preference and closes banner
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    const afterEscape = await page.evaluate(() =>
+      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
+    );
+    assert.equal(afterEscape, '1');
+
+    // Returning visitor does not automatically see the welcome overlay on reload
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.leaflet-top');
+    await page.waitForTimeout(800);
+    assert.equal(await page.locator(welcomeSelector).count(), 0);
+
+    // Reopen via Intro button and test "Connect AI Agent" CTA
+    await page.getByRole('button', { name: /Intro/i }).click();
+    await page.waitForSelector(welcomeSelector);
+    await page.getByRole('button', { name: /Connect AI Agent/i }).click();
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+    const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
+    assert.ok(selectedTabText.includes('Agentic User / AI Steward'));
+
+    // Reopen via Intro button and test "Full Guide" CTA opening Info modal above Leaflet
+    await page.getByRole('button', { name: /Intro/i }).click();
+    await page.waitForSelector(welcomeSelector);
+    await page.getByRole('button', { name: /Full Guide/i }).click();
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    await page.waitForSelector('text=Proof of Location Threat Model');
+
+    const infoModalAudit = await page.evaluate(() => {
+      const backdrop = globalThis.document.querySelector('.modal-backdrop');
+      const zoomIn = globalThis.document.querySelector('.leaflet-control-zoom-in');
+      const zr = zoomIn?.getBoundingClientRect();
+      const hit = zr ? globalThis.document.elementFromPoint(zr.left + zr.width / 2, zr.top + zr.height / 2) : null;
+      return {
+        zIndex: backdrop ? Number(globalThis.getComputedStyle(backdrop).zIndex) : 0,
+        coversLeaflet: Boolean(backdrop && hit && (hit === backdrop || backdrop.contains(hit)))
+      };
+    });
+    assert.ok(infoModalAudit.zIndex >= 2000);
+    assert.equal(infoModalAudit.coversLeaflet, true);
+
+    assert.deepEqual(pageErrors, []);
+    await context.close();
+  });
+
+  test('Desktop defaults to Map Explorer, stays 100% viewport framed across desktop sizes, opens Pair/Info & ?sculpture= deep link', async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const pageErrors = [];
@@ -161,34 +325,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.desktop-nav');
 
-    // First-time visitor overlay appears automatically over Desktop Explorer
-    const welcomeDialog = await page.waitForSelector(
-      '[aria-label="Welcome to GRAFFILAND first-visit overview"]'
-    );
-    const welcomeText = await welcomeDialog.textContent();
-    assert.ok(welcomeText.includes('GRAFFILAND is a real-world 3D art map'));
-    assert.ok(welcomeText.includes('What Humans Can Do'));
-    assert.ok(welcomeText.includes('What AI Agents Can Do'));
+    // Dismiss initial first-time visitor overlay via primary CTA
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
     await page.getByRole('button', { name: /Explore the Map/i }).click();
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
       state: 'detached'
     });
-    const welcomeSaved = await page.evaluate(() =>
-      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
-    );
-    assert.equal(welcomeSaved, '1');
-
-    // Can still reopen the welcome banner anytime from the Intro button
-    await page.getByRole('button', { name: /Intro/i }).click();
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
-    await page.getByRole('button', { name: /Close welcome banner/i }).click();
 
     const bodyText = await page.textContent('body');
     assert.ok(bodyText.includes('Desktop Map Explorer'));
     assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
     assert.ok(bodyText.includes('E2E Lighthouse Cube'));
 
-    // Exercise Desktop Intro Banner tabs (Human Creator <-> Agentic User / AI Steward <-> Collectors & Scouts) & Prompt Preview
+    // Exercise Desktop Intro Banner tabs (Human Creator <-> Collectors & Scouts <-> Agentic User / AI Steward) & Prompt Preview
     await page.getByRole('button', { name: /Copy Property-Agent Prompt/i }).waitFor();
     await page.getByRole('tab', { name: /Collectors & Scouts/i }).click();
     await page.waitForSelector('text=Collect Real-World Verified 3D NFTs');
@@ -197,28 +346,48 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Preview Prompt/i }).click();
     await page.waitForSelector('text=Zero-OAuth Autonomous Agent Steward');
 
-    // Verify 100% full-viewport framing even when Intro + Prompt Preview are expanded
-    const viewportMetrics = await page.evaluate(() => {
-      const shell = globalThis.document.querySelector('.desktop-shell');
-      const mapEl = globalThis.document.querySelector('.desktop-map-stage .map-container');
-      const sideEl = globalThis.document.querySelector('.desktop-nearby-panel');
-      return {
-        innerWidth: globalThis.window.innerWidth,
-        innerHeight: globalThis.window.innerHeight,
-        docScrollHeight: globalThis.document.documentElement.scrollHeight,
-        shellHeight: shell?.getBoundingClientRect().height || 0,
-        mapHeight: mapEl?.getBoundingClientRect().height || 0,
-        sideHeight: sideEl?.getBoundingClientRect().height || 0
-      };
-    });
-    assert.ok(
-      viewportMetrics.docScrollHeight <= viewportMetrics.innerHeight + 2,
-      `Expected 100% viewport fit without page scroll, got docScrollHeight=${viewportMetrics.docScrollHeight} vs innerHeight=${viewportMetrics.innerHeight}`
-    );
-    assert.ok(
-      viewportMetrics.mapHeight >= 300 && viewportMetrics.sideHeight >= 300,
-      `Expected map & sidebar to share full height cleanly, got map=${viewportMetrics.mapHeight}, side=${viewportMetrics.sideHeight}`
-    );
+    // Verify 100% full-viewport framing even when Intro + Prompt Preview are expanded (1440x900 & 1280x720)
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 1280, height: 720 },
+      { width: 1440, height: 900 }
+    ]) {
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(120);
+      const viewportMetrics = await page.evaluate(() => {
+        const mapEl = globalThis.document.querySelector('.desktop-map-stage .map-container');
+        const sideEl = globalThis.document.querySelector('.desktop-nearby-panel');
+        const mapRect = mapEl?.getBoundingClientRect();
+        const sideRect = sideEl?.getBoundingClientRect();
+        return {
+          innerWidth: globalThis.window.innerWidth,
+          innerHeight: globalThis.window.innerHeight,
+          docScrollWidth: globalThis.document.documentElement.scrollWidth,
+          docScrollHeight: globalThis.document.documentElement.scrollHeight,
+          mapHeight: mapRect?.height || 0,
+          sideHeight: sideRect?.height || 0,
+          mapBottom: mapRect?.bottom || 0,
+          sideBottom: sideRect?.bottom || 0
+        };
+      });
+      const minPanelHeight = vp.height >= 800 ? 250 : 120;
+      assert.ok(
+        viewportMetrics.docScrollHeight <= viewportMetrics.innerHeight + 2,
+        `Expected 100% viewport fit (${vp.width}x${vp.height}), got docScrollHeight=${viewportMetrics.docScrollHeight} vs innerHeight=${viewportMetrics.innerHeight}`
+      );
+      assert.ok(
+        viewportMetrics.docScrollWidth <= viewportMetrics.innerWidth + 1,
+        `Expected no horizontal overflow (${vp.width}x${vp.height}), got ${viewportMetrics.docScrollWidth} > ${viewportMetrics.innerWidth}`
+      );
+      assert.ok(
+        viewportMetrics.mapHeight >= minPanelHeight && viewportMetrics.sideHeight >= minPanelHeight,
+        `Expected map & sidebar height >= ${minPanelHeight}px (${vp.width}x${vp.height}), got map=${viewportMetrics.mapHeight}, side=${viewportMetrics.sideHeight}`
+      );
+      assert.ok(
+        Math.abs(viewportMetrics.mapBottom - viewportMetrics.sideBottom) <= 4,
+        `Expected map & sidebar bottoms aligned (${vp.width}x${vp.height}), got mapBottom=${viewportMetrics.mapBottom}, sideBottom=${viewportMetrics.sideBottom}`
+      );
+    }
 
     await page.getByRole('button', { name: /Copy Autonomous Agent Prompt/i }).click();
     await page.waitForSelector('text=Copied Autonomous Agent Prompt');
@@ -249,9 +418,13 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(leaderText.includes('E2E Artist'));
     assert.ok(leaderText.includes('Playwright Bot Steward'));
 
-    // Open QR Pair modal
+    // Open QR Pair modal and verify it stacks above Leaflet
     await page.getByRole('button', { name: /Pair Phone/i }).click();
     await page.waitForSelector('text=Pair Phone via QR');
+    const pairZ = await page.evaluate(() =>
+      Number(globalThis.getComputedStyle(globalThis.document.querySelector('.modal-backdrop')).zIndex)
+    );
+    assert.ok(pairZ >= 2000);
     await page.getByRole('button', { name: /Close pairing modal/i }).click();
 
     // Open Info modal and confirm Threat Model + Policy
@@ -269,8 +442,64 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const modalText = await page.textContent('.modal-card');
     assert.ok(modalText.includes('E2E Lighthouse Cube'));
     assert.ok(modalText.includes('Share to X'));
+    const deepModalZ = await page.evaluate(() =>
+      Number(globalThis.getComputedStyle(globalThis.document.querySelector('.modal-backdrop')).zIndex)
+    );
+    assert.ok(deepModalZ >= 2000);
 
     assert.deepEqual(pageErrors, []);
     await context.close();
+  });
+
+  test('Mobile first-time visitor overlay (390x844) stays open without colliding with tutorial & supports Quick Guide / Skip', async () => {
+    const mobileOptions = {
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile'
+    };
+
+    const ctx1 = await browser.newContext(mobileOptions);
+    const page1 = await ctx1.newPage();
+    const errors1 = [];
+    page1.on('pageerror', (err) => errors1.push(err.message));
+
+    await page1.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page1.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page1.waitForTimeout(1000);
+
+    assert.equal(await page1.isVisible('[aria-label="Welcome to GRAFFILAND first-visit overview"]'), true);
+    assert.equal(await page1.locator('[aria-label="GRAFFILAND Quick Start Guide"]').count(), 0);
+    const scrollW = await page1.evaluate(() => globalThis.document.documentElement.scrollWidth);
+    assert.ok(scrollW <= 391, `Expected mobile overlay width <= 391px, got ${scrollW}`);
+
+    await page1.getByRole('button', { name: /Next: Quick Camera Guide/i }).click();
+    await page1.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+      state: 'detached'
+    });
+    await page1.waitForSelector('[aria-label="GRAFFILAND Quick Start Guide"]');
+    assert.deepEqual(errors1, []);
+    await ctx1.close();
+
+    const ctx2 = await browser.newContext(mobileOptions);
+    const page2 = await ctx2.newPage();
+    const errors2 = [];
+    page2.on('pageerror', (err) => errors2.push(err.message));
+
+    await page2.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page2.getByRole('button', { name: /Skip to AR Camera/i }).click();
+    await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+      state: 'detached'
+    });
+    assert.equal(await page2.locator('[aria-label="GRAFFILAND Quick Start Guide"]').count(), 0);
+    const prefs = await page2.evaluate(() => ({
+      welcome: globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1'),
+      tutorial: globalThis.localStorage.getItem('graffiland_studio_tutorial_v1')
+    }));
+    assert.equal(prefs.welcome, '1');
+    assert.equal(prefs.tutorial, '1');
+    assert.deepEqual(errors2, []);
+    await ctx2.close();
   });
 });

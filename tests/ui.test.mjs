@@ -386,18 +386,21 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     const { default: FirstVisitWelcomeOverlay } = await loadJsxModule(
       'client/src/components/FirstVisitWelcomeOverlay.jsx'
     );
-    let exploredWith = null;
+    const exploreCalls = [];
     let agentConnected = false;
+    let guideOpened = false;
     const view = RTL.render(
       React.createElement(FirstVisitWelcomeOverlay, {
         isMobile: false,
         onExplore: (dontShow) => {
-          exploredWith = dontShow;
+          exploreCalls.push(dontShow);
         },
         onConnectAgent: () => {
           agentConnected = true;
         },
-        onOpenGuide: () => {}
+        onOpenGuide: () => {
+          guideOpened = true;
+        }
       })
     );
 
@@ -406,11 +409,42 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(view.getByText(/What AI Agents Can Do/i));
     assert.ok(view.getByText(/90% Seller/i));
 
+    // Clicking inside the card must keep the overlay open
+    RTL.fireEvent.click(view.getByText(/What Humans Can Do/i));
+    RTL.fireEvent.click(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
+    assert.equal(exploreCalls.length, 0);
+
+    // Starting a pointer press inside the card and releasing on the backdrop must NOT close it
+    const backdrop = view.getByRole('dialog', { name: /Welcome to GRAFFILAND first-visit overview/i });
+    const cardEl = view.container.querySelector('.welcome-overlay-card');
+    RTL.fireEvent.pointerDown(cardEl);
+    RTL.fireEvent.click(backdrop);
+    assert.equal(exploreCalls.length, 0);
+
+    // Uncheck dontShowAgain and click genuinely on the backdrop -> calls onExplore(false)
+    const checkbox = view.getByRole('checkbox');
+    RTL.fireEvent.click(checkbox);
+    RTL.fireEvent.pointerDown(backdrop);
+    RTL.fireEvent.click(backdrop);
+    assert.equal(exploreCalls.length, 1);
+    assert.equal(exploreCalls[0], false);
+
+    // Pressing Escape dismisses cleanly with current dontShowAgain flag
+    RTL.fireEvent.keyDown(globalThis.window, { key: 'Escape' });
+    assert.equal(exploreCalls.length, 2);
+    assert.equal(exploreCalls[1], false);
+
+    // Re-check dontShowAgain -> action buttons pass true
+    RTL.fireEvent.click(checkbox);
+    RTL.fireEvent.click(view.getByRole('button', { name: /Full Guide/i }));
+    assert.equal(guideOpened, true);
+
     RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI Agent/i }));
     assert.equal(agentConnected, true);
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Explore the Map/i }));
-    assert.equal(exploredWith, true);
+    assert.equal(exploreCalls.length, 3);
+    assert.equal(exploreCalls[2], true);
     cleanup();
 
     let skippedCamera = false;

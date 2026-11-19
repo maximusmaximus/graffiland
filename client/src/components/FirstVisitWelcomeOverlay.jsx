@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function FirstVisitWelcomeOverlay({
@@ -9,6 +9,17 @@ export default function FirstVisitWelcomeOverlay({
   onSkipToCamera
 }) {
   const [dontShowAgain, setDontShowAgain] = useState(true);
+  const startedInsideCardRef = useRef(false);
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        onExplore?.(dontShowAgain);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dontShowAgain, onExplore]);
 
   return (
     <div
@@ -16,9 +27,21 @@ export default function FirstVisitWelcomeOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="Welcome to GRAFFILAND first-visit overview"
-      onClick={() => onExplore?.(dontShowAgain)}
+      onPointerDown={(e) => {
+        startedInsideCardRef.current = e.target !== e.currentTarget;
+      }}
+      onClick={(e) => {
+        const startedInside = startedInsideCardRef.current;
+        startedInsideCardRef.current = false;
+        if (e.target === e.currentTarget && !startedInside) {
+          onExplore?.(dontShowAgain);
+        }
+      }}
     >
-      <div className="modal-card welcome-overlay-card" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-card welcome-overlay-card"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="welcome-overlay-header">
           <div>
             <span className="badge teal" style={{ marginBottom: 6 }}>
