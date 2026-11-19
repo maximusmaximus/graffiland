@@ -317,4 +317,61 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('DesktopIntroBanner switches Human/Agentic tabs, previews, and copies connection prompts', async () => {
+    const { default: DesktopIntroBanner } = await loadJsxModule(
+      'client/src/components/DesktopIntroBanner.jsx'
+    );
+    const copiedTexts = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      value: {
+        writeText: async (text) => {
+          copiedTexts.push(text);
+        }
+      },
+      configurable: true
+    });
+
+    let activeRole = 'human';
+    let view;
+    const renderBanner = (role) => {
+      const el = React.createElement(DesktopIntroBanner, {
+        user: { id: 'u1', walletAddress: '0x1234567890abcdef1234567890abcdef12345678' },
+        mcpState: { activePairing: { code: 'GLP-ABCD-EFGH-JKLM-NPQR' }, pairings: [] },
+        roleTab: role,
+        onRoleTabChange: (next) => {
+          activeRole = next;
+        },
+        onOpenPair: () => {},
+        onOpenInfo: () => {},
+        onDismiss: () => {}
+      });
+      if (!view) view = RTL.render(el);
+      else view.rerender(el);
+    };
+
+    renderBanner('human');
+    assert.ok(view.getByText(/Mobile Required for Full Functionality/i));
+    RTL.fireEvent.click(view.getByText(/Copy Property-Agent Prompt/i));
+    await RTL.waitFor(() => {
+      assert.equal(copiedTexts.length, 1);
+      assert.ok(copiedTexts[0].includes('GLP-ABCD-EFGH-JKLM-NPQR'));
+    });
+
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Agentic User \/ AI Steward/i }));
+    assert.equal(activeRole, 'agent');
+    renderBanner('agent');
+    assert.ok(view.getByText(/Autonomous AI Agents Connect Without OAuth/i));
+
+    RTL.fireEvent.click(view.getByText(/Preview Prompt/i));
+    assert.ok(view.getByText(/Zero-OAuth Autonomous Agent Steward/i));
+
+    RTL.fireEvent.click(view.getByText(/Copy Autonomous Agent Prompt/i));
+    await RTL.waitFor(() => {
+      assert.equal(copiedTexts.length, 2);
+      assert.ok(copiedTexts[1].includes('/api/agents/challenge'));
+      assert.ok(copiedTexts[1].includes('claim_land'));
+    });
+    cleanup();
+  });
 });

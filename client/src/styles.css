@@ -1236,6 +1236,66 @@ select {
   flex: 1 1 360px;
 }
 
+.desktop-intro-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.desktop-intro-card.is-agent-tab {
+  background: rgba(123, 44, 191, 0.14);
+  border-color: rgba(123, 44, 191, 0.45);
+}
+
+.desktop-intro-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.desktop-intro-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.desktop-intro-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.desktop-intro-feedback {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.desktop-prompt-preview-wrap {
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 8px;
+}
+
+.desktop-prompt-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(6, 9, 17, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .desktop-map-layout {
   display: grid;
   grid-template-columns: 1fr 336px;

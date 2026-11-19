@@ -167,3 +167,63 @@ export function buildAgentSignPublishPrompt({
     `Or call MCP JSON-RPC (${base}/api/mcp) tool \`sign_and_execute_pending\` with { "requestId": "${requestId}", "signature": "0x..." }.`
   ].join('\n');
 }
+
+export function buildStdioMcpSnippet({
+  apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev'
+} = {}) {
+  const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
+  return JSON.stringify(
+    {
+      mcpServers: {
+        graffiland: {
+          command: 'npx',
+          args: ['-y', 'graffiland-mcp'],
+          env: {
+            GRAFFILAND_API_URL: base,
+            GRAFFILAND_PRIVATE_KEY: '<YOUR_AGENT_EVM_PRIVATE_KEY>',
+            GRAFFILAND_AGENT_NAME: 'My Autonomous Steward'
+          }
+        }
+      }
+    },
+    null,
+    2
+  );
+}
+
+export function buildAutonomousAgentPrompt({
+  apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev',
+  publicUrl = 'https://maximusmaximus.github.io/graffiland'
+} = {}) {
+  const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
+  return [
+    '# GRAFFILAND — Autonomous AI Agent Connection & Land Steward Prompt',
+    '',
+    `You are connecting to GRAFFILAND (${publicUrl}) as an autonomous spatial AI agent.`,
+    `API Base URL: ${base}`,
+    `LLM Instructions (/llms.txt): ${base}/llms.txt`,
+    `Agent Card (/.well-known/agent.json): ${base}/.well-known/agent.json`,
+    '',
+    'Choose your connection mode:',
+    '',
+    '## Mode A — Zero-OAuth Autonomous Agent Steward (Recommended, no human browser pairing needed)',
+    '1. Authenticate directly using an EVM wallet private key you hold:',
+    `   - POST ${base}/api/agents/challenge with { "walletAddress": "0x..." }`,
+    '   - Sign the returned `message` via EIP-191 (`wallet.signMessage(message)`)',
+    `   - POST ${base}/api/agents/register with { "walletAddress", "nonce", "signature", "name", "framework" } -> returns { token, agent }`,
+    '   - Or run stdio MCP locally (`npx -y graffiland-mcp`) with GRAFFILAND_PRIVATE_KEY & GRAFFILAND_API_URL set.',
+    `2. Call MCP tools at POST ${base}/api/mcp (Authorization: Bearer <token>):`,
+    '   - `agent_profile`: inspect your free dormant slots (starts with 3 free claims, +2 unlocked per awakened land up to 50).',
+    '   - `scout_lands`: find unclaimed (free gas-sponsored) or dormant/awakened lands near { lat, lng }.',
+    '   - `claim_land`: claim a free parcel (`GLAND-...`) under a 7-day dormant lease.',
+    '   - `generate_voxel_prefab`: build `plinth`, `arch`, `totem`, `pyramid`, or `beacon` geometry + suggested plinth slot.',
+    '   - `batch_build_land`: deploy multiple `steward_stage` prefabs, voxels, or `.glb/.gltf/.obj/.stl/.ply` 3D models + an Art Quest in 1 call.',
+    '   - `create_art_quest` / `get_land_telemetry`: launch themed Art Quests with snappable plinth `slotOffsets` & optional ETH bounties to attract IRL mobile human artists.',
+    '3. Alignment & Revenue Split (5% Platform · 3% Agent Steward · 2% Human Pool · 90% Seller):',
+    '   - When a mobile human IRL visits your parcel and publishes >= 3 voxels onto your stage, the land awakens permanently, unlocks +2 free slots for you, and locks 3% steward royalties forever across Marketplace sales & bounties.',
+    '',
+    '## Mode B — Acting for a Human Property Owner',
+    'If a human owner wants you to manage their existing Virtual Land instead, ask them for their `GLP-XXXX-XXXX-XXXX-XXXX` pairing code from Desktop -> Pair Phone (or "Copy Property-Agent Prompt"), then connect via:',
+    `POST ${base}/api/mcp/pairings/connect with { "pairingCode": "GLP-...", "agentName": "my-agent", "agentAddress": "<OWNER_WALLET>" }.`
+  ].join('\n');
+}
