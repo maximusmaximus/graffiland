@@ -8,6 +8,27 @@ import express from 'express';
 import { ethers } from 'ethers';
 import { WebSocketServer } from 'ws';
 import { CONFIG, POLICY, ROOT_DIR } from './config.mjs';
+import { STEWARD_DEFAULTS, TRANSACTION_FEES } from '../shared/constants.mjs';
+import {
+  getAgentProfile,
+  getDualLeaderboards,
+  issueAgentAuthChallenge,
+  registerOrLoginAgentWallet
+} from '../shared/agentAuthService.mjs';
+import {
+  awakenParcelByHumanVisit,
+  claimDormantLand,
+  createArtQuest,
+  getLandTelemetry,
+  listNearbyQuests,
+  scoutLands
+} from '../shared/agentQuestService.mjs';
+import {
+  createMarketplaceListing,
+  executeMarketplacePurchase,
+  getEconomySplitsSummary,
+  listMarketplaceItems
+} from '../shared/marketplaceService.mjs';
 import { getDb } from './db.mjs';
 import {
   getAuthUserFromRequest,
@@ -177,6 +198,8 @@ export function createAppServer(serverOptions = {}) {
       googleClientId: CONFIG.googleClientId || null,
       allowDevGoogleAuth: CONFIG.allowDevGoogleAuth,
       policy: POLICY,
+      feeBreakdown: TRANSACTION_FEES,
+      stewardDefaults: STEWARD_DEFAULTS,
       chain: getChainStatus(),
       ipfsProvider: CONFIG.pinataJwt
         ? 'pinata'
@@ -335,10 +358,15 @@ export function createAppServer(serverOptions = {}) {
       a.yaw AS anchor_yaw,
       a.current_rev AS current_rev,
       a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-      a.mesh_stats_json AS mesh_stats_json
+      a.mesh_stats_json AS mesh_stats_json,
+      COALESCE(l.layer_role, 'artist_work') AS layer_role,
+      COALESCE(l.quest_id, '') AS layer_quest_id,
+      COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+      COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
   `;
 
   app.get('/api/sculptures', (req, res) => {
@@ -754,6 +782,166 @@ export function createAppServer(serverOptions = {}) {
       ''
     );
   }
+
+  // Zero-OAuth Agent Auth, Scouting, Free Claims, Quests & 5%/3%/2% Marketplace
+  app.post(
+    '/api/agents/challenge',
+    handleChatRoute((req) =>
+      issueAgentAuthChallenge(chatDb, { walletAddress: req.body?.walletAddress })
+    )
+  );
+
+  app.post('/api/agents/register', async (req, res) => {
+    try {
+      const out = await registerOrLoginAgentWallet(chatDb, {
+        walletAddress: req.body?.walletAddress,
+        nonce: req.body?.nonce,
+        signature: req.body?.signature,
+        name: req.body?.name,
+        framework: req.body?.framework,
+        description: req.body?.description,
+        endpointUrl: req.body?.endpointUrl,
+        sessionSecret: CONFIG.sessionSecret
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Agent registration failed' });
+    }
+  });
+
+  app.get(
+    '/api/agents/me',
+    requireAuth,
+    handleChatRoute((req) => getAgentProfile(chatDb, req.user.id))
+  );
+
+  app.get(
+    '/api/agents/leaderboard',
+    handleChatRoute((req) =>
+      getDualLeaderboards(chatDb, { limit: Number(req.query?.limit || 25) })
+    )
+  );
+
+  app.get(
+    '/api/agents/:agentId',
+    handleChatRoute((req) => getAgentProfile(chatDb, req.params.agentId))
+  );
+
+  app.get(
+    '/api/lands/scout',
+    handleChatRoute((req) =>
+      scoutLands(chatDb, {
+        lat: req.query?.lat !== undefined ? Number(req.query.lat) : null,
+        lng: req.query?.lng !== undefined ? Number(req.query.lng) : null,
+        radiusMeters: req.query?.radiusMeters ? Number(req.query.radiusMeters) : 5000,
+        statusFilter: String(req.query?.status || 'all')
+      })
+    )
+  );
+
+  app.post('/api/lands/claim', requireAuth, async (req, res) => {
+    try {
+      const out = await claimDormantLand(chatDb, {
+        agentUser: req.user,
+        parcelId: req.body?.parcelId || '',
+        lat: req.body?.lat,
+        lng: req.body?.lng,
+        customName: req.body?.customName || '',
+        curationNote: req.body?.curationNote || ''
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'Land claim failed',
+        ...(err?.extra || {})
+      });
+    }
+  });
+
+  app.get(
+    '/api/lands/:parcelId/telemetry',
+    handleChatRoute((req) => getLandTelemetry(chatDb, req.params.parcelId))
+  );
+
+  app.post('/api/lands/:parcelId/quests', requireAuth, async (req, res) => {
+    try {
+      const out = await createArtQuest(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        title: req.body?.title,
+        prompt: req.body?.prompt,
+        theme: req.body?.theme,
+        bountyEth: req.body?.bountyEth,
+        maxCompletions: req.body?.maxCompletions,
+        slotOffsets: req.body?.slotOffsets
+      });
+      res.status(201).json({ quest: out });
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Quest creation failed' });
+    }
+  });
+
+  app.get(
+    '/api/quests/nearby',
+    handleChatRoute((req) =>
+      listNearbyQuests(chatDb, {
+        lat: req.query?.lat !== undefined ? Number(req.query.lat) : null,
+        lng: req.query?.lng !== undefined ? Number(req.query.lng) : null,
+        radiusMeters: req.query?.radiusMeters ? Number(req.query.radiusMeters) : 25000,
+        status: String(req.query?.status || 'open')
+      })
+    )
+  );
+
+  app.get(
+    '/api/marketplace/listings',
+    handleChatRoute(async (req) => ({
+      listings: await listMarketplaceItems(chatDb, {
+        status: String(req.query?.status || 'active'),
+        parcelId: String(req.query?.parcel || ''),
+        limit: req.query?.limit ? Number(req.query.limit) : 60
+      })
+    }))
+  );
+
+  app.post('/api/marketplace/listings', requireAuth, async (req, res) => {
+    try {
+      const listing = await createMarketplaceListing(chatDb, {
+        sculptureId: req.body?.sculptureId,
+        sellerUser: req.user,
+        priceEth: req.body?.priceEth,
+        platformAddress: getChainStatus().royaltyReceiver
+      });
+      res.status(201).json({ listing });
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Listing failed' });
+    }
+  });
+
+  app.post('/api/marketplace/listings/:id/buy', requireAuth, async (req, res) => {
+    try {
+      const out = await executeMarketplacePurchase(chatDb, {
+        listingId: req.params.id,
+        buyerUser: req.user,
+        buyerAddress: req.body?.buyerAddress || '',
+        txHash: req.body?.txHash || '',
+        platformAddress: getChainStatus().royaltyReceiver
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Purchase failed' });
+    }
+  });
+
+  app.get(
+    '/api/economy/splits',
+    handleChatRoute((req) =>
+      getEconomySplitsSummary(chatDb, {
+        parcelId: String(req.query?.parcel || ''),
+        address: String(req.query?.address || '')
+      })
+    )
+  );
 
   app.get('/api/mcp/spec', (req, res) => {
     const apiOrigin = `${req.protocol}://${req.get('host')}`;
@@ -1377,6 +1565,18 @@ export function createAppServer(serverOptions = {}) {
         changeSummary: 'Initial mobile publish'
       });
 
+      const awakening = await awakenParcelByHumanVisit(chatDb, {
+        parcelId: locationBundle.parcelId,
+        sculptureId,
+        artistUser: req.user,
+        artistAddress: recipientAddress,
+        voxelCount: validation.cleanVoxels.length,
+        isCustomModel: false,
+        questId: req.body?.questId || '',
+        plinthSlotId: req.body?.plinthSlotId || '',
+        platformAddress: getChainStatus().royaltyReceiver
+      });
+
       if (req.body?.draftId) {
         await consumeDraftOnPublish(chatDb, { draftId: req.body.draftId, user: req.user });
       }
@@ -1385,7 +1585,8 @@ export function createAppServer(serverOptions = {}) {
       res.status(201).json({
         sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
         mint: mintResult,
-        ipfs: ipfsResult
+        ipfs: ipfsResult,
+        awakening
       });
     } catch (err) {
       console.error('Publish failed:', err);

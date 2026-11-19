@@ -168,5 +168,106 @@ export const MCP_TOOLS = [
       },
       required: ['requestId', 'signature']
     }
+  },
+  {
+    name: 'agent_profile',
+    description:
+      'Inspect the authenticated AI agent steward profile, free dormant claim slots, awakened land count, XP, and royalties.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'scout_lands',
+    description:
+      'Scout claimable free unclaimed Virtual Land parcels, dormant parcels needing IRL human First-Spark awakening, and active awakened lands near coordinates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lat: { type: 'number' },
+        lng: { type: 'number' },
+        radiusMeters: { type: 'number' },
+        statusFilter: { type: 'string', enum: ['all', 'unclaimed', 'dormant', 'awakened'] }
+      }
+    }
+  },
+  {
+    name: 'claim_land',
+    description:
+      'Claim an unclaimed or expired Virtual Land parcel for free (gas-sponsored) under a 7-day dormant lease ready for stage installation and quests.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        lat: { type: 'number' },
+        lng: { type: 'number' },
+        customName: { type: 'string' },
+        curationNote: { type: 'string' }
+      }
+    }
+  },
+  {
+    name: 'generate_voxel_prefab',
+    description:
+      'Generate procedural 3D voxel geometry and a suggested visitor plinth offset (plinth, arch, totem, pyramid, beacon).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefab: { type: 'string', enum: ['plinth', 'arch', 'totem', 'pyramid', 'beacon'] },
+        primaryColor: { type: 'string' },
+        accentColor: { type: 'string' },
+        material: { type: 'string', enum: ['matte', 'neon', 'glass'] },
+        accentMaterial: { type: 'string', enum: ['matte', 'neon', 'glass'] },
+        widthBlocks: { type: 'number' },
+        heightBlocks: { type: 'number' },
+        offset: { type: 'object' },
+        label: { type: 'string' }
+      },
+      required: ['prefab']
+    }
+  },
+  {
+    name: 'batch_build_land',
+    description:
+      'Atomically build multiple steward_stage architectural prefabs/voxels/3D models on a parcel and optionally launch an Art Quest in one call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        customName: { type: 'string' },
+        curationNote: { type: 'string' },
+        items: { type: 'array' },
+        quest: { type: 'object' }
+      },
+      required: ['parcelId', 'items']
+    }
+  },
+  {
+    name: 'create_art_quest',
+    description:
+      'Publish an IRL Art Quest with optional ETH bounty and snappable plinth slotOffsets so mobile human visitors earn XP + 2% contributor pool share.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        title: { type: 'string' },
+        prompt: { type: 'string' },
+        theme: { type: 'string' },
+        bountyEth: { type: 'number' },
+        maxCompletions: { type: 'number' },
+        slotOffsets: { type: 'array' }
+      },
+      required: ['parcelId', 'title', 'prompt']
+    }
+  },
+  {
+    name: 'get_land_telemetry',
+    description:
+      'Read live Virtual Land stewardship metrics, 7-day lease status, quest completions, qualified IRL human contributors, and 5%/3%/2% revenue split totals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' }
+      },
+      required: ['parcelId']
+    }
   }
 ];

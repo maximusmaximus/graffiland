@@ -26,7 +26,7 @@ import {
 } from './helpers.mjs';
 
 export async function listLandsWithCurations(db) {
-  const rows = await db.all(
+  const scRows = await db.all(
     `SELECT
       parcel_id,
       geohash,
@@ -35,38 +35,73 @@ export async function listLandsWithCurations(db) {
       MIN(created_at) AS first_at
      FROM sculptures
      WHERE hidden = 0
-     GROUP BY parcel_id, geohash
-     ORDER BY visible_count DESC, latest_at DESC`
+     GROUP BY parcel_id, geohash`
   );
-
+  const lpRows = await db.all('SELECT * FROM land_parcels ORDER BY updated_at DESC');
+  const stewardRows = await db.all('SELECT * FROM land_steward_state');
+  const questCounts = await db.all(
+    `SELECT parcel_id, COUNT(*) AS cnt FROM land_quests WHERE status = 'open' GROUP BY parcel_id`
+  );
   const curations = await db.all('SELECT * FROM parcel_curations');
+
+  const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
+  const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
+  const stewardMap = new Map((stewardRows || []).map((r) => [r.parcel_id, r]));
+  const questMap = new Map((questCounts || []).map((r) => [r.parcel_id, Number(r.cnt || 0)]));
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
 
+  const allParcelIds = new Set([...scMap.keys(), ...lpMap.keys()]);
   const parcels = [];
-  for (const row of rows || []) {
-    const bounds = decodeGeohashBounds(row.geohash);
-    const first = await db.get(
-      'SELECT recipient_address, creator_name, creator_sub FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
-      [row.parcel_id]
-    );
-    const cur = curationMap.get(row.parcel_id);
+
+  for (const parcelId of allParcelIds) {
+    const sc = scMap.get(parcelId);
+    const lp = lpMap.get(parcelId);
+    const st = stewardMap.get(parcelId);
+    const geohash = sc?.geohash || lp?.geohash || parcelId.replace(/^GLAND-/, '').toLowerCase();
+    const bounds = decodeGeohashBounds(geohash);
+    const first = sc
+      ? await db.get(
+          'SELECT recipient_address, creator_name, creator_sub FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+          [parcelId]
+        )
+      : null;
+    const cur = curationMap.get(parcelId);
+    const stewardStatus = st?.status || 'awakened';
+    const ownerSub = st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
+    const stewardType =
+      st?.steward_type || (String(ownerSub).startsWith('agent:') ? 'agent' : 'human');
+
     parcels.push({
-      parcelId: row.parcel_id,
-      geohash: row.geohash,
+      parcelId,
+      geohash,
       bounds,
       centerLat: bounds.center[0],
       centerLng: bounds.center[1],
-      sculptureCount: row.visible_count,
-      firstClaimantAddress: first?.recipient_address || '',
-      firstClaimantName: first?.creator_name || '',
-      ownerSub: first?.creator_sub || '',
+      sculptureCount: Number(sc?.visible_count ?? lp?.sculpture_count ?? 0),
+      firstClaimantAddress: first?.recipient_address || lp?.first_claimant_address || '',
+      firstClaimantName: first?.creator_name || st?.steward_name || '',
+      ownerSub,
+      stewardSub: ownerSub,
+      stewardName: st?.steward_name || first?.creator_name || '',
+      stewardType,
+      stewardStatus,
+      firstSparkBoost: stewardStatus === 'dormant',
+      leaseExpiresAt: st?.lease_expires_at || '',
+      awakenedAt: st?.awakened_at || '',
+      humanContributorCount: Number(st?.human_contributor_count || 0),
+      openQuestCount: questMap.get(parcelId) || 0,
+      totalVolumeEth: Number(st?.total_tx_volume_eth || 0),
+      agentRoyaltiesEth: Number(st?.agent_royalties_eth || 0),
+      humanRoyaltiesEth: Number(st?.human_royalties_eth || 0),
       customName: cur?.custom_name || '',
       curationNote: cur?.curation_note || '',
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
-      latestAt: row.latest_at
+      latestAt: sc?.latest_at || lp?.updated_at || st?.updated_at || ''
     });
   }
+
+  parcels.sort((a, b) => (b.sculptureCount - a.sculptureCount) || (b.latestAt || '').localeCompare(a.latestAt || ''));
   return parcels;
 }
 
@@ -552,7 +587,16 @@ export async function applyUpdateSculpture(
 
 export async function applyCreateSculptureOnLand(
   db,
-  { parcelCtx, ownerUser, ownerAddress, payload, pinSculptureFn, mintSculptureFn, proofSeed = '' }
+  {
+    parcelCtx,
+    ownerUser,
+    ownerAddress,
+    payload,
+    pinSculptureFn,
+    mintSculptureFn,
+    proofSeed = '',
+    layerRole = ''
+  }
 ) {
   const modelExtract = extractCustomModelInput(payload);
   if (modelExtract.error) {
@@ -787,6 +831,33 @@ export async function applyCreateSculptureOnLand(
     [ownerAddress, now, parcelCtx.parcelId]
   );
 
+  const effectiveLayerRole =
+    layerRole === 'steward_stage' ||
+    payload?.layerRole === 'steward_stage' ||
+    String(ownerUser?.id || '').startsWith('agent:') ||
+    ownerUser?.actorType === 'agent'
+      ? 'steward_stage'
+      : 'artist_work';
+  await db.run(
+    `INSERT INTO sculpture_layers (
+      sculpture_id, parcel_id, layer_role, quest_id, plinth_slot_id, agent_id, qual_contributor, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sculpture_id) DO UPDATE SET
+      layer_role = excluded.layer_role,
+      updated_at = excluded.updated_at`,
+    [
+      sculptureId,
+      parcelCtx.parcelId,
+      effectiveLayerRole,
+      String(payload?.questId || ''),
+      String(payload?.plinthSlotId || ''),
+      String(ownerUser?.id || '').startsWith('agent:') ? ownerUser.id : '',
+      effectiveLayerRole === 'artist_work' && cleanVoxels.length >= 3 ? 1 : 0,
+      now,
+      now
+    ]
+  );
+
   const saved = await fetchSculptureWithModelRow(db, sculptureId);
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
@@ -824,26 +895,51 @@ export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '',
     String(reason || '').trim().slice(0, 160) ||
     (viaAgent ? 'Land erased by authorized agent' : 'Land erased by property owner');
 
-  await db.run(
-    `UPDATE sculptures
-     SET hidden = 1, hidden_reason = ?, hidden_by = ?
-     WHERE parcel_id = ? AND hidden = 0`,
-    [cleanReason, ownerAddress, parcelCtx.parcelId]
+  const layerRows = await db.all(
+    `SELECT s.id, s.recipient_address, COALESCE(l.layer_role, 'artist_work') AS layer_role
+     FROM sculptures s
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     WHERE s.parcel_id = ? AND s.hidden = 0`,
+    [parcelCtx.parcelId]
   );
+  const erasableIds = (layerRows || [])
+    .filter(
+      (r) =>
+        r.layer_role === 'steward_stage' ||
+        String(r.recipient_address || '').toLowerCase() === String(ownerAddress || '').toLowerCase()
+    )
+    .map((r) => r.id);
+  const preservedHumanWorks = (layerRows || []).length - erasableIds.length;
+
+  for (const sid of erasableIds) {
+    await db.run(
+      `UPDATE sculptures SET hidden = 1, hidden_reason = ?, hidden_by = ? WHERE id = ?`,
+      [cleanReason, ownerAddress, sid]
+    );
+    await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sid]);
+    await db.run('DELETE FROM sculpture_anchors WHERE sculpture_id = ?', [sid]);
+  }
   await db.run('DELETE FROM parcel_curations WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM land_contributors WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM sculpture_models WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM sculpture_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM parcel_landmark_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
-  await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
+
+  if (preservedHumanWorks === 0) {
+    await db.run('DELETE FROM land_contributors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM parcel_landmark_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  } else {
+    await db.run(
+      'UPDATE land_parcels SET sculpture_count = ?, updated_at = ? WHERE parcel_id = ?',
+      [preservedHumanWorks, new Date().toISOString(), parcelCtx.parcelId]
+    );
+  }
 
   return {
     erased: true,
     parcelId: parcelCtx.parcelId,
-    erasedSculptureCount: parcelCtx.visibleRows.length,
+    erasedSculptureCount: erasableIds.length,
+    preservedHumanWorks,
     reason: cleanReason
   };
 }

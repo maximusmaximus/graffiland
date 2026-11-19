@@ -185,6 +185,13 @@ export async function checkSculptureEditPermission(
     return { row, role: 'owner', ownerAddress: row.recipient_address };
   }
   if (user && (await isUserParcelContributor(db, { parcelId: row.parcel_id, user }))) {
+    const layer = await db.get('SELECT layer_role FROM sculpture_layers WHERE sculpture_id = ?', [row.id]);
+    if (layer?.layer_role === 'steward_stage') {
+      throw new McpServiceError(
+        'Steward stage items (steward_stage) are protected from contributor edits. Add or edit your own artist_work sculptures on this land.',
+        403
+      );
+    }
     return { row, role: 'contributor', ownerAddress: row.recipient_address };
   }
   throw new McpServiceError(
@@ -211,10 +218,15 @@ export async function fetchSculptureWithModelRow(db, sculptureId) {
       a.yaw AS anchor_yaw,
       a.current_rev AS current_rev,
       a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-      a.mesh_stats_json AS mesh_stats_json
+      a.mesh_stats_json AS mesh_stats_json,
+      COALESCE(l.layer_role, 'artist_work') AS layer_role,
+      COALESCE(l.quest_id, '') AS layer_quest_id,
+      COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+      COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
      WHERE s.id = ?`,
     [sculptureId]
   );

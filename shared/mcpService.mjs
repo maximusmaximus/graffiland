@@ -1,4 +1,13 @@
 import { buildAgentSpec } from './agentService.mjs';
+import { getAgentProfile } from './agentAuthService.mjs';
+import {
+  batchBuildLand,
+  claimDormantLand,
+  createArtQuest,
+  getLandTelemetry,
+  scoutLands
+} from './agentQuestService.mjs';
+import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
 import { serializeSculptureRow } from './sculpture.mjs';
 import { extractCustomModelInput } from './model3d.mjs';
@@ -104,10 +113,26 @@ export async function handleMcpJsonRpc(
   const effectiveCode =
     pairingCode || params?.pairingCode || params?.arguments?.pairingCode || '';
 
-  const { pairing, ownerUser } = await requireActiveMcpPairing(db, {
-    pairingCode: effectiveCode,
-    callerUser
-  });
+  let pairing;
+  let ownerUser;
+  if (!effectiveCode && callerUser?.actorType === 'agent') {
+    ownerUser = callerUser;
+    pairing = {
+      code: 'DIRECT-AGENT-WALLET',
+      ownerAddress: callerUser.wallet_address,
+      mcpActive: true,
+      keyConnected: true,
+      agentName: callerUser.name || 'Autonomous Steward',
+      agentAddress: callerUser.wallet_address
+    };
+  } else {
+    const active = await requireActiveMcpPairing(db, {
+      pairingCode: effectiveCode,
+      callerUser
+    });
+    pairing = active.pairing;
+    ownerUser = active.ownerUser;
+  }
 
   if (method === 'initialize') {
     return {
@@ -151,10 +176,15 @@ export async function handleMcpJsonRpc(
           m.byte_length AS custom_model_bytes,
           a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
           a.current_rev AS current_rev, a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-          a.mesh_stats_json AS mesh_stats_json
+          a.mesh_stats_json AS mesh_stats_json,
+          COALESCE(l.layer_role, 'artist_work') AS layer_role,
+          COALESCE(l.quest_id, '') AS layer_quest_id,
+          COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+          COALESCE(l.qual_contributor, 1) AS qual_contributor
          FROM sculptures s
          LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
          LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+         LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
          WHERE s.parcel_id = ? AND s.hidden = 0
          ORDER BY s.created_at ASC`,
         [parcelId]
@@ -427,6 +457,59 @@ export async function handleMcpJsonRpc(
         mintSculptureFn,
         emitMetadataUpdateFn
       });
+    } else if (toolName === 'agent_profile') {
+      toolResult =
+        ownerUser?.actorType === 'agent'
+          ? await getAgentProfile(db, ownerUser.id)
+          : {
+              actorType: 'human-paired',
+              userId: ownerUser.id,
+              name: ownerUser.name,
+              walletAddress: resolvePreferredOwnerWallet(ownerUser),
+              pairingCode: pairing.code
+            };
+    } else if (toolName === 'scout_lands') {
+      toolResult = await scoutLands(db, {
+        lat: args.lat,
+        lng: args.lng,
+        radiusMeters: args.radiusMeters ?? 5000,
+        statusFilter: args.statusFilter || 'all'
+      });
+    } else if (toolName === 'claim_land') {
+      toolResult = await claimDormantLand(db, {
+        agentUser: ownerUser,
+        parcelId: args.parcelId || '',
+        lat: args.lat,
+        lng: args.lng,
+        customName: args.customName || '',
+        curationNote: args.curationNote || ''
+      });
+    } else if (toolName === 'generate_voxel_prefab') {
+      toolResult = generateVoxelPrefab(args);
+    } else if (toolName === 'batch_build_land') {
+      toolResult = await batchBuildLand(db, {
+        agentUser: ownerUser,
+        parcelId: args.parcelId,
+        items: args.items || [],
+        customName: args.customName,
+        curationNote: args.curationNote,
+        quest: args.quest || null,
+        pinSculptureFn,
+        mintSculptureFn
+      });
+    } else if (toolName === 'create_art_quest') {
+      toolResult = await createArtQuest(db, {
+        parcelId: args.parcelId,
+        user: ownerUser,
+        title: args.title,
+        prompt: args.prompt,
+        theme: args.theme || 'open',
+        bountyEth: args.bountyEth || 0,
+        maxCompletions: args.maxCompletions || 10,
+        slotOffsets: args.slotOffsets || []
+      });
+    } else if (toolName === 'get_land_telemetry') {
+      toolResult = await getLandTelemetry(db, args.parcelId);
     } else {
       throw new McpServiceError(`Unknown MCP tool: ${toolName}`, 404);
     }

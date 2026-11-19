@@ -446,3 +446,158 @@ CREATE INDEX IF NOT EXISTS idx_sculptures_hidden_lat_lng
 
 CREATE INDEX IF NOT EXISTS idx_sculptures_geohash
   ON sculptures (geohash);
+
+CREATE TABLE IF NOT EXISTS agent_accounts (
+  agent_id TEXT PRIMARY KEY,
+  wallet_lower TEXT NOT NULL UNIQUE,
+  wallet_address TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT 'Autonomous Steward',
+  framework TEXT NOT NULL DEFAULT 'custom',
+  description TEXT NOT NULL DEFAULT '',
+  endpoint_url TEXT NOT NULL DEFAULT '',
+  max_slots INTEGER NOT NULL DEFAULT 3,
+  used_slots INTEGER NOT NULL DEFAULT 0,
+  activated_lands_count INTEGER NOT NULL DEFAULT 0,
+  total_xp INTEGER NOT NULL DEFAULT 0,
+  reputation_score INTEGER NOT NULL DEFAULT 100,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_auth_challenges (
+  nonce TEXT PRIMARY KEY,
+  wallet_lower TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_auth_challenges_wallet
+  ON agent_auth_challenges (wallet_lower, used);
+
+CREATE TABLE IF NOT EXISTS land_steward_state (
+  parcel_id TEXT PRIMARY KEY,
+  steward_sub TEXT NOT NULL DEFAULT '',
+  steward_address TEXT NOT NULL DEFAULT '',
+  steward_name TEXT NOT NULL DEFAULT '',
+  steward_type TEXT NOT NULL DEFAULT 'human',
+  status TEXT NOT NULL DEFAULT 'awakened',
+  claimed_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL DEFAULT '',
+  awakened_at TEXT NOT NULL DEFAULT '',
+  first_human_sub TEXT NOT NULL DEFAULT '',
+  first_human_address TEXT NOT NULL DEFAULT '',
+  human_contributor_count INTEGER NOT NULL DEFAULT 0,
+  total_tx_volume_eth REAL NOT NULL DEFAULT 0,
+  agent_royalties_eth REAL NOT NULL DEFAULT 0,
+  human_royalties_eth REAL NOT NULL DEFAULT 0,
+  platform_fees_eth REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_land_steward_status_lease
+  ON land_steward_state (status, lease_expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_land_steward_sub
+  ON land_steward_state (steward_sub, status);
+
+CREATE TABLE IF NOT EXISTS land_quests (
+  id TEXT PRIMARY KEY,
+  parcel_id TEXT NOT NULL,
+  steward_sub TEXT NOT NULL,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  theme TEXT NOT NULL DEFAULT 'open',
+  bounty_wei TEXT NOT NULL DEFAULT '0',
+  bounty_eth REAL NOT NULL DEFAULT 0,
+  slot_offsets_json TEXT NOT NULL DEFAULT '[]',
+  max_completions INTEGER NOT NULL DEFAULT 10,
+  completions_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_land_quests_parcel_status
+  ON land_quests (parcel_id, status);
+
+CREATE TABLE IF NOT EXISTS land_quest_completions (
+  id TEXT PRIMARY KEY,
+  quest_id TEXT NOT NULL,
+  parcel_id TEXT NOT NULL,
+  sculpture_id TEXT NOT NULL,
+  artist_sub TEXT NOT NULL,
+  artist_name TEXT NOT NULL DEFAULT '',
+  artist_address TEXT NOT NULL DEFAULT '',
+  plinth_slot_id TEXT NOT NULL DEFAULT '',
+  voxel_count INTEGER NOT NULL DEFAULT 0,
+  qualifies_for_pool INTEGER NOT NULL DEFAULT 0,
+  xp_awarded INTEGER NOT NULL DEFAULT 0,
+  awakened_parcel INTEGER NOT NULL DEFAULT 0,
+  bounty_paid_eth REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_quest_completions_parcel_artist
+  ON land_quest_completions (parcel_id, artist_sub);
+
+CREATE TABLE IF NOT EXISTS sculpture_layers (
+  sculpture_id TEXT PRIMARY KEY,
+  parcel_id TEXT NOT NULL,
+  layer_role TEXT NOT NULL DEFAULT 'artist_work',
+  quest_id TEXT NOT NULL DEFAULT '',
+  plinth_slot_id TEXT NOT NULL DEFAULT '',
+  agent_id TEXT NOT NULL DEFAULT '',
+  qual_contributor INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sculpture_layers_parcel_role
+  ON sculpture_layers (parcel_id, layer_role);
+
+CREATE TABLE IF NOT EXISTS marketplace_listings (
+  id TEXT PRIMARY KEY,
+  sculpture_id TEXT NOT NULL,
+  parcel_id TEXT NOT NULL,
+  seller_sub TEXT NOT NULL,
+  seller_name TEXT NOT NULL DEFAULT '',
+  seller_address TEXT NOT NULL,
+  price_eth REAL NOT NULL,
+  price_wei TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  buyer_sub TEXT NOT NULL DEFAULT '',
+  buyer_address TEXT NOT NULL DEFAULT '',
+  tx_hash TEXT NOT NULL DEFAULT '',
+  split_breakdown_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  sold_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_marketplace_listings_status_parcel
+  ON marketplace_listings (status, parcel_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fee_ledger_entries (
+  id TEXT PRIMARY KEY,
+  tx_type TEXT NOT NULL,
+  parcel_id TEXT NOT NULL,
+  sculpture_id TEXT NOT NULL DEFAULT '',
+  listing_id TEXT NOT NULL DEFAULT '',
+  recipient_role TEXT NOT NULL,
+  recipient_sub TEXT NOT NULL DEFAULT '',
+  recipient_name TEXT NOT NULL DEFAULT '',
+  recipient_address TEXT NOT NULL,
+  bps INTEGER NOT NULL,
+  amount_eth REAL NOT NULL,
+  amount_wei TEXT NOT NULL,
+  tx_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fee_ledger_recipient
+  ON fee_ledger_entries (recipient_address, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_fee_ledger_parcel
+  ON fee_ledger_entries (parcel_id, created_at DESC);

@@ -41,10 +41,15 @@ export function buildSculptureSelectSql({ includeVoxels = true } = {}) {
       a.yaw AS anchor_yaw,
       a.current_rev AS current_rev,
       a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-      a.mesh_stats_json AS mesh_stats_json
+      a.mesh_stats_json AS mesh_stats_json,
+      COALESCE(l.layer_role, 'artist_work') AS layer_role,
+      COALESCE(l.quest_id, '') AS layer_quest_id,
+      COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+      COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
   `;
 }
 
@@ -153,6 +158,11 @@ export function serializeSculptureRow(
     },
     currentRev: Number(row.current_rev || 1),
     lastErc4906TxHash: row.last_erc4906_tx_hash || '',
+    layerRole: row.layer_role || 'artist_work',
+    questId: row.layer_quest_id || '',
+    plinthSlotId: row.layer_plinth_slot_id || '',
+    qualifiesForContributorPool:
+      row.qual_contributor !== undefined ? Boolean(row.qual_contributor) : true,
     ...(row.mesh_stats_json
       ? {
           meshStats: (() => {

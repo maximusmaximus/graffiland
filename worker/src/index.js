@@ -2,7 +2,28 @@ import { ethers } from 'ethers';
 import { CID } from 'multiformats/cid';
 import * as raw from 'multiformats/codecs/raw';
 import { sha256 } from 'multiformats/hashes/sha2';
-import { POLICY, ROBINHOOD_NETWORKS } from '../../shared/constants.mjs';
+import { POLICY, ROBINHOOD_NETWORKS, STEWARD_DEFAULTS, TRANSACTION_FEES } from '../../shared/constants.mjs';
+import {
+  formatAgentProfile,
+  getAgentProfile,
+  getDualLeaderboards,
+  issueAgentAuthChallenge,
+  registerOrLoginAgentWallet
+} from '../../shared/agentAuthService.mjs';
+import {
+  awakenParcelByHumanVisit,
+  claimDormantLand,
+  createArtQuest,
+  getLandTelemetry,
+  listNearbyQuests,
+  scoutLands
+} from '../../shared/agentQuestService.mjs';
+import {
+  createMarketplaceListing,
+  executeMarketplacePurchase,
+  getEconomySplitsSummary,
+  listMarketplaceItems
+} from '../../shared/marketplaceService.mjs';
 import {
   buildAgentSpec,
   createAgentSession,
@@ -223,7 +244,28 @@ async function getAuthUser(request, env, cfg) {
   if (!token) return null;
   try {
     const decoded = await verifyJwt(token, cfg.sessionSecret);
-    return await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(decoded.sub).first();
+    const userRow = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(decoded.sub).first();
+    if (!userRow) return null;
+    if (decoded.actorType === 'agent' || String(userRow.id).startsWith('agent:')) {
+      const agentRow = await env.DB.prepare('SELECT * FROM agent_accounts WHERE agent_id = ?')
+        .bind(userRow.id)
+        .first();
+      if (agentRow) {
+        const slotRow = await env.DB.prepare(
+          `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`
+        )
+          .bind(agentRow.agent_id)
+          .first();
+        return {
+          ...userRow,
+          actorType: 'agent',
+          agent: formatAgentProfile(agentRow, {
+            activeDormantSlots: Number(slotRow?.cnt || 0)
+          })
+        };
+      }
+    }
+    return userRow;
   } catch {
     return null;
   }
@@ -675,6 +717,8 @@ export default {
           googleClientId: cfg.googleClientId || null,
           allowDevGoogleAuth: cfg.allowDevGoogleAuth,
           policy: POLICY,
+          feeBreakdown: TRANSACTION_FEES,
+          stewardDefaults: STEWARD_DEFAULTS,
           chain: {
             network: cfg.network,
             contractAddress: cfg.contractAddress,
@@ -943,10 +987,15 @@ export default {
         a.yaw AS anchor_yaw,
         a.current_rev AS current_rev,
         a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-        a.mesh_stats_json AS mesh_stats_json
+        a.mesh_stats_json AS mesh_stats_json,
+        COALESCE(l.layer_role, 'artist_work') AS layer_role,
+        COALESCE(l.quest_id, '') AS layer_quest_id,
+        COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+        COALESCE(l.qual_contributor, 1) AS qual_contributor
        FROM sculptures s
        LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
        LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+       LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
     `;
 
     // List public sculptures
@@ -1029,6 +1078,213 @@ export default {
       body?.params?.arguments?.pairingCode ||
       url.searchParams.get('pairingCode') ||
       '';
+
+    // Zero-OAuth Agent Auth, Scouting, Free Claims, Quests & 5%/3%/2% Marketplace
+    if (pathname === '/api/agents/challenge' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await issueAgentAuthChallenge(d1Adapter, {
+          walletAddress: body?.walletAddress
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Challenge failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/agents/register' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await registerOrLoginAgentWallet(d1Adapter, {
+          walletAddress: body?.walletAddress,
+          nonce: body?.nonce,
+          signature: body?.signature,
+          name: body?.name,
+          framework: body?.framework,
+          description: body?.description,
+          endpointUrl: body?.endpointUrl,
+          sessionSecret: cfg.sessionSecret
+        });
+        return jsonResponse(out, 201, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Agent registration failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/agents/me' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        return jsonResponse(await getAgentProfile(d1Adapter, user.id), 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Profile failed' }, err?.statusCode || 404, request);
+      }
+    }
+
+    if (pathname === '/api/agents/leaderboard' && request.method === 'GET') {
+      try {
+        const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 25;
+        return jsonResponse(await getDualLeaderboards(d1Adapter, { limit }), 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Leaderboard failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const agentProfileMatch = pathname.match(/^\/api\/agents\/([^/]+)$/);
+    if (agentProfileMatch && request.method === 'GET') {
+      try {
+        const out = await getAgentProfile(d1Adapter, decodeURIComponent(agentProfileMatch[1]));
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Agent not found' }, err?.statusCode || 404, request);
+      }
+    }
+
+    if (pathname === '/api/lands/scout' && request.method === 'GET') {
+      try {
+        const out = await scoutLands(d1Adapter, {
+          lat: url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null,
+          lng: url.searchParams.has('lng') ? Number(url.searchParams.get('lng')) : null,
+          radiusMeters: url.searchParams.has('radiusMeters')
+            ? Number(url.searchParams.get('radiusMeters'))
+            : 5000,
+          statusFilter: url.searchParams.get('status') || 'all'
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Scout failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/lands/claim' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await claimDormantLand(d1Adapter, {
+          agentUser: user,
+          parcelId: body?.parcelId || '',
+          lat: body?.lat,
+          lng: body?.lng,
+          customName: body?.customName || '',
+          curationNote: body?.curationNote || ''
+        });
+        return jsonResponse(out, 201, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Land claim failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const landTelemetryMatch = pathname.match(/^\/api\/lands\/([^/]+)\/telemetry$/);
+    if (landTelemetryMatch && request.method === 'GET') {
+      try {
+        const out = await getLandTelemetry(d1Adapter, decodeURIComponent(landTelemetryMatch[1]));
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Telemetry failed' }, err?.statusCode || 404, request);
+      }
+    }
+
+    const landQuestsMatch = pathname.match(/^\/api\/lands\/([^/]+)\/quests$/);
+    if (landQuestsMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await createArtQuest(d1Adapter, {
+          parcelId: decodeURIComponent(landQuestsMatch[1]),
+          user,
+          title: body?.title,
+          prompt: body?.prompt,
+          theme: body?.theme,
+          bountyEth: body?.bountyEth,
+          maxCompletions: body?.maxCompletions,
+          slotOffsets: body?.slotOffsets
+        });
+        return jsonResponse({ quest: out }, 201, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Quest creation failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/quests/nearby' && request.method === 'GET') {
+      try {
+        const out = await listNearbyQuests(d1Adapter, {
+          lat: url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null,
+          lng: url.searchParams.has('lng') ? Number(url.searchParams.get('lng')) : null,
+          radiusMeters: url.searchParams.has('radiusMeters')
+            ? Number(url.searchParams.get('radiusMeters'))
+            : 25000,
+          status: url.searchParams.get('status') || 'open'
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Quest lookup failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/marketplace/listings') {
+      try {
+        if (request.method === 'GET') {
+          const listings = await listMarketplaceItems(d1Adapter, {
+            status: url.searchParams.get('status') || 'active',
+            parcelId: url.searchParams.get('parcel') || '',
+            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 60
+          });
+          return jsonResponse({ listings }, 200, request);
+        }
+        if (request.method === 'POST') {
+          const user = await getAuthUser(request, env, cfg);
+          if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+          const body = await request.json().catch(() => ({}));
+          const listing = await createMarketplaceListing(d1Adapter, {
+            sculptureId: body?.sculptureId,
+            sellerUser: user,
+            priceEth: body?.priceEth,
+            platformAddress: cfg.royaltyReceiver
+          });
+          return jsonResponse({ listing }, 201, request);
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Marketplace error' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const marketBuyMatch = pathname.match(/^\/api\/marketplace\/listings\/([^/]+)\/buy$/);
+    if (marketBuyMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await executeMarketplacePurchase(d1Adapter, {
+          listingId: decodeURIComponent(marketBuyMatch[1]),
+          buyerUser: user,
+          buyerAddress: body?.buyerAddress || '',
+          txHash: body?.txHash || '',
+          platformAddress: cfg.royaltyReceiver
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Purchase failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/economy/splits' && request.method === 'GET') {
+      try {
+        const out = await getEconomySplitsSummary(d1Adapter, {
+          parcelId: url.searchParams.get('parcel') || '',
+          address: url.searchParams.get('address') || ''
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Economy lookup failed' }, err?.statusCode || 400, request);
+      }
+    }
 
     if (pathname === '/api/mcp/spec' && request.method === 'GET') {
       return jsonResponse(
@@ -1775,6 +2031,18 @@ export default {
           changeSummary: 'Initial mobile publish'
         });
 
+        const awakening = await awakenParcelByHumanVisit(d1Adapter, {
+          parcelId: locationBundle.parcelId,
+          sculptureId,
+          artistUser: user,
+          artistAddress: recipientAddress,
+          voxelCount: validation.cleanVoxels.length,
+          isCustomModel: false,
+          questId: body?.questId || '',
+          plinthSlotId: body?.plinthSlotId || '',
+          platformAddress: cfg.royaltyReceiver
+        });
+
         if (body?.draftId) {
           await consumeDraftOnPublish(d1Adapter, { draftId: body.draftId, user });
         }
@@ -1786,7 +2054,8 @@ export default {
           {
             sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
             mint: mintResult,
-            ipfs: ipfsResult
+            ipfs: ipfsResult,
+            awakening
           },
           201,
           request
