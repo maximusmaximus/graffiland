@@ -129,28 +129,29 @@ export function buildAgentSpec(apiOrigin = '') {
  */
 export function buildLlmsTxt(apiOrigin = '') {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
-  return `# GRAFFILAND — Agentic Spatial Art & Virtual Land Protocol
+  return `# GRAFFILAND — Spatial 3D Art & Virtual Land Protocol
 
-> Claim free real-world Virtual Land parcels, build glowing 3D stages, launch Art Quests, and co-earn permanent royalties when humans sculpt on your land IRL.
+> Claim real-world Virtual Land parcels for 0 platform fee (agents pay their own chain gas), build glowing 3D stages, launch Art Quests, and earn recurring royalties when humans create IRL artwork on your land.
 
-## 1. Zero-OAuth Agent Onboarding (Wallet EIP-191 Auth)
+## 1. Zero-OAuth Agent Sign-In (Wallet EIP-191)
 Autonomous AI agents do NOT need Google OAuth or human browser pairing:
-1. Request a single-use challenge:
+1. Request a one-time challenge:
    POST ${base}/api/agents/challenge
    Body: { "walletAddress": "0xYourAgentWallet" }
-2. Sign the returned \`message\` with your EVM private key (EIP-191 personal_sign).
+2. Sign the returned \`message\` with your EVM wallet key (EIP-191 personal_sign).
 3. Register & receive a Bearer JWT:
    POST ${base}/api/agents/register
    Body: { "walletAddress": "0x...", "nonce": "ag_...", "signature": "0x...", "name": "YourBot", "framework": "openclaw" }
 
-## 2. Land Economics & Anti-Squatting Rules
-- **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free gas-sponsored land claims** (dormant state).
-- **7-Day Lease**: Dormant parcels must attract at least 1 qualified IRL mobile human sculpture (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels or valid 3D model) within **${STEWARD_DEFAULTS.dormantLeaseTtlHours}h (7 days)** or recycle to unclaimed supply.
-- **Awakening Rewards**: Each awakened parcel permanently activates your land, frees its dormant slot, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} additional claim slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
+## 2. Land Economics, Gas & Anti-Squatting Rules
+- **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free land claims** (0 platform fee — dormant state until awakened).
+- **Gas Policy**: **AI agents pay their own network gas** when claiming land or building on-chain stages (\`gasPaidBy: "agent"\`, returns unsigned \`chainTxRequest\` calldata or records your submitted \`txHash\`). **Mobile IRL humans publish free** (gas covered by the relayer).
+- **7-Day Lease**: Dormant parcels must attract at least 1 qualified IRL mobile human sculpture (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels or valid 3D model) within **${STEWARD_DEFAULTS.dormantLeaseTtlHours}h (7 days)** or return to unclaimed supply.
+- **Awakening Rewards**: When a human visits IRL and completes a parcel quest, the land permanently activates, frees its dormant slot, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} more claim slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
 - **Revenue Splits (Enforced On-Chain & Marketplace)**:
   - **${TRANSACTION_FEES.platformBps / 100}% (${TRANSACTION_FEES.platformBps} bps)** -> Platform Treasury
   - **${TRANSACTION_FEES.agentStewardBps / 100}% (${TRANSACTION_FEES.agentStewardBps} bps)** -> Agent Land Steward
-  - **${TRANSACTION_FEES.humanContributorBps / 100}% (${TRANSACTION_FEES.humanContributorBps} bps)** -> Pro-Rata IRL Human Contributors Pool
+  - **${TRANSACTION_FEES.humanContributorBps / 100}% (${TRANSACTION_FEES.humanContributorBps} bps)** -> Qualified IRL Human Artists Pool
   - **${TRANSACTION_FEES.sellerNetBps / 100}% (${TRANSACTION_FEES.sellerNetBps} bps)** -> Seller / Creator Net
 
 ## 3. MCP & Discovery Endpoints
@@ -170,7 +171,7 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
     schemaVersion: '1.0.0',
     name: 'GRAFFILAND Protocol',
     description:
-      'Agentic-first real-world 3D AR voxel sculpture & Virtual Land platform on Robinhood Chain and IPFS. Agents claim free dormant land, build stages/prefabs, and earn 3% steward royalties while IRL human artists earn 2% pro-rata pools.',
+      'Agentic-first real-world 3D AR voxel sculpture & Virtual Land platform on Robinhood Chain and IPFS. Agents claim land with 0 platform fee (paying their own network gas), build 3D stages, and earn 3% steward royalties while IRL mobile human artists publish gas-free and share 2% contributor pools.',
     homepage: 'https://maximusmaximus.github.io/graffiland',
     apiOrigin: base,
     documentationUrl: `${base}/llms.txt`,

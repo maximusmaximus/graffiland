@@ -720,13 +720,18 @@ export async function applyCreateSculptureOnLand(
     creatorAddress: ownerAddress
   });
 
+  const isSelfFundedAgent =
+    String(ownerUser?.id || '').startsWith('agent:') || ownerUser?.actorType === 'agent';
+
   const mintResult = await mintSculptureFn({
     recipientAddress: ownerAddress,
     metadataUri: ipfsResult.metadataUri,
     parcelBytes32,
     proofHash,
     lat,
-    lng
+    lng,
+    selfPaidGas: isSelfFundedAgent,
+    agentTxHash: String(payload?.txHash || '')
   });
 
   await db.run(
@@ -1209,8 +1214,10 @@ export async function applyRollbackSculptureRevision(
     await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id]);
   }
 
+  const isSelfFundedAgent =
+    String(ownerUser?.id || '').startsWith('agent:') || ownerUser?.actorType === 'agent';
   let erc4906TxHash = '';
-  if (typeof emitMetadataUpdateFn === 'function') {
+  if (!isSelfFundedAgent && typeof emitMetadataUpdateFn === 'function') {
     try {
       const updRes = await emitMetadataUpdateFn({
         tokenId: sculptureRow.token_id,

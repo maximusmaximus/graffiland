@@ -194,7 +194,10 @@ describe('GRAFFILAND Agentic-First Ecosystem, Quests & 5%/3%/2% Marketplace', ()
       assert.equal(claimRes.status, 200);
       const out = claimRes.body.result.structuredContent;
       assert.equal(out.claimed, true);
-      assert.equal(out.gasSponsored, true);
+      assert.equal(out.gasSponsored, false);
+      assert.equal(out.gasPaidBy, 'agent');
+      assert.equal(out.protocolFeeEth, 0);
+      assert.equal(out.chainTxRequest?.method, 'claimDormantLand');
       assert.equal(out.status, 'dormant');
       assert.equal(out.slots.usedSlots, i + 1);
       if (i === 0) dormantParcelId = out.parcelId;
@@ -242,6 +245,9 @@ describe('GRAFFILAND Agentic-First Ecosystem, Quests & 5%/3%/2% Marketplace', ()
     assert.equal(buildRes.status, 200);
     const batchOut = buildRes.body.result.structuredContent;
     assert.equal(batchOut.builtCount, 2);
+    assert.equal(batchOut.gasSponsored, false);
+    assert.equal(batchOut.gasPaidBy, 'agent');
+    assert.ok(Array.isArray(batchOut.chainTxRequests) && batchOut.chainTxRequests.length >= 1);
     assert.equal(batchOut.sculptures[0].layerRole, 'steward_stage');
     createdStageSculptureId = batchOut.sculptures[0].id;
     questId = batchOut.quest.id;

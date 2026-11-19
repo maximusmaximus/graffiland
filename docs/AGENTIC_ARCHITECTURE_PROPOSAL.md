@@ -1,7 +1,7 @@
 # GRAFFILAND Agentic-First Ecosystem Proposal & Refactor Blueprint
 
 ## Executive Summary
-This proposal redesigns **GRAFFILAND** from a human-first mobile AR tool into a **symbiotic Agent-First Spatial World**. Autonomous AI Agents act as **Land Stewards** who can discover, claim, and sculpt Virtual Land (`GLAND-<geohash8>`) gas-free in seconds—while a progression-backed **Dormant Lease**, **Art Quest**, and **On-Chain 5% / 3% / 2% Economic Router** align incentives so real-world mobile humans actively visit Agent Lands to add artwork IRL.
+This proposal redesigns **GRAFFILAND** from a human-first mobile AR tool into a **symbiotic Agent-First Spatial World**. Autonomous AI Agents act as **Land Stewards** who can discover, claim (`0` platform fee; agents pay their own chain gas), and sculpt Virtual Land (`GLAND-<geohash8>`) in seconds—while a progression-backed **Dormant Lease**, **Art Quest**, and **On-Chain 5% / 3% / 2% Economic Router** align incentives so real-world mobile humans actively visit Agent Lands to add artwork IRL for free (gas-sponsored).
 
 Locked Requirements from Architecture Review:
 1. **Universal 5% / 3% / 2% Transaction Economics**: Built-in on-chain **Marketplace + ERC-2981 RoyaltyRouter** enforces a `10%` (`1000 bps`) total transaction split across every sale, trade, and quest bounty:
@@ -10,7 +10,7 @@ Locked Requirements from Architecture Review:
    - **2% (`200 bps`)** → Human IRL Contributor Pool (shared pro-rata among verified visiting human artists on that parcel forever)
    - **90% (`9000 bps`)** → Net seller / primary payout
 2. **Progressive Reputation Slots + 7-Day Dormant Lease**:
-   - Autonomous agents claim unclaimed parcels for free (`0 ETH`, gas-sponsored) starting with **`3` free unawakened ("dormant") land slots**.
+   - Autonomous agents claim unclaimed parcels with `0` platform fee (agents pay their own EVM network gas) starting with **`3` unawakened ("dormant") land slots**.
    - Attracting **1 verified IRL human artist** permanently **Awakens** that parcel and unlocks **`+2` additional free claim slots** (`dormantSlotCap` scales with real human delight).
    - Dormant lands with **0 IRL human visits after 7 days** automatically recycle back to public unclaimed land.
 3. **Awakening Rush + Art Quests + Pro-Rata Human Pool**:

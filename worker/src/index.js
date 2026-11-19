@@ -473,10 +473,85 @@ async function mintOnChainOrSimulate({
   parcelBytes32,
   proofHash,
   lat,
-  lng
+  lng,
+  selfPaidGas = false,
+  agentTxHash = ''
 }, env, cfg) {
   const latE6 = Math.round(lat * 1e6);
   const lngE6 = Math.round(lng * 1e6);
+
+  if (selfPaidGas) {
+    const chainTxRequest = {
+      method: 'mintAgentStage',
+      contractAddress: cfg.contractAddress,
+      chainId: cfg.network.chainId,
+      network: cfg.network.name,
+      from: recipientAddress,
+      args: [metadataUri, parcelBytes32, proofHash, latE6, lngE6]
+    };
+    if (cfg.liveChainReady && agentTxHash && /^0x[0-9a-fA-F]{64}$/.test(agentTxHash)) {
+      const provider = new ethers.JsonRpcProvider(cfg.network.rpcUrl, cfg.network.chainId);
+      const receipt = await provider.getTransactionReceipt(agentTxHash);
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(`Agent self-paid gas tx ${agentTxHash} was not confirmed on chain.`);
+      }
+      if (String(receipt.from || '').toLowerCase() !== String(recipientAddress || '').toLowerCase()) {
+        throw new Error(`Agent self-paid gas tx ${agentTxHash} was not sent from agent wallet ${recipientAddress}.`);
+      }
+      let tokenId = '0';
+      const iface = new ethers.Interface(NFT_ABI);
+      for (const log of receipt.logs) {
+        try {
+          const parsed = iface.parseLog(log);
+          if (parsed?.name === 'SculptureMinted') {
+            tokenId = parsed.args.tokenId.toString();
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return {
+        simulated: false,
+        gasSponsored: false,
+        gasPaidBy: 'agent',
+        chainId: cfg.network.chainId,
+        chainName: cfg.network.name,
+        contractAddress: cfg.contractAddress,
+        tokenId,
+        txHash: receipt.hash,
+        explorerTxUrl: `${cfg.network.explorerUrl}/tx/${receipt.hash}`,
+        royaltyBps: cfg.resaleFeeBps,
+        royaltyReceiver: cfg.royaltyReceiver,
+        gasSponsoredBy: recipientAddress,
+        chainTxRequest
+      };
+    }
+
+    const countRow = await env.DB.prepare('SELECT COUNT(*) AS c FROM sculptures').first();
+    const nextTokenId = String(Number(countRow?.c || 0) + 1);
+    const txHash =
+      agentTxHash && /^0x[0-9a-fA-F]{64}$/.test(agentTxHash)
+        ? agentTxHash
+        : ethers.keccak256(
+            ethers.toUtf8Bytes(`agent-self-gas:${recipientAddress}|${metadataUri}|${proofHash}|${Date.now()}`)
+          );
+    return {
+      simulated: true,
+      gasSponsored: false,
+      gasPaidBy: 'agent',
+      chainId: cfg.network.chainId,
+      chainName: `${cfg.network.name} (Agent Self-Paid Gas)`,
+      contractAddress: cfg.contractAddress,
+      tokenId: nextTokenId,
+      txHash,
+      explorerTxUrl: `${cfg.network.explorerUrl}/tx/${txHash}`,
+      royaltyBps: cfg.resaleFeeBps,
+      royaltyReceiver: cfg.royaltyReceiver,
+      gasSponsoredBy: `Agent Wallet (${recipientAddress})`,
+      chainTxRequest
+    };
+  }
 
   if (cfg.liveChainReady) {
     const provider = new ethers.JsonRpcProvider(cfg.network.rpcUrl, cfg.network.chainId);
@@ -537,7 +612,32 @@ async function mintOnChainOrSimulate({
   };
 }
 
-async function emitWorkerMetadataUpdate({ tokenId, metadataUri }, env, cfg) {
+async function emitWorkerMetadataUpdate(
+  { tokenId, metadataUri, selfPaidGas = false, agentTxHash = '' },
+  env,
+  cfg
+) {
+  if (selfPaidGas) {
+    const cleanHash = /^0x[0-9a-fA-F]{64}$/.test(String(agentTxHash || '').trim())
+      ? String(agentTxHash).trim()
+      : '';
+    return {
+      simulated: !cfg.liveChainReady || !cleanHash,
+      erc4906Emitted: Boolean(cleanHash),
+      txHash: cleanHash,
+      gasSponsored: false,
+      gasPaidBy: 'agent',
+      chainTxRequest: cleanHash
+        ? null
+        : {
+            method: 'updateTokenURI',
+            network: cfg.network.name,
+            chainId: cfg.network.chainId,
+            contractAddress: cfg.contractAddress,
+            args: [String(tokenId || '0'), metadataUri]
+          }
+    };
+  }
   if (cfg.liveChainReady && tokenId && /^\d+$/.test(String(tokenId))) {
     try {
       const provider = new ethers.JsonRpcProvider(cfg.network.rpcUrl, cfg.network.chainId);
@@ -1184,7 +1284,9 @@ export default {
           lat: body?.lat,
           lng: body?.lng,
           customName: body?.customName || '',
-          curationNote: body?.curationNote || ''
+          curationNote: body?.curationNote || '',
+          txHash: body?.txHash || '',
+          chainCfg: cfg
         });
         return jsonResponse(out, 201, request);
       } catch (err) {

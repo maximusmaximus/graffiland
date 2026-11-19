@@ -860,7 +860,9 @@ export function createAppServer(serverOptions = {}) {
         lat: req.body?.lat,
         lng: req.body?.lng,
         customName: req.body?.customName || '',
-        curationNote: req.body?.curationNote || ''
+        curationNote: req.body?.curationNote || '',
+        txHash: req.body?.txHash || '',
+        chainCfg: getChainStatus()
       });
       res.status(201).json(out);
     } catch (err) {

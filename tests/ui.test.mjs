@@ -371,7 +371,14 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(copiedTexts.length, 2);
       assert.ok(copiedTexts[1].includes('/api/agents/challenge'));
       assert.ok(copiedTexts[1].includes('claim_land'));
+      assert.ok(copiedTexts[1].includes('own chain gas'));
     });
+
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Collectors & Scouts/i }));
+    assert.equal(activeRole, 'collector');
+    renderBanner('collector');
+    assert.ok(view.getByText(/Collect Real-World Verified 3D NFTs/i));
+    assert.ok(view.getByText(/Proof of Real Presence/i));
     cleanup();
   });
 });

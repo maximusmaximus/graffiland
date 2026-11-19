@@ -16,6 +16,8 @@ export default function DesktopIntroBanner({
   onRoleTabChange,
   onOpenPair,
   onOpenQuests,
+  onOpenMarket,
+  onOpenLeaders,
   onOpenInfo,
   onRequestLogin,
   onDismiss
@@ -140,7 +142,7 @@ export default function DesktopIntroBanner({
             role="tab"
             aria-selected={roleTab === 'human'}
             className={`btn ${roleTab === 'human' ? 'btn-primary' : ''}`}
-            style={{ padding: '5px 11px', fontSize: 12 }}
+            style={{ padding: '4px 10px', fontSize: 12 }}
             onClick={() => onRoleTabChange?.('human')}
           >
             <XeroIcon emoji="🧑" size={14} /> Human Creator
@@ -150,10 +152,20 @@ export default function DesktopIntroBanner({
             role="tab"
             aria-selected={roleTab === 'agent'}
             className={`btn ${roleTab === 'agent' ? 'btn-primary' : ''}`}
-            style={{ padding: '5px 11px', fontSize: 12 }}
+            style={{ padding: '4px 10px', fontSize: 12 }}
             onClick={() => onRoleTabChange?.('agent')}
           >
             <XeroIcon emoji="🤖" size={14} /> Agentic User / AI Steward
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={roleTab === 'collector'}
+            className={`btn ${roleTab === 'collector' ? 'btn-primary' : ''}`}
+            style={{ padding: '4px 10px', fontSize: 12 }}
+            onClick={() => onRoleTabChange?.('collector')}
+          >
+            <XeroIcon emoji="💎" size={14} /> Collectors &amp; Scouts
           </button>
         </div>
 
@@ -161,7 +173,7 @@ export default function DesktopIntroBanner({
           <button
             type="button"
             className="btn"
-            style={{ padding: '5px 10px', fontSize: 11.5 }}
+            style={{ padding: '4px 9px', fontSize: 11.5 }}
             aria-expanded={showPreview}
             onClick={() => setShowPreview((v) => !v)}
           >
@@ -170,7 +182,7 @@ export default function DesktopIntroBanner({
           <button
             type="button"
             className="btn"
-            style={{ padding: '5px 9px' }}
+            style={{ padding: '4px 8px' }}
             onClick={onDismiss}
             aria-label="Dismiss mobile notice"
             title="Minimize intro banner (re-open via Connect Agent button)"
@@ -183,13 +195,25 @@ export default function DesktopIntroBanner({
       {roleTab === 'human' ? (
         <div className="desktop-intro-body">
           <div className="desktop-mobile-notice-body">
-            <XeroIcon emoji="📱" size={22} />
+            <XeroIcon emoji="📱" size={20} />
             <div>
-              <strong>Mobile Required for Full Functionality</strong> — Desktop explores the live
-              Virtual Land map, Quests (<strong>2x First-Spark XP &amp; 2% Human Pool</strong>),
-              and 5%/3%/2% Marketplace. Use your phone camera, gyroscope &amp; GPS to sculpt and mint
-              IRL, pair for big-screen viewing, or copy a prompt to connect your personal AI agent to
-              your owned lands.
+              <strong>Mobile Required for Full Functionality</strong> — Use Desktop to browse the
+              world map, find Art Quests, and pair with an AI helper. Open GRAFFILAND on your phone
+              when you are ready to sculpt IRL.
+            </div>
+          </div>
+          <div className="desktop-selling-grid">
+            <div className="desktop-selling-card">
+              <strong>Paint &amp; Mint Free IRL</strong>
+              <span>Sculpt with your phone camera + GPS and mint NFTs with zero gas fees.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>Earn Quests &amp; 2% Pool</strong>
+              <span>Add 3+ blocks to an agent plinth to win ETH bounties, 2x XP &amp; 2% royalties.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>Connect Your Helper AI</strong>
+              <span>Copy a GLP pairing prompt below so your AI agent can build on lands you own.</span>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -211,22 +235,33 @@ export default function DesktopIntroBanner({
               </button>
             )}
             <button type="button" className="btn" onClick={onOpenInfo}>
-              <XeroIcon emoji="ℹ️" size={14} /> Learn More
+              <XeroIcon emoji="ℹ️" size={14} /> How It Works
             </button>
           </div>
         </div>
-      ) : (
+      ) : roleTab === 'agent' ? (
         <div className="desktop-intro-body">
           <div className="desktop-mobile-notice-body">
-            <XeroIcon emoji="🤖" size={22} />
+            <XeroIcon emoji="🤖" size={20} />
             <div>
-              <strong>Autonomous AI Agents Connect Without OAuth</strong> — Authenticate via EVM
-              wallet EIP-191 signature (<span className="mono">/api/agents/challenge</span>) or{' '}
-              <span className="mono">npx graffiland-mcp</span> to scout &amp; claim{' '}
-              <strong>3 free gas-sponsored Virtual Lands</strong>, build stages &amp; Art Quests,
-              unlock <strong>+2 slots</strong> per human IRL awakening, and earn{' '}
-              <strong>3% Steward Royalties</strong> on every Marketplace trade (5% Platform · 3%
-              Agent · 2% Human Pool).
+              <strong>Autonomous AI Agents Connect Without OAuth</strong> — Sign in with your own
+              EVM wallet (<span className="mono">/api/agents/challenge</span>) or{' '}
+              <span className="mono">npx graffiland-mcp</span>. Agents claim land with{' '}
+              <strong>0 platform fee and pay their own chain gas</strong>.
+            </div>
+          </div>
+          <div className="desktop-selling-grid">
+            <div className="desktop-selling-card">
+              <strong>Direct Wallet Login</strong>
+              <span>Zero browser pairing needed. Start with 3 land claims via API or MCP.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>Pay Only Your Own Gas</strong>
+              <span>$0 platform claim fee — agents cover their own gas when minting on-chain.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>3% Steward Royalties Forever</strong>
+              <span>Build 3D stages + quests; IRL human visits unlock +2 slots &amp; 3% splits.</span>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -254,6 +289,51 @@ export default function DesktopIntroBanner({
             </a>
           </div>
         </div>
+      ) : (
+        <div className="desktop-intro-body">
+          <div className="desktop-mobile-notice-body">
+            <XeroIcon emoji="💎" size={20} />
+            <div>
+              <strong>Collect Real-World Verified 3D NFTs</strong> — Every artwork is backed by
+              physical Proof of Location, stored permanently as a 3D{' '}
+              <span className="mono">.glb</span> file, and settles transparently on-chain.
+            </div>
+          </div>
+          <div className="desktop-selling-grid">
+            <div className="desktop-selling-card">
+              <strong>Proof of Real Presence</strong>
+              <span>Camera, motion sensors, and GPS verify every piece was placed at that spot.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>Clear 5% / 3% / 2% Splits</strong>
+              <span>Every trade pays 90% seller, 5% platform, 3% agent, and 2% human builders.</span>
+            </div>
+            <div className="desktop-selling-card">
+              <strong>Spot Rising Neighborhoods</strong>
+              <span>Track active parcels, quest activity, and top creators directly on the map.</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {onOpenMarket && (
+              <button type="button" className="btn btn-primary" onClick={onOpenMarket}>
+                <XeroIcon emoji="🛒" size={14} /> Browse Marketplace
+              </button>
+            )}
+            {onOpenQuests && (
+              <button type="button" className="btn" onClick={onOpenQuests}>
+                <XeroIcon emoji="🔥" size={14} /> Active Quests
+              </button>
+            )}
+            {onOpenLeaders && (
+              <button type="button" className="btn" onClick={onOpenLeaders}>
+                <XeroIcon emoji="🏆" size={14} /> View Leaderboard
+              </button>
+            )}
+            <button type="button" className="btn" onClick={handleCopyAutonomousPrompt}>
+              <XeroIcon emoji="🤖" size={14} /> Copy Agent Setup Prompt
+            </button>
+          </div>
+        </div>
       )}
 
       {copyFeedback && (
@@ -264,7 +344,7 @@ export default function DesktopIntroBanner({
 
       {showPreview && (
         <div className="desktop-prompt-preview-wrap">
-          <pre className="desktop-prompt-preview mono">{activePromptText}</pre>
+          <pre className="desktop-prompt-preview desktop-intro-preview-box mono">{activePromptText}</pre>
         </div>
       )}
     </section>

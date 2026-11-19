@@ -55,11 +55,87 @@ export async function mintOnRobinhoodChain({
   parcelBytes32,
   proofHash,
   lat,
-  lng
+  lng,
+  selfPaidGas = false,
+  agentTxHash = ''
 }) {
   const status = getChainStatus();
   const latE6 = Math.round(lat * 1e6);
   const lngE6 = Math.round(lng * 1e6);
+
+  if (selfPaidGas) {
+    const chainTxRequest = {
+      method: 'mintAgentStage',
+      contractAddress: status.contractAddress,
+      chainId: status.network.chainId,
+      network: status.network.name,
+      from: recipientAddress,
+      args: [metadataUri, parcelBytes32, proofHash, latE6, lngE6]
+    };
+    if (status.liveReady && agentTxHash && /^0x[0-9a-fA-F]{64}$/.test(agentTxHash)) {
+      const provider = new ethers.JsonRpcProvider(status.network.rpcUrl, status.network.chainId);
+      const receipt = await provider.getTransactionReceipt(agentTxHash);
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(`Agent self-paid gas tx ${agentTxHash} was not confirmed on chain.`);
+      }
+      if (String(receipt.from || '').toLowerCase() !== String(recipientAddress || '').toLowerCase()) {
+        throw new Error(`Agent self-paid gas tx ${agentTxHash} was not sent from agent wallet ${recipientAddress}.`);
+      }
+      let tokenId = '0';
+      const iface = new ethers.Interface(loadContractAbi());
+      for (const log of receipt.logs) {
+        try {
+          const parsed = iface.parseLog(log);
+          if (parsed && parsed.name === 'SculptureMinted') {
+            tokenId = parsed.args.tokenId.toString();
+            break;
+          }
+        } catch {
+          // non-matching log
+        }
+      }
+      return {
+        simulated: false,
+        gasSponsored: false,
+        gasPaidBy: 'agent',
+        chainId: status.network.chainId,
+        chainName: status.network.name,
+        contractAddress: status.contractAddress,
+        tokenId,
+        txHash: receipt.hash,
+        explorerTxUrl: `${status.network.explorerUrl}/tx/${receipt.hash}`,
+        royaltyBps: CONFIG.resaleFeeBps,
+        royaltyReceiver: status.royaltyReceiver,
+        gasSponsoredBy: recipientAddress,
+        chainTxRequest
+      };
+    }
+
+    const db = getDb();
+    const countRow = db.prepare('SELECT COUNT(*) AS c FROM sculptures').get();
+    const nextTokenId = String((countRow?.c || 0) + 1);
+    const txHash =
+      agentTxHash && /^0x[0-9a-fA-F]{64}$/.test(agentTxHash)
+        ? agentTxHash
+        : ethers.keccak256(
+            ethers.toUtf8Bytes(`agent-self-gas:${recipientAddress}|${metadataUri}|${proofHash}|${Date.now()}`)
+          );
+    return {
+      simulated: true,
+      gasSponsored: false,
+      gasPaidBy: 'agent',
+      chainId: status.network.chainId,
+      chainName: `${status.network.name} (Agent Self-Paid Gas)`,
+      contractAddress: status.contractAddress,
+      tokenId: nextTokenId,
+      txHash,
+      explorerTxUrl: `${status.network.explorerUrl}/tx/${txHash}`,
+      royaltyBps: CONFIG.resaleFeeBps,
+      royaltyReceiver: status.royaltyReceiver,
+      gasSponsoredBy: `Agent Wallet (${recipientAddress})`,
+      chainTxRequest
+    };
+  }
 
   if (status.liveReady) {
     const provider = new ethers.JsonRpcProvider(
