@@ -18,6 +18,7 @@ export default function DesktopIntroBanner({
   onOpenQuests,
   onOpenMarket,
   onOpenLeaders,
+  onOpenWelcome,
   onOpenInfo,
   onRequestLogin,
   onDismiss
@@ -170,6 +171,17 @@ export default function DesktopIntroBanner({
         </div>
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {onOpenWelcome && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '4px 9px', fontSize: 11.5 }}
+              onClick={onOpenWelcome}
+              title="Reopen the first-visit simple overview banner"
+            >
+              <XeroIcon emoji="👋" size={13} /> Intro
+            </button>
+          )}
           <button
             type="button"
             className="btn"

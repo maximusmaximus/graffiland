@@ -1,6 +1,13 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
+import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
+import {
+  loadBoolPreference,
+  saveBoolPreference,
+  TUTORIAL_SEEN_KEY,
+  WELCOME_OVERLAY_SEEN_KEY
+} from './utils/clipboard.js';
 import { isMobileDevice } from './utils/device.js';
 
 const DesktopHub = lazy(() => import('./components/DesktopHub.jsx'));
@@ -11,6 +18,17 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(() => isMobileDevice());
+  const [welcomeOpen, setWelcomeOpen] = useState(() => {
+    try {
+      const hasDeepLink = new URLSearchParams(window.location.search).has('sculpture');
+      if (hasDeepLink) return false;
+    } catch {
+      // ignore
+    }
+    return !loadBoolPreference(WELCOME_OVERLAY_SEEN_KEY, false);
+  });
+  const [desktopAction, setDesktopAction] = useState(null);
+  const [skipTutorialSignal, setSkipTutorialSignal] = useState(0);
 
   useEffect(() => {
     const onResize = () => setIsMobile(isMobileDevice());
@@ -85,27 +103,64 @@ export default function App() {
     </div>
   );
 
+  function dismissWelcome(dontShowAgain = true) {
+    if (dontShowAgain) {
+      saveBoolPreference(WELCOME_OVERLAY_SEEN_KEY, true);
+    }
+    setWelcomeOpen(false);
+  }
+
+  const welcomeOverlay = welcomeOpen ? (
+    <FirstVisitWelcomeOverlay
+      isMobile={isMobile}
+      onExplore={dismissWelcome}
+      onConnectAgent={(dontShow) => {
+        dismissWelcome(dontShow);
+        setDesktopAction({ type: 'agent', ts: Date.now() });
+      }}
+      onOpenGuide={(dontShow) => {
+        dismissWelcome(dontShow);
+        setDesktopAction({ type: 'info', ts: Date.now() });
+      }}
+      onSkipToCamera={(dontShow) => {
+        dismissWelcome(dontShow);
+        saveBoolPreference(TUTORIAL_SEEN_KEY, true);
+        setSkipTutorialSignal((n) => n + 1);
+      }}
+    />
+  ) : null;
+
   if (isMobile) {
     return (
-      <Suspense fallback={lazyFallback}>
-        <MobileStudio
-          config={config}
-          user={user}
-          onUserUpdate={setUser}
-          onLogout={handleLogout}
-        />
-      </Suspense>
+      <>
+        <Suspense fallback={lazyFallback}>
+          <MobileStudio
+            config={config}
+            user={user}
+            onUserUpdate={setUser}
+            onLogout={handleLogout}
+            isWelcomeOpen={welcomeOpen}
+            skipTutorialSignal={skipTutorialSignal}
+          />
+        </Suspense>
+        {welcomeOverlay}
+      </>
     );
   }
 
   return (
-    <Suspense fallback={lazyFallback}>
-      <DesktopHub
-        config={config}
-        user={user}
-        onUserUpdate={setUser}
-        onLogout={handleLogout}
-      />
-    </Suspense>
+    <>
+      <Suspense fallback={lazyFallback}>
+        <DesktopHub
+          config={config}
+          user={user}
+          onUserUpdate={setUser}
+          onLogout={handleLogout}
+          welcomeRequest={desktopAction}
+          onOpenWelcome={() => setWelcomeOpen(true)}
+        />
+      </Suspense>
+      {welcomeOverlay}
+    </>
   );
 }

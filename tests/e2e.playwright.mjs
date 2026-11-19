@@ -161,6 +161,28 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.desktop-nav');
 
+    // First-time visitor overlay appears automatically over Desktop Explorer
+    const welcomeDialog = await page.waitForSelector(
+      '[aria-label="Welcome to GRAFFILAND first-visit overview"]'
+    );
+    const welcomeText = await welcomeDialog.textContent();
+    assert.ok(welcomeText.includes('GRAFFILAND is a real-world 3D art map'));
+    assert.ok(welcomeText.includes('What Humans Can Do'));
+    assert.ok(welcomeText.includes('What AI Agents Can Do'));
+    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+      state: 'detached'
+    });
+    const welcomeSaved = await page.evaluate(() =>
+      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
+    );
+    assert.equal(welcomeSaved, '1');
+
+    // Can still reopen the welcome banner anytime from the Intro button
+    await page.getByRole('button', { name: /Intro/i }).click();
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page.getByRole('button', { name: /Close welcome banner/i }).click();
+
     const bodyText = await page.textContent('body');
     assert.ok(bodyText.includes('Desktop Map Explorer'));
     assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
