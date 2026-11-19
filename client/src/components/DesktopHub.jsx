@@ -74,7 +74,14 @@ function formatDistanceLabel(meters) {
   return `${(meters / 1000).toFixed(1)}km away`;
 }
 
-export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
+export default function DesktopHub({
+  config,
+  user,
+  onUserUpdate,
+  onLogout,
+  welcomeRequest = null,
+  onOpenWelcome = null
+}) {
   const initialSession = useMemo(() => loadDesktopSession(), []);
 
   const [sculptures, setSculptures] = useState([]);
@@ -352,6 +359,19 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     }
   }
 
+  useEffect(() => {
+    if (!welcomeRequest?.type) return;
+    if (welcomeRequest.type === 'agent') {
+      setPairOpen(false);
+      setInfoOpen(false);
+      setMobileNoticeDismissed(false);
+      setIntroRoleTab('agent');
+    } else if (welcomeRequest.type === 'info') {
+      setPairOpen(false);
+      setInfoOpen(true);
+    }
+  }, [welcomeRequest]);
+
   return (
     <div className="desktop-shell">
       <header className="desktop-nav">
@@ -434,6 +454,7 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
             onOpenQuests={() => setSidebarTab('quests')}
             onOpenMarket={() => setSidebarTab('market')}
             onOpenLeaders={() => setSidebarTab('leaders')}
+            onOpenWelcome={onOpenWelcome}
             onOpenInfo={openInfoModal}
             onRequestLogin={() => setLoginOpen(true)}
             onDismiss={dismissMobileNotice}

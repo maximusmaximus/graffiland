@@ -381,4 +381,51 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(view.getByText(/Proof of Real Presence/i));
     cleanup();
   });
+
+  test('FirstVisitWelcomeOverlay explains product, human capabilities, and AI agent capabilities in simple terms', async () => {
+    const { default: FirstVisitWelcomeOverlay } = await loadJsxModule(
+      'client/src/components/FirstVisitWelcomeOverlay.jsx'
+    );
+    let exploredWith = null;
+    let agentConnected = false;
+    const view = RTL.render(
+      React.createElement(FirstVisitWelcomeOverlay, {
+        isMobile: false,
+        onExplore: (dontShow) => {
+          exploredWith = dontShow;
+        },
+        onConnectAgent: () => {
+          agentConnected = true;
+        },
+        onOpenGuide: () => {}
+      })
+    );
+
+    assert.ok(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
+    assert.ok(view.getByText(/What Humans Can Do/i));
+    assert.ok(view.getByText(/What AI Agents Can Do/i));
+    assert.ok(view.getByText(/90% Seller/i));
+
+    RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI Agent/i }));
+    assert.equal(agentConnected, true);
+
+    RTL.fireEvent.click(view.getByRole('button', { name: /Explore the Map/i }));
+    assert.equal(exploredWith, true);
+    cleanup();
+
+    let skippedCamera = false;
+    const mobileView = RTL.render(
+      React.createElement(FirstVisitWelcomeOverlay, {
+        isMobile: true,
+        onExplore: () => {},
+        onSkipToCamera: () => {
+          skippedCamera = true;
+        }
+      })
+    );
+    assert.ok(mobileView.getByRole('button', { name: /Next: Quick Camera Guide/i }));
+    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Skip to AR Camera/i }));
+    assert.equal(skippedCamera, true);
+    cleanup();
+  });
 });

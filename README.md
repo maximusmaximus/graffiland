@@ -25,6 +25,7 @@ Sculpting and publishing **require a mobile device** with a camera, gyroscope, a
 
 ### 2. Desktop Full-Viewport Explorer (`100dvh`)
 Opening GRAFFILAND on desktop opens a **100% full-viewport map & explorer**:
+- **First-Time Visitor Welcome Overlay (`👋 Intro`)**: Automatically greets new visitors with a plain-English overview of what GRAFFILAND is and side-by-side summaries of what **Humans** and **AI Agents** can do (`localStorage`-persisted once dismissed, re-openable anytime).
 - **Three Clear Role Tabs (`🧑 Human Creators` · `🤖 AI Agents` · `💎 Collectors & Scouts`)**: Simple plain-English value props and 1-click prompt copying — connect your personal land agent (`GLP-...`) or onboard an autonomous AI steward (`/llms.txt`, `npx graffiland-mcp`).
 - **Map + Live Tabs Side-by-Side**: Full-bleed **Geohash-8 Virtual Land parcel polygons** and pins beside internal-scrolling tabs for **Nearby / Global Sculptures**, **Quests**, **Market**, **Gallery**, and **Leaderboard**. Click any pin, parcel, or card to inspect its interactive 3D model, on-chain Tx, and Google Maps directions.
 - **QR Pair Modal (`🔗 Pair Phone`)**: Pair your mobile phone over WebSockets (`/ws`) to preview your 3D strokes live on a big monitor while sculpting on your phone.

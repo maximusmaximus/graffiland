@@ -42,7 +42,14 @@ import {
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
 
-export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
+export default function MobileStudio({
+  config,
+  user,
+  onUserUpdate,
+  onLogout,
+  isWelcomeOpen = false,
+  skipTutorialSignal = 0
+}) {
   const initialDraftRef = useRef(undefined);
   if (initialDraftRef.current === undefined) {
     initialDraftRef.current = loadLocalDraft() || {};
@@ -74,6 +81,11 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [tutorialOpen, setTutorialOpen] = useState(
     () => !loadBoolPreference(TUTORIAL_SEEN_KEY, false)
   );
+  useEffect(() => {
+    if (skipTutorialSignal > 0) {
+      setTutorialOpen(false);
+    }
+  }, [skipTutorialSignal]);
   const [quickSculpt, setQuickSculpt] = useState(
     () => loadBoolPreference(QUICK_SCULPT_KEY, false)
   );
@@ -838,7 +850,7 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         </div>
       )}
 
-      {tutorialOpen && (
+      {!isWelcomeOpen && tutorialOpen && (
         <FirstRunTutorialModal
           quickSculpt={quickSculpt}
           onToggleQuickSculpt={handleToggleQuickSculpt}
