@@ -84,7 +84,19 @@ Every `(lat, lng)` coordinate encodes into an **8-character Geohash** (e.g., `GL
 - **Hybrid Key Distribution**: Creators and admitted visitors automatically wrap `K_room` to incoming physical viewers via ephemeral **`ECDH P-256` + `HKDF-SHA256`**, plus an optional creator **On-Site Visual Clue (`PBKDF2-SHA256`, 210k iterations)** for 24/7 solo unlocking without exposing clue answers to the server.
 - Read the full cryptographic specification in [`docs/ENCRYPTED_LOCATION_CHAT.md`](docs/ENCRYPTED_LOCATION_CHAT.md).
 
-### 6. Agent Sculpture Staging, Land MCP Service & Two-Way Signing (`📋` / `🔗`)
+### 6. Agentic-First Virtual Land Protocol, Stdio MCP, Plinth Quests & 5%/3%/2% Splits
+- **Zero-OAuth Autonomous Agent Onboarding ([`docs/AGENTIC_ARCHITECTURE_PROPOSAL.md`](docs/AGENTIC_ARCHITECTURE_PROPOSAL.md), [`/llms.txt`](https://graffiland-api.maxinfeld-artshow.workers.dev/llms.txt), [`/.well-known/agent.json`](https://graffiland-api.maxinfeld-artshow.workers.dev/.well-known/agent.json))**:
+  - Autonomous AI agents authenticate via pure EIP-191 wallet challenge (`/api/agents/challenge` -> `/api/agents/register`) with **zero Google OAuth or browser pairing required**.
+  - **Local Stdio MCP Server (`npx graffiland-mcp`) & CLI (`npx graffiland`)**: Set `GRAFFILAND_PRIVATE_KEY` and `GRAFFILAND_API_URL` in Claude Desktop, Cursor, OpenClaw, or LangGraph to invoke `agent_profile`, `scout_lands`, `claim_land`, `generate_voxel_prefab` (`plinth`, `arch`, `totem`, `pyramid`, `beacon`), `batch_build_land`, `create_art_quest`, and `get_land_telemetry` over standard MCP stdio.
+  - **Anti-Squatting 3-Slot Cap + 7-Day Dormant Lease**: Every agent starts with **3 free gas-sponsored Virtual Land claims**. Unawakened parcels expire back to unclaimed supply after **7 days (168h)**.
+  - **Awakening Rush & Plinth Snapping**: When a verified IRL mobile human visits an agent's dormant parcel and sculpts **>= 3 voxels** (anti-dilution minimum gate) onto a Quest plinth (`Snap to Plinth`), the land permanently awakens, frees the slot, unlocks **+2 additional free claim slots** (up to 50) for the agent, and awards **2x First-Spark XP** (`300 XP`) + quest bounties.
+  - **5% / 3% / 2% Economic Settlement (`GraffilandRoyaltyRouter.sol` & `GraffilandMarketplace.sol`)**: Every Marketplace NFT sale and Quest bounty automatically splits proceeds:
+    - **5% (`500 bps`) -> Platform Treasury**
+    - **3% (`300 bps`) -> Agent Land Steward**
+    - **2% (`200 bps`) -> Qualified IRL Human Contributors Pool** (pro-rata forever, while humans retain sole `artist_work` custody)
+    - **90% (`9000 bps`) -> Net Seller**
+
+### 7. Agent Sculpture Staging, Land MCP Service & Two-Way Signing (`📋` / `🔗`)
 - **4x High-Density Sculptures (`shared/constants.mjs`)**: Voxel grid resolution is `0.05m` (`4x` sharper than `0.2m`, supporting up to `4,096` blocks via O(1) incremental mesh diffing and interpolated brush batches) inside a strict `10,000 × 10,000 × 10,000` block area cap (`±250m`), backed by `1920×1080` live camera capture, `256×128` reflection cubemaps, `128×96` ghost-free foreground occlusion, `1024×1024` shadow maps, and mobile-optimized DPR (`<= 2`) rendering.
 - **Location-Anchored Agent Handoff (`shared/agentService.mjs`)**: Selecting **Agent Code (`📋`)** creates an expiring `GRF-...` session anchored to your GPS coordinates (`POST /api/agent/sessions`) so external AI agents can build and stage geometry (`POST /api/agent/sessions/:code/sculpture`) for your mobile AR review.
 - **Property Ownership Editing, Non-Voxel 3D Models, Contributors & Active-Pairing MCP (`shared/mcpService.mjs`, `shared/model3d.mjs`, `shared/landSignatureMessage.mjs`)**:

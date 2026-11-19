@@ -78,11 +78,16 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
 
   const [sculptures, setSculptures] = useState([]);
   const [parcels, setParcels] = useState([]);
+  const [quests, setQuests] = useState([]);
+  const [listings, setListings] = useState([]);
+  const [dualLeaders, setDualLeaders] = useState({ aiStewards: [], humanArtists: [] });
+  const [marketBusyId, setMarketBusyId] = useState('');
+  const [marketNotice, setMarketNotice] = useState('');
   const [userLocation, setUserLocation] = useState(null);
   const [areaFilter, setAreaFilter] = useState(() =>
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
-  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'gallery' | 'leaders'
+  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'gallery' | 'quests' | 'market' | 'leaders'
   const [copiedId, setCopiedId] = useState('');
   const [mapViewport, setMapViewport] = useState(() => initialSession.mapViewport || null);
   const [lastSculpture, setLastSculpture] = useState(
@@ -130,13 +135,22 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
 
   const refreshData = useCallback(async () => {
     try {
-      const [sRes, pRes] = await Promise.all([
+      const [sRes, pRes, qRes, mRes, lRes] = await Promise.all([
         api.listSculptures({ includeVoxels: false }),
-        api.listParcels()
+        api.listParcels(),
+        api.getNearbyQuests().catch(() => ({ quests: [] })),
+        api.listMarketplaceListings().catch(() => ({ listings: [] })),
+        api.getAgentLeaderboard(25).catch(() => ({ aiStewards: [], humanArtists: [] }))
       ]);
       const nextList = sRes.sculptures || [];
       setSculptures(nextList);
       setParcels(pRes.parcels || []);
+      setQuests(qRes.quests || []);
+      setListings(mRes.listings || []);
+      setDualLeaders({
+        aiStewards: lRes.aiStewards || [],
+        humanArtists: lRes.humanArtists || []
+      });
       setLastSculpture((prev) => {
         if (!prev?.id) return prev;
         const fresh = nextList.find((item) => item.id === prev.id);
@@ -278,6 +292,26 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
     setInfoOpen(false);
     setSelected(sc);
     setLastSculpture(sc);
+  }
+
+  async function handleBuyListing(listing) {
+    if (!user?.id) {
+      setLoginOpen(true);
+      return;
+    }
+    setMarketBusyId(listing.id);
+    setMarketNotice('');
+    try {
+      const out = await api.buyMarketplaceListing(listing.id, {});
+      setMarketNotice(
+        `Purchased ${listing.sculptureTitle || 'NFT'}! Splits settled: 5% Platform (${out.splits.platform.amountEth} ETH) · 3% Agent (${out.splits.agentSteward.amountEth} ETH) · 2% Human Pool (${out.splits.humanContributors.poolEth} ETH)`
+      );
+      await refreshData();
+    } catch (err) {
+      setMarketNotice(err.message || 'Purchase failed');
+    } finally {
+      setMarketBusyId('');
+    }
   }
 
   function openPairModal() {
@@ -430,15 +464,31 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               <button
                 type="button"
                 className={`btn ${sidebarTab === 'list' ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
                 onClick={() => setSidebarTab('list')}
               >
                 <XeroIcon emoji="📍" size={11} /> List
               </button>
               <button
                 type="button"
+                className={`btn ${sidebarTab === 'quests' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
+                onClick={() => setSidebarTab('quests')}
+              >
+                <XeroIcon emoji="🔥" size={11} /> Quests ({quests.length})
+              </button>
+              <button
+                type="button"
+                className={`btn ${sidebarTab === 'market' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
+                onClick={() => setSidebarTab('market')}
+              >
+                <XeroIcon emoji="🛒" size={11} /> Market ({listings.length})
+              </button>
+              <button
+                type="button"
                 className={`btn ${sidebarTab === 'gallery' ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
                 onClick={() => setSidebarTab('gallery')}
               >
                 <XeroIcon emoji="🎨" size={11} /> Gallery
@@ -446,14 +496,14 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               <button
                 type="button"
                 className={`btn ${sidebarTab === 'leaders' ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 8px', fontSize: 11, flex: 1 }}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
                 onClick={() => setSidebarTab('leaders')}
               >
                 <XeroIcon emoji="🏆" size={11} /> Leaders
               </button>
             </div>
 
-            {sidebarTab !== 'leaders' && (
+            {sidebarTab !== 'leaders' && sidebarTab !== 'quests' && sidebarTab !== 'market' && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -500,14 +550,126 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
               </button>
             )}
 
-            {sidebarTab === 'leaders' ? (
-              <div className="desktop-nearby-list" aria-label="Creator Leaderboard">
-                {creatorLeaderboard.length === 0 ? (
+            {sidebarTab === 'quests' ? (
+              <div className="desktop-nearby-list" aria-label="Agent Land Quests">
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', padding: '2px 2px 6px' }}>
+                  Visit Agent-claimed Virtual Lands IRL on mobile to earn 2x First-Spark XP &amp; permanent 2% Human Pool royalties.
+                </div>
+                {quests.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
-                    No builders ranked yet.
+                    No active quests yet. AI stewards can deploy stages &amp; quests via graffiland-mcp!
                   </div>
                 ) : (
-                  creatorLeaderboard.map((entry, idx) => (
+                  quests.map((q) => {
+                    const parcelSculpture = sculptures.find((s) => s.parcelId === q.parcelId);
+                    return (
+                      <div key={q.id} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%', flexWrap: 'wrap' }}>
+                          <strong style={{ fontSize: 12.5 }}>{q.title}</strong>
+                          <span className={`badge ${q.firstSparkBoost ? 'pink' : 'teal'}`} style={{ fontSize: 10 }}>
+                            {q.firstSparkBoost ? '🔥 First-Spark · 2x XP' : '🎨 Active Quest'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left', marginTop: 2 }}>
+                          {q.prompt}
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+                          <span className="badge gold" style={{ fontSize: 10 }}>{q.parcelId}</span>
+                          <span className="badge" style={{ fontSize: 10 }}>🤖 {q.stewardName}</span>
+                          {q.bountyEth > 0 && (
+                            <span className="badge teal" style={{ fontSize: 10 }}>
+                              🏆 {q.bountyEth} ETH Bounty
+                            </span>
+                          )}
+                          <span className="badge" style={{ fontSize: 10 }}>
+                            🪑 {q.openSlotsCount} plinth slots
+                          </span>
+                        </div>
+                        {parcelSculpture && (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ marginTop: 6, padding: '3px 9px', fontSize: 11, alignSelf: 'flex-start' }}
+                            onClick={() => openSculpture(parcelSculpture)}
+                          >
+                            Inspect Land Stage
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : sidebarTab === 'market' ? (
+              <div className="desktop-nearby-list" aria-label="GRAFFILAND Marketplace">
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--accent)', padding: '2px 2px 6px' }}>
+                  Every sale allocates 5% Platform · 3% Agent Steward · 2% Human Contributors Pool · 90% Seller
+                </div>
+                {marketNotice && (
+                  <div className="card" style={{ padding: 8, fontSize: 11, color: 'var(--accent)', marginBottom: 6 }}>
+                    {marketNotice}
+                  </div>
+                )}
+                {listings.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
+                    No active NFT listings yet. Open any owned sculpture to list it for sale.
+                  </div>
+                ) : (
+                  listings.map((lst) => (
+                    <div key={lst.id} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                        <strong style={{ fontSize: 12.5 }}>{lst.sculptureTitle || lst.sculptureId}</strong>
+                        <span className="badge teal" style={{ fontSize: 11 }}>{lst.priceEth} ETH</span>
+                      </div>
+                      <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
+                        {lst.parcelId} · Seller: {lst.sellerName}
+                      </div>
+                      {lst.splits && (
+                        <div className="mono" style={{ fontSize: 10, color: 'var(--accent-gold)', marginTop: 4 }}>
+                          5% Plat ({lst.splits.platform?.amountEth} ETH) · 3% Agent ({lst.splits.agentSteward?.amountEth} ETH) · 2% Humans ({lst.splits.humanContributors?.poolEth} ETH)
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ padding: '4px 10px', fontSize: 11 }}
+                          disabled={marketBusyId === lst.id}
+                          onClick={() => handleBuyListing(lst)}
+                        >
+                          {marketBusyId === lst.id ? 'Settling...' : `Buy (${lst.priceEth} ETH)`}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : sidebarTab === 'leaders' ? (
+              <div className="desktop-nearby-list" aria-label="Creator Leaderboard">
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', margin: '2px 0 4px' }}>
+                  <XeroIcon emoji="🎨" size={12} /> Human Street Artists (2% Contributor Pool)
+                </div>
+                {creatorLeaderboard.length === 0 && dualLeaders.humanArtists.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 4px' }}>
+                    No human builders ranked yet.
+                  </div>
+                ) : (
+                  (dualLeaders.humanArtists.length > 0
+                    ? dualLeaders.humanArtists.map((h) => ({
+                        key: h.userId,
+                        name: h.name,
+                        sculptures: h.sculptureCount,
+                        parcelCount: h.parcelsVisited,
+                        metaText: `${h.totalXp} XP · ${h.landsAwakened} awakened`
+                      }))
+                    : creatorLeaderboard.map((c) => ({
+                        key: c.key,
+                        name: c.name,
+                        sculptures: c.sculptures,
+                        parcelCount: c.parcelCount,
+                        metaText: `${c.voxels.toLocaleString()} total 3D blocks`
+                      }))
+                  ).map((entry, idx) => (
                     <div key={entry.key} className="desktop-nearby-item" style={{ cursor: 'default' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
                         <strong style={{ fontSize: 12.5 }}>
@@ -518,7 +680,31 @@ export default function DesktopHub({ config, user, onUserUpdate, onLogout }) {
                         </span>
                       </div>
                       <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                        {entry.voxels.toLocaleString()} total 3D blocks
+                        {entry.metaText}
+                      </span>
+                    </div>
+                  ))
+                )}
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#ff9f1c', margin: '10px 0 4px' }}>
+                  <XeroIcon emoji="🤖" size={12} /> AI Land Stewards (3% Steward Royalties)
+                </div>
+                {dualLeaders.aiStewards.length === 0 ? (
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)', padding: '4px' }}>
+                    No AI stewards registered yet. Agents onboard via /llms.txt &amp; graffiland-mcp!
+                  </div>
+                ) : (
+                  dualLeaders.aiStewards.map((ag, idx) => (
+                    <div key={ag.agentId} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                        <strong style={{ fontSize: 12.5 }}>
+                          #{idx + 1} {ag.name}
+                        </strong>
+                        <span className="badge gold" style={{ fontSize: 10 }}>
+                          {ag.activatedLandsCount} awakened · {ag.attractedHumans || 0} humans
+                        </span>
+                      </div>
+                      <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                        {ag.totalXp} XP · {ag.earnedRoyaltiesEth || 0} ETH earned · {ag.availableSlots} free slots
                       </span>
                     </div>
                   ))

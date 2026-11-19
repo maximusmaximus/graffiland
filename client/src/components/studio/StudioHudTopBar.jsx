@@ -47,7 +47,10 @@ export default function StudioHudTopBar({
   onMobileRejectPending,
   mapOpen,
   nearbyCount,
-  onOpenAreaMap
+  onOpenAreaMap,
+  activeQuest = null,
+  selectedPlinthSlot = null,
+  onSnapToPlinthSlot = null
 }) {
   return (
     <>
@@ -211,6 +214,35 @@ export default function StudioHudTopBar({
             >
               <XeroIcon emoji="👆" size={13} />
               <span>Tap scene to set start surface</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {mode === 'draw' && activeQuest && !quickSculpt && (
+        <div
+          className="surface-pill hud-interactive"
+          style={{
+            top: 98,
+            borderColor: activeQuest.firstSparkBoost
+              ? 'rgba(255, 107, 53, 0.7)'
+              : 'rgba(0, 245, 212, 0.5)'
+          }}
+        >
+          <span className="surface-pill-label" style={{ maxWidth: 190 }}>
+            {activeQuest.firstSparkBoost ? '🔥 First-Spark (2x XP)' : '🎨 Quest'}: {activeQuest.title}
+          </span>
+          {(activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId) && onSnapToPlinthSlot && (
+            <button
+              type="button"
+              className={`surface-pill-btn ${selectedPlinthSlot ? 'active' : ''}`}
+              onClick={() =>
+                onSnapToPlinthSlot(
+                  (activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId)
+                )
+              }
+            >
+              {selectedPlinthSlot ? '✅ Snapped' : '🪑 Snap to Plinth'}
             </button>
           )}
         </div>

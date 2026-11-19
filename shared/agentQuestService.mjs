@@ -152,7 +152,15 @@ export async function scoutLands(
      ORDER BY lp.updated_at DESC`
   );
 
-  const hasCoord = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+  const hasCoord =
+    lat !== null &&
+    lat !== undefined &&
+    lat !== '' &&
+    lng !== null &&
+    lng !== undefined &&
+    lng !== '' &&
+    Number.isFinite(Number(lat)) &&
+    Number.isFinite(Number(lng));
   const refLat = hasCoord ? Number(lat) : null;
   const refLng = hasCoord ? Number(lng) : null;
   const knownParcelIds = new Set();
@@ -659,7 +667,15 @@ export async function listNearbyQuests(
     status && status !== 'all' ? [status] : []
   );
 
-  const hasCoord = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+  const hasCoord =
+    lat !== null &&
+    lat !== undefined &&
+    lat !== '' &&
+    lng !== null &&
+    lng !== undefined &&
+    lng !== '' &&
+    Number.isFinite(Number(lat)) &&
+    Number.isFinite(Number(lng));
   const refLat = hasCoord ? Number(lat) : null;
   const refLng = hasCoord ? Number(lng) : null;
 

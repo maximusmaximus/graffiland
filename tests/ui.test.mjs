@@ -146,11 +146,109 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     assert.ok(view.getByText(/Proof of Location Threat Model & Transparency/i));
+    assert.ok(view.getByText(/Agentic-First Stewardship, Quests & 5% \/ 3% \/ 2% Splits/i));
     assert.ok(view.getByText(POLICY.threatModelSummary));
 
     RTL.fireEvent.click(view.getByText(/Terms & Virtual Land/i));
+    assert.ok(view.getByText(/Marketplace & Co-Creation Royalty Economics \(5% \/ 3% \/ 2%\)/i));
     assert.ok(view.getByText(/Prohibited Content, Takedown & Virtual Land Dispute Process/i));
     assert.ok(view.getByText(/Hate speech, harassment, doxxing/i));
+    cleanup();
+  });
+
+  test('PublishSculptureModal shows Quest eligibility gate and Awakening Rush celebration receipt', async () => {
+    const { default: PublishSculptureModal } = await loadJsxModule(
+      'client/src/components/studio/PublishSculptureModal.jsx'
+    );
+    const { POLICY } = await import('../shared/constants.mjs');
+    const preView = RTL.render(
+      React.createElement(PublishSculptureModal, {
+        config: { policy: POLICY },
+        user: { id: 'u1', walletAddress: '0x1234', activeMintRecipient: '0x1234' },
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }],
+        polStats: { frames: 10, flow: 90 },
+        location: { lat: 37.77, lng: -122.41, altitude: 10 },
+        orbStatus: { keyframes: 3, features: 24 },
+        activeQuest: {
+          id: 'q1',
+          title: 'Neon Plinth Challenge',
+          firstSparkBoost: true,
+          badgeLabel: '🔥 First-Spark Needed · 2x XP · 2% Pool'
+        },
+        selectedPlinthSlot: { id: 'plinth-1', label: 'Center Pedestal' },
+        passkeyCount: 0,
+        passkeyBusy: false,
+        onEnrollPasskey: async () => {},
+        title: 'Phoenix',
+        setTitle: () => {},
+        description: 'Glowing voxel statue on the cyber pedestal.',
+        setDescription: () => {},
+        cluePrompt: '',
+        setCluePrompt: () => {},
+        clueAnswer: '',
+        setClueAnswer: () => {},
+        termsAccepted: true,
+        setTermsAccepted: () => {},
+        publishing: false,
+        publishError: '',
+        setPublishError: () => {},
+        mintReceipt: null,
+        mcpPairingsState: { activePairing: null },
+        agentPublishPrompt: null,
+        draftsBusy: false,
+        draftStatusText: '',
+        onSubmitPublish: (e) => e.preventDefault(),
+        onCopyAgentPublishPrompt: () => {},
+        onManualSaveDraft: () => {},
+        onOpenInfo: () => {},
+        onOpenPair: () => {},
+        onOpenManageLand: () => {},
+        onViewInARPreview: () => {},
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.ok(preView.getByText(/Neon Plinth Challenge/i));
+    assert.ok(preView.getByText(/Add at least 2 more voxel\(s\)/i));
+    cleanup();
+
+    const receiptView = RTL.render(
+      React.createElement(PublishSculptureModal, {
+        config: { policy: POLICY },
+        user: { id: 'u1', walletAddress: '0x1234' },
+        voxels: [],
+        polStats: { frames: 10, flow: 90 },
+        orbStatus: { keyframes: 3, features: 24 },
+        mintReceipt: {
+          sculpture: { id: 's1', title: 'Phoenix', parcelId: 'GLAND-9Q8YY' },
+          mint: { tokenId: 9, txHash: '0xabc' },
+          ipfs: { metadataCid: 'bafkrei123' },
+          awakening: {
+            awakenedParcel: true,
+            xpAwarded: 300,
+            qualifiesForContributorPool: true,
+            slotsUnlockedForAgent: 2
+          }
+        },
+        title: '',
+        setTitle: () => {},
+        description: '',
+        setDescription: () => {},
+        cluePrompt: '',
+        setCluePrompt: () => {},
+        clueAnswer: '',
+        setClueAnswer: () => {},
+        termsAccepted: true,
+        setTermsAccepted: () => {},
+        setPublishError: () => {},
+        onOpenManageLand: () => {},
+        onViewInARPreview: () => {},
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.ok(receiptView.getByText(/First-Spark Awakening! \(\+300 XP/i));
+    assert.ok(receiptView.getByText(/unlocked \+2 more free land slots!/i));
     cleanup();
   });
 

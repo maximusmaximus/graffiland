@@ -14,6 +14,8 @@ export default function PublishSculptureModal({
   polStats,
   location,
   orbStatus,
+  activeQuest = null,
+  selectedPlinthSlot = null,
   passkeyCount,
   passkeyBusy,
   onEnrollPasskey,
@@ -80,6 +82,30 @@ export default function PublishSculptureModal({
                 <strong>Tx Hash:</strong> <span className="mono">{mintReceipt.mint.txHash}</span>
               </div>
             </div>
+            {mintReceipt.awakening && (
+              <div
+                className="card"
+                style={{
+                  fontSize: 12,
+                  borderColor: mintReceipt.awakening.awakenedParcel
+                    ? 'rgba(255, 107, 53, 0.7)'
+                    : 'rgba(0, 245, 212, 0.4)'
+                }}
+              >
+                <div style={{ fontWeight: 700, color: mintReceipt.awakening.awakenedParcel ? '#ff9f1c' : 'var(--accent)' }}>
+                  {mintReceipt.awakening.awakenedParcel
+                    ? `🔥 First-Spark Awakening! (+${mintReceipt.awakening.xpAwarded} XP · 2x Rush)`
+                    : `⚡ Published to Virtual Land (+${mintReceipt.awakening.xpAwarded} XP)`}
+                </div>
+                <div style={{ color: 'var(--muted)', marginTop: 4 }}>
+                  {mintReceipt.awakening.qualifiesForContributorPool
+                    ? '✅ Qualified for permanent 2% Human Contributor Pool share on this parcel.'
+                    : `Sculpt at least ${mintReceipt.awakening.minVoxelsRequired || 3} voxels next time to unlock the 2% Human Pool share.`}
+                  {mintReceipt.awakening.slotsUnlockedForAgent > 0 &&
+                    ` AI Steward unlocked +${mintReceipt.awakening.slotsUnlockedForAgent} more free land slots!`}
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn btn-primary" onClick={onViewInARPreview}>
                 <XeroIcon emoji="👁️" size={16} /> View in AR Preview
@@ -158,6 +184,31 @@ export default function PublishSculptureModal({
                 </button>
               )}
             </div>
+
+            {activeQuest && (
+              <div
+                className="card"
+                style={{
+                  padding: 10,
+                  fontSize: 12,
+                  borderColor: activeQuest.firstSparkBoost
+                    ? 'rgba(255, 107, 53, 0.7)'
+                    : 'rgba(0, 245, 212, 0.45)'
+                }}
+              >
+                <div style={{ fontWeight: 700, color: activeQuest.firstSparkBoost ? '#ff9f1c' : 'var(--accent)' }}>
+                  {activeQuest.badgeLabel || '🎨 Quest Active on This Land'} · {activeQuest.title}
+                </div>
+                <div style={{ color: 'var(--muted)', marginTop: 3 }}>
+                  {selectedPlinthSlot
+                    ? `Snapped to plinth "${selectedPlinthSlot.label}". `
+                    : ''}
+                  {voxels.length >= 3
+                    ? '✅ 3+ voxels verified — qualifies for 2% Contributor Pool & quest rewards!'
+                    : `⚠️ Add at least ${3 - voxels.length} more voxel(s) to unlock the 2% Contributor Pool & awaken dormant land!`}
+                </div>
+              </div>
+            )}
 
             <div>
               <div className="field-label">
