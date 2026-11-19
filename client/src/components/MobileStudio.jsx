@@ -89,6 +89,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
+  const [activeQuest, setActiveQuest] = useState(null);
+  const [selectedPlinthSlot, setSelectedPlinthSlot] = useState(null);
 
   const [canTouch, setCanTouch] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -114,6 +116,47 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
       clearTimeout(hintTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    const loc = pol.location;
+    if (!loc || !Number.isFinite(Number(loc.lat)) || !Number.isFinite(Number(loc.lng))) return;
+    let cancelled = false;
+    api
+      .getNearbyQuests({ lat: loc.lat, lng: loc.lng, radiusMeters: 150, status: 'open' })
+      .then((res) => {
+        if (cancelled) return;
+        const firstQuest = res?.quests?.[0] || null;
+        setActiveQuest(firstQuest);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pol.location]);
+
+  const handleSnapToPlinthSlot = useCallback(
+    (slot) => {
+      if (!slot) return;
+      setSelectedPlinthSlot(slot);
+      brush.setArtTransform((prev) => ({
+        ...prev,
+        offsetX: Number(slot.dx || 0),
+        offsetY: Number(slot.dy || 0),
+        offsetZ: Number(slot.dz || 0),
+        rotYDeg: Math.round(((Number(slot.yaw || 0) * 180) / Math.PI) * 10) / 10
+      }));
+      brush.setSurfaceAnchor({
+        label: slot.label || 'AI Plinth',
+        depthM: 1.5,
+        point: new THREE.Vector3(Number(slot.dx || 0), Number(slot.dy || 0), Number(slot.dz || 0)),
+        normal: new THREE.Vector3(0, 1, 0),
+        locked: true,
+        autoDetected: false
+      });
+      showTemporaryHint(`Snapped canvas onto plinth "${slot.label}"! Draw & publish 3+ voxels.`);
+    },
+    [brush, showTemporaryHint]
+  );
 
   const showTemporaryHint = useCallback((msg) => {
     setArSelectHint(msg);
@@ -434,6 +477,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
         voxels: brush.voxels,
         anchorOffset,
         previewDataUrl,
+        questId: activeQuest?.id || '',
+        plinthSlotId: selectedPlinthSlot?.id || '',
         draftId: drafts.activeDraftId || undefined,
         location: refinedAnchor,
         proofOfLocation: polSnap,
@@ -695,6 +740,9 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           mapOpen={ar.mapOpen}
           nearbyCount={ar.nearbySculptures.length}
           onOpenAreaMap={ar.openAreaMap}
+          activeQuest={activeQuest}
+          selectedPlinthSlot={selectedPlinthSlot}
+          onSnapToPlinthSlot={handleSnapToPlinthSlot}
         />
 
         <ToolCarouselBar
@@ -849,6 +897,8 @@ export default function MobileStudio({ config, user, onUserUpdate, onLogout }) {
           polStats={pol.polStats}
           location={pol.location}
           orbStatus={pol.orbStatus}
+          activeQuest={activeQuest}
+          selectedPlinthSlot={selectedPlinthSlot}
           passkeyCount={pol.passkeyCount}
           passkeyBusy={pol.passkeyBusy}
           onEnrollPasskey={pol.handleEnrollPasskey}

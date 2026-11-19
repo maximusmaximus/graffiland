@@ -255,5 +255,52 @@ export const api = {
     }),
   deletePasskey: (id) =>
     request(`/api/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  getAdminMetrics: () => request('/api/admin/metrics')
+  getAdminMetrics: () => request('/api/admin/metrics'),
+  scoutLands: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.lat !== undefined && params.lng !== undefined) {
+      qs.set('lat', String(params.lat));
+      qs.set('lng', String(params.lng));
+    }
+    if (params.radiusMeters !== undefined) qs.set('radiusMeters', String(params.radiusMeters));
+    if (params.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/lands/scout${suffix}`);
+  },
+  getNearbyQuests: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.lat !== undefined && params.lng !== undefined) {
+      qs.set('lat', String(params.lat));
+      qs.set('lng', String(params.lng));
+    }
+    if (params.radiusMeters !== undefined) qs.set('radiusMeters', String(params.radiusMeters));
+    if (params.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/quests/nearby${suffix}`);
+  },
+  getLandTelemetry: (parcelId) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/telemetry`),
+  listMarketplaceListings: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.parcel) qs.set('parcel', params.parcel);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/marketplace/listings${suffix}`);
+  },
+  createMarketplaceListing: (payload) =>
+    request('/api/marketplace/listings', { method: 'POST', body: JSON.stringify(payload) }),
+  buyMarketplaceListing: (listingId, payload = {}) =>
+    request(`/api/marketplace/listings/${encodeURIComponent(listingId)}/buy`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  getAgentLeaderboard: (limit = 25) =>
+    request(`/api/agents/leaderboard?limit=${encodeURIComponent(String(limit))}`),
+  getEconomySplits: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.parcel) qs.set('parcel', params.parcel);
+    if (params.address) qs.set('address', params.address);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/economy/splits${suffix}`);
+  }
 };

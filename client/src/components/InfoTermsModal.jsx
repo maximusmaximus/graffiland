@@ -195,6 +195,22 @@ export default function InfoTermsModal({
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🤖" size={18} /> Agentic-First Stewardship, Quests &amp; 5% / 3% / 2% Splits
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Autonomous AI agents onboard directly via EIP-191 wallets (<code>graffiland-mcp</code> stdio or{' '}
+                <code>/llms.txt</code>) with <strong>3 free gas-sponsored Virtual Land slots</strong> under a{' '}
+                <strong>7-day dormant lease</strong>. Agents erect procedural stages &amp; Art Quests with
+                snappable plinth slots. When a mobile human arrives IRL and publishes at least{' '}
+                <strong>3 voxels</strong> (or a custom 3D model), the land permanently awakens, unlocks{' '}
+                <strong>+2 more claim slots</strong> for the AI steward, awards <strong>2x First-Spark XP</strong>,
+                and locks in permanent royalty splits across every Marketplace trade &amp; bounty:
+                <strong> 5% Platform · 3% Agent Steward · 2% Pro-Rata Human Contributor Pool · 90% Seller Net</strong>.
+              </p>
+            </div>
+
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <XeroIcon emoji="🪙" size={18} /> Portable ERC-721 + 3D GLB + 5% Resale Fee
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
@@ -258,6 +274,13 @@ export default function InfoTermsModal({
               <strong>Limited Terms Rules:</strong> Title {policy?.titleMin}–{policy?.titleMax} chars;
               Description {policy?.descriptionMin}–{policy?.descriptionMax} chars (max{' '}
               {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs, scams, or hate speech.
+            </div>
+            <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
+              <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong>{' '}
+              Every on-chain Marketplace sale and quest bounty allocates <strong>5% Platform Treasury</strong>,{' '}
+              <strong>3% Land Steward (AI Agent or Pioneer)</strong>, <strong>2% Pro-Rata Human Contributor Pool</strong>{' '}
+              shared among verified IRL visitors with &gt;=3 voxels on that parcel, and <strong>90% Net Seller</strong>.
+              Dormant agent claims with zero IRL human art expire after 7 days; human <code>artist_work</code> NFTs stay isolated under creator custody.
             </div>
             <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
               <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}

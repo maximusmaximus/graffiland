@@ -5,6 +5,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { ethers } from 'ethers';
 import { chromium } from 'playwright-core';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +25,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
   before(async () => {
     process.env.GRAFFILAND_DB_PATH = path.join(tmpDir, 'e2e.sqlite');
     process.env.GRAFFILAND_IPFS_DIR = path.join(tmpDir, 'ipfs');
+    process.env.PINATA_JWT = '';
+    process.env.ROBINHOOD_CONTRACT_ADDRESS = '';
+    process.env.ROBINHOOD_RELAYER_PRIVATE_KEY = '';
     const { createAppServer } = await import('../server/index.mjs');
     const { app, server } = createAppServer();
     app.use('/graffiland', express.static(path.join(ROOT, 'dist')));
@@ -72,6 +76,65 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     }).then((r) => r.json());
     seededSculptureId = pubRes?.sculpture?.id || '';
 
+    // Seed autonomous AI Steward claiming a dormant land, deploying a quest plinth, and listing on marketplace
+    const botWallet = ethers.Wallet.createRandom();
+    const chal = await fetch(`${baseUrl}/api/agents/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddress: botWallet.address })
+    }).then((r) => r.json());
+    const botSig = await botWallet.signMessage(chal.message);
+    const botAuth = await fetch(`${baseUrl}/api/agents/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        walletAddress: botWallet.address,
+        nonce: chal.nonce,
+        signature: botSig,
+        name: 'Playwright Bot Steward',
+        framework: 'openclaw'
+      })
+    }).then((r) => r.json());
+
+    const scoutRes = await fetch(`${baseUrl}/api/lands/scout?lat=37.781&lng=-122.412&status=unclaimed`)
+      .then((r) => r.json());
+    const dormantPid = scoutRes.parcels[0].parcelId;
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botAuth.token}` },
+      body: JSON.stringify({ parcelId: dormantPid, customName: 'Bot Cyber Plaza' })
+    });
+    assert.equal(claimRes.status, 201);
+    const buildRpc = await fetch(`${baseUrl}/api/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botAuth.token}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'batch_build_land',
+          arguments: {
+            parcelId: dormantPid,
+            items: [{ prefab: 'plinth', title: 'Bot Plinth Stage', accentColor: '#00f5d4' }],
+            quest: {
+              title: 'E2E Neon Plinth Quest',
+              prompt: 'Sculpt 3+ glowing voxels onto our center plinth.',
+              bountyEth: 0.2
+            }
+          }
+        }
+      })
+    }).then((r) => r.json());
+    assert.ok(buildRpc?.result?.structuredContent?.quest?.id, JSON.stringify(buildRpc));
+    const stageScId = buildRpc.result.structuredContent.sculptures[0].id;
+    const listRes = await fetch(`${baseUrl}/api/marketplace/listings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${botAuth.token}` },
+      body: JSON.stringify({ sculptureId: stageScId, priceEth: 0.1 })
+    });
+    assert.equal(listRes.status, 201);
+
     browser = await chromium.launch({
       executablePath: CHROME_PATH,
       headless: true,
@@ -103,13 +166,28 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
     assert.ok(bodyText.includes('E2E Lighthouse Cube'));
 
-    // Switch sidebar tabs: Gallery -> Leaders -> List
+    // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
+    await page.getByRole('button', { name: /Quests/i }).click();
+    await page.waitForSelector('[aria-label="Agent Land Quests"]');
+    const questsText = await page.textContent('[aria-label="Agent Land Quests"]');
+    assert.ok(questsText.includes('E2E Neon Plinth Quest'));
+    assert.ok(questsText.includes('First-Spark'));
+
+    await page.getByRole('button', { name: /Market/i }).click();
+    await page.waitForSelector('[aria-label="GRAFFILAND Marketplace"]');
+    const marketText = await page.textContent('[aria-label="GRAFFILAND Marketplace"]');
+    assert.ok(marketText.includes('5% Platform'));
+    assert.ok(marketText.includes('3% Agent Steward'));
+    assert.ok(marketText.includes('2% Human Contributors Pool'));
+    assert.ok(marketText.includes('Bot Plinth Stage'));
+
     await page.getByRole('button', { name: /Gallery/i }).click();
     await page.waitForSelector('[aria-label="Sculpture Gallery"]');
     await page.getByRole('button', { name: /Leaders/i }).click();
     await page.waitForSelector('[aria-label="Creator Leaderboard"]');
     const leaderText = await page.textContent('[aria-label="Creator Leaderboard"]');
     assert.ok(leaderText.includes('E2E Artist'));
+    assert.ok(leaderText.includes('Playwright Bot Steward'));
 
     // Open QR Pair modal
     await page.getByRole('button', { name: /Pair Phone/i }).click();

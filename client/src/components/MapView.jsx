@@ -16,7 +16,8 @@ export default function MapView({
   initialView = null,
   onViewportChange = null,
   config = null,
-  onSelectSculpture
+  onSelectSculpture,
+  onSelectParcel = null
 }) {
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
@@ -24,6 +25,7 @@ export default function MapView({
   const initialViewRef = useRef(initialView);
   const initialUserLocationRef = useRef(userLocation);
   const onViewportChangeRef = useRef(onViewportChange);
+  const onSelectParcelRef = useRef(onSelectParcel);
   const userAdjustedViewRef = useRef(
     Boolean(
       initialView &&
@@ -37,6 +39,10 @@ export default function MapView({
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
   }, [onViewportChange]);
+
+  useEffect(() => {
+    onSelectParcelRef.current = onSelectParcel;
+  }, [onSelectParcel]);
 
   useEffect(() => {
     if (!mapHostRef.current || mapRef.current) return;
@@ -163,17 +169,35 @@ export default function MapView({
     for (const p of parcelMap.values()) {
       const parcelSculptures = sculptures.filter((s) => s.parcelId === p.parcelId);
       const isSelectedParcel = selectedParcelId && p.parcelId === selectedParcelId;
+      const isDormant = p.stewardStatus === 'dormant';
+      const hasQuests = Number(p.openQuestCount || 0) > 0;
+      const strokeColor = isSelectedParcel
+        ? '#ffd166'
+        : isDormant
+        ? '#ff6b35'
+        : hasQuests
+        ? '#7b2cbf'
+        : '#00f5d4';
       const rect = L.rectangle([p.bounds.sw, p.bounds.ne], {
-        color: isSelectedParcel ? '#ffd166' : '#00f5d4',
-        weight: isSelectedParcel ? 2.5 : 1.75,
-        fillColor: isSelectedParcel ? '#ffd166' : '#00f5d4',
-        fillOpacity: isSelectedParcel ? 0.28 : 0.2
+        color: strokeColor,
+        weight: isSelectedParcel || isDormant ? 2.5 : 1.75,
+        dashArray: isDormant ? '6 4' : undefined,
+        fillColor: strokeColor,
+        fillOpacity: isSelectedParcel ? 0.28 : isDormant ? 0.26 : 0.2
       });
+      const questTag = isDormant
+        ? ' · 🔥 Needs First Spark (2x XP)'
+        : hasQuests
+        ? ` · 🎨 ${p.openQuestCount} Quest(s)`
+        : '';
+      const stewardTag = p.stewardType === 'agent' ? ' · 🤖 AI Steward' : '';
       rect.bindTooltip(
-        `Virtual Land ${p.parcelId} (${parcelSculptures.length || p.sculptureCount} sculpture${(parcelSculptures.length || p.sculptureCount) === 1 ? '' : 's'})`
+        `Virtual Land ${p.parcelId} (${parcelSculptures.length || p.sculptureCount} sculpture${(parcelSculptures.length || p.sculptureCount) === 1 ? '' : 's'}${questTag}${stewardTag})`
       );
       if (parcelSculptures.length > 0 && onSelectSculpture) {
         rect.on('click', () => onSelectSculpture(parcelSculptures[0]));
+      } else {
+        rect.on('click', () => onSelectParcelRef.current?.(p));
       }
       rect.addTo(layer);
     }

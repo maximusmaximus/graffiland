@@ -69,6 +69,10 @@ export default function SculptureModal({
   const [busyAction, setBusyAction] = useState('');
   const [nftNotice, setNftNotice] = useState('');
   const [nftError, setNftError] = useState('');
+  const [listingPrice, setListingPrice] = useState('0.05');
+  const [listingBusy, setListingBusy] = useState(false);
+  const [listingNotice, setListingNotice] = useState('');
+  const [listingError, setListingError] = useState('');
   const [editTitle, setEditTitle] = useState(initialSculpture?.title || '');
   const [editDesc, setEditDesc] = useState(initialSculpture?.description || '');
   const [landCustomName, setLandCustomName] = useState('');
@@ -595,6 +599,13 @@ export default function SculptureModal({
           <span className="badge pink">
             <XeroIcon emoji="🪙" size={13} /> {sculpture.chain?.royaltyPercent || 5}% Resale Fee
           </span>
+          <span className={`badge ${sculpture.layerRole === 'steward_stage' ? 'gold' : 'teal'}`}>
+            {sculpture.layerRole === 'steward_stage'
+              ? '🤖 Steward Stage Architecture'
+              : sculpture.qualifiesForContributorPool !== false
+              ? '🎨 IRL Artist Work · 2% Pool'
+              : '🌱 Micro Voxel (<3)'}
+          </span>
           {sculpture.modelType === 'custom-3d' && sculpture.customModel ? (
             <span className="badge teal">
               <XeroIcon emoji="🗿" size={13} /> {String(sculpture.customModel.format || 'glb').toUpperCase()} 3D Model
@@ -949,6 +960,70 @@ export default function SculptureModal({
             {nftError && (
               <div className="mono" style={{ marginTop: 8, fontSize: 12, color: 'var(--danger, #ff5e7e)' }}>
                 {nftError}
+              </div>
+            )}
+
+            {isPropertyOwner && user && (
+              <div
+                style={{
+                  marginTop: 12,
+                  paddingTop: 10,
+                  borderTop: '1px solid rgba(255,255,255,0.08)'
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 4 }}>
+                  <XeroIcon emoji="🛒" size={14} /> List on Built-In Marketplace (5% · 3% · 2% Split)
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>
+                  5% Platform · 3% Land Steward · 2% Human Contributors Pool · 90% To Seller
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input
+                    className="input mono"
+                    type="number"
+                    min="0.0001"
+                    step="0.01"
+                    value={listingPrice}
+                    onChange={(e) => setListingPrice(e.target.value)}
+                    style={{ width: 120, fontSize: 12 }}
+                    aria-label="Listing price in ETH"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={listingBusy}
+                    onClick={async () => {
+                      setListingBusy(true);
+                      setListingNotice('');
+                      setListingError('');
+                      try {
+                        const res = await api.createMarketplaceListing({
+                          sculptureId: sculpture.id,
+                          priceEth: Number(listingPrice)
+                        });
+                        setListingNotice(
+                          `Listed for ${res.listing.priceEth} ETH! (${res.listing.splits?.summary || '5% / 3% / 2% / 90%'})`
+                        );
+                      } catch (err) {
+                        setListingError(err.message || 'Listing failed');
+                      } finally {
+                        setListingBusy(false);
+                      }
+                    }}
+                  >
+                    {listingBusy ? 'Listing...' : 'List for Sale (ETH)'}
+                  </button>
+                </div>
+                {listingNotice && (
+                  <div className="mono" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--accent)' }}>
+                    {listingNotice}
+                  </div>
+                )}
+                {listingError && (
+                  <div className="mono" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--danger, #ff5e7e)' }}>
+                    {listingError}
+                  </div>
+                )}
               </div>
             )}
             {transfers.length > 0 && (
