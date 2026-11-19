@@ -9,16 +9,21 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title GraffilandNFT
- * @notice Location-anchored 3D graffiti sculptures & Virtual Land deeds on Robinhood Chain.
- *         Supports standard ERC-721 transfers, ERC-721 Enumerable, ERC-4906 metadata events,
- *         EIP-7572 collection contractURI, and ERC-2981 secondary resale royalty fixed at 5% (500 bps).
+ * @notice Location-anchored 3D sculptures & Agentic-First Virtual Land Deeds on Robinhood Chain.
+ *         Supports standard ERC-721 transfers, ERC-721 Enumerable, ERC-4906 metadata updates,
+ *         EIP-7572 collection contractURI, dormant agent land leases, and ERC-2981 royalty splits:
+ *         5% Platform + 3% Agent Steward + 2% Human Contributors (10% total via GraffilandRoyaltyRouter).
  */
 contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Royalty, Ownable {
-    uint96 public constant RESALE_FEE_BPS = 500; // 5.00%
+    uint96 public constant RESALE_FEE_BPS = 500; // 5.00% Platform base fee
+    uint96 public constant AGENT_STEWARD_FEE_BPS = 300; // 3.00% Agent Steward fee
+    uint96 public constant HUMAN_CONTRIBUTOR_FEE_BPS = 200; // 2.00% Human Contributor pool
+    uint96 public constant TOTAL_TX_FEE_BPS = 1000; // 10.00% Combined split across Platform + Agent + Human
 
     uint256 private _nextTokenId = 1;
     address public relayer;
     address public defaultRoyaltyReceiver;
+    address public royaltyRouter;
     string private _contractMetadataURI = "https://graffiland-api.maxinfeld-artshow.workers.dev/api/contract/metadata.json";
 
     struct VirtualLandRecord {
@@ -30,8 +35,21 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         uint64 mintedAt;
     }
 
+    struct LandLease {
+        address steward;
+        int32 latE6;
+        int32 lngE6;
+        uint64 claimedAt;
+        uint64 expiresAt;
+        uint64 awakenedAt;
+        address awakenedBy;
+        bool exists;
+        bool awakened;
+    }
+
     mapping(uint256 => VirtualLandRecord) public landRecords;
     mapping(bytes32 => uint256[]) private _parcelTokens;
+    mapping(bytes32 => LandLease) public landLeases;
 
     event SculptureMinted(
         uint256 indexed tokenId,
@@ -42,6 +60,21 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         int32 latE6,
         int32 lngE6
     );
+    event DormantLandClaimed(
+        bytes32 indexed landParcelId,
+        address indexed steward,
+        int32 latE6,
+        int32 lngE6,
+        uint64 expiresAt
+    );
+    event LandAwakened(
+        bytes32 indexed landParcelId,
+        address indexed steward,
+        address indexed firstHumanArtist,
+        bytes32 proofOfLocationHash
+    );
+    event DormantLandReleased(bytes32 indexed landParcelId, address indexed previousSteward);
+    event RoyaltyRouterUpdated(address indexed previousRouter, address indexed newRouter);
     event RelayerUpdated(address indexed previousRelayer, address indexed newRelayer);
     event RoyaltyReceiverUpdated(address indexed previousReceiver, address indexed newReceiver);
     event ContractURIUpdated();
@@ -75,6 +108,11 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         _setDefaultRoyalty(newReceiver, RESALE_FEE_BPS);
     }
 
+    function setRoyaltyRouter(address newRouter) external onlyOwner {
+        emit RoyaltyRouterUpdated(royaltyRouter, newRouter);
+        royaltyRouter = newRouter;
+    }
+
     function contractURI() external view returns (string memory) {
         return _contractMetadataURI;
     }
@@ -85,7 +123,76 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
     }
 
     /**
-     * @notice Gas-sponsored mint called by the platform relayer; transfers ownership immediately to `recipient`.
+     * @notice Allows autonomous agents to claim an unoccupied parcel for free with a Dormant Lease TTL.
+     *         If no verified IRL human visits and adds art before `expiresAt`, the parcel releases.
+     */
+    function claimDormantLand(
+        bytes32 landParcelId,
+        address steward,
+        int32 latE6,
+        int32 lngE6,
+        uint64 ttlSeconds
+    ) external onlyRelayerOrOwner {
+        require(landParcelId != bytes32(0), "GraffilandNFT: invalid parcel");
+        require(steward != address(0), "GraffilandNFT: zero steward");
+        require(ttlSeconds >= 1 hours && ttlSeconds <= 30 days, "GraffilandNFT: invalid TTL");
+
+        LandLease storage existing = landLeases[landParcelId];
+        if (existing.exists) {
+            require(!existing.awakened && block.timestamp > existing.expiresAt, "GraffilandNFT: parcel active");
+            emit DormantLandReleased(landParcelId, existing.steward);
+        }
+
+        uint64 expiresAt = uint64(block.timestamp) + ttlSeconds;
+        landLeases[landParcelId] = LandLease({
+            steward: steward,
+            latE6: latE6,
+            lngE6: lngE6,
+            claimedAt: uint64(block.timestamp),
+            expiresAt: expiresAt,
+            awakenedAt: 0,
+            awakenedBy: address(0),
+            exists: true,
+            awakened: false
+        });
+
+        emit DormantLandClaimed(landParcelId, steward, latE6, lngE6, expiresAt);
+    }
+
+    /**
+     * @notice Permanently awakens a dormant parcel when a verified IRL human places artwork on it.
+     */
+    function activateLandByHuman(
+        bytes32 landParcelId,
+        address firstHumanArtist,
+        bytes32 proofOfLocationHash
+    ) external onlyRelayerOrOwner {
+        require(firstHumanArtist != address(0), "GraffilandNFT: zero human artist");
+        require(proofOfLocationHash != bytes32(0), "GraffilandNFT: missing proof");
+        LandLease storage lease = landLeases[landParcelId];
+        require(lease.exists, "GraffilandNFT: parcel not leased");
+        require(!lease.awakened, "GraffilandNFT: already awakened");
+        require(block.timestamp <= lease.expiresAt, "GraffilandNFT: lease expired");
+
+        lease.awakened = true;
+        lease.awakenedAt = uint64(block.timestamp);
+        lease.awakenedBy = firstHumanArtist;
+
+        emit LandAwakened(landParcelId, lease.steward, firstHumanArtist, proofOfLocationHash);
+    }
+
+    function releaseExpiredLand(bytes32 landParcelId) external {
+        LandLease storage lease = landLeases[landParcelId];
+        require(lease.exists && !lease.awakened, "GraffilandNFT: not dormant");
+        require(block.timestamp > lease.expiresAt, "GraffilandNFT: lease still active");
+        address prev = lease.steward;
+        delete landLeases[landParcelId];
+        emit DormantLandReleased(landParcelId, prev);
+    }
+
+    /**
+     * @notice Gas-sponsored mint called by platform relayer; transfers ERC-721 custody immediately to `recipient`.
+     *         Routes ERC-2981 10% total royalties (5% Platform + 3% Agent + 2% Human) through `royaltyRouter` when set.
      */
     function mintSculpture(
         address recipient,
@@ -103,7 +210,12 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         tokenId = _nextTokenId++;
         _safeMint(recipient, tokenId);
         _setTokenURI(tokenId, metadataURI);
-        _setTokenRoyalty(tokenId, defaultRoyaltyReceiver, RESALE_FEE_BPS);
+
+        if (royaltyRouter != address(0)) {
+            _setTokenRoyalty(tokenId, royaltyRouter, TOTAL_TX_FEE_BPS);
+        } else {
+            _setTokenRoyalty(tokenId, defaultRoyaltyReceiver, RESALE_FEE_BPS);
+        }
 
         landRecords[tokenId] = VirtualLandRecord({
             landParcelId: landParcelId,
