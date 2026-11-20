@@ -62,6 +62,28 @@ export const STEWARD_DEFAULTS = {
   agentAwakenXp: 100
 };
 
+export const LAND_VOLUME_LIMITS = {
+  minWidthMeters: 4,
+  maxWidthMeters: 120,
+  defaultWidthMeters: 14,
+  minDepthMeters: 4,
+  maxDepthMeters: 120,
+  defaultDepthMeters: 14,
+  minHeightMeters: 4,
+  maxHeightMeters: 250,
+  defaultHeightMeters: 18,
+  minZScale: 0.25,
+  maxZScale: 10,
+  defaultZScale: 1,
+  rotationMinDeg: 0,
+  rotationMaxDeg: 359,
+  defaultRotationDeg: 0,
+  maxFootprintAreaSqM: 5000,
+  maxVolumeCubicM: 500000,
+  maxSelectionBatch: 12,
+  starterFreeHumanClaims: 3
+};
+
 export const POLICY = {
   termsVersion: '2026-11-19.v3',
   titleMin: 3,
@@ -75,6 +97,7 @@ export const POLICY = {
   voxelStepMeters: VOXEL_STEP,
   areaHalfSpanMeters: AREA_HALF_SPAN_METERS,
   areaLimitBlocks: [AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS],
+  landVolumeLimits: LAND_VOLUME_LIMITS,
   resaleFeePercent: 5,
   resaleFeeBps: 500,
   transactionFees: TRANSACTION_FEES,

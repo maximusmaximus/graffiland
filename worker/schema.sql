@@ -601,3 +601,19 @@ CREATE INDEX IF NOT EXISTS idx_fee_ledger_recipient
 
 CREATE INDEX IF NOT EXISTS idx_fee_ledger_parcel
   ON fee_ledger_entries (parcel_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS land_volumes (
+  parcel_id TEXT PRIMARY KEY,
+  center_lat REAL NOT NULL,
+  center_lng REAL NOT NULL,
+  width_meters REAL NOT NULL DEFAULT 14,
+  depth_meters REAL NOT NULL DEFAULT 14,
+  height_meters REAL NOT NULL DEFAULT 18,
+  z_scale REAL NOT NULL DEFAULT 1,
+  rotation_deg REAL NOT NULL DEFAULT 0,
+  base_altitude_m REAL NOT NULL DEFAULT 0,
+  footprint_area_sqm REAL NOT NULL DEFAULT 196,
+  volume_cubic_m REAL NOT NULL DEFAULT 3528,
+  corners_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);

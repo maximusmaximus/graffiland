@@ -1,5 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import {
+  computeOrientedFootprintLngLat,
+  footprintsOverlap,
+  validateAndNormalizeLandVolume
+} from '../../../shared/landVolume.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import {
@@ -9,10 +15,11 @@ import {
 } from '../utils/clipboard.js';
 import AdminPanel from './AdminPanel.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
+import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
-import MapView from './MapView.jsx';
+import MapView3D from './MapView3D.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import SculptureModal from './SculptureModal.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -95,7 +102,16 @@ export default function DesktopHub({
   const [areaFilter, setAreaFilter] = useState(() =>
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
-  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'gallery' | 'quests' | 'market' | 'leaders'
+  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'quests' | 'market' | 'leaders'
+  const [drawMode, setDrawMode] = useState(false);
+  const [viewMode, setViewMode] = useState('2d'); // '2d' | '3d' | 'isometric'
+  const [autoSwitchedHint, setAutoSwitchedHint] = useState(false);
+  const [draftParcelsRaw, setDraftParcelsRaw] = useState([]);
+  const [selectedDraftId, setSelectedDraftId] = useState('');
+  const [mintBusy, setMintBusy] = useState(false);
+  const [landStatus, setLandStatus] = useState('');
+  const draftCountRef = useRef(0);
+  draftCountRef.current = draftParcelsRaw.length;
   const [copiedId, setCopiedId] = useState('');
   const [mapViewport, setMapViewport] = useState(() => initialSession.mapViewport || null);
   const [lastSculpture, setLastSculpture] = useState(
@@ -194,7 +210,41 @@ export default function DesktopHub({
   useEffect(() => {
     refreshData();
     refreshMyLands();
-    const deepId = new URLSearchParams(window.location.search).get('sculpture');
+    const urlParams = new URLSearchParams(window.location.search);
+    const deepId = urlParams.get('sculpture');
+    const deepParcel = urlParams.get('parcel');
+    const deepLat = Number(urlParams.get('lat'));
+    const deepLng = Number(urlParams.get('lng'));
+    if (deepParcel && Number.isFinite(deepLat) && Number.isFinite(deepLng)) {
+      const deepW = Number(urlParams.get('w')) || LAND_VOLUME_LIMITS.defaultWidthMeters;
+      const deepD = Number(urlParams.get('d')) || LAND_VOLUME_LIMITS.defaultDepthMeters;
+      const deepH = Number(urlParams.get('h')) || LAND_VOLUME_LIMITS.defaultHeightMeters;
+      const deepRot = Number(urlParams.get('rot')) || 0;
+      const deepName = urlParams.get('name') || '';
+      const id = `draft-url-${deepParcel}`;
+      setDraftParcelsRaw((prev) => {
+        if (prev.some((d) => d.parcelId === deepParcel || d.id === id)) return prev;
+        return [
+          ...prev,
+          {
+            id,
+            parcelId: deepParcel.toUpperCase(),
+            centerLat: deepLat,
+            centerLng: deepLng,
+            widthMeters: deepW,
+            depthMeters: deepD,
+            heightMeters: deepH,
+            zScale: Number((deepH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+            rotationDeg: deepRot,
+            customName: deepName
+          }
+        ];
+      });
+      setSelectedDraftId(id);
+      setSidebarTab('land');
+      setViewMode('3d');
+      setMapViewport((prev) => ({ ...(prev || {}), lat: deepLat, lng: deepLng, zoom: 17.5 }));
+    }
     if (deepId) {
       api
         .getSculpture(deepId)
@@ -359,6 +409,314 @@ export default function DesktopHub({
     }
   }
 
+  const draftParcels = useMemo(() => {
+    const existingVols = (parcels || []).map((p) => p?.volume || null).filter(Boolean);
+    const validated = (draftParcelsRaw || []).map((raw) => {
+      const centerLat = Number(raw.centerLat ?? raw.lat);
+      const centerLng = Number(raw.centerLng ?? raw.lng);
+      const res = validateAndNormalizeLandVolume({
+        parcelId: raw.parcelId,
+        lat: centerLat,
+        lng: centerLng,
+        widthMeters: raw.widthMeters,
+        depthMeters: raw.depthMeters,
+        heightMeters: raw.heightMeters,
+        zScale: raw.zScale,
+        rotationDeg: raw.rotationDeg
+      });
+      if (res.ok && res.volume) {
+        return {
+          ...raw,
+          ...res.volume,
+          id: raw.id,
+          customName: raw.customName || '',
+          valid: true,
+          errors: []
+        };
+      }
+      const w = Number(raw.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters);
+      const d = Number(raw.depthMeters || LAND_VOLUME_LIMITS.defaultDepthMeters);
+      const h = Number(raw.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters);
+      const rot = Number(raw.rotationDeg || 0);
+      const { corners, ring } = computeOrientedFootprintLngLat({
+        lat: centerLat,
+        lng: centerLng,
+        widthMeters: w,
+        depthMeters: d,
+        rotationDeg: rot
+      });
+      return {
+        ...raw,
+        centerLat,
+        centerLng,
+        widthMeters: w,
+        depthMeters: d,
+        heightMeters: h,
+        zScale: Number((h / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+        rotationDeg: rot,
+        footprintAreaSqM: Math.round(w * d),
+        volumeCubicM: Math.round(w * d * h),
+        corners,
+        ring,
+        valid: false,
+        errors: res.errors || ['Invalid land volume dimensions.']
+      };
+    });
+
+    return validated.map((item, idx) => {
+      let hasOverlap = existingVols.some((ev) => footprintsOverlap(item, ev));
+      if (!hasOverlap) {
+        hasOverlap = validated.some((other, oIdx) => oIdx !== idx && footprintsOverlap(item, other));
+      }
+      return { ...item, hasOverlap };
+    });
+  }, [draftParcelsRaw, parcels]);
+
+  const ownedUserParcels = useMemo(() => {
+    if (!user?.id) return [];
+    const byPid = new Map();
+    for (const p of parcels || []) {
+      if (p.ownerSub === user.id || p.claimedBy === user.id) {
+        byPid.set(p.parcelId, p);
+      }
+    }
+    for (const mp of myLands?.parcels || []) {
+      if (mp?.parcelId && !byPid.has(mp.parcelId)) {
+        byPid.set(mp.parcelId, mp);
+      }
+    }
+    return Array.from(byPid.values());
+  }, [parcels, myLands, user?.id]);
+
+  const handleAddDraftRectangle = useCallback((rect) => {
+    const currentCount = draftCountRef.current;
+    if (currentCount >= LAND_VOLUME_LIMITS.maxSelectionBatch) {
+      setLandStatus({
+        text: `Selection batch limit reached (max ${LAND_VOLUME_LIMITS.maxSelectionBatch} squares).`,
+        isError: true
+      });
+      return;
+    }
+    const nextId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const heightMeters = Number(rect.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters);
+    const newDraft = {
+      id: nextId,
+      centerLat: Number(rect.lat),
+      centerLng: Number(rect.lng),
+      widthMeters: Number(rect.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters),
+      depthMeters: Number(rect.depthMeters || LAND_VOLUME_LIMITS.defaultDepthMeters),
+      heightMeters,
+      zScale: Number((heightMeters / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+      rotationDeg: Number(rect.rotationDeg || 0),
+      customName: ''
+    };
+    setDraftParcelsRaw((prev) => [...prev, newDraft]);
+    setSelectedDraftId(nextId);
+    setSidebarTab('land');
+    setLandStatus('');
+    if (currentCount === 0) {
+      setViewMode((cur) => (cur === '2d' ? '3d' : cur));
+      setAutoSwitchedHint(true);
+    }
+  }, []);
+
+  const handleAddDraftAtCenter = useCallback(() => {
+    const existingVols = (parcels || []).map((p) => p?.volume || null).filter(Boolean);
+    const activeVols = draftParcels.map((d) => d).filter(Boolean);
+    const takenVols = [...existingVols, ...activeVols];
+
+    let anchorLat =
+      Number(mapViewport?.lat) ||
+      Number(userLocation?.lat) ||
+      Number(sculptures?.[0]?.lat) ||
+      37.7749;
+    let anchorLng =
+      Number(mapViewport?.lng) ||
+      Number(userLocation?.lng) ||
+      Number(sculptures?.[0]?.lng) ||
+      -122.4194;
+
+    if (draftParcelsRaw.length > 0) {
+      const last = draftParcelsRaw[draftParcelsRaw.length - 1];
+      anchorLat = Number(last.centerLat ?? last.lat ?? anchorLat);
+      anchorLng = Number(last.centerLng ?? last.lng ?? anchorLng) + 0.00032;
+    }
+
+    const candidateOffsets = [
+      [0, 0],
+      [0, 0.00035],
+      [0.00035, 0],
+      [0, -0.00035],
+      [-0.00035, 0],
+      [0.00035, 0.00035],
+      [-0.00035, 0.00035],
+      [0, 0.0007],
+      [0.0007, 0]
+    ];
+
+    let chosenLat = anchorLat;
+    let chosenLng = anchorLng;
+    for (const [dLat, dLng] of candidateOffsets) {
+      const probe = validateAndNormalizeLandVolume({
+        lat: anchorLat + dLat,
+        lng: anchorLng + dLng,
+        widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
+        depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
+        heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
+        rotationDeg: 0
+      }).volume;
+      if (probe && !takenVols.some((tv) => footprintsOverlap(probe, tv))) {
+        chosenLat = anchorLat + dLat;
+        chosenLng = anchorLng + dLng;
+        break;
+      }
+    }
+
+    handleAddDraftRectangle({
+      lat: chosenLat,
+      lng: chosenLng,
+      widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
+      depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
+      heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
+      rotationDeg: 0
+    });
+  }, [
+    parcels,
+    draftParcels,
+    draftParcelsRaw,
+    mapViewport?.lat,
+    mapViewport?.lng,
+    userLocation?.lat,
+    userLocation?.lng,
+    sculptures,
+    handleAddDraftRectangle
+  ]);
+
+  const handleUpdateDraft = useCallback((id, patch) => {
+    setDraftParcelsRaw((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    );
+  }, []);
+
+  const handleRemoveDraft = useCallback((id) => {
+    setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== id));
+    setSelectedDraftId((cur) => (cur === id ? '' : cur));
+  }, []);
+
+  const handleClearDrafts = useCallback(() => {
+    setDraftParcelsRaw([]);
+    setSelectedDraftId('');
+    setLandStatus('');
+  }, []);
+
+  const handleMintDraft = useCallback(async (draft) => {
+    if (!draft) return;
+    if (!user?.id) {
+      setLoginOpen(true);
+      setLandStatus({ text: 'Sign in with Google to mint free starter land.', isError: true });
+      return;
+    }
+    setMintBusy(true);
+    setLandStatus('');
+    try {
+      const res = await api.claimLand({
+        parcelId: draft.parcelId,
+        lat: draft.centerLat,
+        lng: draft.centerLng,
+        customName: draft.customName?.trim() || undefined,
+        volume: {
+          centerLat: draft.centerLat,
+          centerLng: draft.centerLng,
+          widthMeters: draft.widthMeters,
+          depthMeters: draft.depthMeters,
+          heightMeters: draft.heightMeters,
+          zScale: draft.zScale,
+          rotationDeg: draft.rotationDeg
+        }
+      });
+      setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== draft.id));
+      setSelectedDraftId(`owned:${res.parcelId}`);
+      setLandStatus({
+        text: `Minted ${res.parcelId} (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}!`
+      });
+      await Promise.all([refreshData(), refreshMyLands()]);
+    } catch (err) {
+      setLandStatus({ text: err?.message || 'Could not mint land parcel.', isError: true });
+    } finally {
+      setMintBusy(false);
+    }
+  }, [user?.id, refreshData, refreshMyLands]);
+
+  const handleMintAll = useCallback(async () => {
+    const ready = draftParcels.filter((d) => d.valid !== false && !d.hasOverlap);
+    if (!ready.length) return;
+    if (!user?.id) {
+      setLoginOpen(true);
+      setLandStatus({ text: 'Sign in with Google to mint starter parcels.', isError: true });
+      return;
+    }
+    setMintBusy(true);
+    setLandStatus('');
+    const mintedIds = [];
+    const mintedSet = new Set();
+    let lastError = '';
+    for (const draft of ready) {
+      try {
+        const res = await api.claimLand({
+          parcelId: draft.parcelId,
+          lat: draft.centerLat,
+          lng: draft.centerLng,
+          customName: draft.customName?.trim() || undefined,
+          volume: {
+            centerLat: draft.centerLat,
+            centerLng: draft.centerLng,
+            widthMeters: draft.widthMeters,
+            depthMeters: draft.depthMeters,
+            heightMeters: draft.heightMeters,
+            zScale: draft.zScale,
+            rotationDeg: draft.rotationDeg
+          }
+        });
+        mintedIds.push(res.parcelId);
+        mintedSet.add(draft.id);
+      } catch (err) {
+        lastError = err?.message || 'Mint failed.';
+        break;
+      }
+    }
+    if (mintedSet.size > 0) {
+      setDraftParcelsRaw((prev) => prev.filter((item) => !mintedSet.has(item.id)));
+      setSelectedDraftId(`owned:${mintedIds[mintedIds.length - 1]}`);
+      await Promise.all([refreshData(), refreshMyLands()]);
+    }
+    if (lastError) {
+      setLandStatus({
+        text: mintedIds.length
+          ? `Minted ${mintedIds.join(', ')}. Stopped: ${lastError}`
+          : lastError,
+        isError: true
+      });
+    } else {
+      setLandStatus({ text: `Minted ${mintedIds.length} parcel(s): ${mintedIds.join(', ')}` });
+    }
+    setMintBusy(false);
+  }, [draftParcels, user?.id, refreshData, refreshMyLands]);
+
+  const handleUpdateOwnedVolume = useCallback(async (parcelId, nextVolume) => {
+    if (!parcelId || !user?.id) return;
+    setMintBusy(true);
+    setLandStatus('');
+    try {
+      await api.updateLandVolume(parcelId, nextVolume);
+      setLandStatus({ text: `Saved updated 3D bounds for ${parcelId}.` });
+      await Promise.all([refreshData(), refreshMyLands()]);
+    } catch (err) {
+      setLandStatus({ text: err?.message || 'Could not update 3D volume.', isError: true });
+    } finally {
+      setMintBusy(false);
+    }
+  }, [user?.id, refreshData, refreshMyLands]);
+
   useEffect(() => {
     if (!welcomeRequest?.type) return;
     if (welcomeRequest.type === 'agent') {
@@ -394,6 +752,15 @@ export default function DesktopHub({
           )}
           <button type="button" className="btn btn-primary" onClick={openPairModal}>
             <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
+          </button>
+          <button
+            type="button"
+            className="btn"
+            style={{ borderColor: 'rgba(0, 245, 212, 0.5)', color: 'var(--accent)' }}
+            onClick={() => setSidebarTab('land')}
+            title="Select, size, rotate & scale 3D lands on desktop"
+          >
+            <XeroIcon emoji="🏗️" size={16} /> Mint Land
           </button>
           <button
             type="button"
@@ -463,9 +830,14 @@ export default function DesktopHub({
 
         <div className="desktop-map-layout">
           <div className="desktop-map-stage">
-            <MapView
+            <MapView3D
               sculptures={displayedSculptures}
               parcels={parcels}
+              draftParcels={draftParcels}
+              selectedDraftId={selectedDraftId}
+              drawMode={drawMode}
+              viewMode={viewMode}
+              autoSwitchedHint={autoSwitchedHint}
               userLocation={userLocation}
               focusArea={areaFilter === 'nearby' && Boolean(userLocation) && nearbyMatches.length > 0}
               selectedSculptureId={selected?.id || lastSculpture?.id || ''}
@@ -473,6 +845,13 @@ export default function DesktopHub({
               onViewportChange={handleViewportChange}
               config={config}
               onSelectSculpture={openSculpture}
+              onAddDraftRectangle={handleAddDraftRectangle}
+              onSelectDraft={(id) => {
+                setSelectedDraftId(id);
+                setSidebarTab('land');
+              }}
+              onViewModeChange={(nextMode) => setViewMode(nextMode)}
+              onDismissAuto3dHint={() => setAutoSwitchedHint(false)}
             />
           </div>
 
@@ -501,6 +880,14 @@ export default function DesktopHub({
                 onClick={() => setSidebarTab('list')}
               >
                 <XeroIcon emoji="📍" size={11} /> List
+              </button>
+              <button
+                type="button"
+                className={`btn ${sidebarTab === 'land' ? 'btn-primary' : ''}`}
+                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
+                onClick={() => setSidebarTab('land')}
+              >
+                <XeroIcon emoji="🏗️" size={11} /> Mint Land{draftParcels.length > 0 ? ` (${draftParcels.length})` : ''}
               </button>
               <button
                 type="button"
@@ -536,7 +923,7 @@ export default function DesktopHub({
               </button>
             </div>
 
-            {sidebarTab !== 'leaders' && sidebarTab !== 'quests' && sidebarTab !== 'market' && (
+            {sidebarTab !== 'leaders' && sidebarTab !== 'quests' && sidebarTab !== 'market' && sidebarTab !== 'land' && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -583,7 +970,31 @@ export default function DesktopHub({
               </button>
             )}
 
-            {sidebarTab === 'quests' ? (
+            {sidebarTab === 'land' ? (
+              <DesktopLandBuilderPanel
+                draftParcels={draftParcels}
+                ownedParcels={ownedUserParcels}
+                selectedDraftId={selectedDraftId}
+                drawMode={drawMode}
+                onToggleDrawMode={() => setDrawMode((cur) => !cur)}
+                onAddDraftAtCenter={handleAddDraftAtCenter}
+                onSelectDraft={(id) => setSelectedDraftId(id)}
+                onUpdateDraft={handleUpdateDraft}
+                onRemoveDraft={handleRemoveDraft}
+                onClearDrafts={handleClearDrafts}
+                onMintDraft={handleMintDraft}
+                onMintAll={handleMintAll}
+                onUpdateOwnedVolume={handleUpdateOwnedVolume}
+                mintBusy={mintBusy}
+                landStatus={landStatus}
+                user={user}
+                pairingCode={mcpState?.activePairing?.code || mcpState?.pairings?.[0]?.code || ''}
+                publicUrl={config?.publicUrl || ''}
+                apiOrigin={API_BASE || window.location.origin}
+                config={config}
+                onSignIn={() => setLoginOpen(true)}
+              />
+            ) : sidebarTab === 'quests' ? (
               <div className="desktop-nearby-list" aria-label="Agent Land Quests">
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', padding: '2px 2px 6px' }}>
                   Visit these AI agent lands IRL with your phone to earn 2x XP, bounties, and a 2% Human Pool share.

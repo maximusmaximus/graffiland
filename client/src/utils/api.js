@@ -279,6 +279,21 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/quests/nearby${suffix}`);
   },
+  claimLand: (payload) =>
+    request('/api/lands/claim', { method: 'POST', body: JSON.stringify(payload) }),
+  updateLandVolume: (parcelId, volume) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/volume`, {
+      method: 'POST',
+      body: JSON.stringify({ volume })
+    }),
+  searchLocations: (query, bias = null) => {
+    const qs = new URLSearchParams({ q: String(query || '') });
+    if (bias && Number.isFinite(Number(bias.lat)) && Number.isFinite(Number(bias.lng))) {
+      qs.set('lat', String(bias.lat));
+      qs.set('lng', String(bias.lng));
+    }
+    return request(`/api/geocode/search?${qs.toString()}`);
+  },
   getLandTelemetry: (parcelId) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/telemetry`),
   listMarketplaceListings: (params = {}) => {

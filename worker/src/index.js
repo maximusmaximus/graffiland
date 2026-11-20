@@ -16,8 +16,10 @@ import {
   createArtQuest,
   getLandTelemetry,
   listNearbyQuests,
-  scoutLands
+  scoutLands,
+  updateLandVolume
 } from '../../shared/agentQuestService.mjs';
+import { searchLocations } from '../../shared/geocodeService.mjs';
 import {
   createMarketplaceListing,
   executeMarketplacePurchase,
@@ -1285,6 +1287,7 @@ export default {
           lng: body?.lng,
           customName: body?.customName || '',
           curationNote: body?.curationNote || '',
+          volume: body?.volume || null,
           txHash: body?.txHash || '',
           chainCfg: cfg
         });
@@ -1295,6 +1298,41 @@ export default {
           err?.statusCode || 400,
           request
         );
+      }
+    }
+
+    const landVolumeMatch = pathname.match(/^\/api\/lands\/([^/]+)\/volume$/);
+    if (landVolumeMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await updateLandVolume(d1Adapter, {
+          parcelId: decodeURIComponent(landVolumeMatch[1]),
+          user,
+          volume: body?.volume || body || {}
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not update 3D land volume', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/geocode/search' && request.method === 'GET') {
+      try {
+        const out = await searchLocations({
+          query: url.searchParams.get('q') || '',
+          lat: url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null,
+          lng: url.searchParams.has('lng') ? Number(url.searchParams.get('lng')) : null,
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 6
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Location search failed' }, 400, request);
       }
     }
 

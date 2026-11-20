@@ -32,7 +32,7 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: true,
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -41,6 +41,7 @@ export default defineConfig({
           if (id.includes('node_modules/qrcode')) return 'qrcode';
           if (id.includes('node_modules/three/examples/jsm')) return 'three-addons';
           if (id.includes('node_modules/three')) return 'three-core';
+          if (id.includes('node_modules/maplibre-gl')) return 'maplibre';
           if (id.includes('node_modules/leaflet')) return 'leaflet';
           if (id.includes('node_modules/ethers')) return 'ethers';
           return undefined;

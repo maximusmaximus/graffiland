@@ -1,5 +1,8 @@
 const PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+import { LAND_VOLUME_LIMITS } from './constants.mjs';
+import { buildParcelShareUrl } from './landVolume.mjs';
+
 export function normalizePairingCode(raw) {
   const cleaned = String(raw || '')
     .trim()
@@ -225,5 +228,122 @@ export function buildAutonomousAgentPrompt({
     '## Mode B — Help a Human Property Owner',
     'If a human wants you to manage their existing land, ask for their `GLP-XXXX-XXXX-XXXX-XXXX` code from Desktop -> Pair Phone (or "Copy Property-Agent Prompt"), then connect via:',
     `POST ${base}/api/mcp/pairings/connect with { "pairingCode": "GLP-...", "agentName": "my-agent", "agentAddress": "<OWNER_WALLET>" }.`
+  ].join('\n');
+}
+
+/**
+ * Generates a single copyable prompt containing every selected 3D Virtual Land property,
+ * its exact coordinates/bounds/rotation/Z-scale, share URL, limits, and agent claim instructions.
+ */
+export function buildLandAcquisitionAgentPrompt({
+  properties = [],
+  apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev',
+  publicUrl = 'https://maximusmaximus.github.io/graffiland/',
+  pairingCode = '',
+  ownerAddress = ''
+} = {}) {
+  const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
+  const appUrl = new URL(String(publicUrl || 'https://maximusmaximus.github.io/graffiland/'));
+
+  const normalizedProps = (properties || []).map((p, idx) => {
+    const vol = p?.volume || p || {};
+    const lat = Number(vol.centerLat ?? p?.lat ?? 0);
+    const lng = Number(vol.centerLng ?? p?.lng ?? 0);
+    const parcelId = String(p?.parcelId || vol.parcelId || '').toUpperCase();
+    const customName = String(p?.customName || '').trim();
+    const widthMeters = Number(vol.widthMeters ?? LAND_VOLUME_LIMITS.defaultWidthMeters);
+    const depthMeters = Number(vol.depthMeters ?? LAND_VOLUME_LIMITS.defaultDepthMeters);
+    const heightMeters = Number(vol.heightMeters ?? LAND_VOLUME_LIMITS.defaultHeightMeters);
+    const zScale = Number(
+      vol.zScale ?? Number((heightMeters / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3))
+    );
+    const rotationDeg = Number(vol.rotationDeg ?? 0);
+    const footprintAreaSqM = Number((widthMeters * depthMeters).toFixed(2));
+    const volumeCubicM = Number((footprintAreaSqM * heightMeters).toFixed(2));
+    const corners = Array.isArray(vol.corners) ? vol.corners : [];
+    const shareUrl =
+      p?.shareUrl ||
+      buildParcelShareUrl({
+        origin: appUrl.origin,
+        pathname: appUrl.pathname,
+        parcelId,
+        lat,
+        lng,
+        volume: { centerLat: lat, centerLng: lng, widthMeters, depthMeters, heightMeters, rotationDeg },
+        customName
+      });
+
+    return {
+      index: idx + 1,
+      parcelId,
+      customName: customName || `Property #${idx + 1}`,
+      lat,
+      lng,
+      widthMeters,
+      depthMeters,
+      heightMeters,
+      zScale,
+      rotationDeg,
+      footprintAreaSqM,
+      volumeCubicM,
+      corners,
+      shareUrl
+    };
+  });
+
+  const propLines = normalizedProps.flatMap((item) => [
+    `### Property #${item.index}: ${item.customName} (${item.parcelId})`,
+    `- Center GPS: ${item.lat}, ${item.lng}`,
+    `- 3D Dimensions: ${item.widthMeters}m wide × ${item.depthMeters}m deep × ${item.heightMeters}m tall (Z scale ${item.zScale}x · Rotation ${item.rotationDeg}° clockwise)`,
+    `- Footprint Area: ${item.footprintAreaSqM} m² · 3D Volume: ${item.volumeCubicM} m³`,
+    ...(item.corners.length ? [`- Oriented Corners ([lng, lat]): ${JSON.stringify(item.corners)}`] : []),
+    `- Direct Preview Link: ${item.shareUrl}`,
+    ''
+  ]);
+
+  const jsonPayloads = normalizedProps.map((item) => ({
+    parcelId: item.parcelId,
+    lat: item.lat,
+    lng: item.lng,
+    customName: item.customName,
+    volume: {
+      widthMeters: item.widthMeters,
+      depthMeters: item.depthMeters,
+      heightMeters: item.heightMeters,
+      zScale: item.zScale,
+      rotationDeg: item.rotationDeg
+    }
+  }));
+
+  return [
+    '# GRAFFILAND — Acquire Selected 3D Virtual Land Properties',
+    '',
+    `API Base URL: ${base}`,
+    `Total Selected Properties: ${normalizedProps.length}`,
+    ...(pairingCode ? [`Human Pairing Code (optional): ${pairingCode}`] : []),
+    ...(ownerAddress ? [`Human Wallet Address: ${ownerAddress}`] : []),
+    '',
+    '## Platform 3D Land Limits & Rules',
+    `- Footprint Width & Depth: ${LAND_VOLUME_LIMITS.minWidthMeters}m – ${LAND_VOLUME_LIMITS.maxWidthMeters}m each (max area ${LAND_VOLUME_LIMITS.maxFootprintAreaSqM.toLocaleString()} m²)`,
+    `- Height (Z Axis): ${LAND_VOLUME_LIMITS.minHeightMeters}m – ${LAND_VOLUME_LIMITS.maxHeightMeters}m (${LAND_VOLUME_LIMITS.minZScale}x – ${LAND_VOLUME_LIMITS.maxZScale}x Z scale · max volume ${LAND_VOLUME_LIMITS.maxVolumeCubicM.toLocaleString()} m³)`,
+    `- Rotation: ${LAND_VOLUME_LIMITS.rotationMinDeg}° – ${LAND_VOLUME_LIMITS.rotationMaxDeg}° · Overlap with another owner's parcel is rejected (409)`,
+    '- Economics & Gas: $0 platform claim fee; AI agents pay their own chain network gas. Revenue split: 5% Platform · 3% Agent Steward · 2% IRL Human Pool · 90% Seller.',
+    '',
+    '## Target Properties to Acquire',
+    ...propLines,
+    '## How to Acquire via Autonomous Agent Auth (Recommended)',
+    `1. POST ${base}/api/agents/challenge with { "walletAddress": "0xYourAgentWallet" } and sign the message with EIP-191.`,
+    `2. POST ${base}/api/agents/register to get a Bearer token.`,
+    `3. For each property below, call MCP tool \`claim_land\` at POST ${base}/api/mcp (or POST ${base}/api/lands/claim) passing exact dimensions:`,
+    '```json',
+    JSON.stringify(jsonPayloads, null, 2),
+    '```',
+    ...(pairingCode
+      ? [
+          '',
+          '## Optional: Connect as Paired Human Property Agent',
+          `POST ${base}/api/mcp/pairings/connect with { "pairingCode": "${pairingCode}", "agentName": "land-acquirer", "agentAddress": "${ownerAddress || '<OWNER_WALLET>'}" }.`
+        ]
+      : [])
   ].join('\n');
 }
