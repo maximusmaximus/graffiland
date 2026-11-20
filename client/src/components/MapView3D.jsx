@@ -22,12 +22,30 @@ const TERRARIUM_DEM_TILES = ['https://s3.amazonaws.com/elevation-tiles-prod/terr
 
 const FALLBACK_DARK_STYLE = {
   version: 8,
-  sources: {},
+  sources: {
+    'carto-dark': {
+      type: 'raster',
+      tiles: [
+        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
+      ],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+    }
+  },
   layers: [
     {
       id: 'fallback-bg',
       type: 'background',
       paint: { 'background-color': '#0b1020' }
+    },
+    {
+      id: 'fallback-carto-raster',
+      type: 'raster',
+      source: 'carto-dark',
+      minzoom: 0,
+      maxzoom: 22
     }
   ]
 };
@@ -123,6 +141,7 @@ function drawGlowingPrism(ctx, geom, { outerColor, innerColor, lineWidth = 2, gl
     ctx.restore();
   };
 
+  drawEdgeList('rgba(4, 10, 20, 0.72)', lineWidth + 3.4, 2);
   drawEdgeList(outerColor, lineWidth + 1.8, glowBlur);
   drawEdgeList(innerColor, Math.max(1, lineWidth - 0.3), 0);
 
@@ -359,6 +378,7 @@ export default function MapView3D({
 
   const ensureCustomLayers = useCallback((map) => {
     if (!map) return;
+    styleReadyRef.current = true;
 
     try {
       if (!map.getSource('terrarium-dem')) {
@@ -377,48 +397,51 @@ export default function MapView3D({
     // Boost building-3d contrast if OpenFreeMap liberty style is loaded
     try {
       if (map.getLayer('building-3d')) {
-        map.setPaintProperty('building-3d', 'fill-extrusion-color', '#1c2742');
+        map.setPaintProperty('building-3d', 'fill-extrusion-color', '#24324f');
         map.setPaintProperty('building-3d', 'fill-extrusion-opacity', showBuildingsRef.current ? 0.78 : 0);
       }
     } catch {
       // ignore on fallback style
     }
 
-    if (!map.getSource('owned-lands')) {
-      map.addSource('owned-lands', { type: 'geojson', data: EMPTY_FC });
-    }
-    if (!map.getLayer('owned-lands-extrusion')) {
-      map.addLayer({
-        id: 'owned-lands-extrusion',
-        type: 'fill-extrusion',
-        source: 'owned-lands',
-        paint: {
-          'fill-extrusion-color': ['get', 'color'],
-          'fill-extrusion-height': ['get', 'heightMeters'],
-          'fill-extrusion-base': ['get', 'baseAltitudeM'],
-          'fill-extrusion-opacity': 0.28
-        }
-      });
+    try {
+      if (!map.getSource('owned-lands')) {
+        map.addSource('owned-lands', { type: 'geojson', data: EMPTY_FC });
+      }
+      if (!map.getLayer('owned-lands-extrusion')) {
+        map.addLayer({
+          id: 'owned-lands-extrusion',
+          type: 'fill-extrusion',
+          source: 'owned-lands',
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-height': ['get', 'heightMeters'],
+            'fill-extrusion-base': ['get', 'baseAltitudeM'],
+            'fill-extrusion-opacity': 0.28
+          }
+        });
+      }
+
+      if (!map.getSource('draft-lands')) {
+        map.addSource('draft-lands', { type: 'geojson', data: EMPTY_FC });
+      }
+      if (!map.getLayer('draft-lands-extrusion')) {
+        map.addLayer({
+          id: 'draft-lands-extrusion',
+          type: 'fill-extrusion',
+          source: 'draft-lands',
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-height': ['get', 'heightMeters'],
+            'fill-extrusion-base': ['get', 'baseAltitudeM'],
+            'fill-extrusion-opacity': 0.28
+          }
+        });
+      }
+    } catch {
+      // never fail basemap rendering on custom overlay setup
     }
 
-    if (!map.getSource('draft-lands')) {
-      map.addSource('draft-lands', { type: 'geojson', data: EMPTY_FC });
-    }
-    if (!map.getLayer('draft-lands-extrusion')) {
-      map.addLayer({
-        id: 'draft-lands-extrusion',
-        type: 'fill-extrusion',
-        source: 'draft-lands',
-        paint: {
-          'fill-extrusion-color': ['get', 'color'],
-          'fill-extrusion-height': ['get', 'heightMeters'],
-          'fill-extrusion-base': ['get', 'baseAltitudeM'],
-          'fill-extrusion-opacity': ['get', 'opacity']
-        }
-      });
-    }
-
-    styleReadyRef.current = true;
     syncGeoJsonSources();
   }, [syncGeoJsonSources]);
 
@@ -463,8 +486,13 @@ export default function MapView3D({
       ensureCustomLayers(map);
     };
 
-    const onMapError = () => {
-      if (!fallbackAppliedRef.current && !styleReadyRef.current) {
+    const onMapError = (ev) => {
+      const msg = String(ev?.error?.message || '');
+      const isFatalStyleFetchError =
+        !ev?.sourceId &&
+        (/failed to fetch|network|cors|load style|timeout|404|500|502|503/i.test(msg) ||
+          ev?.error?.status === 0);
+      if (isFatalStyleFetchError && !fallbackAppliedRef.current && !styleReadyRef.current) {
         fallbackAppliedRef.current = true;
         try {
           map.setStyle(FALLBACK_DARK_STYLE);
@@ -513,7 +541,7 @@ export default function MapView3D({
           // ignore
         }
       }
-    }, 3500);
+    }, 12000);
 
     let observer = null;
     if (typeof ResizeObserver === 'function' && mapHostRef.current) {

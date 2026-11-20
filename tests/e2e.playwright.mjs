@@ -507,10 +507,24 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const pageErrors = [];
+    const mapConsoleErrors = [];
     page.on('pageerror', (err) => pageErrors.push(err.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        const txt = msg.text();
+        if (/data expressions not supported|worker failed to load/i.test(txt)) {
+          mapConsoleErrors.push(txt);
+        }
+      }
+    });
 
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.maplibregl-ctrl-zoom-in');
+    await page.waitForFunction(() => {
+      const txt = globalThis.document.querySelector('.maplibregl-ctrl-attrib-inner')?.textContent || '';
+      return /OpenFreeMap|OpenStreetMap|CARTO/i.test(txt);
+    }, { timeout: 15000 });
+    assert.deepEqual(mapConsoleErrors, []);
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
     await page.getByRole('button', { name: /Explore the Map/i }).click();
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
