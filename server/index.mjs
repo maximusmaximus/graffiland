@@ -21,8 +21,10 @@ import {
   createArtQuest,
   getLandTelemetry,
   listNearbyQuests,
-  scoutLands
+  scoutLands,
+  updateLandVolume
 } from '../shared/agentQuestService.mjs';
+import { searchLocations } from '../shared/geocodeService.mjs';
 import {
   createMarketplaceListing,
   executeMarketplacePurchase,
@@ -861,6 +863,7 @@ export function createAppServer(serverOptions = {}) {
         lng: req.body?.lng,
         customName: req.body?.customName || '',
         curationNote: req.body?.curationNote || '',
+        volume: req.body?.volume || null,
         txHash: req.body?.txHash || '',
         chainCfg: getChainStatus()
       });
@@ -872,6 +875,34 @@ export function createAppServer(serverOptions = {}) {
       });
     }
   });
+
+  app.post('/api/lands/:parcelId/volume', requireAuth, async (req, res) => {
+    try {
+      const out = await updateLandVolume(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        volume: req.body?.volume || req.body || {}
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'Could not update 3D land volume',
+        ...(err?.extra || {})
+      });
+    }
+  });
+
+  app.get(
+    '/api/geocode/search',
+    handleChatRoute((req) =>
+      searchLocations({
+        query: String(req.query?.q || ''),
+        lat: req.query?.lat !== undefined ? Number(req.query.lat) : null,
+        lng: req.query?.lng !== undefined ? Number(req.query.lng) : null,
+        limit: req.query?.limit ? Number(req.query.limit) : 6
+      })
+    )
+  );
 
   app.get(
     '/api/lands/:parcelId/telemetry',

@@ -138,7 +138,13 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     browser = await chromium.launch({
       executablePath: CHROME_PATH,
       headless: true,
-      args: ['--no-sandbox', '--disable-gpu-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-gpu-sandbox',
+        '--use-gl=angle',
+        '--use-angle=swiftshader',
+        '--enable-unsafe-swiftshader'
+      ]
     });
   });
 
@@ -152,7 +158,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     }
   });
 
-  test('First-time visitor welcome overlay stays visibly above Leaflet map until closed, clicked off, or Escaped', async () => {
+  test('First-time visitor welcome overlay stays visibly above 3D MapLibre canvas until closed, clicked off, or Escaped', async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const pageErrors = [];
@@ -160,9 +166,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.desktop-nav');
-    await page.waitForSelector('.leaflet-top');
-    await page.waitForSelector('.leaflet-control-zoom-in');
-    // Allow Leaflet async mount/layout effects to settle; overlay must remain on top
+    await page.waitForSelector('.maplibregl-ctrl-top-right');
+    await page.waitForSelector('.maplibregl-ctrl-zoom-in');
+    // Allow MapLibre async mount/layout effects to settle; overlay must remain on top
     await page.waitForTimeout(1500);
 
     const welcomeSelector = '[aria-label="Welcome to GRAFFILAND first-visit overview"]';
@@ -177,8 +183,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       const backdrop = globalThis.document.querySelector('.welcome-overlay-backdrop');
       const card = globalThis.document.querySelector('.welcome-overlay-card');
       const mapCont = globalThis.document.querySelector('.map-container');
-      const leafCont = globalThis.document.querySelector('.leaflet-container');
-      const zoomIn = globalThis.document.querySelector('.leaflet-control-zoom-in');
+      const mlCont = globalThis.document.querySelector('.maplibregl-map');
+      const zoomIn = globalThis.document.querySelector('.maplibregl-ctrl-zoom-in');
       const cardRect = card?.getBoundingClientRect();
       const zoomRect = zoomIn?.getBoundingClientRect();
       const zoomX = zoomRect ? zoomRect.left + zoomRect.width / 2 : 0;
@@ -202,8 +208,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       return {
         mapIsolation: mapCont ? globalThis.getComputedStyle(mapCont).isolation : null,
         mapZ: mapCont ? globalThis.getComputedStyle(mapCont).zIndex : null,
-        leafIsolation: leafCont ? globalThis.getComputedStyle(leafCont).isolation : null,
-        leafZ: leafCont ? globalThis.getComputedStyle(leafCont).zIndex : null,
+        mlIsolation: mlCont ? globalThis.getComputedStyle(mlCont).isolation : null,
+        mlZ: mlCont ? globalThis.getComputedStyle(mlCont).zIndex : null,
         backdropZ: backdrop ? Number(globalThis.getComputedStyle(backdrop).zIndex) : 0,
         innerWidth: globalThis.window.innerWidth,
         innerHeight: globalThis.window.innerHeight,
@@ -215,17 +221,12 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
               bottom: cardRect.bottom
             }
           : null,
-        zoomCoord: { x: zoomX, y: zoomY },
-        zoomOutsideCard: Boolean(
-          cardRect &&
-            zoomRect &&
-            (zoomX < cardRect.left ||
-              zoomX > cardRect.right ||
-              zoomY < cardRect.top ||
-              zoomY > cardRect.bottom)
-        ),
-        hitAtZoomIsLeaflet: Boolean(
-          hitAtZoom?.closest('.leaflet-pane, .leaflet-control, .leaflet-container')
+        backdropClickCoord: {
+          x: Math.max(12, Math.floor((cardRect?.left || 40) / 2)),
+          y: Math.floor(globalThis.window.innerHeight / 2)
+        },
+        hitAtZoomIsMapLibre: Boolean(
+          hitAtZoom?.closest('.maplibregl-ctrl, .maplibregl-map, .maplibregl-canvas-container')
         ),
         hitAtZoomCoveredByOverlay: Boolean(
           backdrop && hitAtZoom && (hitAtZoom === backdrop || backdrop.contains(hitAtZoom))
@@ -236,16 +237,15 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     assert.equal(layerAudit.mapIsolation, 'isolate');
     assert.equal(layerAudit.mapZ, '0');
-    assert.equal(layerAudit.leafIsolation, 'isolate');
-    assert.equal(layerAudit.leafZ, '0');
+    assert.equal(layerAudit.mlIsolation, 'isolate');
+    assert.equal(layerAudit.mlZ, '0');
     assert.ok(layerAudit.backdropZ >= 2000, `Expected backdrop z >= 2000, got ${layerAudit.backdropZ}`);
     assert.ok(layerAudit.cardRect.top >= 0 && layerAudit.cardRect.left >= 0);
     assert.ok(
       layerAudit.cardRect.bottom <= layerAudit.innerHeight + 1 &&
         layerAudit.cardRect.right <= layerAudit.innerWidth + 1
     );
-    assert.equal(layerAudit.zoomOutsideCard, true);
-    assert.equal(layerAudit.hitAtZoomIsLeaflet, false);
+    assert.equal(layerAudit.hitAtZoomIsMapLibre, false);
     assert.equal(layerAudit.hitAtZoomCoveredByOverlay, true);
     assert.equal(layerAudit.allPointsInsideCard, true);
 
@@ -254,9 +254,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForTimeout(300);
     assert.equal(await page.isVisible(welcomeSelector), true);
 
-    // Uncheck "Don't show automatically again" and click off card onto the dark backdrop (at zoom coord)
+    // Uncheck "Don't show automatically again" and click off card onto the dark backdrop
     await page.getByRole('checkbox').uncheck();
-    await page.mouse.click(layerAudit.zoomCoord.x, layerAudit.zoomCoord.y);
+    await page.mouse.click(layerAudit.backdropClickCoord.x, layerAudit.backdropClickCoord.y);
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
     const afterUncheckedClose = await page.evaluate(() =>
       globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
@@ -265,7 +265,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     // Reloading shows the banner again because checkbox was unchecked
     await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForSelector('.leaflet-top');
+    await page.waitForSelector('.maplibregl-ctrl-top-right');
     await page.waitForTimeout(1000);
     assert.equal(await page.isVisible(welcomeSelector), true);
 
@@ -279,7 +279,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     // Returning visitor does not automatically see the welcome overlay on reload
     await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForSelector('.leaflet-top');
+    await page.waitForSelector('.maplibregl-ctrl-top-right');
     await page.waitForTimeout(800);
     assert.equal(await page.locator(welcomeSelector).count(), 0);
 
@@ -292,7 +292,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
     assert.ok(selectedTabText.includes('Agentic User / AI Steward'));
 
-    // Reopen via Intro button and test "Full Guide" CTA opening Info modal above Leaflet
+    // Reopen via Intro button and test "Full Guide" CTA opening Info modal above MapLibre
     await page.getByRole('button', { name: /Intro/i }).click();
     await page.waitForSelector(welcomeSelector);
     await page.getByRole('button', { name: /Full Guide/i }).click();
@@ -301,16 +301,16 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     const infoModalAudit = await page.evaluate(() => {
       const backdrop = globalThis.document.querySelector('.modal-backdrop');
-      const zoomIn = globalThis.document.querySelector('.leaflet-control-zoom-in');
+      const zoomIn = globalThis.document.querySelector('.maplibregl-ctrl-zoom-in');
       const zr = zoomIn?.getBoundingClientRect();
       const hit = zr ? globalThis.document.elementFromPoint(zr.left + zr.width / 2, zr.top + zr.height / 2) : null;
       return {
         zIndex: backdrop ? Number(globalThis.getComputedStyle(backdrop).zIndex) : 0,
-        coversLeaflet: Boolean(backdrop && hit && (hit === backdrop || backdrop.contains(hit)))
+        coversMapLibre: Boolean(backdrop && hit && (hit === backdrop || backdrop.contains(hit)))
       };
     });
     assert.ok(infoModalAudit.zIndex >= 2000);
-    assert.equal(infoModalAudit.coversLeaflet, true);
+    assert.equal(infoModalAudit.coversMapLibre, true);
 
     assert.deepEqual(pageErrors, []);
     await context.close();
@@ -501,5 +501,117 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.equal(prefs.tutorial, '1');
     assert.deepEqual(errors2, []);
     await ctx2.close();
+  });
+
+  test('Desktop 3D Isometric Land Builder: search, draw first square auto-3D, Isometric/rotate/tilt, W/D/Rot/Z sliders, agent export & mint', async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.maplibregl-ctrl-zoom-in');
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+      state: 'detached'
+    });
+
+    // Open Mint Land workspace
+    await page.getByRole('button', { name: /Mint Land/i }).first().click();
+    await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
+    await page.waitForSelector('[data-testid="land-limits-card"]');
+
+    // Search intersection / coordinate spot and jump map
+    const searchInput = page.getByLabel('Search locations, intersections, or businesses');
+    await searchInput.fill('37.786, -122.408');
+    await page.getByRole('button', { name: /^Find$/i }).click();
+    await page.waitForSelector('.map3d-search-item');
+    await page.locator('.map3d-search-item').first().click();
+    await page.waitForTimeout(350);
+
+    // Activate Draw Land while map is in 2D
+    const stage = page.locator('.map3d-stage');
+    assert.equal(await stage.getAttribute('data-view-mode'), '2d');
+    await page.getByRole('button', { name: /Draw Land/i }).click();
+    assert.equal(await stage.getAttribute('data-draw-mode'), 'on');
+
+    // Drag-draw first rectangle directly onto the map -> automatically switches to 3D mode!
+    const mapBox = await page.locator('.map-container').boundingBox();
+    assert.ok(mapBox && mapBox.width > 200 && mapBox.height > 200);
+    const cx = mapBox.x + mapBox.width * 0.54;
+    const cy = mapBox.y + mapBox.height * 0.56;
+    await page.mouse.move(cx - 32, cy - 32);
+    await page.mouse.down();
+    await page.mouse.move(cx + 38, cy + 38, { steps: 6 });
+    await page.mouse.up();
+
+    await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
+    assert.equal(await stage.getAttribute('data-view-mode'), '3d');
+    await page.waitForSelector('.map3d-auto3d-pill');
+
+    // Switch Back to 2D cleanly, then to Isometric, rotate & adjust 2D-to-3D tilt
+    await page.locator('.map3d-auto3d-pill').getByRole('button', { name: /Back to 2D/i }).click();
+    assert.equal(await stage.getAttribute('data-view-mode'), '2d');
+
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /^Isometric$/i }).click();
+    assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
+    await page.waitForTimeout(250);
+
+    const bearingBefore = Number(await stage.getAttribute('data-bearing'));
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /\+15°/i }).click();
+    await page.waitForFunction(
+      (prev) => {
+        const el = globalThis.document.querySelector('.map3d-stage');
+        return el && Number(el.getAttribute('data-bearing')) !== prev;
+      },
+      bearingBefore
+    );
+
+    await page.getByLabel('Canvas 2D to 3D tilt').fill('40');
+    assert.equal(await stage.getAttribute('data-pitch'), '40');
+
+    // Add a second square and edit Width, Depth, Rotate, and Z-Axis Scale on Square #1
+    await page.getByRole('button', { name: /\+ Add Square/i }).click();
+    await page.waitForSelector('.map3d-stage[data-draft-count="2"]');
+
+    await page.locator('.land-draft-item').first().click();
+    await page.getByLabel('Width (m)').fill('28');
+    await page.getByLabel('Depth (m)').fill('22');
+    await page.getByLabel('Rotate (°)').fill('30');
+    await page.getByLabel('Z-Axis Scale').fill('2');
+
+    const firstItemText = await page.locator('.land-draft-item').first().textContent();
+    assert.ok(firstItemText.includes('28×22×36m'), `Expected 28x22x36m in ${firstItemText}`);
+    assert.ok(firstItemText.includes('30°'), `Expected 30 deg in ${firstItemText}`);
+    assert.ok(firstItemText.includes('616 m²'), `Expected 616 m2 in ${firstItemText}`);
+
+    // Copy Parcel Link & Copy All Properties for Agent
+    await page.getByRole('button', { name: /Copy Parcel Link/i }).click();
+    await page.waitForSelector('text=/Copied parcel link for GLAND-/i');
+
+    await page.getByRole('button', { name: /Copy All Properties for Agent/i }).click();
+    const previewBox = page.getByLabel('Agent properties prompt preview');
+    await previewBox.waitFor();
+    const agentPrompt = await previewBox.inputValue();
+    assert.ok(agentPrompt.includes('Total Selected Properties: 2'));
+    assert.ok(agentPrompt.includes('Oriented Corners ([lng, lat]):'));
+    assert.ok(agentPrompt.includes('5,000 m²'));
+    assert.ok((agentPrompt.match(/GLAND-[0-9A-Z]+/g) || []).length >= 2);
+
+    // Sign in and mint the first square from Desktop
+    const initialOwned = Number(await stage.getAttribute('data-owned-count'));
+    await page.getByRole('button', { name: /Sign In/i }).first().click();
+    await page.getByRole('button', { name: /Continue with Google/i }).click();
+    await page.waitForSelector('.modal-backdrop', { state: 'detached' });
+
+    await page.getByRole('button', { name: /Mint This Land/i }).click();
+    await page.waitForSelector('text=/Minted GLAND-/i');
+    await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
+    const afterOwned = Number(await stage.getAttribute('data-owned-count'));
+    assert.equal(afterOwned, initialOwned + 1);
+
+    assert.deepEqual(pageErrors, []);
+    await context.close();
   });
 });

@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { POLICY } from '../constants.mjs';
+import { buildDefaultVolumeFromBounds, computeOrientedFootprintLngLat } from '../landVolume.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -43,12 +44,14 @@ export async function listLandsWithCurations(db) {
     `SELECT parcel_id, COUNT(*) AS cnt FROM land_quests WHERE status = 'open' GROUP BY parcel_id`
   );
   const curations = await db.all('SELECT * FROM parcel_curations');
+  const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
   const stewardMap = new Map((stewardRows || []).map((r) => [r.parcel_id, r]));
   const questMap = new Map((questCounts || []).map((r) => [r.parcel_id, Number(r.cnt || 0)]));
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
+  const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
 
   const allParcelIds = new Set([...scMap.keys(), ...lpMap.keys()]);
   const parcels = [];
@@ -66,6 +69,52 @@ export async function listLandsWithCurations(db) {
         )
       : null;
     const cur = curationMap.get(parcelId);
+    const vr = volumeMap.get(parcelId);
+    let parsedCorners = [];
+    if (vr?.corners_json) {
+      try {
+        parsedCorners = JSON.parse(vr.corners_json);
+      } catch {
+        parsedCorners = [];
+      }
+    }
+    const volume = vr
+      ? {
+          parcelId,
+          geohash,
+          centerLat: Number(vr.center_lat),
+          centerLng: Number(vr.center_lng),
+          widthMeters: Number(vr.width_meters),
+          depthMeters: Number(vr.depth_meters),
+          heightMeters: Number(vr.height_meters),
+          zScale: Number(vr.z_scale),
+          rotationDeg: Number(vr.rotation_deg),
+          baseAltitudeM: Number(vr.base_altitude_m || 0),
+          footprintAreaSqM: Number(vr.footprint_area_sqm),
+          volumeCubicM: Number(vr.volume_cubic_m),
+          corners:
+            parsedCorners.length >= 4
+              ? parsedCorners
+              : computeOrientedFootprintLngLat({
+                  lat: Number(vr.center_lat),
+                  lng: Number(vr.center_lng),
+                  widthMeters: Number(vr.width_meters),
+                  depthMeters: Number(vr.depth_meters),
+                  rotationDeg: Number(vr.rotation_deg)
+                }).corners,
+          ring:
+            parsedCorners.length >= 4
+              ? [...parsedCorners.slice(0, 4), parsedCorners[0]]
+              : computeOrientedFootprintLngLat({
+                  lat: Number(vr.center_lat),
+                  lng: Number(vr.center_lng),
+                  widthMeters: Number(vr.width_meters),
+                  depthMeters: Number(vr.depth_meters),
+                  rotationDeg: Number(vr.rotation_deg)
+                }).ring
+        }
+      : buildDefaultVolumeFromBounds(bounds, parcelId, geohash);
+
     const stewardStatus = st?.status || 'awakened';
     const ownerSub = st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
     const stewardType =
@@ -75,8 +124,9 @@ export async function listLandsWithCurations(db) {
       parcelId,
       geohash,
       bounds,
-      centerLat: bounds.center[0],
-      centerLng: bounds.center[1],
+      volume,
+      centerLat: volume?.centerLat ?? bounds.center[0],
+      centerLng: volume?.centerLng ?? bounds.center[1],
       sculptureCount: Number(sc?.visible_count ?? lp?.sculpture_count ?? 0),
       firstClaimantAddress: first?.recipient_address || lp?.first_claimant_address || '',
       firstClaimantName: first?.creator_name || st?.steward_name || '',
@@ -932,6 +982,7 @@ export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '',
     await db.run('DELETE FROM parcel_landmark_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
     await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
   } else {
     await db.run(

@@ -462,4 +462,92 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(skippedCamera, true);
     cleanup();
   });
+
+  test('DesktopLandBuilderPanel renders limits, sliders, and multi-property agent export callbacks', async () => {
+    const { DesktopLandBuilderPanel } = await loadJsxModule(
+      'client/src/components/DesktopLandBuilderPanel.jsx'
+    );
+    const { validateAndNormalizeLandVolume } = await import('../shared/landVolume.mjs');
+
+    const p1 = {
+      id: 'draft-1',
+      ...validateAndNormalizeLandVolume({
+        lat: 37.7749,
+        lng: -122.4194,
+        widthMeters: 20,
+        depthMeters: 16,
+        heightMeters: 18,
+        rotationDeg: 0
+      }).volume,
+      customName: 'Studio West',
+      valid: true,
+      hasOverlap: false,
+      errors: []
+    };
+    const p2 = {
+      id: 'draft-2',
+      ...validateAndNormalizeLandVolume({
+        lat: 37.776,
+        lng: -122.418,
+        widthMeters: 14,
+        depthMeters: 14,
+        heightMeters: 27,
+        rotationDeg: 45
+      }).volume,
+      customName: 'Plaza East',
+      valid: true,
+      hasOverlap: false,
+      errors: []
+    };
+
+    const updates = [];
+    const minted = [];
+    const view = RTL.render(
+      React.createElement(DesktopLandBuilderPanel, {
+        draftParcels: [p1, p2],
+        ownedParcels: [],
+        selectedDraftId: 'draft-1',
+        drawMode: false,
+        onToggleDrawMode: () => {},
+        onAddDraftAtCenter: () => {},
+        onSelectDraft: () => {},
+        onUpdateDraft: (id, patch) => updates.push({ id, patch }),
+        onRemoveDraft: () => {},
+        onClearDrafts: () => {},
+        onMintDraft: (draft) => minted.push(draft.parcelId),
+        onMintAll: () => {},
+        user: { id: 'u1', name: 'Land Creator' }
+      })
+    );
+
+    const limitsCard = view.getByTestId('land-limits-card');
+    assert.ok(limitsCard.textContent.includes('5,000 m²'));
+    assert.ok(limitsCard.textContent.includes('500,000 m³'));
+    assert.ok(limitsCard.textContent.includes('3 free human claims'));
+
+    RTL.fireEvent.change(view.getByLabelText('Width (m)'), { target: { value: '32' } });
+    RTL.fireEvent.change(view.getByLabelText('Depth (m)'), { target: { value: '24' } });
+    RTL.fireEvent.change(view.getByLabelText('Rotate (°)'), { target: { value: '45' } });
+    RTL.fireEvent.change(view.getByLabelText('Z-Axis Scale'), { target: { value: '2' } });
+    RTL.fireEvent.click(view.getByRole('button', { name: '+15°' }));
+
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.widthMeters === 32));
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.depthMeters === 24));
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.rotationDeg === 45));
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.zScale === 2 && u.patch.heightMeters === 36));
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.rotationDeg === 15));
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Copy All Properties for Agent/i }));
+    });
+    const previewBox = view.getByLabelText('Agent properties prompt preview');
+    assert.ok(previewBox.value.includes('Total Selected Properties: 2'));
+    assert.ok(previewBox.value.includes(p1.parcelId));
+    assert.ok(previewBox.value.includes(p2.parcelId));
+    assert.ok(previewBox.value.includes(JSON.stringify(p1.corners)));
+
+    RTL.fireEvent.click(view.getByRole('button', { name: /Mint This Land/i }));
+    assert.deepEqual(minted, [p1.parcelId]);
+    cleanup();
+  });
 });

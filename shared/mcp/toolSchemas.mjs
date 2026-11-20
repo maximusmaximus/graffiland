@@ -196,7 +196,7 @@ export const MCP_TOOLS = [
   {
     name: 'claim_land',
     description:
-      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. AI agents pay their own network gas (supply optional on-chain txHash).',
+      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. Supports optional custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). AI agents pay their own network gas (supply optional on-chain txHash).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,6 +205,7 @@ export const MCP_TOOLS = [
         lng: { type: 'number' },
         customName: { type: 'string' },
         curationNote: { type: 'string' },
+        volume: { type: 'object' },
         txHash: { type: 'string' }
       }
     }

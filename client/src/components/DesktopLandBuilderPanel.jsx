@@ -1,0 +1,589 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
+import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
+import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
+
+async function copyTextSafe(text) {
+  const payload = String(text || '');
+  if (!payload) return false;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(payload);
+      return true;
+    }
+  } catch {
+    // Fallback below when clipboard permission is denied
+  }
+  try {
+    if (typeof document !== 'undefined') {
+      const ta = document.createElement('textarea');
+      ta.value = payload;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Boolean(copied);
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function clampNum(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeDeg(value) {
+  const n = Math.round(Number(value) || 0);
+  return ((n % 360) + 360) % 360;
+}
+
+export function DesktopLandBuilderPanel({
+  draftParcels = [],
+  ownedParcels = [],
+  selectedDraftId = '',
+  drawMode = false,
+  onToggleDrawMode,
+  onAddDraftAtCenter,
+  onSelectDraft,
+  onUpdateDraft,
+  onRemoveDraft,
+  onClearDrafts,
+  onMintDraft,
+  onMintAll,
+  onUpdateOwnedVolume,
+  mintBusy = false,
+  landStatus = '',
+  user = null,
+  pairingCode = '',
+  publicUrl = '',
+  apiOrigin = '',
+  config = null,
+  onSignIn
+}) {
+  const limits = useMemo(() => ({
+    ...LAND_VOLUME_LIMITS,
+    ...(config?.landVolumeLimits || {})
+  }), [config]);
+
+  const [copyBanner, setCopyBanner] = useState('');
+  const [showAgentPreview, setShowAgentPreview] = useState(false);
+
+  const origin = useMemo(() => {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return window.location.origin;
+    }
+    return publicUrl || 'https://maximusmaximus.github.io';
+  }, [publicUrl]);
+
+  const pathname = useMemo(() => {
+    if (typeof window !== 'undefined' && window.location?.pathname) {
+      return window.location.pathname;
+    }
+    return '/graffiland/';
+  }, []);
+
+  const activeDraft = useMemo(
+    () => draftParcels.find((item) => item.id === selectedDraftId) || draftParcels[0] || null,
+    [draftParcels, selectedDraftId]
+  );
+
+  const ownedSelectionId = selectedDraftId.startsWith('owned:') ? selectedDraftId.slice(6) : '';
+  const activeOwned = useMemo(
+    () => (ownedSelectionId ? ownedParcels.find((p) => p.parcelId === ownedSelectionId) || null : null),
+    [ownedParcels, ownedSelectionId]
+  );
+
+  const [ownedDraftVol, setOwnedDraftVol] = useState(null);
+  useEffect(() => {
+    if (!activeOwned) {
+      setOwnedDraftVol(null);
+      return;
+    }
+    setOwnedDraftVol({ ...(activeOwned.volume || {}) });
+  }, [activeOwned]);
+
+  const activeMode = activeOwned ? 'owned' : activeDraft ? 'draft' : null;
+  const activeItem = activeOwned || activeDraft || null;
+  const activeVolume = activeOwned ? (ownedDraftVol || activeOwned.volume || {}) : activeDraft || {};
+
+  const activeWidth = clampNum(
+    activeVolume.widthMeters,
+    limits.minWidthMeters,
+    limits.maxWidthMeters,
+    limits.defaultWidthMeters
+  );
+  const activeDepth = clampNum(
+    activeVolume.depthMeters,
+    limits.minDepthMeters,
+    limits.maxDepthMeters,
+    limits.defaultDepthMeters
+  );
+  const activeZScale = clampNum(
+    activeVolume.zScale,
+    limits.minZScale,
+    limits.maxZScale,
+    limits.defaultZScale
+  );
+  const activeHeight = clampNum(
+    activeVolume.heightMeters,
+    limits.minHeightMeters,
+    limits.maxHeightMeters,
+    Math.round(limits.defaultHeightMeters * activeZScale)
+  );
+  const activeRotation = normalizeDeg(activeVolume.rotationDeg);
+  const activeArea = Math.round(Number(activeVolume.footprintAreaSqM) || activeWidth * activeDepth);
+  const activeCubic = Math.round(Number(activeVolume.volumeCubicM) || activeArea * activeHeight);
+
+  const readyDrafts = useMemo(
+    () => draftParcels.filter((item) => item.valid !== false && !item.hasOverlap),
+    [draftParcels]
+  );
+
+  const enrichedProperties = useMemo(() => {
+    return draftParcels.map((draft, idx) => ({
+      ...draft,
+      customName: draft.customName || `Land Plot #${idx + 1}`,
+      shareUrl: buildParcelShareUrl({
+        origin,
+        pathname,
+        parcelId: draft.parcelId,
+        lat: draft.centerLat ?? draft.lat,
+        lng: draft.centerLng ?? draft.lng,
+        volume: draft,
+        customName: draft.customName
+      })
+    }));
+  }, [draftParcels, origin, pathname]);
+
+  const agentPromptText = useMemo(() => {
+    return buildLandAcquisitionAgentPrompt({
+      properties: enrichedProperties,
+      apiOrigin: apiOrigin || origin,
+      publicUrl: publicUrl || `${origin}${pathname}`,
+      pairingCode: pairingCode || undefined,
+      ownerAddress: user?.walletAddress || user?.address || undefined
+    });
+  }, [enrichedProperties, apiOrigin, origin, publicUrl, pathname, pairingCode, user]);
+
+  const allLinksText = useMemo(() => {
+    return enrichedProperties.map((prop) => `${prop.customName || prop.parcelId}: ${prop.shareUrl}`).join('\n');
+  }, [enrichedProperties]);
+
+  const flashCopy = (msg) => {
+    setCopyBanner(msg);
+  };
+
+  const handleCopySingleLink = async () => {
+    if (!activeItem) return;
+    const shareUrl = buildParcelShareUrl({
+      origin,
+      pathname,
+      parcelId: activeItem.parcelId,
+      lat: activeVolume.centerLat ?? activeItem.lat,
+      lng: activeVolume.centerLng ?? activeItem.lng,
+      volume: activeVolume,
+      customName: activeItem.customName
+    });
+    const ok = await copyTextSafe(shareUrl);
+    flashCopy(ok ? `Copied parcel link for ${activeItem.parcelId}` : shareUrl);
+  };
+
+  const handleCopyAllForAgent = async () => {
+    if (!enrichedProperties.length) return;
+    setShowAgentPreview(true);
+    const ok = await copyTextSafe(agentPromptText);
+    flashCopy(
+      ok
+        ? `Copied ${enrichedProperties.length} propert${enrichedProperties.length === 1 ? 'y' : 'ies'} for your agent`
+        : 'Prepared agent acquisition text below'
+    );
+  };
+
+  const handleCopyAllLinks = async () => {
+    if (!enrichedProperties.length) return;
+    const ok = await copyTextSafe(allLinksText);
+    flashCopy(ok ? `Copied ${enrichedProperties.length} parcel share link(s)` : allLinksText);
+  };
+
+  const patchActiveDimensions = (patch) => {
+    if (!activeItem) return;
+    if (activeMode === 'draft') {
+      onUpdateDraft?.(activeDraft.id, patch);
+    } else if (activeMode === 'owned') {
+      setOwnedDraftVol((prev) => ({ ...(prev || activeOwned?.volume || {}), ...patch }));
+    }
+  };
+
+  const statusText = typeof landStatus === 'string' ? landStatus : landStatus?.text || '';
+  const statusIsError = typeof landStatus === 'object' ? Boolean(landStatus?.isError) : false;
+
+  const isDrawActive = drawMode === true || drawMode === 'draw';
+
+  return (
+    <div className="land-builder-panel" data-testid="desktop-land-builder-panel">
+      <div className="land-builder-actions">
+        <button
+          type="button"
+          className={`btn btn-sm ${isDrawActive ? 'btn-primary' : 'btn-outline'}`}
+          aria-pressed={isDrawActive}
+          onClick={onToggleDrawMode}
+        >
+          {isDrawActive ? '✏️ Drawing on Map (Click/Drag)' : '✏️ Draw Land'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-outline"
+          disabled={draftParcels.length >= limits.maxSelectionBatch}
+          onClick={onAddDraftAtCenter}
+        >
+          + Add Square
+        </button>
+        {draftParcels.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={onClearDrafts}
+          >
+            Clear ({draftParcels.length})
+          </button>
+        )}
+      </div>
+
+      <div className="land-builder-legend" aria-label="Wireframe color key">
+        <span><i className="legend-dot legend-cyan" /> Considering</span>
+        <span><i className="legend-dot legend-amber" /> Owned</span>
+        <span><i className="legend-dot legend-magenta" /> Quest</span>
+        <span><i className="legend-dot legend-crimson" /> Conflict / Limit</span>
+      </div>
+
+      <div className="land-limits-card" data-testid="land-limits-card">
+        <div className="land-limits-title">3D Land Limits &amp; Rules</div>
+        <div className="land-limits-grid">
+          <span>Footprint W/D: <b>{limits.minWidthMeters}–{limits.maxWidthMeters}m</b></span>
+          <span>Max Area: <b>{limits.maxFootprintAreaSqM.toLocaleString()} m²</b></span>
+          <span>Z-Scale: <b>{limits.minZScale}×–{limits.maxZScale}×</b> ({limits.minHeightMeters}–{limits.maxHeightMeters}m)</span>
+          <span>Max Volume: <b>{limits.maxVolumeCubicM.toLocaleString()} m³</b></span>
+          <span>Rotation: <b>{limits.rotationMinDeg}°–{limits.rotationMaxDeg}°</b></span>
+          <span>Batch / Free: <b>{limits.maxSelectionBatch} plots</b> · <b>{limits.starterFreeHumanClaims} free human claims</b></span>
+        </div>
+        <div className="land-limits-footnote">
+          Human starter claims use sponsored gas. Autonomous agents mint Quest slots &amp; pay their own gas.
+        </div>
+      </div>
+
+      {statusText && (
+        <div className={`status-banner ${statusIsError ? 'status-banner-error' : ''}`} role="status">
+          {statusText}
+        </div>
+      )}
+      {copyBanner && (
+        <div className="status-banner" role="status">
+          {copyBanner}
+        </div>
+      )}
+
+      {!user && (
+        <div className="land-signin-callout">
+          <span>Sign in to mint starter plots or update your owned 3D volumes directly.</span>
+          {onSignIn && (
+            <button type="button" className="btn btn-sm btn-primary" onClick={onSignIn}>
+              Sign In
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="land-section-header">
+        <strong>Considering Squares ({draftParcels.length}/{limits.maxSelectionBatch})</strong>
+      </div>
+
+      {draftParcels.length === 0 ? (
+        <div className="empty-state" style={{ padding: '10px 12px', textAlign: 'left' }}>
+          Click <strong>✏️ Draw Land</strong> and drag/click anywhere on the map, or press <strong>+ Add Square</strong> to drop a 3D wireframe plot. Drawing your first square automatically tilts the map into 3D view.
+        </div>
+      ) : (
+        <div className="land-draft-list" role="list">
+          {draftParcels.map((draft, idx) => {
+            const isSelected = activeMode === 'draft' && activeDraft?.id === draft.id;
+            const hasIssue = draft.valid === false || draft.hasOverlap;
+            const label = draft.customName?.trim() || draft.parcelId;
+            return (
+              <div
+                key={draft.id}
+                role="listitem"
+                className={`land-draft-item ${isSelected ? 'selected' : ''} ${hasIssue ? 'has-issue' : ''}`}
+                onClick={() => onSelectDraft?.(draft.id)}
+              >
+                <div className="land-draft-main">
+                  <div className="land-draft-title">
+                    <span className="land-draft-index">#{idx + 1}</span>
+                    <span>{label}</span>
+                  </div>
+                  <div className="land-draft-meta">
+                    {Math.round(draft.widthMeters)}×{Math.round(draft.depthMeters)}×{Math.round(draft.heightMeters)}m · {Math.round(draft.rotationDeg || 0)}° · {Math.round(draft.footprintAreaSqM || 0)} m²
+                  </div>
+                </div>
+                <div className="land-draft-badges">
+                  <span className={`badge ${hasIssue ? 'badge-error' : 'badge-cyan'}`}>
+                    {draft.hasOverlap ? 'Overlap' : draft.valid === false ? 'Limit' : 'Ready'}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    aria-label={`Remove ${label}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveDraft?.(draft.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {ownedParcels.length > 0 && (
+        <div className="land-owned-strip">
+          <div className="land-section-header">
+            <strong>Your Owned Parcels ({ownedParcels.length})</strong>
+          </div>
+          <div className="land-owned-pills">
+            {ownedParcels.slice(0, 8).map((parcel) => {
+              const ownedKey = `owned:${parcel.parcelId}`;
+              const isSelected = selectedDraftId === ownedKey;
+              return (
+                <button
+                  key={parcel.parcelId}
+                  type="button"
+                  className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => onSelectDraft?.(ownedKey)}
+                >
+                  {parcel.customName || parcel.parcelId}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeItem && (
+        <div className="land-selected-editor" data-testid="land-selected-editor">
+          <div className="land-editor-header">
+            <div>
+              <div className="land-editor-title">
+                {activeMode === 'owned' ? 'Edit Owned 3D Volume' : 'Selected Square 3D Controls'}
+              </div>
+              <div className="land-editor-id">
+                <code>{activeItem.parcelId}</code> · {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
+              </div>
+            </div>
+          </div>
+
+          {activeMode === 'draft' && (activeDraft?.hasOverlap || activeDraft?.valid === false) && (
+            <div className="land-validation-errors" role="alert">
+              {activeDraft.hasOverlap && (
+                <div>Overlaps an existing parcel or another draft square. Move or shrink the footprint.</div>
+              )}
+              {(activeDraft.errors || []).map((err) => (
+                <div key={err}>{err}</div>
+              ))}
+            </div>
+          )}
+
+          {activeMode === 'draft' && (
+            <label className="land-name-field" htmlFor="land-square-name-input">
+              <span>Square Label</span>
+              <input
+                id="land-square-name-input"
+                type="text"
+                maxLength={64}
+                placeholder="e.g., Corner Plaza Studio"
+                value={activeDraft.customName || ''}
+                onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
+              />
+            </label>
+          )}
+
+          <div className="land-slider-row">
+            <div className="land-slider-label">
+              <span>Width (m)</span>
+              <strong>{Math.round(activeWidth)} m</strong>
+            </div>
+            <input
+              type="range"
+              aria-label="Width (m)"
+              min={limits.minWidthMeters}
+              max={limits.maxWidthMeters}
+              step={1}
+              value={activeWidth}
+              onChange={(e) => patchActiveDimensions({ widthMeters: Number(e.target.value) })}
+            />
+          </div>
+
+          <div className="land-slider-row">
+            <div className="land-slider-label">
+              <span>Depth (m)</span>
+              <strong>{Math.round(activeDepth)} m</strong>
+            </div>
+            <input
+              type="range"
+              aria-label="Depth (m)"
+              min={limits.minDepthMeters}
+              max={limits.maxDepthMeters}
+              step={1}
+              value={activeDepth}
+              onChange={(e) => patchActiveDimensions({ depthMeters: Number(e.target.value) })}
+            />
+          </div>
+
+          <div className="land-slider-row">
+            <div className="land-slider-label">
+              <span>Rotate (°)</span>
+              <strong>{activeRotation}°</strong>
+            </div>
+            <input
+              type="range"
+              aria-label="Rotate (°)"
+              min={limits.rotationMinDeg}
+              max={limits.rotationMaxDeg}
+              step={1}
+              value={activeRotation}
+              onChange={(e) => patchActiveDimensions({ rotationDeg: Number(e.target.value) })}
+            />
+            <div className="land-nudge-row">
+              {[-15, 0, 15, 45].map((delta) => (
+                <button
+                  key={delta}
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => patchActiveDimensions({
+                    rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
+                  })}
+                >
+                  {delta === 0 ? 'Reset 0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="land-slider-row">
+            <div className="land-slider-label">
+              <span>Z-Axis Scale (Height)</span>
+              <strong>{activeZScale.toFixed(2)}× ({Math.round(activeHeight)} m)</strong>
+            </div>
+            <input
+              type="range"
+              aria-label="Z-Axis Scale"
+              min={limits.minZScale}
+              max={limits.maxZScale}
+              step={0.05}
+              value={activeZScale}
+              onChange={(e) => {
+                const nextScale = Number(e.target.value);
+                const nextHeight = clampNum(
+                  Math.round(limits.defaultHeightMeters * nextScale),
+                  limits.minHeightMeters,
+                  limits.maxHeightMeters,
+                  limits.defaultHeightMeters
+                );
+                patchActiveDimensions({ zScale: nextScale, heightMeters: nextHeight });
+              }}
+            />
+          </div>
+
+          <div className="land-editor-actions">
+            <button type="button" className="btn btn-sm btn-outline" onClick={handleCopySingleLink}>
+              Copy Parcel Link
+            </button>
+            {activeMode === 'draft' ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={activeDraft.valid === false || activeDraft.hasOverlap || Boolean(mintBusy)}
+                onClick={() => onMintDraft?.(activeDraft)}
+              >
+                {mintBusy ? 'Minting…' : 'Mint This Land'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={Boolean(mintBusy)}
+                onClick={() => onUpdateOwnedVolume?.(activeOwned.parcelId, {
+                  centerLat: activeVolume.centerLat,
+                  centerLng: activeVolume.centerLng,
+                  widthMeters: activeWidth,
+                  depthMeters: activeDepth,
+                  heightMeters: activeHeight,
+                  zScale: activeZScale,
+                  rotationDeg: activeRotation
+                })}
+              >
+                {mintBusy ? 'Saving…' : 'Save 3D Volume'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {draftParcels.length > 0 && (
+        <div className="land-agent-export" data-testid="land-agent-export">
+          <div className="land-section-header">
+            <strong>Batch Mint &amp; Agent Export</strong>
+          </div>
+          <div className="land-agent-export-actions">
+            <button
+              type="button"
+              className="btn btn-sm btn-outline"
+              onClick={handleCopyAllForAgent}
+            >
+              Copy All Properties for Agent
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setShowAgentPreview((prev) => !prev)}
+            >
+              {showAgentPreview ? 'Hide Agent Text' : 'Preview Agent Text'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={handleCopyAllLinks}
+            >
+              Copy All Links
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={readyDrafts.length === 0 || Boolean(mintBusy)}
+              onClick={onMintAll}
+            >
+              {mintBusy ? 'Minting…' : `Mint All (${readyDrafts.length})`}
+            </button>
+          </div>
+          {showAgentPreview && (
+            <textarea
+              readOnly
+              className="land-agent-preview"
+              aria-label="Agent properties prompt preview"
+              value={agentPromptText}
+              rows={8}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+export default DesktopLandBuilderPanel;

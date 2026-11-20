@@ -485,6 +485,7 @@ export async function handleMcpJsonRpc(
         lng: args.lng,
         customName: args.customName || '',
         curationNote: args.curationNote || '',
+        volume: args.volume || null,
         txHash: args.txHash || ''
       });
     } else if (toolName === 'generate_voxel_prefab') {

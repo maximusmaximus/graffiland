@@ -1,6 +1,11 @@
 import { ethers } from 'ethers';
 import { decodeGeohashBounds, encodeGeohash, haversineMeters } from '../server/services/pol.mjs';
-import { STEWARD_DEFAULTS } from './constants.mjs';
+import { LAND_VOLUME_LIMITS, STEWARD_DEFAULTS } from './constants.mjs';
+import {
+  buildDefaultVolumeFromBounds,
+  footprintsOverlap,
+  validateAndNormalizeLandVolume
+} from './landVolume.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -254,8 +259,97 @@ export async function scoutLands(
   };
 }
 
+async function saveLandVolumeRow(db, vol, now) {
+  await db.run(
+    `INSERT INTO land_volumes (
+      parcel_id, center_lat, center_lng, width_meters, depth_meters, height_meters,
+      z_scale, rotation_deg, base_altitude_m, footprint_area_sqm, volume_cubic_m, corners_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(parcel_id) DO UPDATE SET
+      center_lat = excluded.center_lat,
+      center_lng = excluded.center_lng,
+      width_meters = excluded.width_meters,
+      depth_meters = excluded.depth_meters,
+      height_meters = excluded.height_meters,
+      z_scale = excluded.z_scale,
+      rotation_deg = excluded.rotation_deg,
+      base_altitude_m = excluded.base_altitude_m,
+      footprint_area_sqm = excluded.footprint_area_sqm,
+      volume_cubic_m = excluded.volume_cubic_m,
+      corners_json = excluded.corners_json,
+      updated_at = excluded.updated_at`,
+    [
+      vol.parcelId,
+      vol.centerLat,
+      vol.centerLng,
+      vol.widthMeters,
+      vol.depthMeters,
+      vol.heightMeters,
+      vol.zScale,
+      vol.rotationDeg,
+      vol.baseAltitudeM || 0,
+      vol.footprintAreaSqM,
+      vol.volumeCubicM,
+      JSON.stringify(vol.corners || []),
+      now
+    ]
+  );
+}
+
+async function assertNoFootprintOverlap(db, targetVol, claimantSub) {
+  const existingRows = await db
+    .all(
+      `SELECT lp.parcel_id, lp.geohash, lp.first_claimant_sub, st.steward_sub,
+              lv.center_lat, lv.center_lng, lv.width_meters, lv.depth_meters,
+              lv.rotation_deg, lv.corners_json
+       FROM land_parcels lp
+       LEFT JOIN land_volumes lv ON lv.parcel_id = lp.parcel_id
+       LEFT JOIN land_steward_state st ON st.parcel_id = lp.parcel_id
+       WHERE lp.parcel_id != ?`,
+      [targetVol.parcelId]
+    )
+    .catch(() => []);
+
+  for (const row of existingRows || []) {
+    const ownerSub = row.steward_sub || row.first_claimant_sub || '';
+    if (ownerSub && ownerSub === claimantSub) continue;
+    let otherVol = null;
+    if (Number.isFinite(Number(row.width_meters)) && Number(row.width_meters) > 0) {
+      let corners = [];
+      try {
+        corners = JSON.parse(row.corners_json || '[]');
+      } catch {
+        corners = [];
+      }
+      otherVol = {
+        centerLat: Number(row.center_lat),
+        centerLng: Number(row.center_lng),
+        widthMeters: Number(row.width_meters),
+        depthMeters: Number(row.depth_meters),
+        rotationDeg: Number(row.rotation_deg || 0),
+        corners
+      };
+    } else if (row.geohash) {
+      otherVol = buildDefaultVolumeFromBounds(
+        decodeGeohashBounds(row.geohash),
+        row.parcel_id,
+        row.geohash
+      );
+    }
+    if (otherVol && footprintsOverlap(targetVol, otherVol)) {
+      throw new McpServiceError(
+        `Selected 3D land footprint overlaps existing Virtual Land ${row.parcel_id}.`,
+        409,
+        { conflictingParcelId: row.parcel_id }
+      );
+    }
+  }
+}
+
 /**
- * Claims an unclaimed or expired Virtual Land parcel with 0 platform fee (agents pay their own chain gas) under a 7-day dormant lease.
+ * Claims an unclaimed or expired Virtual Land parcel with optional custom 3D volume/rotation/Z-scale.
+ * Autonomous agents get a 7-day dormant lease (0 platform fee, agent pays own gas).
+ * Human Desktop creators mint active starter parcels directly (gas-free starter quota).
  */
 export async function claimDormantLand(
   db,
@@ -266,6 +360,7 @@ export async function claimDormantLand(
     lng = null,
     customName = '',
     curationNote = '',
+    volume = null,
     txHash = '',
     chainCfg = null
   }
@@ -293,6 +388,28 @@ export async function claimDormantLand(
     throw new McpServiceError('Authenticated steward wallet address is required.', 401);
   }
 
+  const refLat = Number.isFinite(Number(lat)) ? Number(lat) : bounds.center[0];
+  const refLng = Number.isFinite(Number(lng)) ? Number(lng) : bounds.center[1];
+  let resolvedVolume = buildDefaultVolumeFromBounds(bounds, cleanParcelId, geohash);
+
+  if (volume && typeof volume === 'object') {
+    const volCheck = validateAndNormalizeLandVolume({
+      ...volume,
+      lat: volume.centerLat ?? volume.lat ?? refLat,
+      lng: volume.centerLng ?? volume.lng ?? refLng,
+      parcelId: cleanParcelId,
+      geohash
+    });
+    if (!volCheck.ok) {
+      throw new McpServiceError(volCheck.errors[0], 400, {
+        errors: volCheck.errors,
+        limits: LAND_VOLUME_LIMITS
+      });
+    }
+    resolvedVolume = volCheck.volume;
+    await assertNoFootprintOverlap(db, resolvedVolume, agentUser.id);
+  }
+
   const existingSteward = await db.get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [
     cleanParcelId
   ]);
@@ -302,13 +419,19 @@ export async function claimDormantLand(
 
   if (existingSteward && (existingSteward.status === 'dormant' || existingSteward.status === 'awakened')) {
     if (existingSteward.steward_sub === agentUser.id) {
+      const nowExisting = new Date().toISOString();
+      if (volume && typeof volume === 'object') {
+        await saveLandVolumeRow(db, resolvedVolume, nowExisting);
+      }
       return {
         claimed: true,
         alreadyClaimed: true,
         parcelId: cleanParcelId,
         status: existingSteward.status,
         leaseExpiresAt: existingSteward.lease_expires_at || '',
-        bounds
+        bounds,
+        volume: resolvedVolume,
+        limits: LAND_VOLUME_LIMITS
       };
     }
     throw new McpServiceError(
@@ -331,25 +454,50 @@ export async function claimDormantLand(
     }
   }
 
-  const agentRow = await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [agentUser.id]);
-  const maxSlots = Number(agentRow?.max_slots ?? STEWARD_DEFAULTS.starterDormantSlots);
-  const activeDormantRow = await db.get(
-    `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
-    [agentUser.id]
-  );
-  const usedSlots = Number(activeDormantRow?.cnt || 0);
-  if (usedSlots >= maxSlots) {
-    throw new McpServiceError(
-      `Dormant claim slot limit reached (${usedSlots}/${maxSlots}). Attract a verified IRL human artist to awaken a land and unlock +${STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots.`,
-      429,
-      { usedSlots, maxSlots }
+  const isAgent = String(agentUser.id || '').startsWith('agent:') || agentUser.actorType === 'agent';
+  const agentRow = isAgent
+    ? await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [agentUser.id])
+    : null;
+  let usedSlots = 0;
+  let maxSlots = STEWARD_DEFAULTS.starterDormantSlots;
+
+  if (isAgent) {
+    maxSlots = Number(agentRow?.max_slots ?? STEWARD_DEFAULTS.starterDormantSlots);
+    const activeDormantRow = await db.get(
+      `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
+      [agentUser.id]
     );
+    usedSlots = Number(activeDormantRow?.cnt || 0);
+    if (usedSlots >= maxSlots) {
+      throw new McpServiceError(
+        `Dormant claim slot limit reached (${usedSlots}/${maxSlots}). Attract a verified IRL human artist to awaken a land and unlock +${STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots.`,
+        429,
+        { usedSlots, maxSlots }
+      );
+    }
+  } else {
+    maxSlots = LAND_VOLUME_LIMITS.starterFreeHumanClaims;
+    const unbuiltHumanRow = await db.get(
+      `SELECT COUNT(*) AS cnt FROM land_steward_state st
+       WHERE st.steward_sub = ? AND st.steward_type = 'human'
+         AND NOT EXISTS (SELECT 1 FROM sculptures s WHERE s.parcel_id = st.parcel_id AND s.hidden = 0)`,
+      [agentUser.id]
+    );
+    usedSlots = Number(unbuiltHumanRow?.cnt || 0);
+    if (usedSlots >= maxSlots) {
+      throw new McpServiceError(
+        `Starter Desktop claim limit reached (${usedSlots}/${maxSlots} unbuilt lands). Publish a sculpture on one of your lands to free another Desktop starter claim slot.`,
+        429,
+        { usedSlots, maxSlots }
+      );
+    }
   }
 
   const now = new Date().toISOString();
-  const leaseExpiresAt = new Date(
-    Date.now() + STEWARD_DEFAULTS.dormantLeaseTtlHours * 60 * 60 * 1000
-  ).toISOString();
+  const leaseExpiresAt = isAgent
+    ? new Date(Date.now() + STEWARD_DEFAULTS.dormantLeaseTtlHours * 60 * 60 * 1000).toISOString()
+    : '';
+  const initialStatus = isAgent ? 'dormant' : 'awakened';
 
   await db.run(
     `INSERT INTO land_parcels (
@@ -365,8 +513,8 @@ export async function claimDormantLand(
     [
       cleanParcelId,
       geohash,
-      bounds.center[0],
-      bounds.center[1],
+      resolvedVolume?.centerLat ?? bounds.center[0],
+      resolvedVolume?.centerLng ?? bounds.center[1],
       agentUser.id,
       stewardAddress,
       stewardAddress,
@@ -374,35 +522,40 @@ export async function claimDormantLand(
     ]
   );
 
-  const isAgent = String(agentUser.id || '').startsWith('agent:') || agentUser.actorType === 'agent';
   await db.run(
     `INSERT INTO land_steward_state (
       parcel_id, steward_sub, steward_address, steward_name, steward_type,
       status, claimed_at, lease_expires_at, awakened_at,
       first_human_sub, first_human_address, human_contributor_count,
       total_tx_volume_eth, agent_royalties_eth, human_royalties_eth, platform_fees_eth, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'dormant', ?, ?, '', '', '', 0, 0, 0, 0, 0, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, 0, 0, 0, 0, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       steward_sub = excluded.steward_sub,
       steward_address = excluded.steward_address,
       steward_name = excluded.steward_name,
       steward_type = excluded.steward_type,
-      status = 'dormant',
+      status = excluded.status,
       claimed_at = excluded.claimed_at,
       lease_expires_at = excluded.lease_expires_at,
-      awakened_at = '',
+      awakened_at = excluded.awakened_at,
       updated_at = excluded.updated_at`,
     [
       cleanParcelId,
       agentUser.id,
       stewardAddress,
-      agentUser.name || 'Autonomous Steward',
+      agentUser.name || (isAgent ? 'Autonomous Steward' : 'Land Creator'),
       isAgent ? 'agent' : 'human',
+      initialStatus,
       now,
       leaseExpiresAt,
+      isAgent ? '' : now,
       now
     ]
   );
+
+  if (resolvedVolume) {
+    await saveLandVolumeRow(db, resolvedVolume, now);
+  }
 
   if (customName || curationNote) {
     await db.run(
@@ -436,12 +589,16 @@ export async function claimDormantLand(
   }
 
   const parcelBytes32 = ethers.keccak256(ethers.toUtf8Bytes(cleanParcelId));
-  const latE6 = Math.round(bounds.center[0] * 1e6);
-  const lngE6 = Math.round(bounds.center[1] * 1e6);
+  const latE6 = Math.round((resolvedVolume?.centerLat ?? bounds.center[0]) * 1e6);
+  const lngE6 = Math.round((resolvedVolume?.centerLng ?? bounds.center[1]) * 1e6);
   const ttlSeconds = STEWARD_DEFAULTS.dormantLeaseTtlHours * 3600;
   const suppliedTxHash = /^0x[0-9a-fA-F]{64}$/.test(String(txHash || '').trim())
     ? String(txHash).trim()
     : '';
+  const humanSimTxHash =
+    !isAgent && !suppliedTxHash
+      ? ethers.keccak256(ethers.toUtf8Bytes(`human-land-claim:${cleanParcelId}:${stewardAddress}:${now}`))
+      : '';
   const chainTxRequest = {
     method: 'claimDormantLand',
     network: chainCfg?.network?.name || 'Robinhood Chain',
@@ -455,17 +612,55 @@ export async function claimDormantLand(
   return {
     claimed: true,
     protocolFeeEth: 0,
-    gasSponsored: false,
-    gasPaidBy: 'agent',
-    txHash: suppliedTxHash,
+    gasSponsored: !isAgent,
+    gasPaidBy: isAgent ? 'agent' : 'platform-relayer',
+    txHash: suppliedTxHash || humanSimTxHash,
     chainTxRequest,
     parcelId: cleanParcelId,
     geohash,
-    status: 'dormant',
+    status: initialStatus,
     leaseExpiresAt,
     bounds,
+    volume: resolvedVolume,
+    limits: LAND_VOLUME_LIMITS,
     slots: { usedSlots: usedSlots + 1, maxSlots, remaining: Math.max(0, maxSlots - usedSlots - 1) }
   };
+}
+
+/**
+ * Updates 3D dimensions, Z-axis scale, and rotation of an owned Virtual Land parcel.
+ */
+export async function updateLandVolume(db, { parcelId, user, volume }) {
+  if (!user) throw new McpServiceError('Sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const currentRow = await db
+    .get('SELECT * FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId])
+    .catch(() => null);
+
+  const volCheck = validateAndNormalizeLandVolume({
+    lat: volume?.centerLat ?? volume?.lat ?? currentRow?.center_lat ?? parcelCtx.bounds.center[0],
+    lng: volume?.centerLng ?? volume?.lng ?? currentRow?.center_lng ?? parcelCtx.bounds.center[1],
+    widthMeters: volume?.widthMeters ?? currentRow?.width_meters,
+    depthMeters: volume?.depthMeters ?? currentRow?.depth_meters,
+    heightMeters: volume?.heightMeters ?? (volume?.zScale !== undefined ? undefined : currentRow?.height_meters),
+    zScale: volume?.zScale,
+    rotationDeg: volume?.rotationDeg ?? currentRow?.rotation_deg,
+    baseAltitudeM: volume?.baseAltitudeM ?? currentRow?.base_altitude_m,
+    parcelId: parcelCtx.parcelId,
+    geohash: parcelCtx.geohash
+  });
+
+  if (!volCheck.ok) {
+    throw new McpServiceError(volCheck.errors[0], 400, {
+      errors: volCheck.errors,
+      limits: LAND_VOLUME_LIMITS
+    });
+  }
+
+  await assertNoFootprintOverlap(db, volCheck.volume, user.id);
+  const now = new Date().toISOString();
+  await saveLandVolumeRow(db, volCheck.volume, now);
+  return { parcelId: parcelCtx.parcelId, volume: volCheck.volume };
 }
 
 /**

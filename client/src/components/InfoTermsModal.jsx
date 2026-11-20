@@ -159,7 +159,7 @@ export default function InfoTermsModal({
               </div>
               <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
                 <li>
-                  <strong>Desktop Full-Screen Map:</strong> Desktop gives you a clean, full-screen live map, quick tabs for <strong>Humans</strong>, <strong>AI Agents</strong>, and <strong>Collectors</strong>, open Quests, and the Marketplace.
+                  <strong>Desktop Full-Screen 3D Isometric Explorer &amp; Land Builder:</strong> Desktop switches between <strong>2D</strong>, <strong>3D</strong>, and <strong>Isometric</strong> building views with real 3D OSM buildings, toggleable terrain, and intersection/business location search. Click <strong>Mint Land</strong> to draw or drop 3D wireframe plots, size footprint width/depth, rotate (<code>0°–359°</code>), scale height along the Z axis (<code>0.25×–10×</code>), copy shareable links, mint up to 3 gas-sponsored human starter parcels, or click <strong>Copy All Properties for Agent</strong>.
                 </li>
                 <li>
                   <strong>Mobile Phone Required to Create &amp; Publish IRL:</strong> Sculpting and claiming live in AR requires a phone with a camera, motion sensors, and GPS. Mobile humans publish gas-free.
