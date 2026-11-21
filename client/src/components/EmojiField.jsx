@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   detectActiveEmojiToken,
   insertEmojiAtToken,
@@ -20,6 +20,7 @@ function EmojiFieldBase({
 }) {
   const fieldRef = useRef(null);
   const rootRef = useRef(null);
+  const pendingCaretRef = useRef(null);
   const listId = useId();
   const [caret, setCaret] = useState(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -46,6 +47,22 @@ function EmojiFieldBase({
     setActiveIndex(0);
   }, [activeToken?.query]);
 
+  useLayoutEffect(() => {
+    const pending = pendingCaretRef.current;
+    if (!pending) return;
+    if (strValue !== pending.expectedValue) return;
+    pendingCaretRef.current = null;
+    const el = fieldRef.current;
+    if (el && typeof el.setSelectionRange === 'function' && el.value === pending.expectedValue) {
+      try {
+        if (document.activeElement !== el) el.focus();
+        el.setSelectionRange(pending.caret, pending.caret);
+      } catch {
+        // ignore on non-selectable inputs
+      }
+    }
+  }, [strValue]);
+
   useEffect(() => {
     if (!isOpen) return undefined;
     const onOutside = (e) => {
@@ -59,27 +76,13 @@ function EmojiFieldBase({
 
   const emitChange = useCallback(
     (nextVal, nextCaret) => {
+      pendingCaretRef.current = { expectedValue: nextVal, caret: nextCaret };
       onChange?.({
         target: { value: nextVal },
         currentTarget: { value: nextVal }
       });
       setCaret(nextCaret);
       setDismissedTokenKey('');
-      const scheduleCaret =
-        typeof requestAnimationFrame === 'function'
-          ? requestAnimationFrame
-          : (fn) => setTimeout(fn, 0);
-      scheduleCaret(() => {
-        const el = fieldRef.current;
-        if (el && typeof el.setSelectionRange === 'function') {
-          try {
-            el.focus();
-            el.setSelectionRange(nextCaret, nextCaret);
-          } catch {
-            // ignore on non-selectable inputs
-          }
-        }
-      });
     },
     [onChange]
   );
@@ -96,6 +99,7 @@ function EmojiFieldBase({
       emitChange(finalVal, Math.min(completed.caret, finalVal.length));
       return;
     }
+    pendingCaretRef.current = null;
     setDismissedTokenKey('');
     setCaret(nextPos);
     onChange?.(e);

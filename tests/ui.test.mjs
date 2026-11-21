@@ -876,15 +876,21 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.keyDown(input, { key: 'Enter' });
     assert.equal(input.value, 'Neon 🔥');
 
-    // 2) Typing completed `:rocket:` immediately replaces with 🚀
+    // 2) Typing completed `:rocket:` immediately replaces with 🚀 (and supports chained emojis)
     RTL.fireEvent.change(textarea, {
       target: { value: 'Launch :rocket:', selectionStart: 15 }
     });
     assert.equal(textarea.value, 'Launch 🚀');
+    assert.equal(textarea.selectionStart, 'Launch 🚀'.length);
 
-    // 3) URLs and timestamps must NOT trigger emoji autocomplete
+    RTL.fireEvent.change(textarea, {
+      target: { value: 'Launch 🚀:fire:', selectionStart: 'Launch 🚀:fire:'.length }
+    });
+    assert.equal(textarea.value, 'Launch 🚀🔥');
+
+    // 3) URLs, timestamps, and double-colons must NOT trigger emoji autocomplete
     RTL.fireEvent.change(input, {
-      target: { value: 'Visit https://example.com at 12:30', selectionStart: 34 }
+      target: { value: 'Visit https://example.com at 12:30 ::before', selectionStart: 43 }
     });
     assert.equal(view.queryByRole('listbox', { name: /Emoji suggestions/i }), null);
     cleanup();
