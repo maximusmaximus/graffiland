@@ -13,23 +13,31 @@ function normalizeCoordinateQuery(q) {
   return { lat, lng };
 }
 
+function looksLikeIntersection(q) {
+  return /\s(&|and|\/|at|@)\s/i.test(String(q || '')) || /&/.test(String(q || ''));
+}
+
 function classifyOsmType(category = '', type = '', label = '') {
   const hay = `${category} ${type} ${label}`.toLowerCase();
-  if (/&|\band\b|intersection|junction|crossing/.test(hay)) return 'intersection';
+  if (/streetint|intersection|junction|crossing/.test(hay) || (looksLikeIntersection(label) && !/deli|market|pizza|cafe|bar|shop/.test(hay))) {
+    return 'intersection';
+  }
   if (
-    /amenity|shop|restaurant|cafe|bar|bank|hotel|mall|office|store|company|cinema|theatre|museum|studio|pharmacy|supermarket/.test(
+    /poi|amenity|shop|restaurant|cafe|coffee|bar|bank|hotel|mall|office|store|company|cinema|theatre|museum|studio|pharmacy|supermarket|food|retail/.test(
       hay
     )
   ) {
     return 'business';
   }
-  if (/tourism|historic|park|plaza|square|monument|tower|stadium/.test(hay)) return 'landmark';
+  if (/tourism|historic|park|plaza|square|monument|tower|stadium|landmark|bridge|attraction/.test(hay)) {
+    return 'landmark';
+  }
   return 'address';
 }
 
-async function safeFetchJson(url, headers = {}) {
+async function safeFetchJson(url, headers = {}, timeoutMs = 4200) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { headers, signal: controller.signal });
     if (!res.ok) return null;
@@ -41,8 +49,49 @@ async function safeFetchJson(url, headers = {}) {
   }
 }
 
+function scoreCandidate(cand, query, biasLat, biasLng, hasBias) {
+  let score = Number(cand._providerScore || 50);
+  const qLower = String(query || '').trim().toLowerCase();
+  const labelLower = String(cand.label || '').toLowerCase();
+  const fullLower = `${labelLower} ${String(cand.subtitle || '').toLowerCase()}`;
+
+  // Exact or prefix match boost
+  if (labelLower === qLower) score += 40;
+  else if (labelLower.startsWith(qLower)) score += 22;
+  else if (fullLower.includes(qLower)) score += 12;
+
+  // Intersection query strongly prefers actual street intersections over businesses containing "&"
+  if (looksLikeIntersection(qLower)) {
+    if (cand.category === 'intersection') score += 55;
+    else if (cand.category === 'business') score -= 18;
+  }
+
+  // Token overlap bonus (handles explicit city/neighborhood names like "Times Square" or "San Francisco")
+  const tokens = qLower
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !['and', 'the', 'ave', 'street', 'road', 'blvd'].includes(t));
+  let matchedTokens = 0;
+  for (const tok of tokens) {
+    if (fullLower.includes(tok)) matchedTokens += 1;
+  }
+  if (tokens.length > 0) {
+    score += (matchedTokens / tokens.length) * 28;
+  }
+
+  // Proximity boost around current map center when available
+  if (hasBias && Number.isFinite(cand.distanceMeters)) {
+    if (cand.distanceMeters <= 1500) score += 42;
+    else if (cand.distanceMeters <= 8000) score += 32;
+    else if (cand.distanceMeters <= 35000) score += 20;
+    else if (cand.distanceMeters <= 150000) score += 8;
+  }
+
+  return score;
+}
+
 /**
- * Searches intersections, businesses, landmarks, addresses, coordinates, or GLAND parcel IDs.
+ * Searches intersections, businesses, landmarks, addresses, coordinates, or GLAND parcel IDs
+ * using ArcGIS World Geocoder (intersections + local POIs), Photon (biased OSM POIs), and Nominatim (viewbox biased).
  */
 export async function searchLocations({ query = '', lat = null, lng = null, limit = 6 } = {}) {
   const q = String(query || '').trim().slice(0, 140);
@@ -93,23 +142,104 @@ export async function searchLocations({ query = '', lat = null, lng = null, limi
     };
   }
 
-  const hasBias = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
-  const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=${maxResults}&q=${encodeURIComponent(
+  const bLat = Number(lat);
+  const bLng = Number(lng);
+  const hasBias = Number.isFinite(bLat) && Number.isFinite(bLng);
+
+  // ArcGIS World Geocoder handles intersections ("Market & 5th") and local biased POIs ("Blue Bottle Coffee") cleanly
+  const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&SingleLine=${encodeURIComponent(
     q
-  )}`;
-  const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${maxResults}${
-    hasBias ? `&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}` : ''
+  )}&outFields=Match_addr,Addr_type,Type,PlaceName,City,Region&maxLocations=${maxResults}${
+    hasBias ? `&location=${encodeURIComponent(`${bLng},${bLat}`)}` : ''
   }`;
 
-  const [nomData, photonData] = await Promise.all([
+  const viewboxParam = hasBias
+    ? `&viewbox=${encodeURIComponent(
+        `${(bLng - 0.35).toFixed(4)},${(bLat + 0.35).toFixed(4)},${(bLng + 0.35).toFixed(4)},${(bLat - 0.35).toFixed(4)}`
+      )}&bounded=0`
+    : '';
+  const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=${maxResults}&q=${encodeURIComponent(
+    q
+  )}${viewboxParam}`;
+
+  const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${maxResults}${
+    hasBias ? `&lat=${encodeURIComponent(String(bLat))}&lon=${encodeURIComponent(String(bLng))}` : ''
+  }`;
+
+  const [arcgisData, photonData, nomData] = await Promise.all([
+    safeFetchJson(arcgisUrl, { Accept: 'application/json' }),
+    safeFetchJson(photonUrl, { Accept: 'application/json' }),
     safeFetchJson(nominatimUrl, {
       'User-Agent': 'GRAFFILAND/1.0 (+https://maximusmaximus.github.io/graffiland)',
       Accept: 'application/json'
-    }),
-    safeFetchJson(photonUrl, { Accept: 'application/json' })
+    })
   ]);
 
   const combined = [];
+
+  if (Array.isArray(arcgisData?.candidates)) {
+    for (const c of arcgisData.candidates) {
+      const rLat = Number(c?.location?.y);
+      const rLng = Number(c?.location?.x);
+      if (!Number.isFinite(rLat) || !Number.isFinite(rLng)) continue;
+      const attrs = c.attributes || {};
+      const gh = encodeGeohash(rLat, rLng, 8);
+      const addrType = String(attrs.Addr_type || '');
+      const placeType = String(attrs.Type || '');
+      const rawAddr = String(attrs.Match_addr || c.address || q);
+      const label = String(attrs.PlaceName || rawAddr.split(',')[0] || q).trim();
+      const subParts = [
+        attrs.PlaceName && rawAddr !== attrs.PlaceName ? rawAddr.split(',').slice(0, 2).join(',').trim() : '',
+        attrs.City,
+        attrs.Region
+      ].filter(Boolean);
+      const subtitle =
+        subParts.length > 0
+          ? Array.from(new Set(subParts)).slice(0, 3).join(', ')
+          : rawAddr.split(',').slice(1, 3).join(',').trim() || `GLAND-${gh.toUpperCase()}`;
+
+      combined.push({
+        id: `arc-${rLat.toFixed(5)},${rLng.toFixed(5)}-${label.slice(0, 16)}`,
+        label,
+        subtitle,
+        category: classifyOsmType(addrType, placeType, `${label} ${addrType}`),
+        lat: Number(rLat.toFixed(6)),
+        lng: Number(rLng.toFixed(6)),
+        parcelId: `GLAND-${gh.toUpperCase()}`,
+        distanceMeters: hasBias ? Math.round(haversineMeters(bLat, bLng, rLat, rLng)) : null,
+        _providerScore: Math.min(95, Number(c.score || 75))
+      });
+    }
+  }
+
+  if (Array.isArray(photonData?.features)) {
+    for (const feat of photonData.features) {
+      const coords = feat?.geometry?.coordinates;
+      const props = feat?.properties || {};
+      if (!Array.isArray(coords) || coords.length < 2) continue;
+      const rLng = Number(coords[0]);
+      const rLat = Number(coords[1]);
+      if (!Number.isFinite(rLat) || !Number.isFinite(rLng)) continue;
+      const gh = encodeGeohash(rLat, rLng, 8);
+      const nameParts = [
+        props.name,
+        props.street && props.housenumber ? `${props.housenumber} ${props.street}` : props.street
+      ].filter(Boolean);
+      const subParts = [props.city || props.town || props.state, props.country].filter(Boolean);
+      const label = nameParts[0] || subParts[0] || q;
+      combined.push({
+        id: `ph-${props.osm_id || `${rLat},${rLng}`}`,
+        label,
+        subtitle: subParts.join(', ') || `GLAND-${gh.toUpperCase()}`,
+        category: classifyOsmType(props.osm_key, props.osm_value, `${q} ${label}`),
+        lat: Number(rLat.toFixed(6)),
+        lng: Number(rLng.toFixed(6)),
+        parcelId: `GLAND-${gh.toUpperCase()}`,
+        distanceMeters: hasBias ? Math.round(haversineMeters(bLat, bLng, rLat, rLng)) : null,
+        _providerScore: 68
+      });
+    }
+  }
 
   if (Array.isArray(nomData)) {
     for (const item of nomData) {
@@ -130,41 +260,35 @@ export async function searchLocations({ query = '', lat = null, lng = null, limi
         category: classifyOsmType(item.category, item.type, `${q} ${item.display_name || ''}`),
         lat: Number(rLat.toFixed(6)),
         lng: Number(rLng.toFixed(6)),
-        parcelId: `GLAND-${gh.toUpperCase()}`
+        parcelId: `GLAND-${gh.toUpperCase()}`,
+        distanceMeters: hasBias ? Math.round(haversineMeters(bLat, bLng, rLat, rLng)) : null,
+        _providerScore: 62
       });
     }
   }
 
-  if (Array.isArray(photonData?.features)) {
-    for (const feat of photonData.features) {
-      const coords = feat?.geometry?.coordinates;
-      const props = feat?.properties || {};
-      if (!Array.isArray(coords) || coords.length < 2) continue;
-      const rLng = Number(coords[0]);
-      const rLat = Number(coords[1]);
-      if (!Number.isFinite(rLat) || !Number.isFinite(rLng)) continue;
-      const gh = encodeGeohash(rLat, rLng, 8);
-      const nameParts = [props.name, props.street && props.housenumber ? `${props.housenumber} ${props.street}` : props.street]
-        .filter(Boolean);
-      const subParts = [props.city || props.town || props.state, props.country].filter(Boolean);
-      const label = nameParts[0] || subParts[0] || q;
-      combined.push({
-        id: `ph-${props.osm_id || `${rLat},${rLng}`}`,
-        label,
-        subtitle: subParts.join(', ') || `GLAND-${gh.toUpperCase()}`,
-        category: classifyOsmType(props.osm_key, props.osm_value, `${q} ${label}`),
-        lat: Number(rLat.toFixed(6)),
-        lng: Number(rLng.toFixed(6)),
-        parcelId: `GLAND-${gh.toUpperCase()}`
-      });
-    }
-  }
+  // Rank candidates by match quality + local proximity to current map center
+  const ranked = combined
+    .map((cand) => ({ ...cand, _rank: scoreCandidate(cand, q, bLat, bLng, hasBias) }))
+    .sort((a, b) => b._rank - a._rank);
 
-  // Deduplicate candidates within 30m
+  // Deduplicate candidates within 40m
   const deduped = [];
-  for (const cand of combined) {
-    const dup = deduped.some((kept) => haversineMeters(kept.lat, kept.lng, cand.lat, cand.lng) < 30);
-    if (!dup) deduped.push(cand);
+  for (const cand of ranked) {
+    const dup = deduped.some((kept) => haversineMeters(kept.lat, kept.lng, cand.lat, cand.lng) < 40);
+    if (!dup) {
+      deduped.push({
+        id: cand.id,
+        label: cand.label,
+        subtitle: cand.subtitle,
+        category: cand.category,
+        lat: cand.lat,
+        lng: cand.lng,
+        parcelId: cand.parcelId,
+        geohash: cand.geohash,
+        distanceMeters: cand.distanceMeters
+      });
+    }
     if (deduped.length >= maxResults) break;
   }
 

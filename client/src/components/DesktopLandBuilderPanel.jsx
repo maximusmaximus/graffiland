@@ -7,6 +7,7 @@ import {
   scaleFootprintToLimit
 } from '../../../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
+import InfoTip from './InfoTip.jsx';
 
 async function copyTextSafe(text) {
   const payload = String(text || '');
@@ -75,7 +76,7 @@ export function DesktopLandBuilderPanel({
 }) {
   const limits = useMemo(() => ({
     ...LAND_VOLUME_LIMITS,
-    ...(config?.landVolumeLimits || {})
+    ...(config?.landVolumeLimits || config?.policy?.landVolumeLimits || {})
   }), [config]);
 
   const [copyBanner, setCopyBanner] = useState('');
@@ -161,12 +162,7 @@ export function DesktopLandBuilderPanel({
 
   const footprintScaleRatio = useMemo(() => {
     const span = Math.max(0.1, maxFootprintFit.maxWidthForAspect - maxFootprintFit.minWidthForAspect);
-    return clampNum(
-      (activeWidth - maxFootprintFit.minWidthForAspect) / span,
-      0,
-      1,
-      0
-    );
+    return clampNum((activeWidth - maxFootprintFit.minWidthForAspect) / span, 0, 1, 0);
   }, [activeWidth, maxFootprintFit.minWidthForAspect, maxFootprintFit.maxWidthForAspect]);
 
   const maxHeightInfo = useMemo(
@@ -216,9 +212,7 @@ export function DesktopLandBuilderPanel({
     return enrichedProperties.map((prop) => `${prop.customName || prop.parcelId}: ${prop.shareUrl}`).join('\n');
   }, [enrichedProperties]);
 
-  const flashCopy = (msg) => {
-    setCopyBanner(msg);
-  };
+  const flashCopy = (msg) => setCopyBanner(msg);
 
   const handleCopySingleLink = async () => {
     if (!activeItem) return;
@@ -263,7 +257,6 @@ export function DesktopLandBuilderPanel({
 
   const statusText = typeof landStatus === 'string' ? landStatus : landStatus?.text || '';
   const statusIsError = typeof landStatus === 'object' ? Boolean(landStatus?.isError) : false;
-
   const isDrawActive = drawMode === true || drawMode === 'draw';
 
   return (
@@ -275,7 +268,7 @@ export function DesktopLandBuilderPanel({
           aria-pressed={isDrawActive}
           onClick={onToggleDrawMode}
         >
-          {isDrawActive ? '✏️ Drawing on Map (Click/Drag)' : '✏️ Draw Land'}
+          {isDrawActive ? '✏️ Drawing on Map' : '✏️ Draw Land'}
         </button>
         <button
           type="button"
@@ -286,36 +279,30 @@ export function DesktopLandBuilderPanel({
           + Add Square
         </button>
         {draftParcels.length > 0 && (
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={onClearDrafts}
-          >
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onClearDrafts}>
             Clear ({draftParcels.length})
           </button>
         )}
+        <InfoTip title="On-Map 3D Controls" align="right">
+          Hover a plot to select it. Drag <strong>corner balls</strong> to scale, drag{' '}
+          <strong>side bars</strong> to stretch an edge, hold &amp; move{' '}
+          <strong>vertical corner bars</strong> to rotate, or drag the <strong>center</strong> to
+          move.
+        </InfoTip>
       </div>
 
-      <div className="land-builder-legend" aria-label="Wireframe color key">
-        <span><i className="legend-dot legend-cyan" /> Considering</span>
-        <span><i className="legend-dot legend-amber" /> Owned</span>
-        <span><i className="legend-dot legend-magenta" /> Quest</span>
-        <span><i className="legend-dot legend-crimson" /> Conflict / Limit</span>
-      </div>
-
-      <div className="land-limits-card" data-testid="land-limits-card">
-        <div className="land-limits-title">3D Land Limits &amp; Rules</div>
-        <div className="land-limits-grid">
-          <span>Footprint W/D: <b>{limits.minWidthMeters}–{limits.maxWidthMeters}m</b></span>
-          <span>Max Area: <b>{limits.maxFootprintAreaSqM.toLocaleString()} m²</b></span>
-          <span>Z-Scale: <b>{limits.minZScale}×–{limits.maxZScale}×</b> ({limits.minHeightMeters}–{limits.maxHeightMeters}m)</span>
-          <span>Max Volume: <b>{limits.maxVolumeCubicM.toLocaleString()} m³</b></span>
-          <span>Rotation: <b>{limits.rotationMinDeg}°–{limits.rotationMaxDeg}°</b></span>
-          <span>Batch / Free: <b>{limits.maxSelectionBatch} plots</b> · <b>{limits.starterFreeHumanClaims} free human claims</b></span>
-        </div>
-        <div className="land-limits-footnote">
-          Human starter claims use sponsored gas. Autonomous agents mint Quest slots &amp; pay their own gas.
-        </div>
+      <div className="land-limits-compact" data-testid="land-limits-card">
+        <span className="mono">
+          Limits: <b>{limits.maxFootprintAreaSqM.toLocaleString()} m²</b> ·{' '}
+          <b>{limits.maxVolumeCubicM.toLocaleString()} m³</b> ·{' '}
+          <b>{limits.starterFreeHumanClaims} free human claims</b>
+        </span>
+        <InfoTip title="3D Land Limits & Rules" align="right">
+          <div>Width / Depth: {limits.minWidthMeters}–{limits.maxWidthMeters}m (max {limits.maxFootprintAreaSqM.toLocaleString()} m²)</div>
+          <div>Height (Z): {limits.minHeightMeters}–{limits.maxHeightMeters}m (max {limits.maxVolumeCubicM.toLocaleString()} m³)</div>
+          <div>Rotation: {limits.rotationMinDeg}°–{limits.rotationMaxDeg}° · Batch: up to {limits.maxSelectionBatch} plots</div>
+          <div>Humans get {limits.starterFreeHumanClaims} gas-free starter claims. AI agents pay own gas.</div>
+        </InfoTip>
       </div>
 
       {statusText && (
@@ -331,9 +318,9 @@ export function DesktopLandBuilderPanel({
 
       {!user && (
         <div className="land-signin-callout">
-          <span>Sign in to mint starter plots or update your owned 3D volumes directly.</span>
+          <span>Sign in to mint free starter plots.</span>
           {onSignIn && (
-            <button type="button" className="btn btn-sm btn-primary" onClick={onSignIn}>
+            <button type="button" className="btn btn-xs btn-primary" onClick={onSignIn}>
               Sign In
             </button>
           )}
@@ -341,12 +328,19 @@ export function DesktopLandBuilderPanel({
       )}
 
       <div className="land-section-header">
-        <strong>Considering Squares ({draftParcels.length}/{limits.maxSelectionBatch})</strong>
+        <strong>
+          Plots ({draftParcels.length}/{limits.maxSelectionBatch})
+        </strong>
+        <div className="land-builder-legend" aria-label="Wireframe color key">
+          <span><i className="legend-dot legend-cyan" /> Draft</span>
+          <span><i className="legend-dot legend-amber" /> Owned</span>
+          <span><i className="legend-dot legend-crimson" /> Conflict</span>
+        </div>
       </div>
 
       {draftParcels.length === 0 ? (
-        <div className="empty-state" style={{ padding: '10px 12px', textAlign: 'left' }}>
-          Click <strong>✏️ Draw Land</strong> and drag/click anywhere on the map, or press <strong>+ Add Square</strong> to drop a 3D wireframe plot. Drawing your first square automatically tilts the map into 3D view.
+        <div className="empty-state" style={{ padding: '10px 12px', textAlign: 'left', fontSize: 12 }}>
+          Click <strong>✏️ Draw Land</strong> and drag on the map, or press <strong>+ Add Square</strong>.
         </div>
       ) : (
         <div className="land-draft-list" role="list">
@@ -395,7 +389,7 @@ export function DesktopLandBuilderPanel({
       {ownedParcels.length > 0 && (
         <div className="land-owned-strip">
           <div className="land-section-header">
-            <strong>Your Owned Parcels ({ownedParcels.length})</strong>
+            <strong>Your Owned Plots ({ownedParcels.length})</strong>
           </div>
           <div className="land-owned-pills">
             {ownedParcels.slice(0, 8).map((parcel) => {
@@ -419,21 +413,23 @@ export function DesktopLandBuilderPanel({
       {activeItem && (
         <div className="land-selected-editor" data-testid="land-selected-editor">
           <div className="land-editor-header">
-            <div>
+            <div className="land-editor-title-row">
               <div className="land-editor-title">
-                {activeMode === 'owned' ? 'Edit Owned 3D Volume' : 'Selected Square 3D Controls'}
+                {activeMode === 'owned' ? 'Owned 3D Volume' : 'Selected Plot'}
               </div>
-              <div className="land-editor-id">
-                <code>{activeItem.parcelId}</code> · {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
-              </div>
+              <InfoTip title="Shape Controls" align="right">
+                Use sliders below or drag handles directly on the map: corner balls scale, edge bars
+                stretch one side, vertical corner bars rotate, center moves.
+              </InfoTip>
+            </div>
+            <div className="land-editor-id">
+              <code>{activeItem.parcelId}</code> · {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
             </div>
           </div>
 
           {activeMode === 'draft' && (activeDraft?.hasOverlap || activeDraft?.valid === false) && (
             <div className="land-validation-errors" role="alert">
-              {activeDraft.hasOverlap && (
-                <div>Overlaps an existing parcel or another draft square. Move or shrink the footprint.</div>
-              )}
+              {activeDraft.hasOverlap && <div>Overlaps another plot. Move or shrink it.</div>}
               {(activeDraft.errors || []).map((err) => (
                 <div key={err}>{err}</div>
               ))}
@@ -442,12 +438,12 @@ export function DesktopLandBuilderPanel({
 
           {activeMode === 'draft' && (
             <label className="land-name-field" htmlFor="land-square-name-input">
-              <span>Square Label</span>
+              <span>Label</span>
               <input
                 id="land-square-name-input"
                 type="text"
                 maxLength={64}
-                placeholder="e.g., Corner Plaza Studio"
+                placeholder="e.g., Corner Plaza"
                 value={activeDraft.customName || ''}
                 onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
               />
@@ -456,7 +452,12 @@ export function DesktopLandBuilderPanel({
 
           <div className="land-slider-row">
             <div className="land-slider-label">
-              <span>Scale Footprint to Limit ({areaLimitPct}% of {limits.maxFootprintAreaSqM.toLocaleString()} m²)</span>
+              <span>
+                Scale ({areaLimitPct}% max)
+                <InfoTip title="Proportional Scale">
+                  Scales width &amp; depth together up to the {limits.maxFootprintAreaSqM.toLocaleString()} m² limit while keeping your orientation and aspect ratio.
+                </InfoTip>
+              </span>
               <strong>{activeWidth}×{activeDepth} m</strong>
             </div>
             <input
@@ -505,7 +506,6 @@ export function DesktopLandBuilderPanel({
                     rotationDeg: normalizeRotationDeg(cameraBearingDeg)
                   })
                 }
-                title="Align parcel orientation with current map camera bearing"
               >
                 Match Map Angle ({Math.round(normalizeRotationDeg(cameraBearingDeg))}°)
               </button>
@@ -546,7 +546,13 @@ export function DesktopLandBuilderPanel({
 
           <div className="land-slider-row">
             <div className="land-slider-label">
-              <span>Rotate (°)</span>
+              <span>
+                Rotate (°)
+                <InfoTip title="Rotate Plot">
+                  Hold and move any vertical corner bar on the 3D box on the map to rotate freely,
+                  or use the slider below.
+                </InfoTip>
+              </span>
               <strong>{activeRotation}°</strong>
             </div>
             <input
@@ -568,7 +574,7 @@ export function DesktopLandBuilderPanel({
                     rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
                   })}
                 >
-                  {delta === 0 ? 'Reset 0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
+                  {delta === 0 ? '0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
                 </button>
               ))}
             </div>
@@ -576,7 +582,13 @@ export function DesktopLandBuilderPanel({
 
           <div className="land-slider-row">
             <div className="land-slider-label">
-              <span>Z-Axis Scale (Height · {volLimitPct}% vol)</span>
+              <span>
+                Z-Axis Scale ({volLimitPct}% vol)
+                <InfoTip title="3D Height & Volume">
+                  Adjusts vertical height from {limits.minHeightMeters}m up to {maxHeightInfo.heightMeters}m
+                  within the {limits.maxVolumeCubicM.toLocaleString()} m³ volume cap.
+                </InfoTip>
+              </span>
               <strong>{activeZScale.toFixed(2)}× ({Math.round(activeHeight)} m)</strong>
             </div>
             <input
@@ -651,14 +663,16 @@ export function DesktopLandBuilderPanel({
       {draftParcels.length > 0 && (
         <div className="land-agent-export" data-testid="land-agent-export">
           <div className="land-section-header">
-            <strong>Batch Mint &amp; Agent Export</strong>
+            <strong>
+              Agent Export &amp; Batch Mint
+              <InfoTip title="Paste Into Your AI Agent" align="right">
+                Copies every selected plot&apos;s GPS center, corners, 3D dimensions, share links,
+                and exact API/MCP payload so your AI agent can acquire them.
+              </InfoTip>
+            </strong>
           </div>
           <div className="land-agent-export-actions">
-            <button
-              type="button"
-              className="btn btn-sm btn-outline"
-              onClick={handleCopyAllForAgent}
-            >
+            <button type="button" className="btn btn-sm btn-outline" onClick={handleCopyAllForAgent}>
               Copy All Properties for Agent
             </button>
             <button
@@ -666,14 +680,10 @@ export function DesktopLandBuilderPanel({
               className="btn btn-sm btn-ghost"
               onClick={() => setShowAgentPreview((prev) => !prev)}
             >
-              {showAgentPreview ? 'Hide Agent Text' : 'Preview Agent Text'}
+              {showAgentPreview ? 'Hide Text' : 'Preview Text'}
             </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={handleCopyAllLinks}
-            >
-              Copy All Links
+            <button type="button" className="btn btn-sm btn-ghost" onClick={handleCopyAllLinks}>
+              Copy Links
             </button>
             <button
               type="button"
