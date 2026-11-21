@@ -334,11 +334,12 @@ export function createAppServer(serverOptions = {}) {
     const normalized = raw ? ethers.getAddress(raw) : '';
     const isEmbedded =
       normalized && String(req.user.wallet_address || '').toLowerCase() === normalized.toLowerCase();
+    let verifiedProof = null;
     if (normalized && !isEmbedded) {
       // The payout address is also treated as an ownership identity (land + sculpture checks),
       // so require proof of control and refuse addresses already linked to another account.
       try {
-        verifyPayoutLinkSignature({
+        verifiedProof = verifyPayoutLinkSignature({
           userId: req.user.id,
           address: normalized,
           issuedAt: req.body?.issuedAt,
@@ -357,6 +358,23 @@ export function createAppServer(serverOptions = {}) {
           .status(409)
           .json({ error: 'That wallet address is already linked to another GRAFFILAND account.' });
       }
+      db.prepare(
+        `INSERT INTO payout_address_proofs (user_id, address, message, signature, verified_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           address = excluded.address,
+           message = excluded.message,
+           signature = excluded.signature,
+           verified_at = excluded.verified_at`
+      ).run(
+        req.user.id,
+        normalized,
+        verifiedProof.message,
+        String(req.body?.signature || '').trim(),
+        new Date().toISOString()
+      );
+    } else {
+      db.prepare('DELETE FROM payout_address_proofs WHERE user_id = ?').run(req.user.id);
     }
     db.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?').run(
       normalized,

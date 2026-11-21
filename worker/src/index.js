@@ -255,6 +255,19 @@ async function getAuthUser(request, env, cfg) {
     const decoded = await verifyJwt(token, cfg.sessionSecret);
     const userRow = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(decoded.sub).first();
     if (!userRow) return null;
+    if (
+      userRow.custom_payout_address &&
+      String(userRow.custom_payout_address).toLowerCase() !==
+        String(userRow.wallet_address || '').toLowerCase()
+    ) {
+      const proof = await env.DB.prepare(
+        'SELECT user_id FROM payout_address_proofs WHERE user_id = ? AND LOWER(address) = ?'
+      )
+        .bind(userRow.id, String(userRow.custom_payout_address).toLowerCase())
+        .first()
+        .catch(() => null);
+      if (!proof) userRow.custom_payout_address = '';
+    }
     if (decoded.actorType === 'agent' || String(userRow.id).startsWith('agent:')) {
       const agentRow = await env.DB.prepare('SELECT * FROM agent_accounts WHERE agent_id = ?')
         .bind(userRow.id)
@@ -1070,8 +1083,9 @@ export default {
       if (normalized && !isEmbedded) {
         // The payout address doubles as an ownership identity (land + sculpture checks), so
         // require proof of control and refuse addresses already linked to another account.
+        let verifiedProof;
         try {
-          verifyPayoutLinkSignature({
+          verifiedProof = verifyPayoutLinkSignature({
             userId: user.id,
             address: normalized,
             issuedAt: body?.issuedAt,
@@ -1092,6 +1106,27 @@ export default {
             request
           );
         }
+        await env.DB.prepare(
+          `INSERT INTO payout_address_proofs (user_id, address, message, signature, verified_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             address = excluded.address,
+             message = excluded.message,
+             signature = excluded.signature,
+             verified_at = excluded.verified_at`
+        )
+          .bind(
+            user.id,
+            normalized,
+            verifiedProof.message,
+            String(body?.signature || '').trim(),
+            new Date().toISOString()
+          )
+          .run();
+      } else {
+        await env.DB.prepare('DELETE FROM payout_address_proofs WHERE user_id = ?')
+          .bind(user.id)
+          .run();
       }
       await env.DB.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?')
         .bind(normalized, user.id)
