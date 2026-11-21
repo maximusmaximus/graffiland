@@ -977,4 +977,158 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('StudioHudTopBar Pair & Approvals button shows notification pill, Yes/No approvals with descriptions, QR scanner, Agent Connector copy & history', async () => {
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+    const approved = [];
+    const rejected = [];
+    const connectedCodes = [];
+    const copiedTexts = [];
+
+    const origClipboard = globalThis.navigator.clipboard;
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (txt) => {
+          copiedTexts.push(txt);
+        }
+      }
+    });
+
+    const pendingItems = [
+      {
+        id: 'sigreq_1',
+        action: 'create_sculpture',
+        parcelId: 'GLAND-9Q8YYK8Y',
+        agentName: 'VoxelBot',
+        summaryTitle: 'Place "Neon Dragon"',
+        summaryDescription: 'Add GLB 3D model on parcel GLAND-9Q8YYK8Y — Fire-breathing corner statue.',
+        status: 'pending',
+        expiresAt: new Date(Date.now() + 30 * 60000).toISOString()
+      },
+      {
+        id: 'sigreq_2',
+        action: 'update_land_settings',
+        parcelId: 'GLAND-9Q8YYK8Y',
+        agentName: 'StewardAI',
+        summaryTitle: 'Freeze Land',
+        summaryDescription: 'Freeze land on parcel GLAND-9Q8YYK8Y.',
+        status: 'pending',
+        expiresAt: new Date(Date.now() + 45 * 60000).toISOString()
+      }
+    ];
+    const historyItems = [
+      {
+        id: 'sigreq_old_1',
+        action: 'update_parcel',
+        parcelId: 'GLAND-9Q8YYK8Y',
+        agentName: 'VoxelBot',
+        summaryTitle: 'Update Land Details',
+        summaryDescription: 'Set name "Sunset Plaza" on parcel GLAND-9Q8YYK8Y.',
+        status: 'executed',
+        signedBy: 'mobile-wallet',
+        updatedAt: new Date(Date.now() - 15 * 60000).toISOString()
+      },
+      {
+        id: 'sigreq_old_2',
+        action: 'erase_land',
+        parcelId: 'GLAND-9Q8YYK8Y',
+        agentName: 'RogueBot',
+        summaryTitle: 'Erase All Land Artworks',
+        summaryDescription: 'Erase all artworks & curations on parcel GLAND-9Q8YYK8Y.',
+        status: 'rejected',
+        updatedAt: new Date(Date.now() - 40 * 60000).toISOString()
+      }
+    ];
+
+    try {
+      function Wrapper() {
+        const [pairInput, setPairInput] = React.useState('');
+        const [notice, setNotice] = React.useState('');
+        return React.createElement(StudioHudTopBar, {
+          user: { id: 'u1', walletAddress: '0x1111111111111111111111111111111111111111' },
+          mode: 'draw',
+          dockOpen: false,
+          location: { lat: 37.7749, lng: -122.4194 },
+          pairedCode: '',
+          pairCodeInput: pairInput,
+          setPairCodeInput: setPairInput,
+          onConnectPairCode: (code) => connectedCodes.push(code),
+          mcpPairingsState: {
+            mcpActive: true,
+            activePairing: { code: 'GLP-ABCD-2345-EFGH-6789', keyConnected: false },
+            pairings: []
+          },
+          mcpPairNotice: notice,
+          setMcpPairNotice: setNotice,
+          voxels: [],
+          quickSculpt: false,
+          onToggleQuickSculpt: () => {},
+          onOpenTutorial: () => {},
+          onOpenInfo: () => {},
+          hasOwnedLand: true,
+          ownedLandCount: 1,
+          onOpenLandManage: () => {},
+          originStatus: { originBlocked: false },
+          sceneScan: { optimal: false },
+          pendingSignatures: pendingItems,
+          signatureHistory: historyItems,
+          onMobileSignPending: (item) => approved.push(item.id),
+          onMobileRejectPending: (id) => rejected.push(id),
+          mapOpen: false,
+          nearbyCount: 0,
+          onOpenAreaMap: () => {}
+        });
+      }
+
+      const view = RTL.render(React.createElement(Wrapper));
+
+      // Notification pill count (2) and persistent alert pill are immediately visible on main canvas
+      assert.equal(view.getByTestId('mobile-pending-pill').textContent, '2');
+      assert.ok(view.getByTestId('mobile-pending-alert-pill').textContent.includes('2 pending approvals'));
+
+      // Clicking the Pair & Approvals button drops down to Pending tab with descriptions & Yes/No buttons
+      RTL.fireEvent.click(view.getByTestId('mobile-pair-hub-btn'));
+      assert.ok(view.getByTestId('mobile-pair-dropdown'));
+      assert.equal(view.getAllByTestId('mobile-pending-item').length, 2);
+      assert.ok(view.getByText(/Fire-breathing corner statue/));
+
+      // Approve Yes on first item, Reject No on second item
+      RTL.fireEvent.click(view.getAllByRole('button', { name: /Yes, Approve/i })[0]);
+      RTL.fireEvent.click(view.getAllByRole('button', { name: /No, Reject/i })[1]);
+      assert.deepEqual(approved, ['sigreq_1']);
+      assert.deepEqual(rejected, ['sigreq_2']);
+
+      // Switch to History tab -> both past Approved & Rejected items appear with descriptions
+      RTL.fireEvent.click(view.getByRole('tab', { name: /History/i }));
+      assert.equal(view.getAllByTestId('mobile-history-item').length, 2);
+      assert.ok(view.getByText(/Set name "Sunset Plaza"/));
+      assert.ok(view.getByText(/Erase all artworks/));
+
+      // Switch to Pair tab -> scan QR viewfinder toggles, URL paste extracts code, and Agent Connector copies
+      RTL.fireEvent.click(view.getByRole('tab', { name: /^🔗 Pair$/i }));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Scan Desktop QR Code/i }));
+      assert.ok(view.getByTestId('desktop-qr-scanner'));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Close Scanner/i }));
+
+      RTL.fireEvent.change(view.getByLabelText('Desktop pair code'), {
+        target: { value: 'https://maximusmaximus.github.io/graffiland/?pair=xy98ab' }
+      });
+      RTL.fireEvent.click(view.getByRole('button', { name: /^Connect$/i }));
+      assert.deepEqual(connectedCodes, ['XY98AB']);
+
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /Copy Agent Connector Prompt/i }));
+      });
+      assert.ok(copiedTexts.some((t) => t.includes('GLP-ABCD-2345-EFGH-6789')));
+    } finally {
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        configurable: true,
+        value: origClipboard
+      });
+      cleanup();
+    }
+  });
 });

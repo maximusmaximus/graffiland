@@ -870,5 +870,114 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await nearPage.getByRole('button', { name: /View in AR/i }).waitFor();
     await nearPage.getByRole('button', { name: /Make Art on This Property/i }).waitFor();
     await nearCtx.close();
+
+    // 4) Mobile Main Canvas Pair & Approvals Hub: notification pill, dropdown Yes/No approval, history & QR scanner
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devProfile: { email: 'mobile-pair-e2e@graffiland.test', name: 'Mobile Owner' } })
+    }).then((r) => r.json());
+    const ownerClaim = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({ lat: 37.7755, lng: -122.4185, customName: 'Mobile Pair Lot' })
+    }).then((r) => r.json());
+    const mcpPair = await fetch(`${baseUrl}/api/mcp/pairings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({})
+    }).then((r) => r.json());
+    await fetch(`${baseUrl}/api/mcp/pairings/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pairingCode: mcpPair.pairing.code,
+        agentName: 'E2E Mobile Bot',
+        agentAddress: ownerAuth.user.walletAddress
+      })
+    });
+    // Enqueue 2 agent requests: reject 1 immediately so History starts with 1 item, keep 1 Pending!
+    const stagedA = await fetch(`${baseUrl}/api/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Graffiland-Pairing-Code': mcpPair.pairing.code
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'update_land_parcel',
+          arguments: {
+            parcelId: ownerClaim.parcelId,
+            customName: 'Approved Mobile Plaza',
+            description: 'Updated via one-tap mobile approval'
+          }
+        }
+      })
+    }).then((r) => r.json());
+    const stagedB = await fetch(`${baseUrl}/api/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Graffiland-Pairing-Code': mcpPair.pairing.code
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'update_land_settings',
+          arguments: { parcelId: ownerClaim.parcelId, frozen: true }
+        }
+      })
+    }).then((r) => r.json());
+    const rejectId = stagedB.result.structuredContent.request.id;
+    await fetch(`${baseUrl}/api/signatures/requests/${rejectId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({})
+    });
+    assert.ok(stagedA.result.structuredContent.request.id);
+
+    const hubCtx = await browser.newContext({
+      ...mobileBase,
+      geolocation: { latitude: 37.7755, longitude: -122.4185 }
+    });
+    await hubCtx.addInitScript((tok) => {
+      globalThis.localStorage.setItem('graffiland_jwt', tok);
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+      globalThis.localStorage.setItem('graffiland_studio_tutorial_v1', '1');
+    }, ownerAuth.token);
+    const hubPage = await hubCtx.newPage();
+    const hubErrors = [];
+    hubPage.on('pageerror', (err) => hubErrors.push(err.message));
+
+    await hubPage.goto(baseUrl, { waitUntil: 'networkidle' });
+    await hubPage.waitForSelector('[data-testid="mobile-pair-hub-btn"]', { timeout: 15000 });
+    await hubPage.waitForSelector('[data-testid="mobile-pending-pill"]', { timeout: 10000 });
+    assert.equal(await hubPage.locator('[data-testid="mobile-pending-pill"]').textContent(), '1');
+    await hubPage.waitForSelector('[data-testid="mobile-pending-alert-pill"]');
+
+    // Open dropdown from main canvas button -> lands on Pending tab with item description & Yes/No
+    await hubPage.locator('[data-testid="mobile-pair-hub-btn"]').click();
+    await hubPage.waitForSelector('[data-testid="mobile-pair-dropdown"]');
+    await hubPage.waitForSelector('text=Approved Mobile Plaza');
+
+    // Approve Yes -> notification pill disappears and item appears in History as Approved
+    await hubPage.getByRole('button', { name: /Yes, Approve/i }).click();
+    await hubPage.waitForSelector('[data-testid="mobile-pending-pill"]', { state: 'detached', timeout: 10000 });
+    await hubPage.getByRole('tab', { name: /History/i }).click();
+    await hubPage.waitForSelector('[data-testid="mobile-history-item"]');
+    assert.equal(await hubPage.locator('[data-testid="mobile-history-item"]').count(), 2);
+
+    // Switch to Pair tab -> verify QR Scanner and Copy Agent Connector controls are present
+    await hubPage.getByRole('tab', { name: /Pair/i }).click();
+    await hubPage.getByRole('button', { name: /Scan Desktop QR Code/i }).click();
+    await hubPage.waitForSelector('[data-testid="desktop-qr-scanner"]');
+    await hubPage.getByRole('button', { name: /Copy Agent Connector Prompt/i }).waitFor();
+    assert.deepEqual(hubErrors, []);
+    await hubCtx.close();
   });
 });

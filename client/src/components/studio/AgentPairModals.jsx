@@ -1,16 +1,24 @@
-import React from 'react';
-import { buildPropertyOwnerPrompt } from '../../../../shared/landSignatureMessage.mjs';
+import React, { useState } from 'react';
+import {
+  buildAutonomousAgentPrompt,
+  buildPropertyOwnerPrompt,
+  buildStdioMcpSnippet
+} from '../../../../shared/landSignatureMessage.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
+import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
 import XeroIcon from '../XeroIcon.jsx';
+import DesktopQrScanner from './DesktopQrScanner.jsx';
 
 export function PairDesktopMcpModal({
   user,
+  videoRef = null,
   pairCodeInput,
   setPairCodeInput,
   pairedCode,
   pairError,
   onConnectPairCode,
+  onDisconnectDesktopPair,
   mcpPairingsState,
   mcpPairBusy,
   mcpPairNotice,
@@ -19,6 +27,24 @@ export function PairDesktopMcpModal({
   onDisconnectMcpPairing,
   onClose
 }) {
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const apiOrigin = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+  const activeCode =
+    mcpPairingsState.activePairing?.code ||
+    mcpPairingsState.pairings?.find((p) => p.status === 'pending')?.code ||
+    '';
+
+  const handleDesktopConnect = (rawInput) => {
+    const parsed = parseDesktopPairQrText(rawInput);
+    if (parsed?.kind === 'desktop') {
+      setPairCodeInput(parsed.code);
+      onConnectPairCode(parsed.code);
+      setScannerOpen(false);
+      return;
+    }
+    onConnectPairCode(rawInput);
+  };
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
@@ -33,26 +59,62 @@ export function PairDesktopMcpModal({
 
         <div className="card" style={{ padding: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-            Desktop Live 3D View Pair (6-char)
+            Desktop Live 3D View Pair (6-char or QR)
           </div>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
-            Enter the 6-character code from Desktop to mirror your 3D drawing live on a big screen.
+            Scan the QR code from Desktop or enter its 6-character code to mirror your 3D drawing
+            live on a big screen.
           </p>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            style={{ width: '100%', marginBottom: 8 }}
+            onClick={() => setScannerOpen((v) => !v)}
+          >
+            <XeroIcon emoji="📷" size={15} />{' '}
+            {scannerOpen ? 'Hide QR Scanner' : 'Scan Desktop QR Code'}
+          </button>
+          {scannerOpen && (
+            <div style={{ marginBottom: 8 }}>
+              <DesktopQrScanner
+                existingVideoRef={videoRef}
+                onDetected={(parsed) => {
+                  if (parsed?.kind === 'desktop') {
+                    setPairCodeInput(parsed.code);
+                    onConnectPairCode(parsed.code);
+                    setScannerOpen(false);
+                  }
+                }}
+                onClose={() => setScannerOpen(false)}
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               className="input mono"
               value={pairCodeInput}
               onChange={(e) => setPairCodeInput(e.target.value.toUpperCase())}
-              placeholder="ABC123"
-              maxLength={6}
+              placeholder="ABC123 or Desktop URL"
+              maxLength={120}
             />
-            <button className="btn btn-primary" onClick={() => onConnectPairCode(pairCodeInput)}>
+            <button className="btn btn-primary" onClick={() => handleDesktopConnect(pairCodeInput)}>
               <XeroIcon emoji="🔗" size={16} /> Connect
             </button>
           </div>
           {pairedCode && (
-            <div className="badge teal" style={{ marginTop: 10 }}>
-              <XeroIcon emoji="✅" size={14} /> Paired to {pairedCode}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              <div className="badge teal">
+                <XeroIcon emoji="✅" size={14} /> Paired to {pairedCode}
+              </div>
+              {onDisconnectDesktopPair && (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-danger"
+                  onClick={onDisconnectDesktopPair}
+                >
+                  Disconnect
+                </button>
+              )}
             </div>
           )}
           {pairError && (
@@ -62,7 +124,7 @@ export function PairDesktopMcpModal({
 
         <div className="card" style={{ padding: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-            <strong style={{ fontSize: 13 }}>Robust Agent MCP Pairing</strong>
+            <strong style={{ fontSize: 13 }}>AI Agent Connector (MCP Pairing)</strong>
             <span className={`badge ${mcpPairingsState.mcpActive ? 'teal' : 'gold'}`}>
               {mcpPairingsState.mcpActive
                 ? mcpPairingsState.activePairing?.keyConnected
@@ -72,14 +134,15 @@ export function PairDesktopMcpModal({
             </span>
           </div>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>
-            MCP tools stay inactive until an AI agent connects using your robust{' '}
-            <code>GLP-...</code> pairing code.
+            Copy your Agent Connector prompt or MCP config. MCP tools stay inactive until an AI
+            agent connects with your <code>GLP-...</code> code.
           </p>
 
-          {mcpPairingsState.activePairing ? (
+          {activeCode ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
-                Active Code: {mcpPairingsState.activePairing.code}
+                {mcpPairingsState.activePairing ? 'Active Code: ' : 'Pending Code: '}
+                {activeCode}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
@@ -87,33 +150,40 @@ export function PairDesktopMcpModal({
                   className="btn btn-primary"
                   onClick={async () => {
                     const txt = buildPropertyOwnerPrompt({
-                      apiOrigin: API_BASE || window.location.origin,
-                      pairingCode: mcpPairingsState.activePairing.code,
+                      apiOrigin,
+                      pairingCode: activeCode,
                       ownerAddress: user?.activeMintRecipient || user?.walletAddress
                     });
                     const ok = await copyToClipboard(txt);
-                    setMcpPairNotice(ok ? 'Copied full Owner MCP Prompt!' : 'Copy prompt from README.');
+                    setMcpPairNotice(ok ? 'Copied full Agent Connector Prompt!' : 'Copy failed.');
                   }}
                 >
-                  <XeroIcon emoji="📋" size={14} /> Copy Owner MCP Prompt
+                  <XeroIcon emoji="📋" size={14} /> Copy Agent Connector
                 </button>
                 <button
                   type="button"
-                  className="btn btn-danger"
-                  disabled={mcpPairBusy}
-                  onClick={() => onDisconnectMcpPairing(mcpPairingsState.activePairing.code)}
+                  className="btn btn-outline btn-sm"
+                  onClick={async () => {
+                    const ok = await copyToClipboard(buildStdioMcpSnippet({ apiOrigin }));
+                    setMcpPairNotice(ok ? 'Copied MCP JSON config!' : 'Copy failed.');
+                  }}
                 >
-                  Disconnect MCP
+                  📋 Copy MCP JSON
                 </button>
+                {mcpPairingsState.activePairing && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    disabled={mcpPairBusy}
+                    onClick={() => onDisconnectMcpPairing(mcpPairingsState.activePairing.code)}
+                  >
+                    Disconnect MCP
+                  </button>
+                )}
               </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {mcpPairingsState.pairings?.[0]?.status === 'pending' && (
-                <div className="mono" style={{ fontSize: 12, color: 'var(--accent-gold)', wordBreak: 'break-all' }}>
-                  Pending Code: {mcpPairingsState.pairings[0].code}
-                </div>
-              )}
               <button
                 type="button"
                 className="btn btn-primary"
@@ -121,8 +191,30 @@ export function PairDesktopMcpModal({
                 onClick={onCreateMcpPairing}
               >
                 <XeroIcon emoji="🔑" size={14} />{' '}
-                {mcpPairBusy ? 'Generating...' : 'Generate Robust Pairing Code & Copy Prompt'}
+                {mcpPairBusy ? 'Generating...' : 'Generate & Copy Agent Connector'}
               </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={async () => {
+                    const ok = await copyToClipboard(buildStdioMcpSnippet({ apiOrigin }));
+                    setMcpPairNotice(ok ? 'Copied MCP JSON config!' : 'Copy failed.');
+                  }}
+                >
+                  📋 Copy MCP JSON
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={async () => {
+                    const ok = await copyToClipboard(buildAutonomousAgentPrompt({ apiOrigin }));
+                    setMcpPairNotice(ok ? 'Copied Autonomous Agent Guide!' : 'Copy failed.');
+                  }}
+                >
+                  🤖 Agent Guide
+                </button>
+              </div>
             </div>
           )}
 

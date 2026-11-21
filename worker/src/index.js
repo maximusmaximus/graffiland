@@ -99,6 +99,7 @@ import {
   listMcpPairings,
   listPendingSignaturesForUser,
   listSculptureRevisions,
+  listSignatureHistoryForUser,
   rejectSignatureRequest,
   removeLandContributor,
   signRequestByAgent,
@@ -2202,9 +2203,29 @@ export default {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
-        return jsonResponse(await listPendingSignaturesForUser(d1Adapter, { user }), 200, request);
+        const includeHistory = url.searchParams.get('includeHistory') === '1';
+        return jsonResponse(
+          await listPendingSignaturesForUser(d1Adapter, { user, includeHistory }),
+          200,
+          request
+        );
       } catch (err) {
         return jsonResponse({ error: err.message || 'Failed to load signatures' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/signatures/history' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const limit = Number(url.searchParams.get('limit') || 40);
+        return jsonResponse(
+          await listSignatureHistoryForUser(d1Adapter, { user, limit }),
+          200,
+          request
+        );
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Failed to load signature history' }, err?.statusCode || 400, request);
       }
     }
 

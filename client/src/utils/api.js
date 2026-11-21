@@ -168,7 +168,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  listPendingSignatures: () => request('/api/signatures/pending'),
+  listPendingSignatures: ({ includeHistory = false } = {}) =>
+    request(`/api/signatures/pending${includeHistory ? '?includeHistory=1' : ''}`),
+  listSignatureHistory: (limit = 40) =>
+    request(`/api/signatures/history?limit=${encodeURIComponent(String(limit))}`),
   createPublishSignatureRequest: (payload) =>
     request('/api/signatures/requests', { method: 'POST', body: JSON.stringify(payload) }),
   getSignatureRequest: (id, pairingCode = '') =>

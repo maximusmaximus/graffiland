@@ -58,6 +58,7 @@ import {
   getSignatureRequest,
   handlePairedLandMutationViaMcp,
   listPendingSignaturesForUser,
+  listSignatureHistoryForUser,
   rejectSignatureRequest,
   signRequestByAgent,
   signRequestByMobile
@@ -93,6 +94,7 @@ export {
   listMcpPairings,
   listPendingSignaturesForUser,
   listSculptureRevisions,
+  listSignatureHistoryForUser,
   rejectSignatureRequest,
   removeLandContributor,
   requireActiveMcpPairing,
