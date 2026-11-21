@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
-import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  computeMaxHeightForFootprint,
+  normalizeRotationDeg,
+  scaleFootprintToLimit
+} from '../../../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
 
 async function copyTextSafe(text) {
@@ -60,6 +65,7 @@ export function DesktopLandBuilderPanel({
   onUpdateOwnedVolume,
   mintBusy = false,
   landStatus = '',
+  cameraBearingDeg = 315,
   user = null,
   pairingCode = '',
   publicUrl = '',
@@ -128,7 +134,7 @@ export function DesktopLandBuilderPanel({
   const activeZScale = clampNum(
     activeVolume.zScale,
     limits.minZScale,
-    limits.maxZScale,
+    Number((limits.maxHeightMeters / limits.defaultHeightMeters).toFixed(2)),
     limits.defaultZScale
   );
   const activeHeight = clampNum(
@@ -140,6 +146,40 @@ export function DesktopLandBuilderPanel({
   const activeRotation = normalizeDeg(activeVolume.rotationDeg);
   const activeArea = Math.round(Number(activeVolume.footprintAreaSqM) || activeWidth * activeDepth);
   const activeCubic = Math.round(Number(activeVolume.volumeCubicM) || activeArea * activeHeight);
+
+  const maxFootprintFit = useMemo(
+    () =>
+      scaleFootprintToLimit({
+        widthMeters: activeWidth,
+        depthMeters: activeDepth,
+        heightMeters: activeHeight,
+        ratio: 1,
+        limits
+      }),
+    [activeWidth, activeDepth, activeHeight, limits]
+  );
+
+  const footprintScaleRatio = useMemo(() => {
+    const span = Math.max(0.1, maxFootprintFit.maxWidthForAspect - maxFootprintFit.minWidthForAspect);
+    return clampNum(
+      (activeWidth - maxFootprintFit.minWidthForAspect) / span,
+      0,
+      1,
+      0
+    );
+  }, [activeWidth, maxFootprintFit.minWidthForAspect, maxFootprintFit.maxWidthForAspect]);
+
+  const maxHeightInfo = useMemo(
+    () =>
+      computeMaxHeightForFootprint({
+        widthMeters: activeWidth,
+        depthMeters: activeDepth,
+        limits
+      }),
+    [activeWidth, activeDepth, limits]
+  );
+  const areaLimitPct = Math.min(100, Math.round((activeArea / limits.maxFootprintAreaSqM) * 100));
+  const volLimitPct = Math.min(100, Math.round((activeCubic / limits.maxVolumeCubicM) * 100));
 
   const readyDrafts = useMemo(
     () => draftParcels.filter((item) => item.valid !== false && !item.hasOverlap),
@@ -416,8 +456,66 @@ export function DesktopLandBuilderPanel({
 
           <div className="land-slider-row">
             <div className="land-slider-label">
+              <span>Scale Footprint to Limit ({areaLimitPct}% of {limits.maxFootprintAreaSqM.toLocaleString()} m²)</span>
+              <strong>{activeWidth}×{activeDepth} m</strong>
+            </div>
+            <input
+              type="range"
+              aria-label="Scale Footprint to Limit"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(footprintScaleRatio * 100)}
+              onChange={(e) => {
+                const scaled = scaleFootprintToLimit({
+                  widthMeters: activeWidth,
+                  depthMeters: activeDepth,
+                  heightMeters: activeHeight,
+                  ratio: Number(e.target.value) / 100,
+                  limits
+                });
+                patchActiveDimensions({
+                  widthMeters: scaled.widthMeters,
+                  depthMeters: scaled.depthMeters,
+                  heightMeters: scaled.heightMeters,
+                  zScale: scaled.zScale
+                });
+              }}
+            />
+            <div className="land-nudge-row">
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() =>
+                  patchActiveDimensions({
+                    widthMeters: maxFootprintFit.widthMeters,
+                    depthMeters: maxFootprintFit.depthMeters,
+                    heightMeters: maxFootprintFit.heightMeters,
+                    zScale: maxFootprintFit.zScale
+                  })
+                }
+              >
+                Max Limit Size ({maxFootprintFit.widthMeters}×{maxFootprintFit.depthMeters}m)
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() =>
+                  patchActiveDimensions({
+                    rotationDeg: normalizeRotationDeg(cameraBearingDeg)
+                  })
+                }
+                title="Align parcel orientation with current map camera bearing"
+              >
+                Match Map Angle ({Math.round(normalizeRotationDeg(cameraBearingDeg))}°)
+              </button>
+            </div>
+          </div>
+
+          <div className="land-slider-row">
+            <div className="land-slider-label">
               <span>Width (m)</span>
-              <strong>{Math.round(activeWidth)} m</strong>
+              <strong>{Number(activeWidth.toFixed(1))} m</strong>
             </div>
             <input
               type="range"
@@ -433,7 +531,7 @@ export function DesktopLandBuilderPanel({
           <div className="land-slider-row">
             <div className="land-slider-label">
               <span>Depth (m)</span>
-              <strong>{Math.round(activeDepth)} m</strong>
+              <strong>{Number(activeDepth.toFixed(1))} m</strong>
             </div>
             <input
               type="range"
@@ -478,27 +576,41 @@ export function DesktopLandBuilderPanel({
 
           <div className="land-slider-row">
             <div className="land-slider-label">
-              <span>Z-Axis Scale (Height)</span>
+              <span>Z-Axis Scale (Height · {volLimitPct}% vol)</span>
               <strong>{activeZScale.toFixed(2)}× ({Math.round(activeHeight)} m)</strong>
             </div>
             <input
               type="range"
               aria-label="Z-Axis Scale"
               min={limits.minZScale}
-              max={limits.maxZScale}
+              max={Math.max(limits.minZScale, maxHeightInfo.zScale)}
               step={0.05}
-              value={activeZScale}
+              value={Math.min(activeZScale, Math.max(limits.minZScale, maxHeightInfo.zScale))}
               onChange={(e) => {
                 const nextScale = Number(e.target.value);
                 const nextHeight = clampNum(
                   Math.round(limits.defaultHeightMeters * nextScale),
                   limits.minHeightMeters,
-                  limits.maxHeightMeters,
+                  maxHeightInfo.heightMeters,
                   limits.defaultHeightMeters
                 );
                 patchActiveDimensions({ zScale: nextScale, heightMeters: nextHeight });
               }}
             />
+            <div className="land-nudge-row">
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() =>
+                  patchActiveDimensions({
+                    zScale: maxHeightInfo.zScale,
+                    heightMeters: maxHeightInfo.heightMeters
+                  })
+                }
+              >
+                Max Height ({maxHeightInfo.heightMeters}m)
+              </button>
+            </div>
           </div>
 
           <div className="land-editor-actions">

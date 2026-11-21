@@ -516,6 +516,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         onClearDrafts: () => {},
         onMintDraft: (draft) => minted.push(draft.parcelId),
         onMintAll: () => {},
+        cameraBearingDeg: 315,
         user: { id: 'u1', name: 'Land Creator' }
       })
     );
@@ -530,12 +531,25 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.change(view.getByLabelText('Rotate (°)'), { target: { value: '45' } });
     RTL.fireEvent.change(view.getByLabelText('Z-Axis Scale'), { target: { value: '2' } });
     RTL.fireEvent.click(view.getByRole('button', { name: '+15°' }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Match Map Angle/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Max Limit Size/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Max Height/i }));
 
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.widthMeters === 32));
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.depthMeters === 24));
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.rotationDeg === 45));
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.zScale === 2 && u.patch.heightMeters === 36));
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.rotationDeg === 15));
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.rotationDeg === 315));
+    assert.ok(
+      updates.some(
+        (u) =>
+          u.id === 'draft-1' &&
+          u.patch.widthMeters * u.patch.depthMeters > 4900 &&
+          u.patch.widthMeters * u.patch.depthMeters <= 5000
+      )
+    );
+    assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.heightMeters === 250));
 
     await RTL.act(async () => {
       RTL.fireEvent.click(view.getByRole('button', { name: /Copy All Properties for Agent/i }));

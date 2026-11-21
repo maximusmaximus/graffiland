@@ -531,10 +531,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       state: 'detached'
     });
 
-    // Open Mint Land workspace
-    await page.getByRole('button', { name: /Mint Land/i }).first().click();
-    await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
-    await page.waitForSelector('[data-testid="land-limits-card"]');
+    // Verify Desktop map starts immediately in Isometric mode (-45 deg, pitch 52 deg)
+    const stage = page.locator('.map3d-stage');
+    assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
+    assert.equal(Number(await stage.getAttribute('data-pitch')), 52);
+    assert.equal(Number(await stage.getAttribute('data-bearing')), -45);
 
     // Search intersection / coordinate spot and jump map
     const searchInput = page.getByLabel('Search locations, intersections, or businesses');
@@ -544,27 +545,49 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.locator('.map3d-search-item').first().click();
     await page.waitForTimeout(350);
 
-    // Activate Draw Land while map is in 2D
-    const stage = page.locator('.map3d-stage');
-    assert.equal(await stage.getAttribute('data-view-mode'), '2d');
-    await page.getByRole('button', { name: /Draw Land/i }).click();
+    // Activate Draw Land directly from the map toolbar while in Isometric view
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /Draw Land/i }).click();
+    await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
+    await page.waitForSelector('[data-testid="land-limits-card"]');
     assert.equal(await stage.getAttribute('data-draw-mode'), 'on');
 
-    // Drag-draw first rectangle directly onto the map -> automatically switches to 3D mode!
+    // Drag-draw a huge rectangle right on the Isometric map -> inherits Isometric orientation (315 deg) & caps cleanly at 5,000 m² limit!
     const mapBox = await page.locator('.map-container').boundingBox();
     assert.ok(mapBox && mapBox.width > 200 && mapBox.height > 200);
+    await page.mouse.move(mapBox.x + mapBox.width * 0.3, mapBox.y + mapBox.height * 0.35);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + mapBox.width * 0.78, mapBox.y + mapBox.height * 0.78, { steps: 8 });
+    await page.mouse.up();
+
+    await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
+    assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
+    const drawnText = await page.locator('.land-draft-item').first().textContent();
+    assert.ok(drawnText.includes('315°'), `Expected drawn square to inherit 315° isometric orientation, got: ${drawnText}`);
+    assert.ok(drawnText.includes('Ready'), `Expected large drag capped cleanly to valid limit size, got: ${drawnText}`);
+
+    // Verify scale-to-limit & max-height controls keep parcel valid up to the exact limit
+    await page.getByRole('button', { name: /Max Limit Size/i }).click();
+    await page.getByRole('button', { name: /Max Height/i }).click();
+    const scaledText = await page.locator('.land-draft-item').first().textContent();
+    assert.ok(scaledText.includes('Ready'), `Expected Max Limit Size + Max Height to remain valid Ready, got: ${scaledText}`);
+
+    // Verify 2D -> 3D auto-switch still works if user clears, switches to 2D, and draws
+    await page.getByRole('button', { name: /^Clear \(1\)$/i }).click();
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /^2D$/i }).click();
+    assert.equal(await stage.getAttribute('data-view-mode'), '2d');
+    await page.waitForTimeout(250);
     const cx = mapBox.x + mapBox.width * 0.54;
     const cy = mapBox.y + mapBox.height * 0.56;
-    await page.mouse.move(cx - 32, cy - 32);
+    await page.mouse.move(cx - 28, cy - 28);
     await page.mouse.down();
-    await page.mouse.move(cx + 38, cy + 38, { steps: 6 });
+    await page.mouse.move(cx + 34, cy + 34, { steps: 6 });
     await page.mouse.up();
 
     await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
     assert.equal(await stage.getAttribute('data-view-mode'), '3d');
     await page.waitForSelector('.map3d-auto3d-pill');
 
-    // Switch Back to 2D cleanly, then to Isometric, rotate & adjust 2D-to-3D tilt
+    // Switch Back to 2D cleanly, then back to Isometric, rotate & adjust 2D-to-3D tilt
     await page.locator('.map3d-auto3d-pill').getByRole('button', { name: /Back to 2D/i }).click();
     assert.equal(await stage.getAttribute('data-view-mode'), '2d');
 

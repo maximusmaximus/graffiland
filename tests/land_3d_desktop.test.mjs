@@ -6,7 +6,10 @@ import { after, before, describe, test } from 'node:test';
 import { LAND_VOLUME_LIMITS } from '../shared/constants.mjs';
 import {
   buildParcelShareUrl,
+  computeCameraAlignedDraftBox,
+  computeMaxHeightForFootprint,
   footprintsOverlap,
+  scaleFootprintToLimit,
   validateAndNormalizeLandVolume
 } from '../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../shared/landSignatureMessage.mjs';
@@ -189,6 +192,79 @@ describe('3D Land Volume Geometry & Prompt Unit Tests', () => {
     assert.ok(prompt.includes('North Annex'));
     assert.ok(prompt.includes('GLP-1111-2222-3333-4444'));
     assert.ok(prompt.includes(`max area ${LAND_VOLUME_LIMITS.maxFootprintAreaSqM.toLocaleString()} m²`));
+  });
+
+  test('computeCameraAlignedDraftBox aligns with Isometric bearing (-45 deg) and caps cleanly to 5,000 m² limit', () => {
+    const isoBox = computeCameraAlignedDraftBox({
+      startLat: 37.7749,
+      startLng: -122.4194,
+      endLat: 37.7752,
+      endLng: -122.419,
+      bearingDeg: -45
+    });
+    assert.equal(isoBox.rotationDeg, 315);
+    assert.ok(isoBox.widthMeters >= LAND_VOLUME_LIMITS.minWidthMeters);
+    assert.ok(isoBox.depthMeters >= LAND_VOLUME_LIMITS.minDepthMeters);
+    assert.ok(isoBox.footprintAreaSqM <= LAND_VOLUME_LIMITS.maxFootprintAreaSqM);
+    assert.equal(isoBox.corners.length, 4);
+
+    // Drag along world East at -45 deg Isometric projects equally onto localX & localY (~373m x 373m) -> caps cleanly at 5,000 m²!
+    const hugeSquare = computeCameraAlignedDraftBox({
+      startLat: 37.7749,
+      startLng: -122.4194,
+      endLat: 37.7749,
+      endLng: -122.4134,
+      bearingDeg: -45
+    });
+    assert.equal(hugeSquare.rotationDeg, 315);
+    assert.equal(hugeSquare.hitLimit, true);
+    assert.ok(
+      hugeSquare.footprintAreaSqM > 4900 && hugeSquare.footprintAreaSqM <= 5000,
+      `Expected ~5000 m² cap, got ${hugeSquare.footprintAreaSqM}`
+    );
+    const validation = validateAndNormalizeLandVolume(hugeSquare);
+    assert.equal(validation.ok, true, JSON.stringify(validation.errors));
+
+    // Drag along NE (parallel to screen X-axis at -45 deg) hits maxWidthMeters (120m) cleanly
+    const wideStrip = computeCameraAlignedDraftBox({
+      startLat: 37.7749,
+      startLng: -122.4194,
+      endLat: 37.7795,
+      endLng: -122.414,
+      bearingDeg: -45
+    });
+    assert.equal(wideStrip.rotationDeg, 315);
+    assert.equal(wideStrip.widthMeters, LAND_VOLUME_LIMITS.maxWidthMeters);
+    assert.equal(wideStrip.hitLimit, true);
+    assert.equal(validateAndNormalizeLandVolume(wideStrip).ok, true);
+  });
+
+  test('scaleFootprintToLimit & computeMaxHeightForFootprint scale cleanly to exact platform limits', () => {
+    const maxRect = scaleFootprintToLimit({
+      widthMeters: 28,
+      depthMeters: 14,
+      heightMeters: 180,
+      ratio: 1
+    });
+    assert.equal(maxRect.widthMeters, 100);
+    assert.equal(maxRect.depthMeters, 50);
+    assert.equal(maxRect.footprintAreaSqM, 5000);
+    // At 5,000 m², height must auto-clamp from 180m -> 100m so volume stays <= 500,000 m³
+    assert.equal(maxRect.heightMeters, 100);
+    assert.equal(maxRect.volumeCubicM, 500000);
+
+    const maxSq = scaleFootprintToLimit({
+      widthMeters: 14,
+      depthMeters: 14,
+      heightMeters: 18,
+      ratio: 1
+    });
+    assert.ok(maxSq.footprintAreaSqM > 4980 && maxSq.footprintAreaSqM <= 5000);
+
+    const smallPlotH = computeMaxHeightForFootprint({ widthMeters: 20, depthMeters: 16 });
+    assert.equal(smallPlotH.heightMeters, 250);
+    const largePlotH = computeMaxHeightForFootprint({ widthMeters: 100, depthMeters: 50 });
+    assert.equal(largePlotH.heightMeters, 100);
   });
 });
 

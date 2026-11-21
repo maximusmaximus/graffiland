@@ -4,7 +4,12 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import xeroemoji from 'xeroemoji';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
-import { buildDefaultVolumeFromBounds, computeOrientedFootprintLngLat } from '../../../shared/landVolume.mjs';
+import {
+  buildDefaultVolumeFromBounds,
+  computeCameraAlignedDraftBox,
+  computeOrientedFootprintLngLat,
+  normalizeRotationDeg
+} from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
@@ -51,8 +56,6 @@ const FALLBACK_DARK_STYLE = {
 };
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
-
-const METERS_PER_DEG_LAT = 111320;
 
 function parcelToFeature(p, fallbackHeight = LAND_VOLUME_LIMITS.defaultHeightMeters) {
   const vol =
@@ -191,7 +194,7 @@ export default function MapView3D({
   draftParcels = [],
   selectedDraftId = '',
   drawMode = false,
-  viewMode = '2d',
+  viewMode = 'isometric',
   autoSwitchedHint = false,
   userLocation = null,
   focusArea = false,
@@ -203,6 +206,7 @@ export default function MapView3D({
   onAddDraftRectangle = null,
   onSelectDraft = null,
   onViewModeChange = null,
+  onToggleDrawMode = null,
   onDismissAuto3dHint = null
 }) {
   const mapHostRef = useRef(null);
@@ -211,9 +215,13 @@ export default function MapView3D({
   const markersRef = useRef([]);
   const styleReadyRef = useRef(false);
   const fallbackAppliedRef = useRef(false);
+  const initialViewModeRef = useRef(viewMode);
+  const firstViewModeSyncRef = useRef(true);
 
-  const [pitchDeg, setPitchDeg] = useState(0);
-  const [bearingDeg, setBearingDeg] = useState(0);
+  const initPitchVal = viewMode === 'isometric' ? 52 : viewMode === '3d' ? 56 : 0;
+  const initBearingVal = viewMode === 'isometric' ? -45 : viewMode === '3d' ? -35 : 0;
+  const [pitchDeg, setPitchDeg] = useState(initPitchVal);
+  const [bearingDeg, setBearingDeg] = useState(initBearingVal);
   const [showBuildings, setShowBuildings] = useState(true);
   const [showTerrain, setShowTerrain] = useState(false);
 
@@ -343,12 +351,15 @@ export default function MapView3D({
     if (preview) {
       const geom = computePrismScreenGeometry(map, maplibregl, preview);
       if (geom) {
+        const previewLabel = preview.hitLimit
+          ? `${preview.widthMeters}×${preview.depthMeters}m · MAX ${LAND_VOLUME_LIMITS.maxFootprintAreaSqM.toLocaleString()} m²`
+          : `${preview.widthMeters}×${preview.depthMeters}m · ${Math.round(preview.rotationDeg || 0)}°`;
         drawGlowingPrism(ctx, geom, {
-          outerColor: '#00f5d4',
+          outerColor: preview.hitLimit ? '#ffd166' : '#00f5d4',
           innerColor: '#ffffff',
-          lineWidth: 2.2,
-          glowBlur: 16,
-          label: `${Math.round(preview.widthMeters)}×${Math.round(preview.depthMeters)}m`
+          lineWidth: 2.3,
+          glowBlur: 18,
+          label: previewLabel
         });
       }
     }
@@ -461,15 +472,24 @@ export default function MapView3D({
       : initLoc && Number.isFinite(initLoc.lat) && Number.isFinite(initLoc.lng)
       ? [initLoc.lng, initLoc.lat]
       : [-122.4194, 37.7749];
-    const startZoom = hasSaved ? Number(saved.zoom) : initLoc ? 16.2 : 15.5;
+    const initMode = initialViewModeRef.current;
+    const initPitch = initMode === 'isometric' ? 52 : initMode === '3d' ? 56 : 0;
+    const initBearing = initMode === 'isometric' ? -45 : initMode === '3d' ? -35 : 0;
+    const startZoom = hasSaved
+      ? Number(saved.zoom)
+      : initMode === 'isometric'
+      ? 17
+      : initLoc
+      ? 16.5
+      : 16;
 
     const map = new maplibregl.Map({
       container: mapHostRef.current,
       style: OPENFREEMAP_LIBERTY_STYLE,
       center: centerLngLat,
       zoom: startZoom,
-      pitch: 0,
-      bearing: 0,
+      pitch: initPitch,
+      bearing: initBearing,
       maxPitch: 68,
       antialias: true,
       attributionControl: true
@@ -484,6 +504,13 @@ export default function MapView3D({
 
     const onStyleLoad = () => {
       ensureCustomLayers(map);
+      const c = map.getCenter();
+      onViewportChangeRef.current?.({
+        lat: Number(c.lat.toFixed(6)),
+        lng: Number(c.lng.toFixed(6)),
+        zoom: Number(map.getZoom().toFixed(2)),
+        bearing: normalizeRotationDeg(map.getBearing())
+      });
     };
 
     const onMapError = (ev) => {
@@ -515,7 +542,8 @@ export default function MapView3D({
       onViewportChangeRef.current?.({
         lat: Number(c.lat.toFixed(6)),
         lng: Number(c.lng.toFixed(6)),
-        zoom: Number(map.getZoom().toFixed(2))
+        zoom: Number(map.getZoom().toFixed(2)),
+        bearing: normalizeRotationDeg(map.getBearing())
       });
     };
 
@@ -621,6 +649,10 @@ export default function MapView3D({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    if (firstViewModeSyncRef.current) {
+      firstViewModeSyncRef.current = false;
+      return;
+    }
     if (viewMode === '2d') {
       map.easeTo({ pitch: 0, bearing: 0, duration: 550 });
     } else if (viewMode === '3d') {
@@ -650,11 +682,17 @@ export default function MapView3D({
       (sc) => Number.isFinite(Number(sc.lat)) && Number.isFinite(Number(sc.lng))
     );
     if (valid.length === 1) {
-      map.jumpTo({ center: [Number(valid[0].lng), Number(valid[0].lat)], zoom: 16 });
+      map.jumpTo({ center: [Number(valid[0].lng), Number(valid[0].lat)], zoom: 17 });
     } else if (valid.length > 1) {
       const bounds = new maplibregl.LngLatBounds();
       for (const sc of valid) bounds.extend([Number(sc.lng), Number(sc.lat)]);
-      map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 0 });
+      map.fitBounds(bounds, {
+        padding: 60,
+        maxZoom: 17,
+        duration: 0,
+        bearing: map.getBearing(),
+        pitch: map.getPitch()
+      });
     }
   }, [sculptures, focusArea]);
 
@@ -808,34 +846,15 @@ export default function MapView3D({
 
     const llEnd = mapRef.current.unproject([px, py]);
     if (!llEnd) return;
-    const centerLat = (dragStartRef.current.lat + llEnd.lat) / 2;
-    const centerLng = (dragStartRef.current.lng + llEnd.lng) / 2;
-    const mPerDegLng = METERS_PER_DEG_LAT * Math.max(0.08, Math.cos((centerLat * Math.PI) / 180));
-    const widthMeters = Math.max(
-      LAND_VOLUME_LIMITS.minWidthMeters,
-      Math.min(LAND_VOLUME_LIMITS.maxWidthMeters, Math.abs(llEnd.lng - dragStartRef.current.lng) * mPerDegLng)
-    );
-    const depthMeters = Math.max(
-      LAND_VOLUME_LIMITS.minDepthMeters,
-      Math.min(LAND_VOLUME_LIMITS.maxDepthMeters, Math.abs(llEnd.lat - dragStartRef.current.lat) * METERS_PER_DEG_LAT)
-    );
-    const { corners, ring } = computeOrientedFootprintLngLat({
-      lat: centerLat,
-      lng: centerLng,
-      widthMeters,
-      depthMeters,
-      rotationDeg: 0
+    const box = computeCameraAlignedDraftBox({
+      startLat: dragStartRef.current.lat,
+      startLng: dragStartRef.current.lng,
+      endLat: llEnd.lat,
+      endLng: llEnd.lng,
+      bearingDeg: mapRef.current.getBearing(),
+      limits: LAND_VOLUME_LIMITS
     });
-    dragPreviewRef.current = {
-      centerLat,
-      centerLng,
-      widthMeters,
-      depthMeters,
-      heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
-      baseAltitudeM: 0,
-      corners,
-      ring
-    };
+    dragPreviewRef.current = box;
     drawWireframes();
   }
 
@@ -849,6 +868,7 @@ export default function MapView3D({
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     const dist = Math.hypot(px - start.x, py - start.y);
+    const camBearing = normalizeRotationDeg(mapRef.current.getBearing());
 
     if (dist < 6) {
       const hitDraft = findDraftHitAtPoint(e.clientX, e.clientY);
@@ -863,23 +883,26 @@ export default function MapView3D({
         widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
         depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
         heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
-        rotationDeg: 0
+        rotationDeg: camBearing
       });
     } else {
       const llEnd = mapRef.current.unproject([px, py]);
       if (llEnd) {
-        const centerLat = (start.lat + llEnd.lat) / 2;
-        const centerLng = (start.lng + llEnd.lng) / 2;
-        const mPerDegLng = METERS_PER_DEG_LAT * Math.max(0.08, Math.cos((centerLat * Math.PI) / 180));
-        const rawW = Math.abs(llEnd.lng - start.lng) * mPerDegLng;
-        const rawD = Math.abs(llEnd.lat - start.lat) * METERS_PER_DEG_LAT;
+        const box = computeCameraAlignedDraftBox({
+          startLat: start.lat,
+          startLng: start.lng,
+          endLat: llEnd.lat,
+          endLng: llEnd.lng,
+          bearingDeg: camBearing,
+          limits: LAND_VOLUME_LIMITS
+        });
         onAddDraftRef.current?.({
-          lat: centerLat,
-          lng: centerLng,
-          widthMeters: Math.max(LAND_VOLUME_LIMITS.minWidthMeters, Math.min(LAND_VOLUME_LIMITS.maxWidthMeters, Number(rawW.toFixed(1)))),
-          depthMeters: Math.max(LAND_VOLUME_LIMITS.minDepthMeters, Math.min(LAND_VOLUME_LIMITS.maxDepthMeters, Number(rawD.toFixed(1)))),
-          heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
-          rotationDeg: 0
+          lat: box.centerLat,
+          lng: box.centerLng,
+          widthMeters: box.widthMeters,
+          depthMeters: box.depthMeters,
+          heightMeters: box.heightMeters,
+          rotationDeg: box.rotationDeg
         });
       }
     }
@@ -998,6 +1021,23 @@ export default function MapView3D({
           >
             Isometric
           </button>
+          {onToggleDrawMode && (
+            <button
+              type="button"
+              className={`btn ${drawMode ? 'btn-primary' : ''}`}
+              style={{
+                padding: '4px 9px',
+                fontSize: 11.5,
+                borderColor: drawMode ? undefined : 'rgba(0, 245, 212, 0.45)',
+                color: drawMode ? undefined : 'var(--accent)'
+              }}
+              aria-pressed={drawMode}
+              onClick={onToggleDrawMode}
+              title="Click and drag on the map to draw a 3D land parcel aligned with the current camera orientation"
+            >
+              {drawMode ? '✏️ Drawing Land' : '✏️ Draw Land'}
+            </button>
+          )}
         </div>
 
         <div className="map3d-toolbar-group" role="group" aria-label="Canvas Tilt and Rotation">
