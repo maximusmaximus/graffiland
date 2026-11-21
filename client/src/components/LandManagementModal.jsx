@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
+import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -59,7 +61,7 @@ export default function LandManagementModal({
           list.find((p) => p.parcelId === (selectedParcelId || initialParcelId)) || list[0];
         setSelectedParcelId(picked.parcelId);
         setCustomName(picked.customName || '');
-        setCurationNote(picked.curationNote || '');
+        setCurationNote(picked.description || picked.curationNote || '');
         setAllowAgentErase(picked.settings?.allowAgentErase !== false);
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
         setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
@@ -88,7 +90,7 @@ export default function LandManagementModal({
   function selectParcel(p) {
     setSelectedParcelId(p.parcelId);
     setCustomName(p.customName || '');
-    setCurationNote(p.curationNote || '');
+    setCurationNote(p.description || p.curationNote || '');
     setAllowAgentErase(p.settings?.allowAgentErase !== false);
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
     setFrozen(Boolean(p.settings?.frozen || p.frozen));
@@ -210,6 +212,7 @@ export default function LandManagementModal({
     try {
       await api.updateLandParcel(activeParcel.parcelId, {
         customName,
+        description: curationNote,
         curationNote
       });
       await api.updateLandSettings(activeParcel.parcelId, {
@@ -386,34 +389,64 @@ export default function LandManagementModal({
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent)' }}>
-                      Parcel Curations &amp; Permissions ({activeParcel.parcelId})
+                      Land Details, Curations &amp; Permissions ({activeParcel.parcelId})
                     </span>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ fontSize: 11, padding: '5px 10px' }}
-                      disabled={busy !== ''}
-                      onClick={handleCopyMcpPrompt}
-                    >
-                      <XeroIcon emoji="📋" size={13} />{' '}
-                      {promptCopied ? 'Copied MCP Prompt!' : 'Copy Agent MCP Prompt (3D Models + Erase)'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ fontSize: 11, padding: '5px 10px' }}
+                        aria-label={`Copy share link for ${activeParcel.parcelId}`}
+                        onClick={async () => {
+                          const shareUrl = buildParcelShareUrl({
+                            origin: window.location.origin,
+                            pathname: window.location.pathname,
+                            parcelId: activeParcel.parcelId,
+                            customName: customName || activeParcel.customName || '',
+                            compact: true
+                          });
+                          const ok = await copyToClipboard(shareUrl);
+                          setNotice(ok ? `Copied share link: ${shareUrl}` : shareUrl);
+                        }}
+                      >
+                        🔗 Copy Share Link
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ fontSize: 11, padding: '5px 10px' }}
+                        disabled={busy !== ''}
+                        onClick={handleCopyMcpPrompt}
+                      >
+                        <XeroIcon emoji="📋" size={13} />{' '}
+                        {promptCopied ? 'Copied MCP Prompt!' : 'Copy Agent MCP Prompt (3D Models + Erase)'}
+                      </button>
+                    </div>
                   </div>
 
-                  <input
-                    className="input"
-                    maxLength={48}
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="Custom Virtual Land title (e.g. Neon Courtyard)"
-                  />
-                  <input
-                    className="input"
-                    maxLength={240}
-                    value={curationNote}
-                    onChange={(e) => setCurationNote(e.target.value)}
-                    placeholder="Parcel description or visitor curation note"
-                  />
+                  <label className="land-name-field">
+                    <span>Land Name</span>
+                    <input
+                      className="input"
+                      aria-label="Land Name"
+                      maxLength={48}
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      placeholder="Custom Virtual Land title (e.g. Neon Courtyard)"
+                    />
+                  </label>
+                  <label className="land-name-field">
+                    <span>Land Description</span>
+                    <textarea
+                      className="textarea"
+                      aria-label="Land Description"
+                      rows={2}
+                      maxLength={240}
+                      value={curationNote}
+                      onChange={(e) => setCurationNote(e.target.value)}
+                      placeholder="Describe this land, visitor guidelines, or curation notes..."
+                    />
+                  </label>
 
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
                     <input

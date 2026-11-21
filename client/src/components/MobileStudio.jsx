@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { parseParcelParamFromLocation } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import {
   loadBoolPreference,
@@ -28,6 +29,7 @@ import {
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
 import MobileMapSheet from './studio/MobileMapSheet.jsx';
+import MobileParcelVisitView from './studio/MobileParcelVisitView.jsx';
 import PublishSculptureModal from './studio/PublishSculptureModal.jsx';
 import SceneCoverageWidget from './studio/SceneCoverageWidget.jsx';
 import StudioDockDrawer from './studio/StudioDockDrawer.jsx';
@@ -90,6 +92,7 @@ export default function MobileStudio({
     () => loadBoolPreference(QUICK_SCULPT_KEY, false)
   );
   const [arSelectHint, setArSelectHint] = useState('');
+  const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
   const hintTimerRef = useRef(null);
 
   // Metadata & Publish Form State
@@ -257,17 +260,44 @@ export default function MobileStudio({
     [brush, showTemporaryHint]
   );
 
-  // Support deep link ?sculpture=<id> directly on mobile too
+  // Support deep link ?sculpture=<id> and ?parcel=<GLAND-...>&slug=<slug> directly on mobile
   const { setMapSelectedSculpture } = ar;
   useEffect(() => {
     const deepId = new URLSearchParams(window.location.search).get('sculpture');
-    if (!deepId) return;
-    api
-      .getSculpture(deepId)
-      .then((res) => {
-        if (res?.sculpture) setMapSelectedSculpture(res.sculpture);
-      })
-      .catch(() => {});
+    if (deepId) {
+      api
+        .getSculpture(deepId)
+        .then((res) => {
+          if (res?.sculpture) setMapSelectedSculpture(res.sculpture);
+        })
+        .catch(() => {});
+    }
+    const parsedParcel = parseParcelParamFromLocation(
+      window.location.search,
+      window.location.pathname
+    );
+    const targetToken = parsedParcel.parcelId || parsedParcel.slug;
+    if (targetToken) {
+      setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
+      api
+        .getLandDetail(targetToken)
+        .then((res) => {
+          setParcelVisit({
+            loading: false,
+            parcel: res?.parcel || null,
+            sculptures: res?.sculptures || [],
+            error: res?.parcel ? '' : 'Virtual Land parcel not found.'
+          });
+        })
+        .catch((err) => {
+          setParcelVisit({
+            loading: false,
+            parcel: null,
+            sculptures: [],
+            error: err?.message || 'Could not load shared Virtual Land parcel.'
+          });
+        });
+    }
   }, [setMapSelectedSculpture]);
 
   const chat = useChat({
@@ -850,7 +880,7 @@ export default function MobileStudio({
         </div>
       )}
 
-      {!isWelcomeOpen && tutorialOpen && (
+      {!isWelcomeOpen && !parcelVisit && tutorialOpen && (
         <FirstRunTutorialModal
           quickSculpt={quickSculpt}
           onToggleQuickSculpt={handleToggleQuickSculpt}
@@ -972,6 +1002,53 @@ export default function MobileStudio({
             setLoginOpen(true);
           }}
           onClose={() => drafts.setDraftsOpen(false)}
+        />
+      )}
+
+      {parcelVisit && (
+        <MobileParcelVisitView
+          parcel={parcelVisit.parcel}
+          sculptures={parcelVisit.sculptures}
+          userLocation={pol.location}
+          loading={parcelVisit.loading}
+          error={parcelVisit.error}
+          onRefreshLocation={() => {
+            navigator.geolocation?.getCurrentPosition?.(
+              (pos) => {
+                const nextLoc = {
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  accuracy: pos.coords.accuracy,
+                  altitude: pos.coords.altitude
+                };
+                pol.setLocation(nextLoc);
+                pol.locationRef.current = nextLoc;
+              },
+              () => {},
+              { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
+            );
+          }}
+          onViewInAR={async (visitedParcel, visitedSculptures) => {
+            setParcelVisit(null);
+            setTutorialOpen(false);
+            if (Array.isArray(visitedSculptures) && visitedSculptures.length > 0) {
+              await ar.hydrateNearbyList(visitedSculptures, pol.location).catch(() => {});
+            }
+            brush.setMode('preview');
+            showTemporaryHint(
+              `Viewing ${visitedParcel?.customName || visitedParcel?.parcelId} in AR!`
+            );
+          }}
+          onMakeArt={(visitedParcel) => {
+            setParcelVisit(null);
+            setTutorialOpen(false);
+            brush.setMode('draw');
+            showTemporaryHint(
+              `Ready to sculpt on ${visitedParcel?.customName || visitedParcel?.parcelId}!`
+            );
+          }}
+          onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
+          onClose={() => setParcelVisit(null)}
         />
       )}
 

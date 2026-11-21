@@ -114,6 +114,7 @@ import {
   disconnectMcpPairing,
   getLandSettingsInternal,
   getMyLandsWorkspace,
+  getPublicParcelDetail,
   getSignatureRequest,
   handleMcpJsonRpc,
   isUserLandOwner,
@@ -130,7 +131,7 @@ import {
   updateLandSettings,
   upsertAnchorAndRevision
 } from '../shared/mcpService.mjs';
-import { b64ToModelBytes, validateAnchorOffset } from '../shared/model3d.mjs';
+import { b64ToModelBytes, validate3dModelUrl, validateAnchorOffset } from '../shared/model3d.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -879,6 +880,7 @@ export function createAppServer(serverOptions = {}) {
         lat: req.body?.lat,
         lng: req.body?.lng,
         customName: req.body?.customName || '',
+        description: req.body?.description || '',
         curationNote: req.body?.curationNote || '',
         volume: req.body?.volume || null,
         txHash: req.body?.txHash || '',
@@ -1172,6 +1174,30 @@ export function createAppServer(serverOptions = {}) {
     '/api/lands/mine',
     requireAuth,
     handleChatRoute((req) => getMyLandsWorkspace(chatDb, { user: req.user }))
+  );
+
+  app.post('/api/models/validate-url', requireAuth, async (req, res) => {
+    const modelUrl = String(req.body?.modelUrl || req.body?.url || '').trim();
+    const formatHint = String(req.body?.modelFormat || req.body?.format || '').trim();
+    const checked = await validate3dModelUrl(modelUrl, { formatHint });
+    const payload = {
+      valid: Boolean(checked.valid),
+      error: checked.error || null,
+      format: checked.format || '',
+      mimeType: checked.mimeType || '',
+      byteLength: checked.byteLength || 0,
+      stats: checked.stats || null,
+      suggestedTitle: checked.suggestedTitle || '',
+      modelUrl
+    };
+    return res.status(checked.valid ? 200 : 400).json(payload);
+  });
+
+  app.get(
+    '/api/lands/:parcelId',
+    handleChatRoute((req) =>
+      getPublicParcelDetail(chatDb, { parcelOrSlug: req.params.parcelId })
+    )
   );
 
   app.post(

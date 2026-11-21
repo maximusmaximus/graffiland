@@ -99,7 +99,14 @@ async function main() {
           commands: [
             'auth --key <privkey> [--name <name>]',
             'scout [--lat <lat> --lng <lng> --status <unclaimed|dormant|awakened|all>]',
-            'claim (--parcel <GLAND-...> | --lat <lat> --lng <lng>) [--name ...]',
+            'parcel <GLAND-...|slug>',
+            'claim (--parcel <GLAND-...> | --lat <lat> --lng <lng>) [--name ...] [--desc ...]',
+            'title --parcel <GLAND-...> --name <name> [--desc <description>]',
+            'volume --parcel <GLAND-...> [--w <m>] [--d <m>] [--h <m>] [--rot <deg>]',
+            'freeze --parcel <GLAND-...> [--off]',
+            'validate-model --url <https://...>',
+            'upload-model --parcel <GLAND-...> --url <https://...> --title <title> [--desc <description>]',
+            'visibility --sculpture <id> (--hide | --unhide) [--reason ...]',
             'prefab [--type plinth|arch|totem|pyramid|beacon] [--primary #1c243b] [--accent #00f5d4]',
             'build --parcel <GLAND-...> [--prefab plinth] [--title ...] [--quest-title ...] [--quest-prompt ...]',
             'quest --parcel <GLAND-...> --title <title> --prompt <prompt> [--bounty 0.1]',
@@ -135,6 +142,14 @@ async function main() {
     return;
   }
 
+  if (cmd === 'parcel') {
+    const target = positional[0] || flags.parcel || flags.slug;
+    if (!target) throw new Error('Provide <GLAND-...|slug> or --parcel <GLAND-...>.');
+    const res = await fetch(`${apiUrl}/api/lands/${encodeURIComponent(target)}`);
+    console.log(JSON.stringify(await res.json(), null, 2));
+    return;
+  }
+
   if (cmd === 'status') {
     if (flags.parcel) {
       const res = await fetch(`${apiUrl}/api/lands/${encodeURIComponent(flags.parcel)}/telemetry`);
@@ -163,7 +178,77 @@ async function main() {
       ...(flags.parcel ? { parcelId: flags.parcel } : {}),
       ...(flags.lat ? { lat: Number(flags.lat), lng: Number(flags.lng) } : {}),
       ...(flags.name ? { customName: flags.name } : {}),
+      ...(flags.desc ? { description: flags.desc } : {}),
       ...(flags.note ? { curationNote: flags.note } : {})
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'title') {
+    if (!flags.parcel) throw new Error('--parcel <GLAND-...> is required.');
+    const out = await callMcpTool(apiUrl, token, 'update_land_parcel', {
+      parcelId: flags.parcel,
+      ...(flags.name !== undefined ? { customName: flags.name } : {}),
+      ...(flags.desc !== undefined ? { description: flags.desc } : {}),
+      ...(flags.note !== undefined ? { curationNote: flags.note } : {})
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'volume') {
+    if (!flags.parcel) throw new Error('--parcel <GLAND-...> is required.');
+    const out = await callMcpTool(apiUrl, token, 'update_land_volume', {
+      parcelId: flags.parcel,
+      ...(flags.w !== undefined ? { widthMeters: Number(flags.w) } : {}),
+      ...(flags.d !== undefined ? { depthMeters: Number(flags.d) } : {}),
+      ...(flags.h !== undefined ? { heightMeters: Number(flags.h) } : {}),
+      ...(flags.rot !== undefined ? { rotationDeg: Number(flags.rot) } : {})
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'freeze') {
+    if (!flags.parcel) throw new Error('--parcel <GLAND-...> is required.');
+    const out = await callMcpTool(apiUrl, token, 'update_land_settings', {
+      parcelId: flags.parcel,
+      frozen: flags.off !== 'true'
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'validate-model') {
+    if (!flags.url) throw new Error('--url <https://...> is required.');
+    const out = await callMcpTool(apiUrl, token, 'validate_3d_model_url', {
+      modelUrl: flags.url,
+      ...(flags.format ? { modelFormat: flags.format } : {})
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'upload-model') {
+    if (!flags.parcel || !flags.url) throw new Error('--parcel and --url are required.');
+    const out = await callMcpTool(apiUrl, token, 'load_3d_model_on_land', {
+      parcelId: flags.parcel,
+      modelUrl: flags.url,
+      title: flags.title || 'Uploaded 3D Model',
+      description: flags.desc || '3D model uploaded directly via GRAFFILAND CLI.',
+      ...(flags.format ? { modelFormat: flags.format } : {})
+    });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  if (cmd === 'visibility') {
+    if (!flags.sculpture) throw new Error('--sculpture <id> is required.');
+    const out = await callMcpTool(apiUrl, token, 'set_sculpture_visibility', {
+      sculptureId: flags.sculpture,
+      hidden: flags.unhide !== 'true',
+      ...(flags.reason ? { reason: flags.reason } : {})
     });
     console.log(JSON.stringify(out, null, 2));
     return;

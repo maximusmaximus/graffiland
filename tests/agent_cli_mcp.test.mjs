@@ -54,6 +54,8 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
     assert.ok(llmsText.includes('3% (300 bps)'));
     assert.ok(llmsText.includes('2% (200 bps)'));
     assert.ok(llmsText.includes('graffiland-mcp'));
+    assert.ok(llmsText.includes('validate_3d_model_url'));
+    assert.ok(llmsText.includes('get_parcel_share_link'));
 
     const cardRes = await fetch(`${baseUrl}/.well-known/agent.json`);
     assert.equal(cardRes.status, 200);
@@ -62,7 +64,8 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
     assert.equal(card.economics.platformBps, 500);
     assert.equal(card.economics.agentStewardBps, 300);
     assert.equal(card.economics.humanContributorBps, 200);
-    assert.ok(card.capabilities.mcpToolsCount >= 19);
+    assert.ok(card.capabilities.mcpToolsCount >= 22);
+    assert.ok(card.endpoints.validateModelUrl.endsWith('/api/models/validate-url'));
     assert.equal(card.stdioMcp.args[0], 'graffiland-mcp');
   });
 
@@ -120,7 +123,12 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
         'generate_voxel_prefab',
         'batch_build_land',
         'create_art_quest',
-        'get_land_telemetry'
+        'get_land_telemetry',
+        'validate_3d_model_url',
+        'update_land_volume',
+        'update_land_settings',
+        'set_sculpture_visibility',
+        'get_parcel_share_link'
       ]) {
         assert.ok(names.includes(expected), `${expected} registered in stdio MCP tools/list`);
       }
@@ -160,6 +168,15 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
       });
       assert.equal(telem.result.structuredContent.steward.status, 'dormant');
       assert.equal(telem.result.structuredContent.layers.stewardStageCount, 1);
+
+      const share = await sendRpc('tools/call', {
+        name: 'get_parcel_share_link',
+        arguments: { parcelId: candidateParcel }
+      });
+      assert.equal(share.result.structuredContent.parcelId, candidateParcel);
+      assert.equal(share.result.structuredContent.slug, 'soho-cyber-plinth');
+      assert.ok(share.result.structuredContent.shareUrl.includes('slug=soho-cyber-plinth'));
+      assert.ok(share.result.structuredContent.directionsUrl.includes('google.com/maps/dir'));
     } finally {
       rl.close();
       child.kill();
@@ -186,5 +203,14 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
     );
     const scoutJson = JSON.parse(scoutOut.stdout);
     assert.ok(scoutJson.parcels.some((p) => p.status === 'dormant'));
+
+    const parcelOut = await execFileAsync(
+      process.execPath,
+      ['bin/graffiland.mjs', 'parcel', 'soho-cyber-plinth'],
+      { env: { ...process.env, GRAFFILAND_API_URL: baseUrl } }
+    );
+    const parcelJson = JSON.parse(parcelOut.stdout);
+    assert.equal(parcelJson.parcel.customName, 'SoHo Cyber Plinth');
+    assert.ok(parcelJson.shareUrl.includes('slug=soho-cyber-plinth'));
   });
 });

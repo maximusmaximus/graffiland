@@ -3,7 +3,9 @@ import { decodeGeohashBounds, encodeGeohash, haversineMeters } from '../server/s
 import { LAND_VOLUME_LIMITS, STEWARD_DEFAULTS } from './constants.mjs';
 import {
   buildDefaultVolumeFromBounds,
+  buildParcelShareUrl,
   footprintsOverlap,
+  slugifyLandTitle,
   validateAndNormalizeLandVolume
 } from './landVolume.mjs';
 import {
@@ -359,12 +361,15 @@ export async function claimDormantLand(
     lat = null,
     lng = null,
     customName = '',
+    description = '',
     curationNote = '',
     volume = null,
     txHash = '',
     chainCfg = null
   }
 ) {
+  const effectiveDescription = String(description || curationNote || '').trim().slice(0, 240);
+  const effectiveCustomName = String(customName || '').trim().replace(/[\r\n]+/g, ' ').slice(0, 48);
   await releaseExpiredDormantLands(db);
 
   let cleanParcelId = normalizeParcelId(parcelId);
@@ -557,7 +562,7 @@ export async function claimDormantLand(
     await saveLandVolumeRow(db, resolvedVolume, now);
   }
 
-  if (customName || curationNote) {
+  if (effectiveCustomName || effectiveDescription) {
     await db.run(
       `INSERT INTO parcel_curations (
         parcel_id, owner_sub, owner_address, custom_name, curation_note,
@@ -573,8 +578,8 @@ export async function claimDormantLand(
         cleanParcelId,
         agentUser.id,
         stewardAddress,
-        String(customName || '').trim().slice(0, 48),
-        String(curationNote || '').trim().slice(0, 240),
+        effectiveCustomName,
+        effectiveDescription,
         now
       ]
     );
@@ -609,6 +614,13 @@ export async function claimDormantLand(
     args: [parcelBytes32, stewardAddress, latE6, lngE6, ttlSeconds]
   };
 
+  const slug = slugifyLandTitle(effectiveCustomName) || cleanParcelId.toLowerCase();
+  const shareUrl = buildParcelShareUrl({
+    parcelId: cleanParcelId,
+    customName: effectiveCustomName,
+    compact: true
+  });
+
   return {
     claimed: true,
     protocolFeeEth: 0,
@@ -618,6 +630,11 @@ export async function claimDormantLand(
     chainTxRequest,
     parcelId: cleanParcelId,
     geohash,
+    customName: effectiveCustomName,
+    description: effectiveDescription,
+    curationNote: effectiveDescription,
+    slug,
+    shareUrl,
     status: initialStatus,
     leaseExpiresAt,
     bounds,

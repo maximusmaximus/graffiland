@@ -303,21 +303,22 @@ export function extractCustomModelInput(input = {}) {
   }
 
   const format = inferFormatFromHint(rawFormat, rawUrl, dataMime);
-  if (!format) {
+  if (!format && !(rawUrl && !decodedBytes)) {
     return {
       provided: true,
       error: `Unsupported or missing 3D model format. Supported: ${SUPPORTED_3D_FORMATS.join(', ')}.`,
       customModel: null
     };
   }
+  const effectiveFormat = format || 'auto';
 
   let stats = { triangleCount: 0, textureCount: 0, hasDraco: false, hasMeshopt: false };
   if (decodedBytes) {
-    const err = validateModelBytesByFormat(format, decodedBytes);
+    const err = validateModelBytesByFormat(effectiveFormat, decodedBytes);
     if (err) {
       return { provided: true, error: err, customModel: null };
     }
-    const inspected = inspectCustomModelStats(format, decodedBytes);
+    const inspected = inspectCustomModelStats(effectiveFormat, decodedBytes);
     if (inspected.error) {
       return { provided: true, error: inspected.error, customModel: null };
     }
@@ -338,7 +339,7 @@ export function extractCustomModelInput(input = {}) {
     };
   }
 
-  const mimeType = FORMAT_MIME_TYPES[format] || 'application/octet-stream';
+  const mimeType = FORMAT_MIME_TYPES[effectiveFormat] || 'application/octet-stream';
   const scale = Number.isFinite(rawScale) ? Math.min(20, Math.max(0.05, rawScale)) : 1;
   const rotationY = Number.isFinite(rawRotY) ? rawRotY : 0;
 
@@ -346,9 +347,9 @@ export function extractCustomModelInput(input = {}) {
     provided: true,
     error: null,
     customModel: {
-      format,
+      format: effectiveFormat,
       mimeType,
-      ext: format,
+      ext: effectiveFormat,
       bytes: decodedBytes,
       byteLength: decodedBytes ? decodedBytes.length : 0,
       externalUrl: rawUrl,
@@ -361,4 +362,146 @@ export function extractCustomModelInput(input = {}) {
 
 export function hasCustomModelPayload(input = {}) {
   return extractCustomModelInput(input).provided;
+}
+
+export function sniffFormatFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4) return '';
+  if (bytes[0] === 0x67 && bytes[1] === 0x6c && bytes[2] === 0x54 && bytes[3] === 0x46) {
+    return 'glb';
+  }
+  const headText = new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes.subarray(0, Math.min(2048, bytes.length)))
+    .trimStart();
+  if (/^ply[\r\n]/i.test(headText)) return 'ply';
+  if (headText.startsWith('{') && /"asset"\s*:/.test(headText)) return 'gltf';
+  if (/^solid\b/i.test(headText) && /facet\s+normal/i.test(headText)) return 'stl';
+  if (/^\s*v\s+[-+\d.eE]+\s+[-+\d.eE]+\s+[-+\d.eE]+/m.test(headText)) return 'obj';
+  if (bytes.length >= 134) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const triCount = view.getUint32(80, true);
+    if (triCount >= 1 && bytes.length === 84 + triCount * 50) return 'stl';
+  }
+  return '';
+}
+
+function deriveSuggestedTitleFromUrl(rawUrl = '') {
+  try {
+    const clean = String(rawUrl || '').split('?')[0].split('#')[0];
+    const seg = clean.split('/').filter(Boolean).pop() || '';
+    const base = decodeURIComponent(seg).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
+    return base.slice(0, 48);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Fetches and validates an external 3D model URL (https://, http://, or ipfs://) against
+ * GRAFFILAND's supported formats (.glb, .gltf, .obj, .stl, .ply), size limit, and WebGL budgets.
+ */
+export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 9000 } = {}) {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) {
+    return { valid: false, error: 'Enter a 3D model URL (https://... or ipfs://...).' };
+  }
+  if (!/^(https?:\/\/|ipfs:\/\/)/i.test(trimmed)) {
+    return { valid: false, error: 'Model link must start with https://, http://, or ipfs://' };
+  }
+
+  let fetchUrl = trimmed;
+  if (/^ipfs:\/\//i.test(trimmed)) {
+    const cidPath = trimmed.slice(7).replace(/^ipfs\//i, '').trim();
+    if (!cidPath) return { valid: false, error: 'Invalid ipfs:// URL.' };
+    fetchUrl = `https://gateway.pinata.cloud/ipfs/${cidPath}`;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(fetchUrl);
+  } catch {
+    return { valid: false, error: 'Malformed 3D model URL.' };
+  }
+  const host = parsedUrl.hostname.toLowerCase();
+  if (
+    host === '169.254.169.254' ||
+    host === 'metadata.google.internal' ||
+    host === 'metadata.goog'
+  ) {
+    return { valid: false, error: 'Blocked internal metadata host.' };
+  }
+
+  let res;
+  try {
+    res = await fetch(fetchUrl, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch {
+    return { valid: false, error: `Could not reach 3D model URL (${trimmed}). Check that the link is public.` };
+  }
+  if (!res.ok) {
+    return { valid: false, error: `3D model link returned HTTP ${res.status}.` };
+  }
+
+  const contentLen = Number(res.headers?.get?.('content-length') || 0);
+  if (contentLen > CUSTOM_MODEL_MAX_BYTES) {
+    return {
+      valid: false,
+      error: `3D model exceeds ${Math.round(CUSTOM_MODEL_MAX_BYTES / (1024 * 1024))} MB maximum size.`
+    };
+  }
+
+  let buf;
+  try {
+    buf = new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return { valid: false, error: 'Failed to read 3D model bytes from link.' };
+  }
+
+  if (buf.length === 0) {
+    return { valid: false, error: '3D model link returned an empty file.' };
+  }
+  if (buf.length > CUSTOM_MODEL_MAX_BYTES) {
+    return {
+      valid: false,
+      error: `3D model exceeds ${Math.round(CUSTOM_MODEL_MAX_BYTES / (1024 * 1024))} MB maximum size.`
+    };
+  }
+
+  const mime = res.headers?.get?.('content-type') || '';
+  const detectedFormat =
+    inferFormatFromHint('', trimmed, mime) ||
+    sniffFormatFromBytes(buf) ||
+    inferFormatFromHint(formatHint, '', '');
+  if (!detectedFormat) {
+    return {
+      valid: false,
+      error: `Unsupported file format. GRAFFILAND supports: ${SUPPORTED_3D_FORMATS.map((f) => `.${f}`).join(', ')}.`
+    };
+  }
+
+  const checked = extractCustomModelInput({
+    modelFormat: detectedFormat,
+    modelBase64: modelBytesToB64(buf)
+  });
+  if (checked.error || !checked.customModel) {
+    return {
+      valid: false,
+      error: checked.error || `File at link is not a valid .${detectedFormat} 3D model.`
+    };
+  }
+
+  return {
+    valid: true,
+    error: null,
+    format: checked.customModel.format,
+    mimeType: checked.customModel.mimeType,
+    byteLength: buf.length,
+    stats: checked.customModel.stats,
+    suggestedTitle: deriveSuggestedTitleFromUrl(trimmed) || `3D ${detectedFormat.toUpperCase()} Model`,
+    resolvedUrl: fetchUrl,
+    originalUrl: trimmed,
+    bytes: buf,
+    customModel: {
+      ...checked.customModel,
+      externalUrl: trimmed
+    }
+  };
 }

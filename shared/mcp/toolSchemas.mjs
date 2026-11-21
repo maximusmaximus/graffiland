@@ -47,7 +47,7 @@ export const MCP_TOOLS = [
   {
     name: 'load_3d_model_on_land',
     description:
-      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -68,7 +68,20 @@ export const MCP_TOOLS = [
         txHash: { type: 'string' },
         signature: { type: 'string' }
       },
-      required: ['parcelId', 'title', 'description', 'modelFormat']
+      required: ['parcelId', 'title', 'description']
+    }
+  },
+  {
+    name: 'validate_3d_model_url',
+    description:
+      'Validate an external https:// or ipfs:// 3D model URL before uploading, checking format support (.glb/.gltf/.obj/.stl/.ply), 4 MB size limit, 150k triangle budget, and 8-texture mobile WebGL limit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        modelUrl: { type: 'string' },
+        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] }
+      },
+      required: ['modelUrl']
     }
   },
   {
@@ -114,15 +127,48 @@ export const MCP_TOOLS = [
   {
     name: 'update_land_parcel',
     description:
-      'Update parcel customName, curationNote, or featuredSculptureId on an owned Virtual Land parcel.',
+      'Update parcel name (customName), description (description / curationNote), or featuredSculptureId on an owned Virtual Land parcel and return its clean shareable slug link.',
     inputSchema: {
       type: 'object',
       properties: {
         parcelId: { type: 'string' },
         customName: { type: 'string' },
+        description: { type: 'string' },
         curationNote: { type: 'string' },
         featuredSculptureId: { type: 'string' },
         signature: { type: 'string' }
+      },
+      required: ['parcelId']
+    }
+  },
+  {
+    name: 'update_land_volume',
+    description:
+      'Resize, rotate, or adjust Z-axis height/scale of an owned 3D Virtual Land parcel within platform limits (max 5,000 m2 footprint, 500,000 m3 volume, no overlaps).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        centerLat: { type: 'number' },
+        centerLng: { type: 'number' },
+        widthMeters: { type: 'number' },
+        depthMeters: { type: 'number' },
+        heightMeters: { type: 'number' },
+        zScale: { type: 'number' },
+        rotationDeg: { type: 'number' },
+        signature: { type: 'string' }
+      },
+      required: ['parcelId']
+    }
+  },
+  {
+    name: 'get_parcel_share_link',
+    description:
+      'Get the clean shareable visit URL, friendly slug, GPS center, frozen status, and mobile AR/Directions info for any minted Virtual Land parcel (accepts GLAND-... parcelId or slug).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' }
       },
       required: ['parcelId']
     }
@@ -227,7 +273,7 @@ export const MCP_TOOLS = [
   {
     name: 'claim_land',
     description:
-      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. Supports optional custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). AI agents pay their own network gas (supply optional on-chain txHash).',
+      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. Supports customName, description/curationNote, and custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). AI agents pay their own network gas (supply optional on-chain txHash).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -235,6 +281,7 @@ export const MCP_TOOLS = [
         lat: { type: 'number' },
         lng: { type: 'number' },
         customName: { type: 'string' },
+        description: { type: 'string' },
         curationNote: { type: 'string' },
         volume: { type: 'object' },
         txHash: { type: 'string' }

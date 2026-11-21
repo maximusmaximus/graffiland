@@ -1,6 +1,11 @@
 import { ethers } from 'ethers';
 import { POLICY } from '../constants.mjs';
-import { buildDefaultVolumeFromBounds, computeOrientedFootprintLngLat } from '../landVolume.mjs';
+import {
+  buildDefaultVolumeFromBounds,
+  buildParcelShareUrl,
+  computeOrientedFootprintLngLat,
+  slugifyLandTitle
+} from '../landVolume.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -10,6 +15,7 @@ import {
   extractCustomModelInput,
   INLINE_MODEL_DB_MAX_BYTES,
   modelBytesToB64,
+  validate3dModelUrl,
   validateAnchorOffset
 } from '../model3d.mjs';
 import { getLandSecurityPolicy } from '../landmarkService.mjs';
@@ -146,7 +152,9 @@ export async function listLandsWithCurations(db) {
       agentRoyaltiesEth: Number(st?.agent_royalties_eth || 0),
       humanRoyaltiesEth: Number(st?.human_royalties_eth || 0),
       customName: cur?.custom_name || '',
+      description: cur?.curation_note || '',
       curationNote: cur?.curation_note || '',
+      slug: slugifyLandTitle(cur?.custom_name || '') || parcelId.toLowerCase(),
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
@@ -169,31 +177,18 @@ export async function listLandsWithCurations(db) {
 
 async function resolveCustomModelBytes(customModel) {
   if (!customModel || customModel.bytes) return customModel;
-  let fetchUrl = customModel.externalUrl;
-  if (fetchUrl.startsWith('ipfs://')) {
-    fetchUrl = `https://gateway.pinata.cloud/ipfs/${fetchUrl.slice(7)}`;
-  }
-  let res;
-  try {
-    res = await fetch(fetchUrl, { signal: AbortSignal.timeout(8000) });
-  } catch {
-    throw new McpServiceError(`Could not download 3D model URL (${customModel.externalUrl}).`, 400);
-  }
-  if (!res.ok) {
-    throw new McpServiceError(`Could not download 3D model URL (HTTP ${res.status}).`, 400);
-  }
-  const buf = new Uint8Array(await res.arrayBuffer());
-  const rechecked = extractCustomModelInput({
-    modelFormat: customModel.format,
-    modelBase64: modelBytesToB64(buf),
-    modelScale: customModel.scale,
-    modelRotationY: customModel.rotationY
-  });
-  if (rechecked.error || !rechecked.customModel) {
-    throw new McpServiceError(rechecked.error || 'Downloaded URL is not a valid 3D model.', 400);
+  const formatHint = customModel.format && customModel.format !== 'auto' ? customModel.format : '';
+  const checked = await validate3dModelUrl(customModel.externalUrl, { formatHint });
+  if (!checked.valid || !checked.customModel) {
+    throw new McpServiceError(
+      checked.error || `Could not download or validate 3D model URL (${customModel.externalUrl}).`,
+      400
+    );
   }
   return {
-    ...rechecked.customModel,
+    ...checked.customModel,
+    scale: customModel.scale ?? checked.customModel.scale,
+    rotationY: customModel.rotationY ?? checked.customModel.rotationY,
     externalUrl: customModel.externalUrl
   };
 }
@@ -423,7 +418,10 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       centerLat: volume?.centerLat ?? bounds?.center?.[0] ?? null,
       centerLng: volume?.centerLng ?? bounds?.center?.[1] ?? null,
       customName: cur?.custom_name || '',
+      description: cur?.curation_note || '',
       curationNote: cur?.curation_note || '',
+      slug: slugifyLandTitle(cur?.custom_name || '') || pid.toLowerCase(),
+      shareUrl: buildParcelShareUrl({ parcelId: pid, customName: cur?.custom_name || '', compact: true }),
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settings.frozen),
@@ -1133,13 +1131,21 @@ export async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress
   const existing = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [
     parcelCtx.parcelId
   ]);
-  const customName =
+  const incomingName =
     payload.customName !== undefined
-      ? String(payload.customName || '').trim().replace(/[\r\n]+/g, ' ').slice(0, 48)
+      ? payload.customName
+      : payload.name !== undefined
+      ? payload.name
+      : payload.title;
+  const incomingNote =
+    payload.description !== undefined ? payload.description : payload.curationNote;
+  const customName =
+    incomingName !== undefined
+      ? String(incomingName || '').trim().replace(/[\r\n]+/g, ' ').slice(0, 48)
       : existing?.custom_name || '';
   const curationNote =
-    payload.curationNote !== undefined
-      ? String(payload.curationNote || '').trim().slice(0, 240)
+    incomingNote !== undefined
+      ? String(incomingNote || '').trim().slice(0, 240)
       : existing?.curation_note || '';
   const featuredId =
     payload.featuredSculptureId !== undefined
@@ -1177,16 +1183,114 @@ export async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress
   );
 
   const row = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [parcelCtx.parcelId]);
+  const slug = slugifyLandTitle(row.custom_name || '') || parcelCtx.parcelId.toLowerCase();
   return {
     parcel: {
       parcelId: parcelCtx.parcelId,
       geohash: parcelCtx.geohash,
       customName: row.custom_name,
+      description: row.curation_note,
       curationNote: row.curation_note,
+      slug,
+      shareUrl: buildParcelShareUrl({
+        parcelId: parcelCtx.parcelId,
+        customName: row.custom_name,
+        compact: true
+      }),
       featuredSculptureId: row.featured_sculpture_id,
       lastSignedTxHash: row.last_signed_tx_hash,
       updatedAt: row.updated_at
     }
+  };
+}
+
+export async function getPublicParcelDetail(
+  db,
+  { parcelOrSlug = '', publicOrigin = 'https://maximusmaximus.github.io', publicPathname = '/graffiland/' } = {}
+) {
+  const raw = String(parcelOrSlug || '').trim();
+  if (!raw) throw new McpServiceError('Parcel ID or slug is required.', 400);
+
+  const allParcels = await listLandsWithCurations(db);
+  const upper = normalizeParcelId(raw);
+  const cleanSlug = slugifyLandTitle(raw);
+
+  const matched =
+    allParcels.find((p) => p.parcelId === upper) ||
+    allParcels.find((p) => p.slug === cleanSlug && cleanSlug !== '') ||
+    allParcels.find((p) => slugifyLandTitle(p.customName || '') === cleanSlug && cleanSlug !== '');
+
+  if (!matched) {
+    throw new McpServiceError(`Virtual Land "${raw}" not found.`, 404);
+  }
+
+  const scRows = await db.all(
+    `SELECT s.*,
+      m.model_format AS custom_model_format, m.mime_type AS custom_model_mime,
+      m.source_type AS custom_model_source_type, m.model_url AS custom_model_url,
+      m.model_cid AS custom_model_cid, m.model_uri AS custom_model_uri,
+      m.scale AS custom_model_scale, m.rotation_y AS custom_model_rotation_y,
+      m.byte_length AS custom_model_bytes,
+      a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+      a.current_rev AS current_rev, a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
+      a.mesh_stats_json AS mesh_stats_json,
+      COALESCE(l.layer_role, 'artist_work') AS layer_role,
+      COALESCE(l.quest_id, '') AS layer_quest_id,
+      COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+      COALESCE(l.qual_contributor, 1) AS qual_contributor
+     FROM sculptures s
+     LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+     LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     WHERE s.parcel_id = ? AND s.hidden = 0
+     ORDER BY s.created_at ASC`,
+    [matched.parcelId]
+  );
+
+  const openQuests = await db
+    .all(
+      `SELECT id, title, prompt, theme, bounty_eth, max_completions, completions_count, slot_offsets_json
+       FROM land_quests WHERE parcel_id = ? AND status = 'open' ORDER BY created_at DESC`,
+      [matched.parcelId]
+    )
+    .catch(() => []);
+
+  const shareUrl = buildParcelShareUrl({
+    origin: publicOrigin,
+    pathname: publicPathname,
+    parcelId: matched.parcelId,
+    customName: matched.customName,
+    compact: true
+  });
+
+  return {
+    parcel: {
+      ...matched,
+      shareUrl,
+      openQuests: (openQuests || []).map((q) => ({
+        id: q.id,
+        title: q.title,
+        prompt: q.prompt,
+        theme: q.theme,
+        bountyEth: Number(q.bounty_eth || 0),
+        maxCompletions: Number(q.max_completions || 10),
+        completionsCount: Number(q.completions_count || 0),
+        slotOffsets: (() => {
+          try {
+            return JSON.parse(q.slot_offsets_json || '[]');
+          } catch {
+            return [];
+          }
+        })()
+      }))
+    },
+    sculptures: (scRows || []).map((r) =>
+      serializeSculptureRow(r, {
+        includeVoxels: true,
+        parcelFrozen: Boolean(matched.frozen)
+      })
+    ),
+    shareUrl
   };
 }
 

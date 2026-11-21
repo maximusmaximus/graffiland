@@ -10,7 +10,8 @@ import {
 import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
 import { serializeSculptureRow } from './sculpture.mjs';
-import { extractCustomModelInput } from './model3d.mjs';
+import { extractCustomModelInput, validate3dModelUrl } from './model3d.mjs';
+import { buildParcelShareUrl, slugifyLandTitle } from './landVolume.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -44,6 +45,7 @@ import {
   directOwnerUpdateSculpture,
   getLandSettingsInternal,
   getMyLandsWorkspace,
+  getPublicParcelDetail,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listOwnerLandsAndSculptures,
@@ -82,6 +84,7 @@ export {
   disconnectMcpPairing,
   getLandSettingsInternal,
   getMyLandsWorkspace,
+  getPublicParcelDetail,
   getSignatureRequest,
   isUserLandOwner,
   isUserParcelContributor,
@@ -200,13 +203,25 @@ export async function handleMcpJsonRpc(
       );
       const cur = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [parcelId]);
       const settings = await getLandSettingsInternal(db, parcelId);
+      const slug = slugifyLandTitle(cur?.custom_name || '') || parcelId.toLowerCase();
       toolResult = {
         parcelId,
+        customName: cur?.custom_name || '',
+        description: cur?.curation_note || '',
+        curationNote: cur?.curation_note || '',
+        slug,
+        shareUrl: buildParcelShareUrl({
+          parcelId,
+          customName: cur?.custom_name || '',
+          compact: true
+        }),
         settings,
         curation: cur
           ? {
               customName: cur.custom_name,
+              description: cur.curation_note,
               curationNote: cur.curation_note,
+              slug,
               featuredSculptureId: cur.featured_sculpture_id,
               lastSignedTxHash: cur.last_signed_tx_hash
             }
@@ -218,6 +233,36 @@ export async function handleMcpJsonRpc(
             parcelFrozen: settings.frozen
           })
         )
+      };
+    } else if (toolName === 'validate_3d_model_url') {
+      const checked = await validate3dModelUrl(args.modelUrl, {
+        formatHint: args.modelFormat || ''
+      });
+      toolResult = {
+        valid: checked.valid,
+        error: checked.error || null,
+        format: checked.format || '',
+        mimeType: checked.mimeType || '',
+        byteLength: checked.byteLength || 0,
+        stats: checked.stats || null,
+        suggestedTitle: checked.suggestedTitle || '',
+        modelUrl: args.modelUrl
+      };
+    } else if (toolName === 'get_parcel_share_link') {
+      const detail = await getPublicParcelDetail(db, { parcelOrSlug: args.parcelId });
+      const lat = detail.parcel.centerLat;
+      const lng = detail.parcel.centerLng;
+      toolResult = {
+        parcelId: detail.parcel.parcelId,
+        customName: detail.parcel.customName,
+        description: detail.parcel.description,
+        slug: detail.parcel.slug,
+        shareUrl: detail.shareUrl,
+        directionsUrl: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lat},${lng}`)}`,
+        frozen: Boolean(detail.parcel.frozen),
+        centerLat: lat,
+        centerLng: lng,
+        sculptureCount: detail.sculptures.length
       };
     } else if (toolName === 'put_sculpture_on_land' || toolName === 'load_3d_model_on_land') {
       const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
@@ -403,8 +448,34 @@ export async function handleMcpJsonRpc(
         parcelId: parcelCtx.parcelId,
         payload: {
           customName: args.customName,
+          description: args.description,
           curationNote: args.curationNote,
           featuredSculptureId: args.featuredSculptureId
+        },
+        signature: args.signature || '',
+        auth: args.auth || null,
+        txHash: args.txHash || '',
+        pinSculptureFn,
+        mintSculptureFn,
+        notifyMobileFn
+      });
+    } else if (toolName === 'update_land_volume') {
+      const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
+      toolResult = await handlePairedLandMutationViaMcp(db, {
+        pairing,
+        ownerUser,
+        action: 'update_land_volume',
+        parcelId: parcelCtx.parcelId,
+        payload: {
+          volume: {
+            ...(args.centerLat !== undefined ? { centerLat: args.centerLat } : {}),
+            ...(args.centerLng !== undefined ? { centerLng: args.centerLng } : {}),
+            ...(args.widthMeters !== undefined ? { widthMeters: args.widthMeters } : {}),
+            ...(args.depthMeters !== undefined ? { depthMeters: args.depthMeters } : {}),
+            ...(args.heightMeters !== undefined ? { heightMeters: args.heightMeters } : {}),
+            ...(args.zScale !== undefined ? { zScale: args.zScale } : {}),
+            ...(args.rotationDeg !== undefined ? { rotationDeg: args.rotationDeg } : {})
+          }
         },
         signature: args.signature || '',
         auth: args.auth || null,
@@ -566,6 +637,7 @@ export async function handleMcpJsonRpc(
         lat: args.lat,
         lng: args.lng,
         customName: args.customName || '',
+        description: args.description || '',
         curationNote: args.curationNote || '',
         volume: args.volume || null,
         txHash: args.txHash || ''

@@ -89,6 +89,7 @@ import {
   disconnectMcpPairing,
   getLandSettingsInternal,
   getMyLandsWorkspace,
+  getPublicParcelDetail,
   getSignatureRequest,
   handleMcpJsonRpc,
   isUserLandOwner,
@@ -105,7 +106,7 @@ import {
   updateLandSettings,
   upsertAnchorAndRevision
 } from '../../shared/mcpService.mjs';
-import { b64ToModelBytes, validateAnchorOffset } from '../../shared/model3d.mjs';
+import { b64ToModelBytes, validate3dModelUrl, validateAnchorOffset } from '../../shared/model3d.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -1289,6 +1290,7 @@ export default {
           lat: body?.lat,
           lng: body?.lng,
           customName: body?.customName || '',
+          description: body?.description || '',
           curationNote: body?.curationNote || '',
           volume: body?.volume || null,
           txHash: body?.txHash || '',
@@ -1567,6 +1569,49 @@ export default {
         return jsonResponse(await getMyLandsWorkspace(d1Adapter, { user }), 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Could not load lands' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/models/validate-url' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      const body = await request.json().catch(() => ({}));
+      const modelUrl = String(body?.modelUrl || body?.url || '').trim();
+      const formatHint = String(body?.modelFormat || body?.format || '').trim();
+      const checked = await validate3dModelUrl(modelUrl, { formatHint });
+      return jsonResponse(
+        {
+          valid: Boolean(checked.valid),
+          error: checked.error || null,
+          format: checked.format || '',
+          mimeType: checked.mimeType || '',
+          byteLength: checked.byteLength || 0,
+          stats: checked.stats || null,
+          suggestedTitle: checked.suggestedTitle || '',
+          modelUrl
+        },
+        checked.valid ? 200 : 400,
+        request
+      );
+    }
+
+    const landDetailMatch = pathname.match(/^\/api\/lands\/([^/]+)$/);
+    if (
+      landDetailMatch &&
+      request.method === 'GET' &&
+      !['scout', 'mine', 'claim'].includes(landDetailMatch[1].toLowerCase())
+    ) {
+      try {
+        const out = await getPublicParcelDetail(d1Adapter, {
+          parcelOrSlug: decodeURIComponent(landDetailMatch[1])
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Virtual Land not found' },
+          err?.statusCode || 404,
+          request
+        );
       }
     }
 

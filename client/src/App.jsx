@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
+import { parseParcelParamFromLocation } from '../../shared/landVolume.mjs';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
@@ -20,8 +21,12 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(() => isMobileDevice());
   const [welcomeOpen, setWelcomeOpen] = useState(() => {
     try {
-      const hasDeepLink = new URLSearchParams(window.location.search).has('sculpture');
-      if (hasDeepLink) return false;
+      const sp = new URLSearchParams(window.location.search);
+      const parsedParcel = parseParcelParamFromLocation(
+        window.location.search,
+        window.location.pathname
+      );
+      if (sp.has('sculpture') || parsedParcel.parcelId || parsedParcel.slug) return false;
     } catch {
       // ignore
     }

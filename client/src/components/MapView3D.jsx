@@ -6,6 +6,7 @@ import xeroemoji from 'xeroemoji';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
   buildDefaultVolumeFromBounds,
+  buildParcelShareUrl,
   computeCameraAlignedDraftBox,
   computeMaxHeightForFootprint,
   computeOrientedFootprintLngLat,
@@ -14,6 +15,7 @@ import {
   scaleDraftFromCorner
 } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
+import { copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   computePrismScreenGeometry,
@@ -454,6 +456,9 @@ export default function MapView3D({
   onSelectDraft = null,
   onUpdateDraft = null,
   onAdd3DItemForParcel = null,
+  onTitleParcel = null,
+  onCopyParcelShareLink = null,
+  focusTarget = null,
   onViewModeChange = null,
   onToggleDrawMode = null,
   onDismissAuto3dHint = null
@@ -512,6 +517,8 @@ export default function MapView3D({
   const onAddDraftRef = useRef(onAddDraftRectangle);
   const onUpdateDraftRef = useRef(onUpdateDraft);
   const onAdd3DItemForParcelRef = useRef(onAdd3DItemForParcel);
+  const onTitleParcelRef = useRef(onTitleParcel);
+  const onCopyParcelShareLinkRef = useRef(onCopyParcelShareLink);
   const onViewportChangeRef = useRef(onViewportChange);
   const onViewModeChangeRef = useRef(onViewModeChange);
   const initialViewRef = useRef(initialView);
@@ -577,6 +584,29 @@ export default function MapView3D({
   useEffect(() => {
     onAdd3DItemForParcelRef.current = onAdd3DItemForParcel;
   }, [onAdd3DItemForParcel]);
+  useEffect(() => {
+    onTitleParcelRef.current = onTitleParcel;
+  }, [onTitleParcel]);
+  useEffect(() => {
+    onCopyParcelShareLinkRef.current = onCopyParcelShareLink;
+  }, [onCopyParcelShareLink]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (
+      !map ||
+      !focusTarget ||
+      !Number.isFinite(Number(focusTarget.lat)) ||
+      !Number.isFinite(Number(focusTarget.lng))
+    ) {
+      return;
+    }
+    userAdjustedRef.current = true;
+    map.flyTo({
+      center: [Number(focusTarget.lng), Number(focusTarget.lat)],
+      zoom: Number(focusTarget.zoom || 17.6),
+      duration: 650
+    });
+  }, [focusTarget]);
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
   }, [onViewportChange]);
@@ -1208,7 +1238,7 @@ export default function MapView3D({
     };
   }, [sculptures, userLocation, selectedSculptureId, config, onSelectSculpture]);
 
-  // Render glowing "+" action button right on each minted parcel owned by the signed-in user
+  // Render action buttons right beside each minted parcel (+, Title, Copy Share Link for owned; Copy Link for public)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return undefined;
@@ -1217,11 +1247,11 @@ export default function MapView3D({
     ownedMarkersRef.current = [];
 
     const ownedSet = new Set((ownedParcelIds || []).map((id) => String(id).toUpperCase()));
-    if (ownedSet.size === 0) return undefined;
 
     for (const p of parcels || []) {
       const pid = String(p?.parcelId || '').toUpperCase();
-      if (!pid || !ownedSet.has(pid)) continue;
+      if (!pid) continue;
+      const isOwned = ownedSet.has(pid);
       const lat = Number(p?.volume?.centerLat ?? p?.centerLat ?? p?.bounds?.center?.[0]);
       const lng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
@@ -1229,26 +1259,75 @@ export default function MapView3D({
       const wrap = document.createElement('div');
       wrap.className = 'map3d-owned-action-pin map3d-ui-stop';
 
-      const plusBtn = document.createElement('button');
-      plusBtn.type = 'button';
-      plusBtn.className = `map3d-owned-plus-btn map3d-ui-stop ${p?.frozen ? 'is-frozen' : ''}`;
-      plusBtn.dataset.parcelId = pid;
-      plusBtn.setAttribute('aria-label', `Add 3D item to ${pid}`);
-      plusBtn.title = p?.frozen
-        ? `${pid} is Frozen — click + to copy agent prompt or unfreeze`
-        : `Add a 3D item to minted land ${pid} (Copy Agent Prompt)`;
-      plusBtn.textContent = p?.frozen ? '+ ❄️' : '+';
-      plusBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-      plusBtn.addEventListener('click', (ev) => {
+      const btnRow = document.createElement('div');
+      btnRow.className = 'map3d-owned-action-row';
+
+      if (isOwned) {
+        const plusBtn = document.createElement('button');
+        plusBtn.type = 'button';
+        plusBtn.className = `map3d-owned-plus-btn map3d-ui-stop ${p?.frozen ? 'is-frozen' : ''}`;
+        plusBtn.dataset.parcelId = pid;
+        plusBtn.setAttribute('aria-label', `Add 3D item to ${pid}`);
+        plusBtn.title = p?.frozen
+          ? `${pid} is Frozen — click + to unfreeze or view agent prompt`
+          : `Add a 3D item to minted land ${pid} (Model Link or Agent Prompt)`;
+        plusBtn.textContent = p?.frozen ? '+ ❄️' : '+';
+        plusBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        plusBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          onAdd3DItemForParcelRef.current?.(p);
+        });
+        btnRow.appendChild(plusBtn);
+
+        const titleBtn = document.createElement('button');
+        titleBtn.type = 'button';
+        titleBtn.className = 'map3d-owned-mini-btn map3d-ui-stop';
+        titleBtn.dataset.parcelId = pid;
+        titleBtn.setAttribute('aria-label', `Title land ${pid}`);
+        titleBtn.title = `Title or describe ${p.customName || pid}`;
+        titleBtn.textContent = '✎';
+        titleBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        titleBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          onTitleParcelRef.current?.(p);
+        });
+        btnRow.appendChild(titleBtn);
+      }
+
+      const shareBtn = document.createElement('button');
+      shareBtn.type = 'button';
+      shareBtn.className = `map3d-owned-mini-btn map3d-parcel-share-btn map3d-ui-stop ${isOwned ? '' : 'is-public'}`;
+      shareBtn.dataset.parcelId = pid;
+      shareBtn.setAttribute('aria-label', `Copy share link for minted land ${pid}`);
+      shareBtn.title = `Copy shareable visit link for ${p.customName || pid}`;
+      shareBtn.textContent = '🔗';
+      shareBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      shareBtn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        onAdd3DItemForParcelRef.current?.(p);
+        if (onCopyParcelShareLinkRef.current) {
+          await onCopyParcelShareLinkRef.current(p);
+        } else {
+          const shareUrl = buildParcelShareUrl({
+            origin: window.location.origin,
+            pathname: window.location.pathname,
+            parcelId: pid,
+            customName: p.customName || '',
+            compact: true
+          });
+          await copyToClipboard(shareUrl);
+        }
+        shareBtn.textContent = '✓';
+        setTimeout(() => {
+          shareBtn.textContent = '🔗';
+        }, 1500);
       });
+      btnRow.appendChild(shareBtn);
 
       const badge = document.createElement('span');
       badge.className = 'map3d-owned-plus-tag';
       badge.textContent = p.customName || pid;
 
-      wrap.append(plusBtn, badge);
+      wrap.append(btnRow, badge);
       const mk = new maplibregl.Marker({ element: wrap, anchor: 'left', offset: [28, 4] })
         .setLngLat([lng, lat])
         .addTo(map);

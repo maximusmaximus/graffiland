@@ -2,9 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import {
+  buildParcelShareUrl,
   computeOrientedFootprintLngLat,
   footprintsOverlap,
   normalizeRotationDeg,
+  parseParcelParamFromLocation,
   validateAndNormalizeLandVolume
 } from '../../../shared/landVolume.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
@@ -24,6 +26,7 @@ import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import SculptureModal from './SculptureModal.jsx';
+import TitleLandModal from './TitleLandModal.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const DESKTOP_SESSION_KEY = 'graffiland_desktop_session_v1';
@@ -131,6 +134,9 @@ export default function DesktopHub({
   const [landManageOpen, setLandManageOpen] = useState(false);
   const [landManageParcelId, setLandManageParcelId] = useState('');
   const [addItemParcelId, setAddItemParcelId] = useState('');
+  const [titleModalTarget, setTitleModalTarget] = useState(null); // { mode: 'draft'|'owned', parcel }
+  const [visitedParcel, setVisitedParcel] = useState(null);
+  const [mapFocusTarget, setMapFocusTarget] = useState(null);
   const [myLands, setMyLands] = useState({ parcelCount: 0, parcels: [] });
   const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -217,38 +223,64 @@ export default function DesktopHub({
     refreshMyLands();
     const urlParams = new URLSearchParams(window.location.search);
     const deepId = urlParams.get('sculpture');
-    const deepParcel = urlParams.get('parcel');
+    const parsedParcel = parseParcelParamFromLocation(
+      window.location.search,
+      window.location.pathname
+    );
+    const deepParcel = parsedParcel.parcelId;
+    const deepSlug = parsedParcel.slug;
     const deepLat = Number(urlParams.get('lat'));
     const deepLng = Number(urlParams.get('lng'));
-    if (deepParcel && Number.isFinite(deepLat) && Number.isFinite(deepLng)) {
-      const deepW = Number(urlParams.get('w')) || LAND_VOLUME_LIMITS.defaultWidthMeters;
-      const deepD = Number(urlParams.get('d')) || LAND_VOLUME_LIMITS.defaultDepthMeters;
-      const deepH = Number(urlParams.get('h')) || LAND_VOLUME_LIMITS.defaultHeightMeters;
-      const deepRot = Number(urlParams.get('rot')) || 0;
-      const deepName = urlParams.get('name') || '';
-      const id = `draft-url-${deepParcel}`;
-      setDraftParcelsRaw((prev) => {
-        if (prev.some((d) => d.parcelId === deepParcel || d.id === id)) return prev;
-        return [
-          ...prev,
-          {
-            id,
-            parcelId: deepParcel.toUpperCase(),
-            centerLat: deepLat,
-            centerLng: deepLng,
-            widthMeters: deepW,
-            depthMeters: deepD,
-            heightMeters: deepH,
-            zScale: Number((deepH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
-            rotationDeg: deepRot,
-            customName: deepName
+    if (deepParcel || deepSlug) {
+      const lookupToken = deepParcel || deepSlug;
+      api
+        .getLandDetail(lookupToken)
+        .then((res) => {
+          if (res?.parcel) {
+            setVisitedParcel({ parcel: res.parcel, sculptures: res.sculptures || [] });
+            const cLat = Number(res.parcel.centerLat ?? res.parcel.volume?.centerLat);
+            const cLng = Number(res.parcel.centerLng ?? res.parcel.volume?.centerLng);
+            if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+              setMapFocusTarget({ lat: cLat, lng: cLng, zoom: 17.8, ts: Date.now() });
+              setMapViewport((prev) => ({ ...(prev || {}), lat: cLat, lng: cLng, zoom: 17.8 }));
+            }
+            setViewMode('isometric');
+            return;
           }
-        ];
-      });
-      setSelectedDraftId(id);
-      setSidebarTab('land');
-      setViewMode('3d');
-      setMapViewport((prev) => ({ ...(prev || {}), lat: deepLat, lng: deepLng, zoom: 17.5 }));
+          throw new Error('not-minted');
+        })
+        .catch(() => {
+          if (deepParcel && Number.isFinite(deepLat) && Number.isFinite(deepLng)) {
+            const deepW = Number(urlParams.get('w')) || LAND_VOLUME_LIMITS.defaultWidthMeters;
+            const deepD = Number(urlParams.get('d')) || LAND_VOLUME_LIMITS.defaultDepthMeters;
+            const deepH = Number(urlParams.get('h')) || LAND_VOLUME_LIMITS.defaultHeightMeters;
+            const deepRot = Number(urlParams.get('rot')) || 0;
+            const deepName = urlParams.get('name') || '';
+            const id = `draft-url-${deepParcel}`;
+            setDraftParcelsRaw((prev) => {
+              if (prev.some((d) => d.parcelId === deepParcel || d.id === id)) return prev;
+              return [
+                ...prev,
+                {
+                  id,
+                  parcelId: deepParcel.toUpperCase(),
+                  centerLat: deepLat,
+                  centerLng: deepLng,
+                  widthMeters: deepW,
+                  depthMeters: deepD,
+                  heightMeters: deepH,
+                  zScale: Number((deepH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+                  rotationDeg: deepRot,
+                  customName: deepName
+                }
+              ];
+            });
+            setSelectedDraftId(id);
+            setSidebarTab('land');
+            setViewMode('3d');
+            setMapViewport((prev) => ({ ...(prev || {}), lat: deepLat, lng: deepLng, zoom: 17.5 }));
+          }
+        });
     }
     if (deepId) {
       api
@@ -684,6 +716,8 @@ export default function DesktopHub({
         lat: draft.centerLat,
         lng: draft.centerLng,
         customName: draft.customName?.trim() || undefined,
+        description: draft.description?.trim() || undefined,
+        curationNote: draft.description?.trim() || undefined,
         volume: {
           centerLat: draft.centerLat,
           centerLng: draft.centerLng,
@@ -727,6 +761,8 @@ export default function DesktopHub({
           lat: draft.centerLat,
           lng: draft.centerLng,
           customName: draft.customName?.trim() || undefined,
+          description: draft.description?.trim() || undefined,
+          curationNote: draft.description?.trim() || undefined,
           volume: {
             centerLat: draft.centerLat,
             centerLng: draft.centerLng,
@@ -804,6 +840,36 @@ export default function DesktopHub({
     });
     await Promise.all([refreshData(), refreshMyLands()]);
   }, [user?.id, refreshData, refreshMyLands]);
+
+  const handleCopyParcelShareLink = useCallback(async (parcel) => {
+    if (!parcel?.parcelId) return;
+    const shareUrl = buildParcelShareUrl({
+      origin: window.location.origin,
+      pathname: window.location.pathname,
+      parcelId: parcel.parcelId,
+      customName: parcel.customName || '',
+      compact: true
+    });
+    const ok = await copyToClipboard(shareUrl);
+    setLandStatus({
+      text: ok
+        ? `Copied share link for ${parcel.customName || parcel.parcelId}: ${shareUrl}`
+        : shareUrl
+    });
+  }, []);
+
+  const handleSaveOwnedTitle = useCallback(
+    async (parcelId, { customName, description }) => {
+      await api.updateLandParcel(parcelId, {
+        customName,
+        description,
+        curationNote: description
+      });
+      setLandStatus({ text: `Saved title for ${parcelId}${customName ? ` ("${customName}")` : ''}.` });
+      await Promise.all([refreshData(), refreshMyLands()]);
+    },
+    [refreshData, refreshMyLands]
+  );
 
   const handleOpenAddLandItem = useCallback((parcelOrId) => {
     const pid =
@@ -925,6 +991,53 @@ export default function DesktopHub({
           />
         )}
 
+        {visitedParcel?.parcel && (
+          <div className="desktop-visited-parcel-bar" role="region" aria-label="Shared parcel visit overview">
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <strong>{visitedParcel.parcel.customName || visitedParcel.parcel.parcelId}</strong>
+                <span className="badge gold mono" style={{ fontSize: 10 }}>
+                  {visitedParcel.parcel.parcelId}
+                </span>
+                <span className={`badge ${visitedParcel.parcel.frozen ? 'badge-error' : 'teal'}`} style={{ fontSize: 10 }}>
+                  {visitedParcel.parcel.frozen ? '❄️ Frozen' : '✅ Open Land'}
+                </span>
+              </div>
+              {visitedParcel.parcel.description && (
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
+                  {visitedParcel.parcel.description}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-xs btn-outline"
+                onClick={() => handleCopyParcelShareLink(visitedParcel.parcel)}
+              >
+                🔗 Copy Link
+              </button>
+              {visitedParcel.sculptures?.[0] && (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-primary"
+                  onClick={() => openSculpture(visitedParcel.sculptures[0])}
+                >
+                  🧊 View Artwork ({visitedParcel.sculptures.length})
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-xs"
+                aria-label="Close shared parcel banner"
+                onClick={() => setVisitedParcel(null)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="desktop-map-layout">
           <div className="desktop-map-stage">
             <MapView3D
@@ -940,6 +1053,7 @@ export default function DesktopHub({
               focusArea={areaFilter === 'nearby' && Boolean(userLocation) && nearbyMatches.length > 0}
               selectedSculptureId={selected?.id || lastSculpture?.id || ''}
               initialView={mapViewport}
+              focusTarget={mapFocusTarget}
               onViewportChange={handleViewportChange}
               config={config}
               onSelectSculpture={openSculpture}
@@ -950,6 +1064,8 @@ export default function DesktopHub({
               }}
               onUpdateDraft={handleUpdateDraft}
               onAdd3DItemForParcel={handleOpenAddLandItem}
+              onTitleParcel={(p) => setTitleModalTarget({ mode: 'owned', parcel: p })}
+              onCopyParcelShareLink={handleCopyParcelShareLink}
               onViewModeChange={(nextMode) => setViewMode(nextMode)}
               onToggleDrawMode={() => {
                 const next = !drawMode;
@@ -1091,6 +1207,9 @@ export default function DesktopHub({
                 onMintAll={handleMintAll}
                 onUpdateOwnedVolume={handleUpdateOwnedVolume}
                 onOpenAddLandItem={handleOpenAddLandItem}
+                onOpenTitleDraft={(draft) => setTitleModalTarget({ mode: 'draft', parcel: draft })}
+                onOpenTitleOwned={(parcel) => setTitleModalTarget({ mode: 'owned', parcel })}
+                onCopyOwnedShareLink={handleCopyParcelShareLink}
                 onToggleFreezeParcel={handleToggleFreezeParcel}
                 onOpenLandManagement={(pid) => {
                   setLandManageParcelId(pid || '');
@@ -1526,12 +1645,47 @@ export default function DesktopHub({
           onMcpStateChange={setMcpState}
           onToggleFreeze={handleToggleFreezeParcel}
           onToggleSculptureVisibility={handleToggleSculptureVisibility}
+          onSculptureUploaded={async () => {
+            await Promise.all([refreshData(), refreshMyLands()]);
+          }}
           onSelectSculpture={(sc) => openSculpture(sc)}
           onOpenLandManagement={(pid) => {
             setLandManageParcelId(pid || '');
             setLandManageOpen(true);
           }}
           onClose={() => setAddItemParcelId('')}
+        />
+      )}
+
+      {titleModalTarget?.parcel && (
+        <TitleLandModal
+          mode={titleModalTarget.mode}
+          parcel={titleModalTarget.parcel}
+          busy={mintBusy}
+          onSave={async ({ customName, description }) => {
+            if (titleModalTarget.mode === 'draft') {
+              handleUpdateDraft(titleModalTarget.parcel.id, { customName, description });
+            } else {
+              await handleSaveOwnedTitle(titleModalTarget.parcel.parcelId, {
+                customName,
+                description
+              });
+            }
+          }}
+          onSaveAndMint={
+            titleModalTarget.mode === 'draft'
+              ? async ({ customName, description }) => {
+                  const updatedDraft = {
+                    ...titleModalTarget.parcel,
+                    customName,
+                    description
+                  };
+                  handleUpdateDraft(titleModalTarget.parcel.id, { customName, description });
+                  await handleMintDraft(updatedDraft);
+                }
+              : null
+          }
+          onClose={() => setTitleModalTarget(null)}
         />
       )}
 

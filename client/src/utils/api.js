@@ -204,6 +204,13 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getMyLands: () => request('/api/lands/mine'),
+  getLandDetail: (parcelOrSlug) =>
+    request(`/api/lands/${encodeURIComponent(parcelOrSlug)}`),
+  validateModelUrl: (payload) =>
+    request('/api/models/validate-url', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   updateLandSettings: (parcelId, payload) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/settings`, {
       method: 'POST',

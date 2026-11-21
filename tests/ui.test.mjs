@@ -24,6 +24,21 @@ async function loadJsxModule(relPath) {
     format: 'esm',
     platform: 'node',
     packages: 'external',
+    plugins: [
+      {
+        name: 'stub-css-for-jsdom',
+        setup(build) {
+          build.onResolve({ filter: /\.css$/ }, () => ({
+            path: 'stub.css',
+            namespace: 'stub-css'
+          }));
+          build.onLoad({ filter: /.*/, namespace: 'stub-css' }, () => ({
+            contents: '',
+            loader: 'js'
+          }));
+        }
+      }
+    ],
     loader: { '.css': 'empty', '.svg': 'dataurl', '.png': 'dataurl' },
     outfile: absOut
   });
@@ -421,6 +436,23 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     assert.ok(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
+    assert.ok(view.getByTestId('welcome-step-1'));
+    assert.ok(view.getByText(/Draw & Title Real-World 3D Land/i));
+    assert.ok(view.container.querySelector('.welcome-step-svg'));
+
+    // Click through all 3 illustrated walkthrough steps and verify Back works
+    RTL.fireEvent.click(view.getByRole('button', { name: /Next Step \(2\/3\)/i }));
+    assert.ok(view.getByTestId('welcome-step-2'));
+    assert.ok(view.getByText(/Upload 3D Models or Paint Free AR Art/i));
+
+    RTL.fireEvent.click(view.getByRole('button', { name: /Next Step \(3\/3\)/i }));
+    assert.ok(view.getByTestId('welcome-step-3'));
+    assert.ok(view.getByText(/Share Visit Links & Pair AI Agents/i));
+
+    RTL.fireEvent.click(view.getByRole('button', { name: /Back/i }));
+    assert.ok(view.getByTestId('welcome-step-2'));
+    assert.equal(exploreCalls.length, 0);
+
     assert.ok(view.getByText(/^For Humans$/i));
     assert.ok(view.getByText(/^For AI Agents$/i));
     assert.ok(view.getByText(/90% Seller/i));
@@ -650,6 +682,164 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       RTL.fireEvent.click(view.getByRole('button', { name: /Hide/i }));
     });
     assert.deepEqual(visCalls, [{ sid: 'sc-1', next: true }]);
+
+    // Verify model format SVG preview illustrations and direct model URL validation + upload
+    assert.ok(view.container.querySelectorAll('.model-format-svg').length >= 6);
+    const origFetch = globalThis.fetch;
+    let uploadedPayload = null;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/models/validate-url')) {
+        return {
+          ok: true,
+          json: async () => ({
+            valid: true,
+            format: 'glb',
+            byteLength: 48120,
+            stats: { triangleCount: 840 },
+            suggestedTitle: 'Cyber Phoenix',
+            modelUrl: 'https://assets.example.com/cyber-phoenix.glb'
+          })
+        };
+      }
+      if (u.includes('/sculptures')) {
+        uploadedPayload = JSON.parse(opts.body || '{}');
+        return {
+          ok: true,
+          json: async () => ({
+            sculpture: { id: 'sc-new-1', title: uploadedPayload.title }
+          })
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+    try {
+      RTL.fireEvent.change(view.getByLabelText('3D Model URL'), {
+        target: { value: 'https://assets.example.com/cyber-phoenix.glb' }
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /^Validate Link$/i }));
+      });
+      assert.ok(view.getByTestId('model-url-valid-badge').textContent.includes('Supported .GLB'));
+
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /Validate & Upload/i }));
+      });
+      assert.equal(uploadedPayload.modelFormat, 'glb');
+      assert.equal(uploadedPayload.modelUrl, 'https://assets.example.com/cyber-phoenix.glb');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+    cleanup();
+  });
+
+  test('TitleLandModal edits title/description with live slug preview and supports Save & Mint', async () => {
+    const { default: TitleLandModal } = await loadJsxModule(
+      'client/src/components/TitleLandModal.jsx'
+    );
+    const saved = [];
+    const minted = [];
+    const view = RTL.render(
+      React.createElement(TitleLandModal, {
+        mode: 'draft',
+        parcel: { id: 'd1', parcelId: 'GLAND-9Q8YYK8Y', customName: '', description: '' },
+        onSave: async (data) => saved.push(data),
+        onSaveAndMint: async (data) => minted.push(data),
+        onClose: () => {}
+      })
+    );
+
+    RTL.fireEvent.change(view.getByLabelText('Land Title'), {
+      target: { value: 'Golden Gate Plaza' }
+    });
+    RTL.fireEvent.change(view.getByLabelText('Land Description'), {
+      target: { value: 'Outdoor 3D sculpture garden open to everyone.' }
+    });
+    assert.ok(view.getByText(/slug=golden-gate-plaza/i));
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Save & Mint Land/i }));
+    });
+    assert.equal(minted.length, 1);
+    assert.equal(minted[0].customName, 'Golden Gate Plaza');
+    assert.equal(minted[0].description, 'Outdoor 3D sculpture garden open to everyone.');
+    cleanup();
+  });
+
+  test('MobileParcelVisitView adapts clean options by proximity & frozen status (Directions vs View in AR + Make Art)', async () => {
+    const { default: MobileParcelVisitView } = await loadJsxModule(
+      'client/src/components/studio/MobileParcelVisitView.jsx'
+    );
+    const baseParcel = {
+      parcelId: 'GLAND-9Q8YYK8Y',
+      customName: 'Sunset Neon Courtyard',
+      description: 'Sculpture park overlooking Market St.',
+      centerLat: 37.7749,
+      centerLng: -122.4194,
+      frozen: false,
+      volume: {
+        centerLat: 37.7749,
+        centerLng: -122.4194,
+        widthMeters: 20,
+        depthMeters: 16,
+        heightMeters: 18
+      }
+    };
+
+    // 1) Far away -> Get Directions shown, View in AR & Make Art hidden
+    const farView = RTL.render(
+      React.createElement(MobileParcelVisitView, {
+        parcel: baseParcel,
+        sculptures: [{ id: 's1', title: 'Neon Spire', voxelCount: 24, lat: 37.7749, lng: -122.4194 }],
+        userLocation: { lat: 37.81, lng: -122.42 },
+        onClose: () => {}
+      })
+    );
+    assert.ok(farView.getByText('Sunset Neon Courtyard'));
+    assert.ok(farView.getByText(/Sculpture park overlooking Market St/i));
+    assert.ok(farView.getByRole('link', { name: /Get Directions/i }));
+    assert.equal(farView.queryByRole('button', { name: /View in AR/i }), null);
+    assert.equal(farView.queryByRole('button', { name: /Make Art on This Property/i }), null);
+    cleanup();
+
+    // 2) Near + Open -> View in AR AND Make Art on This Property both shown
+    let viewedAr = false;
+    let madeArt = false;
+    const nearOpen = RTL.render(
+      React.createElement(MobileParcelVisitView, {
+        parcel: baseParcel,
+        sculptures: [{ id: 's1', title: 'Neon Spire', voxelCount: 24, lat: 37.7749, lng: -122.4194 }],
+        userLocation: { lat: 37.77495, lng: -122.41942 },
+        onViewInAR: () => {
+          viewedAr = true;
+        },
+        onMakeArt: () => {
+          madeArt = true;
+        },
+        onClose: () => {}
+      })
+    );
+    assert.ok(nearOpen.getByTestId('parcel-proximity-near'));
+    RTL.fireEvent.click(nearOpen.getByRole('button', { name: /View in AR/i }));
+    RTL.fireEvent.click(nearOpen.getByRole('button', { name: /Make Art on This Property/i }));
+    assert.equal(viewedAr, true);
+    assert.equal(madeArt, true);
+    cleanup();
+
+    // 3) Near + Frozen -> View in AR shown, Make Art hidden + frozen notice shown
+    const nearFrozen = RTL.render(
+      React.createElement(MobileParcelVisitView, {
+        parcel: { ...baseParcel, frozen: true },
+        sculptures: [],
+        userLocation: { lat: 37.77495, lng: -122.41942 },
+        onViewInAR: () => {},
+        onMakeArt: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.ok(nearFrozen.getByRole('button', { name: /View in AR/i }));
+    assert.equal(nearFrozen.queryByRole('button', { name: /Make Art on This Property/i }), null);
+    assert.ok(nearFrozen.getByText(/frozen by the owner/i));
     cleanup();
   });
 });

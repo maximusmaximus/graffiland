@@ -764,4 +764,94 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(pageErrors, []);
     await context.close();
   });
+
+  test('3-Step Walkthrough, Cart/Popup Titling, Land Management Name+Desc & Mobile Shared Parcel Visit View', async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+
+    // 1) Click through all 3 illustrated walkthrough steps on first visit
+    await page.waitForSelector('[data-testid="welcome-step-1"]');
+    await page.getByRole('button', { name: /Next Step \(2\/3\)/i }).click();
+    await page.waitForSelector('[data-testid="welcome-step-2"]');
+    await page.getByRole('button', { name: /Next Step \(3\/3\)/i }).click();
+    await page.waitForSelector('[data-testid="welcome-step-3"]');
+    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+      state: 'detached'
+    });
+
+    // 2) Add a placeholder plot to cart, edit inline title, open Title Land popup, Save & Mint
+    await page.locator('.desktop-nav').getByRole('button', { name: /Mint Land/i }).click();
+    await page.getByRole('button', { name: /Sign In/i }).first().click();
+    await page.getByRole('button', { name: /Continue with Google/i }).click();
+    await page.waitForSelector('.modal-backdrop', { state: 'detached' });
+
+    await page.getByRole('button', { name: /\+ Add Square/i }).click();
+    await page.waitForSelector('.land-draft-inline-title');
+    await page.locator('.land-draft-inline-title').first().fill('Cart Named Plaza');
+
+    await page.locator('.land-draft-item').first().getByRole('button', { name: /Title popup for/i }).click();
+    await page.waitForSelector('.title-land-modal-card');
+    await page.locator('.title-land-modal-card').getByLabel('Land Title').fill('Civic Sunset Terrace');
+    await page
+      .locator('.title-land-modal-card')
+      .getByLabel('Land Description')
+      .fill('Open 3D art courtyard at Market and Van Ness.');
+    await page.locator('.title-land-modal-card').getByRole('button', { name: /Save & Mint Land/i }).click();
+    await page.waitForSelector('.title-land-modal-card', { state: 'detached' });
+    await page.waitForSelector('text=/Minted GLAND-/i');
+
+    // Verify minted land has on-map copy share link icon & Land Management lets user edit Land Name + Description
+    await page.waitForSelector('.map3d-parcel-share-btn');
+    await page.locator('.desktop-nav').getByRole('button', { name: /Land Management/i }).click();
+    await page.waitForSelector('text=Land Details, Curations & Permissions');
+    await page.getByLabel('Land Name').fill('Market Street Gallery');
+    await page
+      .getByLabel('Land Description')
+      .fill('Updated public sculpture gallery description.');
+    await page.getByRole('button', { name: /Save Land Settings/i }).click();
+    await page.waitForSelector('text=/Saved settings, permissions/i');
+    await page.getByRole('button', { name: /Close land management/i }).click();
+    assert.deepEqual(pageErrors, []);
+    await context.close();
+
+    // 3) Mobile Shared Parcel Visit View: FAR -> Get Directions only; NEAR (Open) -> View in AR + Make Art; NEAR (Frozen) -> View in AR only
+    const mobileBase = {
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      permissions: ['geolocation'],
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile'
+    };
+
+    // Far visitor
+    const farCtx = await browser.newContext({
+      ...mobileBase,
+      geolocation: { latitude: 37.82, longitude: -122.42 }
+    });
+    const farPage = await farCtx.newPage();
+    await farPage.goto(`${baseUrl}/?parcel=GLAND-9Q8YYK8Y`, { waitUntil: 'networkidle' });
+    await farPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]');
+    await farPage.waitForSelector('[data-testid="parcel-proximity-far"]');
+    await farPage.getByRole('link', { name: /Get Directions/i }).waitFor();
+    assert.equal(await farPage.getByRole('button', { name: /View in AR/i }).count(), 0);
+    assert.equal(await farPage.getByRole('button', { name: /Make Art on This Property/i }).count(), 0);
+    await farCtx.close();
+
+    // Near visitor on open land
+    const nearCtx = await browser.newContext({
+      ...mobileBase,
+      geolocation: { latitude: 37.77492, longitude: -122.41942 }
+    });
+    const nearPage = await nearCtx.newPage();
+    await nearPage.goto(`${baseUrl}/?parcel=GLAND-9Q8YYK8Y`, { waitUntil: 'networkidle' });
+    await nearPage.waitForSelector('[data-testid="parcel-proximity-near"]');
+    await nearPage.getByRole('button', { name: /View in AR/i }).waitFor();
+    await nearPage.getByRole('button', { name: /Make Art on This Property/i }).waitFor();
+    await nearCtx.close();
+  });
 });
