@@ -4,6 +4,7 @@ import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import {
   computeOrientedFootprintLngLat,
   footprintsOverlap,
+  normalizeRotationDeg,
   validateAndNormalizeLandVolume
 } from '../../../shared/landVolume.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
@@ -104,7 +105,9 @@ export default function DesktopHub({
   );
   const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'quests' | 'market' | 'leaders'
   const [drawMode, setDrawMode] = useState(false);
-  const [viewMode, setViewMode] = useState('2d'); // '2d' | '3d' | 'isometric'
+  const [viewMode, setViewMode] = useState('isometric'); // 'isometric' | '3d' | '2d'
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
   const [autoSwitchedHint, setAutoSwitchedHint] = useState(false);
   const [draftParcelsRaw, setDraftParcelsRaw] = useState([]);
   const [selectedDraftId, setSelectedDraftId] = useState('');
@@ -514,8 +517,8 @@ export default function DesktopHub({
     setSelectedDraftId(nextId);
     setSidebarTab('land');
     setLandStatus('');
-    if (currentCount === 0) {
-      setViewMode((cur) => (cur === '2d' ? '3d' : cur));
+    if (currentCount === 0 && viewModeRef.current === '2d') {
+      setViewMode('3d');
       setAutoSwitchedHint(true);
     }
   }, []);
@@ -536,10 +539,29 @@ export default function DesktopHub({
       Number(sculptures?.[0]?.lng) ||
       -122.4194;
 
+    const defaultCamRotation = Number.isFinite(Number(mapViewport?.bearing))
+      ? normalizeRotationDeg(mapViewport.bearing)
+      : viewModeRef.current === 'isometric'
+      ? 315
+      : viewModeRef.current === '3d'
+      ? 325
+      : 0;
+
+    let targetRotation = defaultCamRotation;
     if (draftParcelsRaw.length > 0) {
-      const last = draftParcelsRaw[draftParcelsRaw.length - 1];
-      anchorLat = Number(last.centerLat ?? last.lat ?? anchorLat);
-      anchorLng = Number(last.centerLng ?? last.lng ?? anchorLng) + 0.00032;
+      const selectedDraft =
+        draftParcelsRaw.find((d) => d.id === selectedDraftId) ||
+        draftParcelsRaw[draftParcelsRaw.length - 1];
+      targetRotation = normalizeRotationDeg(selectedDraft.rotationDeg ?? defaultCamRotation);
+      const rotRad = (targetRotation * Math.PI) / 180;
+      const stepMeters = Math.max(18, Number(selectedDraft.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters) + 4);
+      const mPerDegLng = 111320 * Math.max(0.08, Math.cos((Number(selectedDraft.centerLat ?? anchorLat) * Math.PI) / 180));
+      anchorLat =
+        Number(selectedDraft.centerLat ?? selectedDraft.lat ?? anchorLat) +
+        (-stepMeters * Math.sin(rotRad)) / 111320;
+      anchorLng =
+        Number(selectedDraft.centerLng ?? selectedDraft.lng ?? anchorLng) +
+        (stepMeters * Math.cos(rotRad)) / mPerDegLng;
     }
 
     const candidateOffsets = [
@@ -563,7 +585,7 @@ export default function DesktopHub({
         widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
         depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
         heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
-        rotationDeg: 0
+        rotationDeg: targetRotation
       }).volume;
       if (probe && !takenVols.some((tv) => footprintsOverlap(probe, tv))) {
         chosenLat = anchorLat + dLat;
@@ -578,14 +600,16 @@ export default function DesktopHub({
       widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
       depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
       heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
-      rotationDeg: 0
+      rotationDeg: targetRotation
     });
   }, [
     parcels,
     draftParcels,
     draftParcelsRaw,
+    selectedDraftId,
     mapViewport?.lat,
     mapViewport?.lng,
+    mapViewport?.bearing,
     userLocation?.lat,
     userLocation?.lng,
     sculptures,
@@ -851,6 +875,11 @@ export default function DesktopHub({
                 setSidebarTab('land');
               }}
               onViewModeChange={(nextMode) => setViewMode(nextMode)}
+              onToggleDrawMode={() => {
+                const next = !drawMode;
+                setDrawMode(next);
+                if (next) setSidebarTab('land');
+              }}
               onDismissAuto3dHint={() => setAutoSwitchedHint(false)}
             />
           </div>
@@ -987,6 +1016,15 @@ export default function DesktopHub({
                 onUpdateOwnedVolume={handleUpdateOwnedVolume}
                 mintBusy={mintBusy}
                 landStatus={landStatus}
+                cameraBearingDeg={
+                  Number.isFinite(Number(mapViewport?.bearing))
+                    ? Number(mapViewport.bearing)
+                    : viewMode === 'isometric'
+                    ? 315
+                    : viewMode === '3d'
+                    ? 325
+                    : 0
+                }
                 user={user}
                 pairingCode={mcpState?.activePairing?.code || mcpState?.pairings?.[0]?.code || ''}
                 publicUrl={config?.publicUrl || ''}

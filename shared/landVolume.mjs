@@ -361,3 +361,174 @@ export function buildParcelShareUrl({
   if (customName) url.searchParams.set('name', String(customName).slice(0, 48));
   return url.toString();
 }
+
+/**
+ * Computes a camera-oriented 3D land footprint from drag start/end GPS coordinates
+ * aligned with the map camera's current bearing, anchored at the drag-start corner,
+ * and smoothly scaled/capped to LAND_VOLUME_LIMITS (width, depth, and maxFootprintAreaSqM).
+ */
+export function computeCameraAlignedDraftBox({
+  startLat,
+  startLng,
+  endLat,
+  endLng,
+  bearingDeg = 0,
+  limits = LAND_VOLUME_LIMITS
+}) {
+  const sLat = Number(startLat);
+  const sLng = Number(startLng);
+  const eLat = Number(endLat);
+  const eLng = Number(endLng);
+  const rotationDeg = normalizeRotationDeg(bearingDeg);
+  const theta = (rotationDeg * Math.PI) / 180;
+  const cosR = Math.cos(theta);
+  const sinR = Math.sin(theta);
+
+  const midLat = (sLat + eLat) / 2;
+  const mPerDegLng = metersPerDegLngAtLat(midLat);
+  const dEast = (eLng - sLng) * mPerDegLng;
+  const dNorth = (eLat - sLat) * METERS_PER_DEG_LAT;
+
+  // Inverse of computeOrientedFootprintLngLat clockwise rotation
+  const localX = dEast * cosR - dNorth * sinR;
+  const localY = dEast * sinR + dNorth * cosR;
+  const signX = localX >= 0 ? 1 : -1;
+  const signY = localY >= 0 ? 1 : -1;
+
+  let widthMeters = Math.max(
+    limits.minWidthMeters,
+    Math.min(limits.maxWidthMeters, Math.abs(localX))
+  );
+  let depthMeters = Math.max(
+    limits.minDepthMeters,
+    Math.min(limits.maxDepthMeters, Math.abs(localY))
+  );
+  let hitLimit =
+    Math.abs(localX) >= limits.maxWidthMeters || Math.abs(localY) >= limits.maxDepthMeters;
+
+  if (widthMeters * depthMeters > limits.maxFootprintAreaSqM) {
+    const scale = Math.sqrt(limits.maxFootprintAreaSqM / (widthMeters * depthMeters));
+    widthMeters = Math.max(limits.minWidthMeters, Math.floor(widthMeters * scale * 10) / 10);
+    depthMeters = Math.max(limits.minDepthMeters, Math.floor(depthMeters * scale * 10) / 10);
+    while (
+      widthMeters * depthMeters > limits.maxFootprintAreaSqM &&
+      widthMeters > limits.minWidthMeters
+    ) {
+      widthMeters = Number((widthMeters - 0.1).toFixed(1));
+    }
+    hitLimit = true;
+  } else {
+    widthMeters = Number(widthMeters.toFixed(1));
+    depthMeters = Number(depthMeters.toFixed(1));
+  }
+
+  // Keep drag start corner pinned while scaling up to the limit
+  const halfLocalX = (signX * widthMeters) / 2;
+  const halfLocalY = (signY * depthMeters) / 2;
+  const centerEastM = halfLocalX * cosR + halfLocalY * sinR;
+  const centerNorthM = -halfLocalX * sinR + halfLocalY * cosR;
+  const centerLng = Number((sLng + centerEastM / mPerDegLng).toFixed(7));
+  const centerLat = Number((sLat + centerNorthM / METERS_PER_DEG_LAT).toFixed(7));
+
+  const heightMeters = limits.defaultHeightMeters;
+  const footprintAreaSqM = Number((widthMeters * depthMeters).toFixed(2));
+  const { corners, ring } = computeOrientedFootprintLngLat({
+    lat: centerLat,
+    lng: centerLng,
+    widthMeters,
+    depthMeters,
+    rotationDeg
+  });
+
+  return {
+    centerLat,
+    centerLng,
+    widthMeters,
+    depthMeters,
+    heightMeters,
+    baseAltitudeM: 0,
+    rotationDeg,
+    footprintAreaSqM,
+    hitLimit,
+    corners,
+    ring
+  };
+}
+
+/**
+ * Scales a parcel footprint proportionally (preserving aspect ratio) along [0..1]
+ * between its minimum legal size and maximum legal footprint (maxWidth/maxDepth/maxFootprintAreaSqM),
+ * while clamping heightMeters so 3D volume stays within maxVolumeCubicM.
+ */
+export function scaleFootprintToLimit({
+  widthMeters = LAND_VOLUME_LIMITS.defaultWidthMeters,
+  depthMeters = LAND_VOLUME_LIMITS.defaultDepthMeters,
+  heightMeters = LAND_VOLUME_LIMITS.defaultHeightMeters,
+  ratio = 1,
+  limits = LAND_VOLUME_LIMITS
+}) {
+  const curW = Math.max(limits.minWidthMeters, Number(widthMeters) || limits.defaultWidthMeters);
+  const curD = Math.max(limits.minDepthMeters, Number(depthMeters) || limits.defaultDepthMeters);
+  const aspect = curW / curD;
+
+  const maxWByArea = Math.sqrt(limits.maxFootprintAreaSqM * aspect);
+  const maxW = Math.min(limits.maxWidthMeters, limits.maxDepthMeters * aspect, maxWByArea);
+  const minW = Math.min(maxW, Math.max(limits.minWidthMeters, limits.minDepthMeters * aspect));
+
+  const t = Math.max(0, Math.min(1, Number(ratio)));
+  let nextW = Math.floor((minW + (maxW - minW) * t) * 10) / 10;
+  let nextD = Math.floor((nextW / aspect) * 10) / 10;
+
+  nextW = Math.max(limits.minWidthMeters, Math.min(limits.maxWidthMeters, nextW));
+  nextD = Math.max(limits.minDepthMeters, Math.min(limits.maxDepthMeters, nextD));
+
+  while (nextW * nextD > limits.maxFootprintAreaSqM && nextW > limits.minWidthMeters) {
+    nextW = Number((nextW - 0.1).toFixed(1));
+  }
+  while (nextW * nextD > limits.maxFootprintAreaSqM && nextD > limits.minDepthMeters) {
+    nextD = Number((nextD - 0.1).toFixed(1));
+  }
+
+  const nextArea = Number((nextW * nextD).toFixed(2));
+  const curH = Math.max(
+    limits.minHeightMeters,
+    Math.min(limits.maxHeightMeters, Number(heightMeters) || limits.defaultHeightMeters)
+  );
+  const maxAllowedH = Math.min(
+    limits.maxHeightMeters,
+    Math.max(limits.minHeightMeters, Math.floor((limits.maxVolumeCubicM / Math.max(1, nextArea)) * 10) / 10)
+  );
+  const nextH = Number(Math.min(curH, maxAllowedH).toFixed(1));
+  const nextZScale = Number((nextH / limits.defaultHeightMeters).toFixed(3));
+
+  return {
+    widthMeters: Number(nextW.toFixed(1)),
+    depthMeters: Number(nextD.toFixed(1)),
+    heightMeters: nextH,
+    zScale: nextZScale,
+    footprintAreaSqM: nextArea,
+    volumeCubicM: Number((nextArea * nextH).toFixed(2)),
+    minWidthForAspect: Number(minW.toFixed(2)),
+    maxWidthForAspect: Number(maxW.toFixed(2))
+  };
+}
+
+/**
+ * Computes maximum legal Z height & Z-scale for a given footprint within maxHeightMeters & maxVolumeCubicM.
+ */
+export function computeMaxHeightForFootprint({
+  widthMeters = LAND_VOLUME_LIMITS.defaultWidthMeters,
+  depthMeters = LAND_VOLUME_LIMITS.defaultDepthMeters,
+  limits = LAND_VOLUME_LIMITS
+}) {
+  const area = Math.max(1, Number(widthMeters) * Number(depthMeters));
+  const maxHeightMeters = Math.min(
+    limits.maxHeightMeters,
+    Math.max(limits.minHeightMeters, Math.floor((limits.maxVolumeCubicM / area) * 10) / 10)
+  );
+  const maxZScale = Number((maxHeightMeters / limits.defaultHeightMeters).toFixed(2));
+  return {
+    heightMeters: Number(maxHeightMeters.toFixed(1)),
+    zScale: maxZScale
+  };
+}
