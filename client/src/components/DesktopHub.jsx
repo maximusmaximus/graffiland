@@ -10,6 +10,7 @@ import {
   validateAndNormalizeLandVolume
 } from '../../../shared/landVolume.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import {
   buildSculptureShareUrl,
@@ -25,6 +26,7 @@ import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
+import ProfileModal from './ProfileModal.jsx';
 import SculptureModal from './SculptureModal.jsx';
 import TitleLandModal from './TitleLandModal.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -131,6 +133,10 @@ export default function DesktopHub({
   );
   const [pairOpen, setPairOpen] = useState(() => initialSession.activeView === 'pair');
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
+  const [infoInitialTab, setInfoInitialTab] = useState('guide');
+  const [profileHandle, setProfileHandle] = useState(() =>
+    parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
+  );
   const [landManageOpen, setLandManageOpen] = useState(false);
   const [landManageParcelId, setLandManageParcelId] = useState('');
   const [addItemParcelId, setAddItemParcelId] = useState('');
@@ -961,8 +967,14 @@ export default function DesktopHub({
             </button>
           )}
           {user ? (
-            <button type="button" className="btn" onClick={openInfoModal}>
-              <XeroIcon emoji="👤" size={16} /> {user.name}
+            <button
+              type="button"
+              className="btn"
+              data-testid="desktop-profile-btn"
+              onClick={() => setProfileHandle(user.username || user.id)}
+              title="Open your public profile, edit @username & bio, and view your lands & actions"
+            >
+              <XeroIcon emoji="👤" size={16} /> {user.username ? `@${user.username}` : user.name}
             </button>
           ) : (
             <button type="button" className="btn" onClick={() => setLoginOpen(true)}>
@@ -1340,23 +1352,45 @@ export default function DesktopHub({
                   (dualLeaders.humanArtists.length > 0
                     ? dualLeaders.humanArtists.map((h) => ({
                         key: h.userId,
+                        profileId: h.username || h.userId,
                         name: h.name,
+                        username: h.username || '',
                         sculptures: h.sculptureCount,
                         parcelCount: h.parcelsVisited,
                         metaText: `${h.totalXp} XP · ${h.landsAwakened} awakened`
                       }))
                     : creatorLeaderboard.map((c) => ({
                         key: c.key,
+                        profileId: '',
                         name: c.name,
+                        username: '',
                         sculptures: c.sculptures,
                         parcelCount: c.parcelCount,
                         metaText: `${c.voxels.toLocaleString()} total 3D blocks`
                       }))
                   ).map((entry, idx) => (
-                    <div key={entry.key} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                    <div
+                      key={entry.key}
+                      className="desktop-nearby-item"
+                      style={{ cursor: entry.profileId ? 'pointer' : 'default' }}
+                      onClick={() => entry.profileId && setProfileHandle(entry.profileId)}
+                      role={entry.profileId ? 'button' : undefined}
+                      tabIndex={entry.profileId ? 0 : undefined}
+                      onKeyDown={(e) => {
+                        if (entry.profileId && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          setProfileHandle(entry.profileId);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
                         <strong style={{ fontSize: 12.5 }}>
-                          #{idx + 1} {entry.name}
+                          #{idx + 1} {entry.name}{' '}
+                          {entry.username && (
+                            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                              @{entry.username}
+                            </span>
+                          )}
                         </strong>
                         <span className="badge teal" style={{ fontSize: 10 }}>
                           {entry.sculptures} art · {entry.parcelCount} land
@@ -1377,7 +1411,20 @@ export default function DesktopHub({
                   </div>
                 ) : (
                   dualLeaders.aiStewards.map((ag, idx) => (
-                    <div key={ag.agentId} className="desktop-nearby-item" style={{ cursor: 'default' }}>
+                    <div
+                      key={ag.agentId}
+                      className="desktop-nearby-item"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setProfileHandle(ag.agentId)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setProfileHandle(ag.agentId);
+                        }
+                      }}
+                    >
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
                         <strong style={{ fontSize: 12.5 }}>
                           #{idx + 1} {ag.name}
@@ -1703,11 +1750,58 @@ export default function DesktopHub({
         />
       )}
 
+      {profileHandle && (
+        <ProfileModal
+          handle={profileHandle}
+          user={user}
+          config={config}
+          onUserUpdate={(nextUser) => {
+            if (
+              profileHandle &&
+              user?.username &&
+              profileHandle.toLowerCase() === user.username.toLowerCase() &&
+              nextUser?.username
+            ) {
+              setProfileHandle(nextUser.username);
+            }
+            onUserUpdate(nextUser);
+          }}
+          onSelectSculpture={(sc) => openSculpture(sc)}
+          onOpenLand={(land) => {
+            const cLat = Number(land?.centerLat ?? land?.volume?.centerLat);
+            const cLng = Number(land?.centerLng ?? land?.volume?.centerLng);
+            if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+              setMapFocusTarget({ lat: cLat, lng: cLng, zoom: 17.8, ts: Date.now() });
+              setMapViewport((prev) => ({ ...(prev || {}), lat: cLat, lng: cLng, zoom: 17.8 }));
+            }
+            api
+              .getLandDetail(land.parcelId)
+              .then((res) => {
+                if (res?.parcel) {
+                  setVisitedParcel({ parcel: res.parcel, sculptures: res.sculptures || [] });
+                }
+              })
+              .catch(() => {});
+          }}
+          onOpenWalletSettings={() => {
+            setInfoInitialTab('account');
+            setInfoOpen(true);
+          }}
+          onLogout={() => {
+            onLogout();
+            setProfileHandle('');
+          }}
+          onClose={() => setProfileHandle('')}
+        />
+      )}
+
       {infoOpen && (
         <InfoTermsModal
           config={config}
           user={user}
+          initialTab={infoInitialTab}
           onUserUpdate={onUserUpdate}
+          onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
           onLogout={() => {
             onLogout();
             setInfoOpen(false);
@@ -1716,7 +1810,10 @@ export default function DesktopHub({
             setInfoOpen(false);
             setLoginOpen(true);
           }}
-          onClose={() => setInfoOpen(false)}
+          onClose={() => {
+            setInfoOpen(false);
+            setInfoInitialTab('guide');
+          }}
         />
       )}
 

@@ -52,6 +52,9 @@ export async function listLandsWithCurations(db) {
   const curations = await db.all('SELECT * FROM parcel_curations');
   const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
   const settingRows = await db.all('SELECT * FROM land_settings').catch(() => []);
+  const userRows = await db
+    .all("SELECT id, username FROM users WHERE username != ''")
+    .catch(() => []);
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
@@ -60,6 +63,7 @@ export async function listLandsWithCurations(db) {
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
   const settingsMap = new Map((settingRows || []).map((s) => [s.parcel_id, s]));
+  const usernameMap = new Map((userRows || []).map((u) => [u.id, u.username || '']));
 
   const allParcelIds = new Set([...scMap.keys(), ...lpMap.keys()]);
   const parcels = [];
@@ -141,6 +145,7 @@ export async function listLandsWithCurations(db) {
       ownerSub,
       stewardSub: ownerSub,
       stewardName: st?.steward_name || first?.creator_name || '',
+      stewardUsername: usernameMap.get(ownerSub) || '',
       stewardType,
       stewardStatus,
       firstSparkBoost: stewardStatus === 'dormant',

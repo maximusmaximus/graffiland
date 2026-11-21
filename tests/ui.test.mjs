@@ -1259,4 +1259,196 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
 
     cleanup();
   });
+
+  test('UsernameOnboardingModal requires a valid available username and saves username + bio', async () => {
+    const { default: UsernameOnboardingModal } = await loadJsxModule(
+      'client/src/components/UsernameOnboardingModal.jsx'
+    );
+    const savedPayloads = [];
+    let completedUser = null;
+
+    const view = RTL.render(
+      React.createElement(UsernameOnboardingModal, {
+        user: { id: 'u1', name: 'Maya Chen', email: 'maya@test.io', username: '', bio: '' },
+        checkUsernameFn: async (handle) =>
+          handle === 'taken_name'
+            ? { available: false, username: handle, reason: '@taken_name is already taken.' }
+            : { available: true, username: handle, reason: `@${handle} is available!` },
+        saveProfileFn: async (payload) => {
+          savedPayloads.push(payload);
+          return {
+            user: {
+              id: 'u1',
+              name: 'Maya Chen',
+              username: payload.username,
+              bio: payload.bio,
+              needsUsernameOnboarding: false
+            }
+          };
+        },
+        onComplete: (u) => {
+          completedUser = u;
+        },
+        onLogout: () => {}
+      })
+    );
+
+    const input = view.getByLabelText('Choose username');
+    const saveBtn = view.getByTestId('onboarding-save-username-btn');
+
+    // Invalid short handle disables submit
+    RTL.fireEvent.change(input, { target: { value: 'ab' } });
+    assert.equal(saveBtn.disabled, true);
+    assert.ok(view.getByTestId('onboarding-username-status').textContent.includes('at least 3'));
+
+    // Taken handle reports unavailable and keeps submit disabled
+    RTL.fireEvent.change(input, { target: { value: 'taken_name' } });
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('onboarding-username-status').textContent.includes('already taken'));
+    });
+    assert.equal(saveBtn.disabled, true);
+
+    // Valid available handle + bio enables save and completes onboarding
+    RTL.fireEvent.change(input, { target: { value: 'maya_neon' } });
+    RTL.fireEvent.change(view.getByLabelText('Profile bio'), {
+      target: { value: 'AR sculptor in SF' }
+    });
+    await RTL.waitFor(() => {
+      assert.equal(saveBtn.disabled, false);
+    });
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(saveBtn);
+    });
+    assert.deepEqual(savedPayloads, [{ username: 'maya_neon', bio: 'AR sculptor in SF' }]);
+    assert.equal(completedUser?.username, 'maya_neon');
+    cleanup();
+  });
+
+  test('ProfileModal displays bio, public land/sculpture/action links, and validates username changes', async () => {
+    const { default: ProfileModal } = await loadJsxModule(
+      'client/src/components/ProfileModal.jsx'
+    );
+    const updatedUsers = [];
+    const mockData = {
+      profile: {
+        id: 'u1',
+        username: 'maya_neon',
+        displayName: 'Maya Chen',
+        bio: 'Building neon voxel art',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        accountType: 'human',
+        joinedAt: '2026-11-01T00:00:00.000Z'
+      },
+      stats: {
+        landCount: 1,
+        sculptureCount: 1,
+        activeListingCount: 0,
+        actionCount: 2,
+        totalBlocks: 88
+      },
+      lands: [
+        {
+          parcelId: 'GLAND-9Q8YYK',
+          customName: 'Civic Neon Plaza',
+          displayName: 'Civic Neon Plaza',
+          description: 'Open 3D sculpture lot',
+          sculptureCount: 1,
+          stewardStatus: 'awakened',
+          volume: { widthMeters: 20, depthMeters: 16, heightMeters: 28, footprintAreaSqM: 320 },
+          googleMapsUrl: 'https://www.google.com/maps/dir/?api=1&destination=37.774900%2C-122.419400'
+        }
+      ],
+      sculptures: [
+        {
+          id: 'sc-1',
+          title: 'Neon Arch',
+          description: 'Floating voxel gateway',
+          parcelId: 'GLAND-9Q8YYK',
+          voxelCount: 88,
+          polScore: 95,
+          createdAt: '2026-11-20T00:00:00.000Z',
+          chain: { txHash: '0x1234567890abcdef', simulated: true }
+        }
+      ],
+      listings: [],
+      actions: [
+        {
+          id: 'act-1',
+          type: 'sculpture_published',
+          icon: '🧊',
+          title: 'Published "Neon Arch"',
+          detail: 'GLAND-9Q8YYK · 88 blocks',
+          parcelId: 'GLAND-9Q8YYK',
+          sculptureId: 'sc-1',
+          linkLabel: 'View Sculpture',
+          createdAt: '2026-11-20T00:00:00.000Z'
+        }
+      ]
+    };
+
+    const view = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'maya_neon',
+        user: { id: 'u1', username: 'maya_neon', name: 'Maya Chen' },
+        fetchProfileFn: async () => mockData,
+        checkUsernameFn: async (u) =>
+          u === 'taken_other'
+            ? { available: false, username: u, reason: '@taken_other is already taken.' }
+            : { available: true, username: u, reason: `@${u} is available!` },
+        saveProfileFn: async ({ username, bio }) => ({
+          ...mockData,
+          user: { id: 'u1', username, bio, name: 'Maya Chen', needsUsernameOnboarding: false },
+          profile: { ...mockData.profile, username, bio }
+        }),
+        onUserUpdate: (u) => updatedUsers.push(u),
+        onClose: () => {}
+      })
+    );
+
+    await RTL.waitFor(() => {
+      assert.equal(view.getByTestId('profile-handle').textContent, '@maya_neon');
+    });
+    assert.ok(view.getByTestId('profile-bio').textContent.includes('Building neon voxel art'));
+
+    // Public land link renders on Lands tab
+    const landLink = view.getByTestId('profile-land-public-link');
+    assert.ok(landLink.getAttribute('href').includes('GLAND-9Q8YYK'));
+
+    // Switch to Sculptures tab -> public sculpture link renders
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Sculptures/i }));
+    const scLink = view.getByTestId('profile-sculpture-public-link');
+    assert.ok(scLink.getAttribute('href').includes('?sculpture=sc-1'));
+
+    // Switch to Actions tab -> public action link renders
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Actions/i }));
+    const actLink = view.getByTestId('profile-action-link');
+    assert.ok(actLink.getAttribute('href').includes('?sculpture=sc-1'));
+
+    // Open Edit Profile, verify duplicate username is blocked, then save valid rename + new bio
+    RTL.fireEvent.click(view.getByTestId('profile-edit-btn'));
+    const uInput = view.getByLabelText('Username');
+    const saveBtn = view.getByTestId('profile-save-btn');
+    RTL.fireEvent.change(uInput, { target: { value: 'taken_other' } });
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('profile-username-status').textContent.includes('already taken'));
+    });
+    assert.equal(saveBtn.disabled, true);
+
+    RTL.fireEvent.change(uInput, { target: { value: 'maya_voxels' } });
+    RTL.fireEvent.change(view.getByLabelText('Bio'), {
+      target: { value: 'Updated bio with AR maps' }
+    });
+    await RTL.waitFor(() => {
+      assert.equal(saveBtn.disabled, false);
+    });
+    await RTL.act(async () => {
+      RTL.fireEvent.click(saveBtn);
+    });
+
+    assert.equal(updatedUsers[0]?.username, 'maya_voxels');
+    assert.equal(view.getByTestId('profile-handle').textContent, '@maya_voxels');
+    assert.ok(view.getByTestId('profile-bio').textContent.includes('Updated bio with AR maps'));
+    cleanup();
+  });
 });

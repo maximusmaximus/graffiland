@@ -42,6 +42,13 @@ export const api = {
   loginWithGoogle: (payload) =>
     request('/api/auth/google', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/auth/me'),
+  checkUsername: (username) =>
+    request(`/api/profile/check-username?username=${encodeURIComponent(String(username || ''))}`),
+  getMyProfile: () => request('/api/profile/me'),
+  updateProfile: (payload) =>
+    request('/api/profile', { method: 'PATCH', body: JSON.stringify(payload) }),
+  getPublicProfile: (handle) =>
+    request(`/api/profiles/${encodeURIComponent(String(handle || ''))}`),
   setPayoutAddress: (address, proof = {}) =>
     request('/api/wallet/payout', {
       method: 'POST',

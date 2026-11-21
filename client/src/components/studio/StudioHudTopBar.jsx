@@ -27,6 +27,7 @@ export default function StudioHudTopBar({
   onToggleQuickSculpt,
   onOpenTutorial,
   onOpenInfo,
+  onOpenProfile = null,
   hasOwnedLand,
   ownedLandCount,
   onOpenLandManage,
@@ -173,6 +174,22 @@ export default function StudioHudTopBar({
             >
               <XeroIcon emoji="🗺️" size={14} label="Land" />
               <span>Land ({ownedLandCount})</span>
+            </button>
+          )}
+
+          {user && onOpenProfile && (
+            <button
+              type="button"
+              className="top-mini-pill mobile-profile-pill"
+              data-testid="mobile-profile-btn"
+              onClick={onOpenProfile}
+              aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
+              title="Open Profile, edit @username & bio, and copy public links"
+            >
+              <XeroIcon emoji="👤" size={13} />
+              <span className="mobile-profile-pill-label">
+                {user.username ? `@${user.username}` : user.name}
+              </span>
             </button>
           )}
 

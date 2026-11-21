@@ -21,6 +21,11 @@ import {
 } from '../../shared/agentQuestService.mjs';
 import { searchLocations } from '../../shared/geocodeService.mjs';
 import {
+  checkUsernameAvailability,
+  getPublicProfile,
+  updateUserProfile
+} from '../../shared/profileService.mjs';
+import {
   createMarketplaceListing,
   executeMarketplacePurchase,
   getEconomySplitsSummary,
@@ -207,7 +212,7 @@ function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Graffiland-Pairing-Code',
     'Access-Control-Max-Age': '86400'
   };
@@ -312,10 +317,15 @@ const SAFE_GATEWAY_MIME = new Set([
 
 function sanitizeUser(row) {
   if (!row) return null;
+  const username = String(row.username || '').trim();
+  const isAgent = String(row.id || '').startsWith('agent:');
   return {
     id: row.id,
     email: row.email,
     name: row.name,
+    username,
+    bio: String(row.bio || ''),
+    needsUsernameOnboarding: !username && !isAgent,
     picture: row.picture,
     walletAddress: row.wallet_address,
     customPayoutAddress: row.custom_payout_address || '',
@@ -1127,6 +1137,71 @@ export default {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       return jsonResponse({ user: sanitizeUser(user) }, 200, request);
+    }
+
+    // User Profiles: username availability validation, profile update (username + bio), and public profiles
+    if (pathname === '/api/profile/check-username' && request.method === 'GET') {
+      try {
+        const authUser = await getAuthUser(request, env, cfg);
+        const result = await checkUsernameAvailability(d1Adapter, {
+          username: String(url.searchParams.get('username') || ''),
+          excludeUserId: authUser?.id || ''
+        });
+        return jsonResponse(result, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Username check failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/profile/me' && request.method === 'GET') {
+      try {
+        const user = await getAuthUser(request, env, cfg);
+        if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+        const pub = await getPublicProfile(d1Adapter, {
+          identifier: user.id,
+          origin: request.headers.get('Origin') || url.origin,
+          pathname: '/'
+        });
+        return jsonResponse({ user: sanitizeUser(user), ...pub }, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Failed to load profile' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/profile' && (request.method === 'PATCH' || request.method === 'POST')) {
+      try {
+        const user = await getAuthUser(request, env, cfg);
+        if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+        const body = await request.json().catch(() => ({}));
+        const updated = await updateUserProfile(d1Adapter, {
+          user,
+          username: body?.username,
+          bio: body?.bio
+        });
+        const pub = await getPublicProfile(d1Adapter, {
+          identifier: updated.id,
+          origin: request.headers.get('Origin') || url.origin,
+          pathname: '/'
+        });
+        return jsonResponse({ user: sanitizeUser(updated), ...pub }, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Failed to save profile' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const publicProfileMatch = pathname.match(/^\/api\/profiles\/([^/]+)$/);
+    if (publicProfileMatch && request.method === 'GET') {
+      try {
+        const handle = decodeURIComponent(publicProfileMatch[1]);
+        const pub = await getPublicProfile(d1Adapter, {
+          identifier: handle,
+          origin: request.headers.get('Origin') || url.origin,
+          pathname: '/'
+        });
+        return jsonResponse(pub, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Profile not found' }, err?.statusCode || 404, request);
+      }
     }
 
     // Cloud Saved Drafts (Auto-Saved & Named WIP Sculptures)

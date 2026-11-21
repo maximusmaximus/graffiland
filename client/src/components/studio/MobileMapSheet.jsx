@@ -28,6 +28,7 @@ export default function MobileMapSheet({
   focusParcelTick = 0,
   onSelectParcel,
   onSelectSculpture,
+  onOpenProfile = null,
   onShowHint,
   onClose,
   nowMsOverride = null
@@ -247,7 +248,10 @@ export default function MobileMapSheet({
                   : exp.state === 'expiring' || exp.state === 'dormant'
                   ? 'badge gold'
                   : 'badge teal';
-              const stewardLabel = land.stewardName
+              const stewardHandle = land.stewardUsername || land.ownerSub || '';
+              const stewardLabel = land.stewardUsername
+                ? `${land.stewardType === 'agent' ? 'AI' : '@'}${land.stewardType === 'agent' ? `: @${land.stewardUsername}` : land.stewardUsername}`
+                : land.stewardName
                 ? `${land.stewardType === 'agent' ? 'AI' : 'Steward'}: ${land.stewardName}`
                 : land.stewardType === 'agent'
                 ? 'AI Steward'
@@ -335,10 +339,22 @@ export default function MobileMapSheet({
                         <XeroIcon emoji="📐" size={11} /> {land.dimensionsLabel}
                       </span>
                     )}
-                    <span className="mobile-meta-chip">
-                      <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
-                      {stewardLabel}
-                    </span>
+                    {onOpenProfile && stewardHandle ? (
+                      <button
+                        type="button"
+                        className="mobile-meta-chip is-clickable"
+                        onClick={() => onOpenProfile(stewardHandle)}
+                        title={`View public profile for ${stewardLabel}`}
+                      >
+                        <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
+                        {stewardLabel}
+                      </button>
+                    ) : (
+                      <span className="mobile-meta-chip">
+                        <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
+                        {stewardLabel}
+                      </span>
+                    )}
                     <span className="mobile-meta-chip">
                       <XeroIcon emoji="🎨" size={11} /> {land.sculptures.length} sculpture
                       {land.sculptures.length === 1 ? '' : 's'}

@@ -1,6 +1,8 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { parseParcelParamFromLocation } from '../../shared/landVolume.mjs';
+import { parseProfileParamFromLocation } from '../../shared/profileRules.mjs';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
+import UsernameOnboardingModal from './components/UsernameOnboardingModal.jsx';
 import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
 import {
@@ -26,7 +28,10 @@ export default function App() {
         window.location.search,
         window.location.pathname
       );
-      if (sp.has('sculpture') || parsedParcel.parcelId || parsedParcel.slug) return false;
+      const parsedProfile = parseProfileParamFromLocation(window.location.search);
+      if (sp.has('sculpture') || parsedParcel.parcelId || parsedParcel.slug || parsedProfile) {
+        return false;
+      }
     } catch {
       // ignore
     }
@@ -135,6 +140,15 @@ export default function App() {
     />
   ) : null;
 
+  const onboardingModal =
+    user && user.needsUsernameOnboarding ? (
+      <UsernameOnboardingModal
+        user={user}
+        onComplete={(updatedUser) => setUser(updatedUser)}
+        onLogout={handleLogout}
+      />
+    ) : null;
+
   if (isMobile) {
     return (
       <>
@@ -144,11 +158,12 @@ export default function App() {
             user={user}
             onUserUpdate={setUser}
             onLogout={handleLogout}
-            isWelcomeOpen={welcomeOpen}
+            isWelcomeOpen={welcomeOpen || Boolean(onboardingModal)}
             skipTutorialSignal={skipTutorialSignal}
           />
         </Suspense>
         {welcomeOverlay}
+        {onboardingModal}
       </>
     );
   }
@@ -166,6 +181,7 @@ export default function App() {
         />
       </Suspense>
       {welcomeOverlay}
+      {onboardingModal}
     </>
   );
 }

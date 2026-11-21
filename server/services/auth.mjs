@@ -97,10 +97,15 @@ export function issueSessionToken(userRow) {
 
 export function sanitizeUser(userRow) {
   if (!userRow) return null;
+  const username = String(userRow.username || '').trim();
+  const isAgent = String(userRow.id || '').startsWith('agent:');
   return {
     id: userRow.id,
     email: userRow.email,
     name: userRow.name,
+    username,
+    bio: String(userRow.bio || ''),
+    needsUsernameOnboarding: !username && !isAgent,
     picture: userRow.picture,
     walletAddress: userRow.wallet_address,
     customPayoutAddress: userRow.custom_payout_address || '',
