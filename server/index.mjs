@@ -49,6 +49,7 @@ import {
 import { pinJsonDocumentToIpfs, pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
 import { validatePublishPayload } from './services/moderation.mjs';
 import {
+  assessTravelFeasibility,
   haversineMeters,
   verifyAndEnrichLocation
 } from './services/pol.mjs';
@@ -1505,8 +1506,26 @@ export function createAppServer(serverOptions = {}) {
 
       if (!locationBundle.verified) {
         return res.status(422).json({
-          error: `Proof of Location check failed (score ${locationBundle.score}/100). Enable GPS, live camera, and move your phone gently while sculpting.`,
+          error: `Proof of Location check failed (score ${locationBundle.score}/100${locationBundle.evidenceIssues?.length ? `: ${locationBundle.evidenceIssues.join('; ')}` : ''}). Enable GPS, live camera, and move your phone gently while sculpting.`,
           proofOfLocation: locationBundle
+        });
+      }
+
+      const previousPublish = db
+        .prepare(
+          'SELECT lat, lng, created_at FROM sculptures WHERE creator_sub = ? ORDER BY created_at DESC LIMIT 1'
+        )
+        .get(req.user.id);
+      const travel = assessTravelFeasibility(
+        previousPublish
+          ? { lat: previousPublish.lat, lng: previousPublish.lng, at: previousPublish.created_at }
+          : null,
+        { lat: locationBundle.lat, lng: locationBundle.lng }
+      );
+      if (!travel.ok) {
+        return res.status(422).json({
+          error: `Location jump too fast since your last publish (${Math.round(travel.distanceM / 1000)} km). Publish again from your current location later.`,
+          travel
         });
       }
 

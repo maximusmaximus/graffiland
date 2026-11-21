@@ -50,6 +50,18 @@ after(async () => {
   }
 });
 
+// Realistic client sensor evidence (the mobile client always sends GPS samples + camera frames).
+function polEvidenceAt(lat, lng) {
+  const now = Date.now();
+  return {
+    cameraFrames: 6,
+    gpsSamples: [
+      { lat, lng, t: now - 3000 },
+      { lat: lat + 0.00001, lng: lng + 0.00001, t: now - 500 }
+    ]
+  };
+}
+
 async function apiJson(route, options = {}) {
   const res = await fetch(`${baseUrl}${route}`, {
     ...options,
@@ -1008,6 +1020,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         termsAccepted: true,
         location: { lat: 37.775, lng: -122.419, altitude: 18, accuracy: 6 },
         proofOfLocation: {
+          ...polEvidenceAt(37.775, -122.419),
           frameHashes: ['aaa111', 'bbb222', 'ccc333', 'ddd444'],
           gyroSamples: [
             { alpha: 10, beta: 20, gamma: 1 },
@@ -1077,7 +1090,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         description: 'First sculpture staking property on this land parcel.',
         termsAccepted: true,
         location: { lat: landLat, lng: landLng, altitude: 14, accuracy: 5 },
-        proofOfLocation: samplePol,
+        proofOfLocation: { ...samplePol, ...polEvidenceAt(landLat, landLng) },
         voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
       })
     });
@@ -1291,7 +1304,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         description: 'Captured on mobile then signed by paired agent on user behalf.',
         termsAccepted: true,
         location: { lat: landLat, lng: landLng, altitude: 14, accuracy: 5 },
-        proofOfLocation: samplePol,
+        proofOfLocation: { ...samplePol, ...polEvidenceAt(landLat, landLng) },
         voxels: [{ x: 0, y: 0, z: 0.05, color: '#ff3e7f', material: 'neon' }]
       })
     });
@@ -1379,7 +1392,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         description: 'Stores encrypted pinned IPFS batch unlockable only on this parcel.',
         termsAccepted: true,
         location: { lat: parcelLat, lng: parcelLng, altitude: 22, accuracy: 5 },
-        proofOfLocation: samplePol,
+        proofOfLocation: { ...samplePol, ...polEvidenceAt(parcelLat, parcelLng) },
         voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
       })
     });
@@ -1718,7 +1731,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         description: 'Claims initial Virtual Land before loading custom 3D mesh.',
         termsAccepted: true,
         location: { lat: mLat, lng: mLng, altitude: 18, accuracy: 5 },
-        proofOfLocation: samplePol,
+        proofOfLocation: { ...samplePol, ...polEvidenceAt(mLat, mLng) },
         voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
       })
     });
@@ -2139,7 +2152,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         termsAccepted: true,
         anchorOffset: { dx: 95, dy: 0, dz: 0, yaw: 0 },
         location: { lat: 37.753, lng: -122.442, altitude: 15, accuracy: 5 },
-        proofOfLocation: pol16,
+        proofOfLocation: { ...pol16, ...polEvidenceAt(37.753, -122.442) },
         voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
       })
     });
@@ -2155,7 +2168,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         termsAccepted: true,
         anchorOffset: { dx: 1.25, dy: 0.4, dz: -0.75, yaw: 0.7854 },
         location: { lat: 37.753, lng: -122.442, altitude: 15, accuracy: 5 },
-        proofOfLocation: pol16,
+        proofOfLocation: { ...pol16, ...polEvidenceAt(37.753, -122.442) },
         voxels: [
           { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
           { x: 0.05, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' }
@@ -2294,7 +2307,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
             description: 'Testing daily sponsored relayer gas limit.',
             termsAccepted: true,
             location: { lat: 37.754, lng: -122.443, altitude: 12, accuracy: 5 },
-            proofOfLocation: pol16,
+            proofOfLocation: { ...pol16, ...polEvidenceAt(37.754, -122.443) },
             voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
           })
         });
@@ -2338,6 +2351,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         termsAccepted: true,
         location: { lat: pLat, lng: pLng, altitude: 22, accuracy: 4 },
         proofOfLocation: {
+          ...polEvidenceAt(pLat, pLng),
           frameHashes: ['k1', 'k2', 'k3', 'k4'],
           gyroSamples: [
             { alpha: 4, beta: 10, gamma: 2 },
@@ -2801,6 +2815,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         termsAccepted: true,
         location: { lat: 37.775, lng: -122.418, accuracy: 5 },
         proofOfLocation: {
+          ...polEvidenceAt(37.775, -122.418),
           frameHashes: ['a1', 'a2', 'a3', 'a4'],
           gyroSamples: [{ alpha: 1, beta: 2, gamma: 3 }, { alpha: 9, beta: 4, gamma: 2 }],
           flowCorrelation: 0.85,

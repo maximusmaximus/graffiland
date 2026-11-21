@@ -201,6 +201,89 @@ export async function reverseGeocode(lat, lng) {
   }
 }
 
+export const POL_LIMITS = {
+  minGpsSamples: 2,
+  maxGpsSamples: 120,
+  maxSampleDistanceM: 250,
+  maxSampleAgeMs: 30 * 60 * 1000,
+  maxFutureSkewMs: 2 * 60 * 1000,
+  minCameraFrames: 1,
+  minGyroSamples: 1,
+  // Cross-publish "impossible travel": faster than a commercial jet between two publishes.
+  maxTravelSpeedMs: 280,
+  travelGraceMeters: 2000
+};
+
+function sampleTime(sample) {
+  const t = Number(sample?.t ?? sample?.ts);
+  return Number.isFinite(t) ? t : NaN;
+}
+
+function countish(value) {
+  if (Array.isArray(value)) return value.length;
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Server-side sanity checks on client-reported sensor evidence. These cannot make GPS spoofing
+ * impossible (all inputs are client-asserted), but they stop trivially empty or inconsistent
+ * payloads from passing and force a spoofer to fabricate a coherent, recent trajectory.
+ * Returns a list of human-readable issues (empty when acceptable).
+ */
+export function assessPolEvidence({
+  lat,
+  lng,
+  gpsSamples = [],
+  gyroSamples = 0,
+  cameraFrames = 0,
+  now = Date.now()
+}) {
+  const issues = [];
+  if (gpsSamples.length < POL_LIMITS.minGpsSamples) {
+    issues.push(`At least ${POL_LIMITS.minGpsSamples} GPS samples are required`);
+  }
+  for (const sample of gpsSamples) {
+    const sLat = Number(sample?.lat);
+    const sLng = Number(sample?.lng);
+    const t = sampleTime(sample);
+    if (!Number.isFinite(sLat) || !Number.isFinite(sLng) || !Number.isFinite(t)) {
+      issues.push('GPS samples must include finite lat, lng and timestamp');
+      break;
+    }
+    if (t > now + POL_LIMITS.maxFutureSkewMs || now - t > POL_LIMITS.maxSampleAgeMs) {
+      issues.push('GPS samples are stale or timestamped in the future');
+      break;
+    }
+    if (haversineMeters(lat, lng, sLat, sLng) > POL_LIMITS.maxSampleDistanceM) {
+      issues.push('GPS samples do not match the claimed location');
+      break;
+    }
+  }
+  if (cameraFrames < POL_LIMITS.minCameraFrames) issues.push('Live camera frames are required');
+  if (gyroSamples < POL_LIMITS.minGyroSamples) issues.push('Device motion samples are required');
+  return issues;
+}
+
+/**
+ * Compares a new publish location against the same account's previous publish. Returns
+ * { ok, distanceM, speedMs }. `previous` is { lat, lng, at } with `at` an ISO string or ms.
+ */
+export function assessTravelFeasibility(previous, next, now = Date.now()) {
+  if (!previous) return { ok: true, distanceM: 0, speedMs: 0 };
+  const pLat = Number(previous.lat);
+  const pLng = Number(previous.lng);
+  const pAt = typeof previous.at === 'number' ? previous.at : Date.parse(String(previous.at || ''));
+  if (!Number.isFinite(pLat) || !Number.isFinite(pLng) || !Number.isFinite(pAt)) {
+    return { ok: true, distanceM: 0, speedMs: 0 };
+  }
+  const distanceM = haversineMeters(pLat, pLng, Number(next.lat), Number(next.lng));
+  const dtSec = Math.max(1, (now - pAt) / 1000);
+  const speedMs = distanceM / dtSec;
+  const ok = distanceM <= POL_LIMITS.travelGraceMeters || speedMs <= POL_LIMITS.maxTravelSpeedMs;
+  return { ok, distanceM: Math.round(distanceM), speedMs: Math.round(speedMs * 10) / 10 };
+}
+
 export async function verifyAndEnrichLocation(locationInput, polInput, userSub) {
   const lat = Number(locationInput?.lat);
   const lng = Number(locationInput?.lng);
@@ -251,20 +334,23 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
   const parcelBytes32 = ethers.keccak256(ethers.toUtf8Bytes(parcelId));
 
   // Verify GPS sample trajectory (no teleporting)
-  const gpsSamples = Array.isArray(polInput?.gpsSamples) ? polInput.gpsSamples : [];
+  const gpsSamples = Array.isArray(polInput?.gpsSamples)
+    ? polInput.gpsSamples.slice(-POL_LIMITS.maxGpsSamples)
+    : [];
   let maxTeleportSpeed = 0;
   for (let i = 1; i < gpsSamples.length; i++) {
     const a = gpsSamples[i - 1];
     const b = gpsSamples[i];
-    const dtSec = Math.max(0.5, (Number(b.t || 0) - Number(a.t || 0)) / 1000);
-    const dist = haversineMeters(Number(a.lat), Number(a.lng), Number(b.lat), Number(b.lng));
+    const dtSec = Math.max(0.5, (sampleTime(b) - sampleTime(a)) / 1000);
+    const dist = haversineMeters(Number(a?.lat), Number(a?.lng), Number(b?.lat), Number(b?.lng));
     const implied = dist / dtSec;
     if (implied > maxTeleportSpeed) maxTeleportSpeed = implied;
   }
   const gpsTrajectoryValid = maxTeleportSpeed < 60;
 
-  const gyroSamples = Math.max(0, Number(polInput?.gyroSamples || 0));
-  const cameraFrames = Math.max(0, Number(polInput?.cameraFrames || 0));
+  const gyroSamples = Math.max(0, countish(polInput?.gyroSamples));
+  const cameraFrames = Math.max(0, countish(polInput?.cameraFrames));
+  const evidenceIssues = assessPolEvidence({ lat, lng, gpsSamples, gyroSamples, cameraFrames });
   const opticalFlowCorrelation = Math.max(
     0,
     Math.min(1, Number(polInput?.opticalFlowCorrelation ?? 0))
@@ -297,7 +383,9 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
       : 4;
 
   const score = Math.min(100, gpsScore + trajectoryBonus + cameraScore + gyroFlowScore + solarMatchScore);
-  const verified = gpsTrajectoryValid && score >= 45;
+  // The score alone is reachable with zero sensor data (GPS accuracy + empty trajectory + solar
+  // defaults), so hard minimum evidence is required on top of it.
+  const verified = gpsTrajectoryValid && evidenceIssues.length === 0 && score >= 45;
 
   const [geoInfo, terrainElevationMeters] = await Promise.all([
     reverseGeocode(lat, lng),
@@ -388,6 +476,7 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
     proofBundle,
     proofHash,
     score,
-    verified
+    verified,
+    evidenceIssues
   };
 }

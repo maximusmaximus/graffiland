@@ -132,6 +132,7 @@ import {
 } from '../../shared/landSignatureMessage.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
+  assessTravelFeasibility,
   haversineMeters,
   verifyAndEnrichLocation
 } from '../../server/services/pol.mjs';
@@ -2071,8 +2072,30 @@ export default {
         if (!locationBundle.verified) {
           return jsonResponse(
             {
-              error: `Proof of Location check failed (score ${locationBundle.score}/100). Enable GPS, live camera, and move your phone gently while sculpting.`,
+              error: `Proof of Location check failed (score ${locationBundle.score}/100${locationBundle.evidenceIssues?.length ? `: ${locationBundle.evidenceIssues.join('; ')}` : ''}). Enable GPS, live camera, and move your phone gently while sculpting.`,
               proofOfLocation: locationBundle
+            },
+            422,
+            request
+          );
+        }
+
+        const previousPublish = await env.DB.prepare(
+          'SELECT lat, lng, created_at FROM sculptures WHERE creator_sub = ? ORDER BY created_at DESC LIMIT 1'
+        )
+          .bind(user.id)
+          .first();
+        const travel = assessTravelFeasibility(
+          previousPublish
+            ? { lat: previousPublish.lat, lng: previousPublish.lng, at: previousPublish.created_at }
+            : null,
+          { lat: locationBundle.lat, lng: locationBundle.lng }
+        );
+        if (!travel.ok) {
+          return jsonResponse(
+            {
+              error: `Location jump too fast since your last publish (${Math.round(travel.distanceM / 1000)} km). Publish again from your current location later.`,
+              travel
             },
             422,
             request
