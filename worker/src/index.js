@@ -19,7 +19,7 @@ import {
   scoutLands,
   updateLandVolume
 } from '../../shared/agentQuestService.mjs';
-import { searchLocations } from '../../shared/geocodeService.mjs';
+import { reverseGeocodeLocation, searchLocations } from '../../shared/geocodeService.mjs';
 import {
   checkUsernameAvailability,
   getPublicProfile,
@@ -1671,6 +1671,28 @@ export default {
       } catch (err) {
         return jsonResponse(
           { error: err.message || 'Location search failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/geocode/reverse' && request.method === 'GET') {
+      try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'geocode-reverse',
+          key: clientIp(request),
+          windowSec: 60,
+          maxRequests: 45
+        });
+        const out = await reverseGeocodeLocation({
+          lat: url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null,
+          lng: url.searchParams.has('lng') ? Number(url.searchParams.get('lng')) : null
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Reverse geocode failed' },
           err?.statusCode || 400,
           request
         );

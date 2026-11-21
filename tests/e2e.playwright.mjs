@@ -839,10 +839,65 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.title-land-modal-card', { state: 'detached' });
     await page.waitForSelector('text=/Minted GLAND-/i');
 
-    // Verify minted land has on-map copy share link icon & cleaned-up Land Management ("i" tooltips + ":" emoji entry)
+    // Mint a second parcel in a distinct location so Land Management tests switching between isometric land views
+    await page.evaluate(async () => {
+      const token = localStorage.getItem('graffiland_jwt') || '';
+      await fetch('/api/lands/claim', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          lat: 37.7955,
+          lng: -122.3937,
+          widthMeters: 24,
+          depthMeters: 22,
+          heightMeters: 26,
+          rotationDeg: 20,
+          customName: 'Embarcadero Pier',
+          description: 'Waterfront 3D plaza'
+        })
+      });
+    });
+
+    // Verify minted land has on-map copy share link icon & cleaned-up Land Management ("i" tooltips + ":" emoji entry + isometric map preview)
     await page.waitForSelector('.map3d-parcel-share-btn');
     await page.locator('.desktop-nav').getByRole('button', { name: /Land Management/i }).click();
     await page.waitForSelector('[aria-label="Land Management"]');
+
+    // Verify Isometric Geographic Preview renders cleanly and updates when selecting another land
+    const isoPreview = page.getByTestId('land-mgmt-iso-preview');
+    await isoPreview.waitFor({ state: 'visible' });
+    const firstPreviewParcelId = await isoPreview.getAttribute('data-parcel-id');
+    assert.ok(firstPreviewParcelId && firstPreviewParcelId.startsWith('GLAND-'));
+    assert.equal(await isoPreview.getAttribute('data-view-mode'), 'isometric');
+    assert.ok((await page.getByTestId('land-preview-coords').textContent()).includes('°'));
+    assert.ok((await page.getByTestId('land-preview-scale').textContent()).includes('m'));
+
+    // Switch preview to Area context, then select the other owned land and confirm it reloads in isometric view
+    await isoPreview.getByRole('button', { name: /Area/i }).click();
+    assert.equal(await isoPreview.getAttribute('data-view-mode'), 'context');
+    const otherTab = page
+      .locator('[role="tablist"][aria-label="Your owned lands"] [role="tab"]')
+      .filter({ hasNotText: new RegExp(firstPreviewParcelId.replace(/^GLAND-/, ''), 'i') })
+      .nth(1);
+    const tabsCount = await page
+      .locator('[role="tablist"][aria-label="Your owned lands"] [role="tab"]')
+      .count();
+    assert.ok(tabsCount >= 2, `Expected >= 2 owned land tabs, got ${tabsCount}`);
+    await page.getByRole('button', { name: /Next land/i }).click();
+    const secondPreviewParcelId = await isoPreview.getAttribute('data-parcel-id');
+    assert.notEqual(secondPreviewParcelId, firstPreviewParcelId);
+    assert.equal(await isoPreview.getAttribute('data-view-mode'), 'isometric');
+    if (await otherTab.isVisible().catch(() => false)) {
+      // ensure clicking back to first parcel works cleanly
+      await page.getByRole('button', { name: /Previous land/i }).click();
+    } else {
+      await page.getByRole('button', { name: /Previous land/i }).click();
+    }
+    assert.equal(await isoPreview.getAttribute('data-parcel-id'), firstPreviewParcelId);
+
     await page.getByRole('button', { name: /Info: Freeze Land/i }).click();
     await page.waitForSelector('[role="tooltip"]');
     await page.keyboard.press('Escape');

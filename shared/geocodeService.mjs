@@ -294,3 +294,128 @@ export async function searchLocations({ query = '', lat = null, lng = null, limi
 
   return { query: q, results: deduped };
 }
+
+/**
+ * Reverse-geocodes (lat, lng) into concise human-readable geographic context
+ * (street/place, neighborhood, city, region, country) using ArcGIS World Geocoder
+ * with Photon OSM fallback. Never throws on upstream outage.
+ */
+export async function reverseGeocodeLocation({ lat, lng } = {}) {
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (
+    !Number.isFinite(nLat) ||
+    !Number.isFinite(nLng) ||
+    nLat < -85 ||
+    nLat > 85 ||
+    nLng < -180 ||
+    nLng > 180
+  ) {
+    return {
+      lat: null,
+      lng: null,
+      parcelId: '',
+      street: '',
+      neighborhood: '',
+      city: '',
+      region: '',
+      country: '',
+      shortLabel: '',
+      fullLabel: ''
+    };
+  }
+
+  const gh = encodeGeohash(nLat, nLng, 8);
+  const parcelId = `GLAND-${gh.toUpperCase()}`;
+
+  const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&location=${encodeURIComponent(
+    `${nLng.toFixed(6)},${nLat.toFixed(6)}`
+  )}`;
+  const photonUrl = `https://photon.komoot.io/reverse?lon=${encodeURIComponent(
+    nLng.toFixed(6)
+  )}&lat=${encodeURIComponent(nLat.toFixed(6))}`;
+
+  const [arcgisData, photonData] = await Promise.all([
+    safeFetchJson(arcgisUrl, { Accept: 'application/json' }, 3500),
+    safeFetchJson(photonUrl, { Accept: 'application/json' }, 3500)
+  ]);
+
+  let street = '';
+  let neighborhood = '';
+  let city = '';
+  let region = '';
+  let country = '';
+  let fullLabel = '';
+
+  const addr = arcgisData?.address;
+  if (addr && typeof addr === 'object') {
+    const rawStreet = String(addr.Address || addr.ShortLabel || addr.PlaceName || '').trim();
+    const rawCity = String(addr.City || addr.Subregion || '').trim();
+    const rawRegion = String(addr.RegionAbbr || addr.Region || '').trim();
+    const rawCountry = String(addr.CountryCode || addr.CntryName || '').trim();
+    const rawNbr = String(addr.Neighborhood || addr.District || '').trim();
+    street = rawStreet && rawStreet.toLowerCase() !== rawCity.toLowerCase() ? rawStreet : '';
+    neighborhood = rawNbr && rawNbr.toLowerCase() !== rawCity.toLowerCase() ? rawNbr : '';
+    city = rawCity;
+    region = rawRegion;
+    country = rawCountry;
+    fullLabel = String(addr.LongLabel || addr.Match_addr || '').trim();
+  }
+
+  const phProps = photonData?.features?.[0]?.properties;
+  if (phProps && typeof phProps === 'object') {
+    if (!street) {
+      const phStreet = phProps.street
+        ? phProps.housenumber
+          ? `${phProps.housenumber} ${phProps.street}`
+          : phProps.street
+        : phProps.name || '';
+      street = String(phStreet || '').trim();
+    }
+    if (!neighborhood) {
+      neighborhood = String(phProps.district || phProps.locality || '').trim();
+    }
+    if (!city) {
+      city = String(phProps.city || phProps.town || phProps.county || '').trim();
+    }
+    if (!region) {
+      region = String(phProps.state || '').trim();
+    }
+    if (!country) {
+      country = String(phProps.countrycode || phProps.country || '').trim();
+    }
+  }
+
+  const localityParts = [];
+  if (neighborhood && neighborhood.toLowerCase() !== street.toLowerCase()) {
+    localityParts.push(neighborhood);
+  }
+  if (city && !localityParts.some((p) => p.toLowerCase() === city.toLowerCase())) {
+    localityParts.push(city);
+  }
+  if (region && !localityParts.some((p) => p.toLowerCase() === region.toLowerCase())) {
+    localityParts.push(region);
+  }
+  if (!city && country) {
+    localityParts.push(country);
+  }
+
+  const areaLine = localityParts.join(', ');
+  const shortLabel =
+    street && areaLine
+      ? `${street} · ${areaLine}`
+      : street || areaLine || fullLabel || `${nLat.toFixed(5)}, ${nLng.toFixed(5)}`;
+
+  return {
+    lat: Number(nLat.toFixed(6)),
+    lng: Number(nLng.toFixed(6)),
+    parcelId,
+    street,
+    neighborhood,
+    city,
+    region,
+    country,
+    shortLabel,
+    fullLabel: fullLabel || shortLabel
+  };
+}

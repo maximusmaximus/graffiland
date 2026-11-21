@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
@@ -6,19 +6,24 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import LandIsometricPreview from './LandIsometricPreview.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function LandManagementModal({
   user,
   initialParcelId = '',
+  userLocation = null,
   onSelectSculpture,
   onOpenAddLandItem = null,
+  onFocusParcel = null,
   onWorkspaceChanged,
   onClose
 }) {
   const [workspace, setWorkspace] = useState(null);
   const [selectedParcelId, setSelectedParcelId] = useState(initialParcelId || '');
+  const selectedParcelIdRef = useRef(selectedParcelId);
+  selectedParcelIdRef.current = selectedParcelId;
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
@@ -60,8 +65,8 @@ export default function LandManagementModal({
       setPasskeys(pkRes?.passkeys || []);
       const list = res?.parcels || [];
       if (list.length > 0) {
-        const picked =
-          list.find((p) => p.parcelId === (selectedParcelId || initialParcelId)) || list[0];
+        const preferredId = selectedParcelIdRef.current || initialParcelId;
+        const picked = list.find((p) => p.parcelId === preferredId) || list[0];
         setSelectedParcelId(picked.parcelId);
         setCustomName(picked.customName || '');
         setCurationNote(picked.description || picked.curationNote || '');
@@ -79,7 +84,7 @@ export default function LandManagementModal({
     } finally {
       setLoading(false);
     }
-  }, [initialParcelId, selectedParcelId]);
+  }, [initialParcelId]);
 
   useEffect(() => {
     if (user?.id) loadWorkspace();
@@ -367,19 +372,63 @@ export default function LandManagementModal({
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Compact Parcel Selector */}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {workspace.parcels.map((p) => (
-                <button
-                  key={p.parcelId}
-                  type="button"
-                  className={`btn btn-sm ${activeParcel?.parcelId === p.parcelId ? 'btn-primary' : ''}`}
-                  onClick={() => selectParcel(p)}
-                >
-                  <XeroIcon emoji="📍" size={13} />{' '}
-                  {p.customName || p.parcelId} · {p.sculptureCount}
-                </button>
-              ))}
+            {/* Organized Parcel Selector with Quick Prev/Next for Multi-Land Owners */}
+            <div className="land-mgmt-selector-bar" role="tablist" aria-label="Your owned lands">
+              <div className="land-mgmt-selector-pills">
+                {workspace.parcels.map((p) => {
+                  const isActive = activeParcel?.parcelId === p.parcelId;
+                  return (
+                    <button
+                      key={p.parcelId}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      className={`btn btn-sm land-mgmt-parcel-tab ${isActive ? 'btn-primary is-active' : ''}`}
+                      onClick={() => selectParcel(p)}
+                    >
+                      <XeroIcon emoji={p.frozen || p.settings?.frozen ? '❄️' : '📍'} size={13} />{' '}
+                      <span>{p.customName || p.parcelId}</span>
+                      <span className="land-mgmt-tab-count">· {p.sculptureCount}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {workspace.parcels.length > 1 && activeParcel && (
+                <div className="land-mgmt-selector-nav">
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    aria-label="Previous land"
+                    onClick={() => {
+                      const idx = workspace.parcels.findIndex(
+                        (item) => item.parcelId === activeParcel.parcelId
+                      );
+                      const prevIdx = (idx - 1 + workspace.parcels.length) % workspace.parcels.length;
+                      selectParcel(workspace.parcels[prevIdx]);
+                    }}
+                  >
+                    ‹
+                  </button>
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {workspace.parcels.findIndex((item) => item.parcelId === activeParcel.parcelId) + 1}
+                    /{workspace.parcels.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    aria-label="Next land"
+                    onClick={() => {
+                      const idx = workspace.parcels.findIndex(
+                        (item) => item.parcelId === activeParcel.parcelId
+                      );
+                      const nextIdx = (idx + 1) % workspace.parcels.length;
+                      selectParcel(workspace.parcels[nextIdx]);
+                    }}
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
             </div>
 
             {notice && (
@@ -395,6 +444,24 @@ export default function LandManagementModal({
 
             {activeParcel && (
               <>
+                {/* 0) Perfectly Fit Isometric Geographic Map Preview */}
+                <LandIsometricPreview
+                  parcel={activeParcel}
+                  displayNameOverride={customName}
+                  frozenOverride={frozen}
+                  allParcels={workspace.parcels}
+                  userLocation={userLocation}
+                  onSelectParcel={(p) => selectParcel(p)}
+                  onFocusParcel={
+                    onFocusParcel
+                      ? (p, vol) => {
+                          onClose?.();
+                          onFocusParcel(p, vol);
+                        }
+                      : null
+                  }
+                />
+
                 {/* 1) Land Details, Permissions & Security */}
                 <form
                   onSubmit={handleSaveCurationAndSettings}

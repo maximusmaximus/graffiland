@@ -1133,7 +1133,12 @@ export default function MobileStudio({
         <LandManagementModal
           user={user}
           initialParcelId={lands.landManageParcelId}
+          userLocation={pol.location}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
+          onFocusParcel={() => {
+            lands.setLandManageOpen(false);
+            ar.setMapOpen(true);
+          }}
           onWorkspaceChanged={async () => {
             await lands.refreshMyLands();
             if (pol.location) {
