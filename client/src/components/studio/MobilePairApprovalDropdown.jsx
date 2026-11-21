@@ -458,17 +458,10 @@ export default function MobilePairApprovalDropdown({
             {/* Section 2: Agent Connector & MCP Pairing */}
             <div className="mobile-pair-card">
               <div className="mobile-pair-card-head">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <strong style={{ fontSize: 12.5 }}>AI Agent Connector (MCP)</strong>
-                  <InfoTip title="Agent Connector & Approvals" align="right">
-                    Copy your connector prompt or MCP config into Claude, Cursor, or OpenClaw. If
-                    your agent does not hold your wallet key, every edit lands in your Pending tab
-                    here for one-tap Yes/No approval.
-                  </InfoTip>
-                </span>
+                <strong style={{ fontSize: 12.5 }}>AI Agent Connector (MCP)</strong>
                 <span
                   className={`badge ${mcpPairingsState?.mcpActive ? 'teal' : 'gold'}`}
-                  style={{ fontSize: 10, padding: '2px 6px' }}
+                  style={{ fontSize: 10, padding: '2px 6px', marginLeft: 'auto' }}
                 >
                   {mcpPairingsState?.mcpActive
                     ? mcpPairingsState.activePairing?.keyConnected
@@ -476,6 +469,11 @@ export default function MobilePairApprovalDropdown({
                       : '🟢 Active'
                     : '🟡 Standby'}
                 </span>
+                <InfoTip title="Agent Connector & Approvals" align="right">
+                  Copy your connector prompt or MCP config into Claude, Cursor, or OpenClaw. If
+                  your agent does not hold your wallet key, every edit lands in your Pending tab
+                  here for one-tap Yes/No approval.
+                </InfoTip>
               </div>
 
               {activeMcpCode && (

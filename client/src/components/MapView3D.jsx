@@ -2122,7 +2122,7 @@ export default function MapView3D({
               {drawMode ? '✏️ Drawing Land' : '✏️ Draw Land'}
             </button>
           )}
-          <InfoTip title="3D Map & Land Handles">
+          <InfoTip title="3D Map & Land Handles" mode="popover">
             <strong>Hold down</strong> in one spot on the map (or click <strong>Draw Land</strong>)
             and drag to draw a 3D cube. Drag <strong>corner balls</strong> to scale,{' '}
             <strong>side bars</strong> to stretch an edge, <strong>vertical gold bars</strong> to

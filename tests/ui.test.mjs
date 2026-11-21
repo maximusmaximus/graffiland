@@ -1451,4 +1451,106 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(view.getByTestId('profile-bio').textContent.includes('Updated bio with AR maps'));
     cleanup();
   });
+
+  test('InfoTip unfolds inline underneath each item, closes when selecting another item, and closes when scrolled past', async () => {
+    const { default: InfoTip } = await loadJsxModule('client/src/components/InfoTip.jsx');
+    const view = RTL.render(
+      React.createElement(
+        'div',
+        { 'data-testid': 'scroll-box', style: { overflowY: 'auto', height: '200px' } },
+        React.createElement(
+          'div',
+          { className: 'info-simple-title' },
+          React.createElement('strong', null, 'Item One'),
+          React.createElement(InfoTip, { title: 'Item One Details' }, 'First unfolded explanation')
+        ),
+        React.createElement(
+          'div',
+          { className: 'info-simple-title' },
+          React.createElement('strong', null, 'Item Two'),
+          React.createElement(InfoTip, { title: 'Item Two Details' }, 'Second unfolded explanation')
+        )
+      )
+    );
+
+    // Clicking Item One unfolds inline directly under Item One
+    RTL.fireEvent.click(view.getByRole('button', { name: 'Info: Item One Details' }));
+    const tip1 = view.getByRole('tooltip');
+    assert.equal(tip1.getAttribute('data-info-tip-mode'), 'inline');
+    assert.ok(tip1.textContent.includes('First unfolded explanation'));
+
+    // Selecting Item Two closes Item One and unfolds Item Two
+    RTL.fireEvent.click(view.getByRole('button', { name: 'Info: Item Two Details' }));
+    assert.equal(view.queryByText('First unfolded explanation'), null);
+    const tip2 = view.getByRole('tooltip');
+    assert.ok(tip2.textContent.includes('Second unfolded explanation'));
+
+    // Scrolling past Item Two (panel bottom above visible container top) auto-closes it
+    tip2.getBoundingClientRect = () => ({ top: -120, bottom: -20, left: 10, right: 300, width: 290, height: 100 });
+    RTL.fireEvent.scroll(globalThis.window);
+    assert.equal(view.queryByRole('tooltip'), null);
+
+    cleanup();
+  });
+
+  test('StudioHudTopBar renders top-left Sign In button when logged out and unstacked red error banner with Retry Camera + Dismiss', async () => {
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+    let loginClicks = 0;
+    let retryClicks = 0;
+    let dismissClicks = 0;
+
+    const view = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        user: null,
+        mode: 'draw',
+        dockOpen: true,
+        location: null,
+        pairedCode: '',
+        voxels: [],
+        quickSculpt: false,
+        onToggleQuickSculpt: () => {},
+        onOpenTutorial: () => {},
+        onOpenInfo: () => {},
+        onOpenLogin: () => {
+          loginClicks += 1;
+        },
+        hasOwnedLand: false,
+        ownedLandCount: 0,
+        onOpenLandManage: () => {},
+        needsGyroTap: false,
+        gyroFallbackActive: false,
+        cameraReady: false,
+        onRetryCameraAccess: () => {
+          retryClicks += 1;
+        },
+        sensorBanner: 'Camera is blocked. Allow camera for this site.',
+        onDismissSensorBanner: () => {
+          dismissClicks += 1;
+        },
+        originStatus: { originBlocked: false },
+        sceneScan: { optimal: false },
+        mapOpen: false,
+        nearbyCount: 0,
+        onOpenAreaMap: () => {}
+      })
+    );
+
+    // Top-left Sign In button is present and clickable
+    const signInBtn = view.getByTestId('mobile-signin-btn');
+    RTL.fireEvent.click(signInBtn);
+    assert.equal(loginClicks, 1);
+
+    // Only ONE camera/sensor error banner renders (red error with integrated Retry Camera + Dismiss)
+    const errBanner = view.getByTestId('mobile-error-banner');
+    assert.ok(errBanner.textContent.includes('Camera is blocked'));
+    assert.equal(view.getAllByRole('button', { name: /Retry Camera/i }).length, 1);
+    RTL.fireEvent.click(view.getByRole('button', { name: /Retry Camera/i }));
+    assert.equal(retryClicks, 1);
+    RTL.fireEvent.click(view.getByRole('button', { name: /Dismiss alert/i }));
+    assert.equal(dismissClicks, 1);
+
+    cleanup();
+  });
 });

@@ -48,12 +48,14 @@ export default function StudioHudTopBar({
   onEnableIosGyro,
   onRetryCameraAccess,
   sensorBanner,
+  onDismissSensorBanner = null,
   arTargetedSculpture,
   arPinPreview,
   passkeyBusy,
   onEnrollPasskeyAndRetryPin,
   onOpenCameraSelectedChat,
   arSelectHint,
+  onDismissHint = null,
   originStatus,
   sceneScan,
   onOpenLoginFromHint,
@@ -86,8 +88,73 @@ export default function StudioHudTopBar({
     setPairHubOpen(true);
   };
 
+  const showRedSensorError = Boolean(sensorBanner && (dockOpen || !cameraReady));
+  const showCameraFallbackBanner =
+    !showRedSensorError && !needsGyroTap && (gyroFallbackActive || !cameraReady) && !arSelectHint;
+  const openLoginAction = onOpenLogin || onOpenLoginFromHint;
+
   return (
     <>
+      {/* Top-Left Mobile Account / Sign-In & Telemetry Stack */}
+      <div className="mobile-top-hud-left hud-interactive">
+        {user ? (
+          <button
+            type="button"
+            className="top-mini-pill mobile-profile-pill"
+            data-testid="mobile-profile-btn"
+            onClick={onOpenProfile}
+            aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
+            title="Open Profile, edit @username & bio, and copy public links"
+          >
+            <XeroIcon emoji="👤" size={13} />
+            <span className="mobile-profile-pill-label">
+              {user.username ? `@${user.username}` : user.name}
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="top-mini-pill mobile-signin-pill"
+            data-testid="mobile-signin-btn"
+            onClick={openLoginAction}
+            aria-label="Sign in with Google"
+            title="Sign in with Google to save drafts, claim land, and mint AR sculptures"
+          >
+            <XeroIcon emoji="🔐" size={13} />
+            <span>Sign In</span>
+          </button>
+        )}
+
+        {dockOpen && (
+          <div className="pol-pill">
+            <XeroIcon emoji={location ? '📍' : '⏳'} size={13} />
+            <span>
+              {location
+                ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
+                : 'Acquiring GPS'}
+            </span>
+            {location?.altitude != null && (
+              <>
+                <span>|</span>
+                <XeroIcon emoji="⛰️" size={13} />
+                <span>{Math.round(location.altitude)}m</span>
+              </>
+            )}
+            <span>|</span>
+            <XeroIcon emoji="🧱" size={13} />
+            <span>{voxels.length}</span>
+            {pairedCode && (
+              <>
+                <span>|</span>
+                <XeroIcon emoji="🔗" size={13} />
+                <span>{pairedCode}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Top-Right Mobile Controls & Pair/Approvals Hub */}
       <div className="mobile-top-hud-right hud-interactive">
         <div className="mobile-top-hud-row">
           <button
@@ -177,22 +244,6 @@ export default function StudioHudTopBar({
             </button>
           )}
 
-          {user && onOpenProfile && (
-            <button
-              type="button"
-              className="top-mini-pill mobile-profile-pill"
-              data-testid="mobile-profile-btn"
-              onClick={onOpenProfile}
-              aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
-              title="Open Profile, edit @username & bio, and copy public links"
-            >
-              <XeroIcon emoji="👤" size={13} />
-              <span className="mobile-profile-pill-label">
-                {user.username ? `@${user.username}` : user.name}
-              </span>
-            </button>
-          )}
-
           <button
             type="button"
             className="top-mini-pill"
@@ -234,152 +285,246 @@ export default function StudioHudTopBar({
         />
       </div>
 
-      {editingSculpture && (
-        <div
-          className="mobile-hud-banner hud-interactive under-pol"
-          style={{
-            borderColor: 'rgba(0, 245, 212, 0.72)',
-            background: 'rgba(10, 26, 30, 0.92)',
-            zIndex: 28
-          }}
-        >
-          <span className="mobile-hud-banner-text">
-            <XeroIcon emoji="🖌️" size={14} />
-            <span>
-              Editing {editingSculpture.title} ({voxels.length} blocks)
-            </span>
-          </span>
-          <span style={{ display: 'inline-flex', gap: 6 }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ padding: '4px 10px', fontSize: 11 }}
-              disabled={savingCanvasEdit}
-              onClick={onSaveCanvasModification}
-            >
-              {savingCanvasEdit ? 'Saving...' : 'Save Edit'}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '4px 8px', fontSize: 11 }}
-              onClick={onCancelCanvasModification}
-            >
-              Cancel
-            </button>
-          </span>
-        </div>
-      )}
-
-      {dockOpen && (
-        <div className="pol-pill">
-          <XeroIcon emoji={location ? '📍' : '⏳'} size={14} />
-          <span>
-            {location
-              ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
-              : 'Acquiring GPS'}
-          </span>
-          {location?.altitude != null && (
-            <>
-              <span>|</span>
-              <XeroIcon emoji="⛰️" size={14} />
-              <span>{Math.round(location.altitude)}m</span>
-            </>
-          )}
-          <span>|</span>
-          <XeroIcon emoji="🧱" size={14} />
-          <span>{voxels.length}</span>
-          {pairedCode && (
-            <>
-              <span>|</span>
-              <XeroIcon emoji="🔗" size={14} />
-              <span>{pairedCode}</span>
-            </>
-          )}
-        </div>
-      )}
-
-      {mode === 'draw' && !quickSculpt && (
-        <div className={`surface-pill hud-interactive ${dockOpen ? 'under-pol' : ''}`}>
-          {surfaceAnchor ? (
-            <>
-              <XeroIcon emoji="📌" size={13} />
-              <span className="surface-pill-label">
-                {surfaceAnchor.label} · {surfaceAnchor.depthM.toFixed(1)}m
+      {/* Unified Non-Overlapping Vertical HUD Status & Alert Stack */}
+      <div className={`mobile-hud-stack ${dockOpen ? 'has-pol' : ''}`}>
+        {editingSculpture && (
+          <div
+            className="mobile-hud-banner hud-interactive"
+            style={{
+              borderColor: 'rgba(0, 245, 212, 0.72)',
+              background: 'rgba(10, 26, 30, 0.92)'
+            }}
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="🖌️" size={14} />
+              <span>
+                Editing {editingSculpture.title} ({voxels.length} blocks)
               </span>
+            </span>
+            <span className="mobile-hud-banner-actions">
               <button
                 type="button"
-                className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
-                onClick={onToggleSurfaceLock}
-                title="Toggle start surface plane lock vs Free 3D air drawing"
+                className="btn btn-primary btn-xs"
+                disabled={savingCanvasEdit}
+                onClick={onSaveCanvasModification}
               >
-                <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
-                <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
+                {savingCanvasEdit ? 'Saving...' : 'Save Edit'}
               </button>
               <button
                 type="button"
-                className={`surface-pill-btn ${!brushUsable ? 'is-unavailable' : ''}`}
-                aria-disabled={!brushUsable || undefined}
-                onClick={onSeedVoxelAtAnchor}
-                title={
-                  brushUsable
-                    ? 'Place first block flush on the selected surface'
-                    : brushUnavailableReason
-                }
+                className="btn btn-xs"
+                onClick={onCancelCanvasModification}
               >
-                + Seed
+                Cancel
               </button>
-              <button
-                type="button"
-                className="surface-pill-btn clear"
-                onClick={onClearSurfaceAnchor}
-                aria-label="Clear start surface"
-                title="Clear start surface"
-              >
-                <XeroIcon emoji="✖️" size={11} />
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="surface-pill-prompt"
-              onClick={onSelectSurfaceCenter}
-            >
-              <XeroIcon emoji="👆" size={13} />
-              <span>Tap scene to set start surface</span>
-            </button>
-          )}
-        </div>
-      )}
+            </span>
+          </div>
+        )}
 
-      {mode === 'draw' && activeQuest && !quickSculpt && (
-        <div
-          className="surface-pill hud-interactive"
-          style={{
-            top: 98,
-            borderColor: activeQuest.firstSparkBoost
-              ? 'rgba(255, 107, 53, 0.7)'
-              : 'rgba(0, 245, 212, 0.5)'
-          }}
-        >
-          <span className="surface-pill-label" style={{ maxWidth: 190 }}>
-            {activeQuest.firstSparkBoost ? '🔥 First-Spark (2x XP)' : '🎨 Quest'}: {activeQuest.title}
-          </span>
-          {(activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId) && onSnapToPlinthSlot && (
-            <button
-              type="button"
-              className={`surface-pill-btn ${selectedPlinthSlot ? 'active' : ''}`}
-              onClick={() =>
-                onSnapToPlinthSlot(
-                  (activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId)
-                )
-              }
-            >
-              {selectedPlinthSlot ? '✅ Snapped' : '🪑 Snap to Plinth'}
-            </button>
-          )}
-        </div>
-      )}
+        {mode === 'draw' && !quickSculpt && (
+          <div className="surface-pill hud-interactive">
+            {surfaceAnchor ? (
+              <>
+                <XeroIcon emoji="📌" size={13} />
+                <span className="surface-pill-label">
+                  {surfaceAnchor.label} · {surfaceAnchor.depthM.toFixed(1)}m
+                </span>
+                <button
+                  type="button"
+                  className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
+                  onClick={onToggleSurfaceLock}
+                  title="Toggle start surface plane lock vs Free 3D air drawing"
+                >
+                  <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
+                  <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`surface-pill-btn ${!brushUsable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!brushUsable || undefined}
+                  onClick={onSeedVoxelAtAnchor}
+                  title={
+                    brushUsable
+                      ? 'Place first block flush on the selected surface'
+                      : brushUnavailableReason
+                  }
+                >
+                  + Seed
+                </button>
+                <button
+                  type="button"
+                  className="surface-pill-btn clear"
+                  onClick={onClearSurfaceAnchor}
+                  aria-label="Clear start surface"
+                  title="Clear start surface"
+                >
+                  <XeroIcon emoji="✖️" size={11} />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="surface-pill-prompt"
+                onClick={onSelectSurfaceCenter}
+              >
+                <XeroIcon emoji="👆" size={13} />
+                <span>Tap scene to set start surface</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {mode === 'draw' && activeQuest && !quickSculpt && (
+          <div
+            className="surface-pill hud-interactive"
+            style={{
+              borderColor: activeQuest.firstSparkBoost
+                ? 'rgba(255, 107, 53, 0.7)'
+                : 'rgba(0, 245, 212, 0.5)'
+            }}
+          >
+            <span className="surface-pill-label" style={{ maxWidth: 190 }}>
+              {activeQuest.firstSparkBoost ? '🔥 First-Spark (2x XP)' : '🎨 Quest'}:{' '}
+              {activeQuest.title}
+            </span>
+            {(activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId) &&
+              onSnapToPlinthSlot && (
+                <button
+                  type="button"
+                  className={`surface-pill-btn ${selectedPlinthSlot ? 'active' : ''}`}
+                  onClick={() =>
+                    onSnapToPlinthSlot(
+                      (activeQuest.slotOffsets || []).find((s) => !s.claimedBySculptureId)
+                    )
+                  }
+                >
+                  {selectedPlinthSlot ? '✅ Snapped' : '🪑 Snap to Plinth'}
+                </button>
+              )}
+          </div>
+        )}
+
+        {showRedSensorError && (
+          <div
+            className="mobile-hud-banner hud-interactive is-error"
+            data-testid="mobile-error-banner"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="⚠️" size={14} />
+              <span>{sensorBanner}</span>
+            </span>
+            <span className="mobile-hud-banner-actions">
+              {!cameraReady && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onRetryCameraAccess}
+                >
+                  Retry Camera
+                </button>
+              )}
+              {onDismissSensorBanner && (
+                <button
+                  type="button"
+                  className="btn btn-xs mobile-banner-dismiss"
+                  onClick={onDismissSensorBanner}
+                  aria-label="Dismiss alert"
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+
+        {showCameraFallbackBanner && (
+          <div
+            className="mobile-hud-banner hud-interactive is-warn"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji={!cameraReady ? '📷' : '👆'} size={14} />
+              <span>
+                {!cameraReady
+                  ? 'Camera off/blocked — allow rear camera for AR & Proof of Location.'
+                  : 'Manual Touch-Drag Aim active (no gyro detected — drag screen to aim).'}
+              </span>
+            </span>
+            {!cameraReady && (
+              <span className="mobile-hud-banner-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onRetryCameraAccess}
+                >
+                  Retry Camera
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+
+        {arSelectHint && (
+          <div
+            className={`mobile-hud-banner hud-interactive ${
+              originStatus.originBlocked
+                ? 'is-error'
+                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
+                ? 'is-success'
+                : ''
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon
+                emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
+                size={14}
+              />
+              <span>{arSelectHint}</span>
+            </span>
+            <span className="mobile-hud-banner-actions">
+              {!user && arSelectHint.includes('Sign in') && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onOpenLoginFromHint}
+                >
+                  Sign In
+                </button>
+              )}
+              {onDismissHint && (
+                <button
+                  type="button"
+                  className="btn btn-xs mobile-banner-dismiss"
+                  onClick={onDismissHint}
+                  aria-label="Dismiss notice"
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+
+        {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
+          <div
+            className="mobile-hud-banner origin-blocked-banner hud-interactive is-error"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="⚠️" size={14} />
+              <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
+            </span>
+          </div>
+        )}
+      </div>
 
       {needsGyroTap && (
         <button
@@ -395,50 +540,6 @@ export default function StudioHudTopBar({
         >
           <XeroIcon emoji="🧭" size={18} /> Enable Gyroscope 3D Brush
         </button>
-      )}
-
-      {!needsGyroTap && (gyroFallbackActive || !cameraReady) && !arSelectHint && (
-        <div
-          className={`mobile-hud-banner hud-interactive ${mode === 'draw' ? 'under-pol' : ''}`}
-          style={{
-            background: 'rgba(13, 18, 30, 0.88)',
-            borderColor: 'rgba(255, 209, 102, 0.45)',
-            zIndex: 24
-          }}
-        >
-          <span className="mobile-hud-banner-text">
-            <XeroIcon emoji={!cameraReady ? '📷' : '👆'} size={14} />
-            <span>
-              {!cameraReady
-                ? 'Camera off/blocked — allow rear camera for AR & Proof of Location.'
-                : 'Manual Touch-Drag Aim active (no gyro detected — drag screen to aim).'}
-            </span>
-          </span>
-          {!cameraReady && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ padding: '4px 9px', fontSize: 11 }}
-              onClick={onRetryCameraAccess}
-            >
-              Retry Camera
-            </button>
-          )}
-        </div>
-      )}
-
-      {sensorBanner && dockOpen && (
-        <div
-          className={`mobile-hud-banner hud-interactive is-error ${mode === 'draw' ? 'under-pol' : ''}`}
-          role="status"
-          aria-live="polite"
-          style={{ zIndex: 26 }}
-        >
-          <span className="mobile-hud-banner-text">
-            <XeroIcon emoji="⚠️" size={14} />
-            <span>{sensorBanner}</span>
-          </span>
-        </div>
       )}
 
       {mode === 'preview' && arTargetedSculpture && (() => {
@@ -526,51 +627,6 @@ export default function StudioHudTopBar({
           </div>
         );
       })()}
-
-      {arSelectHint && (
-        <div
-          className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''} ${
-            originStatus.originBlocked
-              ? 'is-error'
-              : sceneScan.optimal && arSelectHint.includes('Mapping complete')
-              ? 'is-success'
-              : ''
-          }`}
-          role="status"
-          aria-live="polite"
-        >
-          <span className="mobile-hud-banner-text">
-            <XeroIcon
-              emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
-              size={14}
-            />
-            <span>{arSelectHint}</span>
-          </span>
-          {!user && arSelectHint.includes('Sign in') && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ padding: '4px 10px', fontSize: 11 }}
-              onClick={onOpenLoginFromHint}
-            >
-              Sign In
-            </button>
-          )}
-        </div>
-      )}
-
-      {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
-        <div
-          className={`mobile-hud-banner origin-blocked-banner is-error ${dockOpen ? 'under-pol' : ''}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span className="mobile-hud-banner-text">
-            <XeroIcon emoji="⚠️" size={14} />
-            <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
-          </span>
-        </div>
-      )}
 
       <button
         type="button"

@@ -512,6 +512,28 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     }));
     assert.equal(prefs.welcome, '1');
     assert.equal(prefs.tutorial, '1');
+
+    // Logged-out mobile top-left Sign In button opens login modal, and Info "i" tips unfold cleanly inside viewport
+    await page2.waitForSelector('[data-testid="mobile-signin-btn"]', { timeout: 10000 });
+    const signInBox = await page2.locator('[data-testid="mobile-signin-btn"]').boundingBox();
+    assert.ok(signInBox && signInBox.x < 40 && signInBox.y < 40, 'Expected Sign In button at top-left on mobile');
+
+    await page2.getByRole('button', { name: 'Info and Terms' }).click();
+    await page2.waitForSelector('.info-simple-card');
+    await page2.locator('.info-tip-btn').first().click();
+    const tipBox = await page2.locator('[role="tooltip"]').boundingBox();
+    assert.ok(tipBox && tipBox.x >= 0 && tipBox.x + tipBox.width <= 390, `Expected unfolded InfoTip inside 390px viewport, got ${JSON.stringify(tipBox)}`);
+    // Selecting a second "i" button closes the first and unfolds the second
+    await page2.locator('.info-tip-btn').nth(1).click();
+    assert.equal(await page2.locator('[role="tooltip"]').count(), 1);
+    // Scrolling past the unfolded item automatically closes it
+    await page2.evaluate(() => {
+      const modal = globalThis.document.querySelector('.modal-card');
+      if (modal) modal.scrollTop = 260;
+    });
+    await page2.waitForSelector('[role="tooltip"]', { state: 'detached', timeout: 3000 });
+    await page2.getByRole('button', { name: 'Close info' }).click();
+
     assert.deepEqual(errors2, []);
     await ctx2.close();
   });

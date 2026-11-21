@@ -787,12 +787,14 @@ export default function MobileStudio({
           onEnableIosGyro={pol.enableIosGyro}
           onRetryCameraAccess={pol.retryCameraAccess}
           sensorBanner={pol.sensorBanner}
+          onDismissSensorBanner={() => pol.setSensorBanner('')}
           arTargetedSculpture={ar.arTargetedSculpture}
           arPinPreview={chat.arPinPreview}
           passkeyBusy={pol.passkeyBusy}
           onEnrollPasskeyAndRetryPin={chat.enrollPasskeyAndRetryPinUnlock}
           onOpenCameraSelectedChat={chat.openCameraSelectedChat}
           arSelectHint={arSelectHint}
+          onDismissHint={() => setArSelectHint('')}
           originStatus={brush.originStatus}
           sceneScan={pol.sceneScan}
           onOpenLoginFromHint={() => {

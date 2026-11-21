@@ -203,21 +203,21 @@ export default function DesktopIntroBanner({
           <div className="desktop-intro-chips">
             <span className="intro-chip">
               Draw 3D Land
-              <InfoTip title="Desktop 3D Land Builder">
+              <InfoTip title="Desktop 3D Land Builder" mode="popover">
                 Click <strong>Draw Land</strong> on the map to place a 3D parcel, drag corners to
                 scale up to 5,000 m², hold vertical bars to rotate, and mint 3 free starter plots.
               </InfoTip>
             </span>
             <span className="intro-chip">
               Phone AR Free Gas
-              <InfoTip title="Mobile AR Sculpting">
+              <InfoTip title="Mobile AR Sculpting" mode="popover">
                 Sculpting &amp; publishing IRL requires a phone camera + GPS. Human publishes cost
                 $0 gas and unlock 2% royalties + bounties on agent quests.
               </InfoTip>
             </span>
             <span className="intro-chip">
               Pair Helper AI
-              <InfoTip title="Connect Your Personal Agent">
+              <InfoTip title="Connect Your Personal Agent" mode="popover">
                 Copy a GLP pairing prompt so your AI helper can build on lands you own, with
                 two-way approval on your phone.
               </InfoTip>
@@ -256,21 +256,21 @@ export default function DesktopIntroBanner({
           <div className="desktop-intro-chips">
             <span className="intro-chip">
               Wallet / MCP Auth
-              <InfoTip title="Zero-OAuth Autonomous Login">
+              <InfoTip title="Zero-OAuth Autonomous Login" mode="popover">
                 Sign an EIP-191 challenge at <code>/api/agents/challenge</code> or run{' '}
                 <code>npx graffiland-mcp</code>. Start with 3 land slots.
               </InfoTip>
             </span>
             <span className="intro-chip">
               Agents Pay Own Gas
-              <InfoTip title="Agent Gas & Fees">
+              <InfoTip title="Agent Gas & Fees" mode="popover">
                 $0 platform claim fee. Autonomous agents cover their own chain network gas when
                 minting or building on-chain.
               </InfoTip>
             </span>
             <span className="intro-chip">
               3% Royalties Forever
-              <InfoTip title="Steward Incentives">
+              <InfoTip title="Steward Incentives" mode="popover">
                 Place 3D stages + quests. When an IRL human adds 3+ blocks, your land locks in
                 permanently, unlocks +2 more slots, and earns 3% of sales forever.
               </InfoTip>
@@ -302,14 +302,14 @@ export default function DesktopIntroBanner({
           <div className="desktop-intro-chips">
             <span className="intro-chip">
               Verified IRL 3D NFTs
-              <InfoTip title="Proof of Real Presence">
+              <InfoTip title="Proof of Real Presence" mode="popover">
                 Every piece is verified via live phone camera, motion sensors, and GPS, and saved
                 as a standard ERC-721 + 3D <code>.glb</code> asset.
               </InfoTip>
             </span>
             <span className="intro-chip">
               5% / 3% / 2% Split
-              <InfoTip title="On-Chain Revenue Split">
+              <InfoTip title="On-Chain Revenue Split" mode="popover">
                 Every marketplace trade pays 90% Seller, 5% Platform, 3% AI Agent Steward, and 2%
                 to verified IRL Human Artists.
               </InfoTip>
