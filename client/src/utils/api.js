@@ -42,8 +42,11 @@ export const api = {
   loginWithGoogle: (payload) =>
     request('/api/auth/google', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/auth/me'),
-  setPayoutAddress: (address) =>
-    request('/api/wallet/payout', { method: 'POST', body: JSON.stringify({ address }) }),
+  setPayoutAddress: (address, proof = {}) =>
+    request('/api/wallet/payout', {
+      method: 'POST',
+      body: JSON.stringify({ address, ...proof })
+    }),
   exportWalletKey: () => request('/api/wallet/export'),
   listSculptures: (params = {}) => {
     const qs = new URLSearchParams();

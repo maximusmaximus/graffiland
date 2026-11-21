@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { isAddress } from 'ethers';
+import { buildPayoutLinkMessage } from '../../../shared/payoutLinkMessage.mjs';
 import { api } from '../utils/api.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -29,7 +31,32 @@ export default function InfoTermsModal({
     setSavingPayout(true);
     setStatusMsg('');
     try {
-      const res = await api.setPayoutAddress(payoutInput.trim());
+      const address = payoutInput.trim();
+      let proof = {};
+      const isEmbedded =
+        address && user?.walletAddress && address.toLowerCase() === user.walletAddress.toLowerCase();
+      if (address && !isEmbedded) {
+        if (!isAddress(address)) throw new Error('Enter a valid 0x… wallet address.');
+        if (!window.ethereum) {
+          throw new Error(
+            'Open this page in a wallet browser (or with a wallet extension) to verify you control this address.'
+          );
+        }
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const active = (accounts || []).map((a) => String(a).toLowerCase());
+        if (!active.includes(address.toLowerCase())) {
+          throw new Error('Switch your wallet to this address, then try again.');
+        }
+        const issuedAt = new Date().toISOString();
+        const message = buildPayoutLinkMessage({ userId: user.id, address, issuedAt });
+        setStatusMsg('Confirm the signature request in your wallet…');
+        const signature = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [message, address]
+        });
+        proof = { issuedAt, signature };
+      }
+      const res = await api.setPayoutAddress(address, proof);
       onUserUpdate(res.user);
       setStatusMsg('Mint recipient address updated.');
     } catch (err) {
@@ -342,7 +369,7 @@ export default function InfoTermsModal({
                     <span>
                       Custom EVM Payout Address{' '}
                       <InfoTip title="External Payout Wallet">
-                        Leave blank to use your embedded wallet. For already-minted NFTs, open any
+                        Leave blank to use your embedded wallet. Saving an external address asks your wallet to sign a free message proving you control it (no gas, no transaction). For already-minted NFTs, open any
                         sculpture you own to transfer it or download its <code>.glb</code> file.
                       </InfoTip>
                     </span>

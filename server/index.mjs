@@ -8,6 +8,7 @@ import express from 'express';
 import { ethers } from 'ethers';
 import { WebSocketServer } from 'ws';
 import { CONFIG, POLICY, ROOT_DIR } from './config.mjs';
+import { verifyPayoutLinkSignature } from '../shared/payoutLinkMessage.mjs';
 import { STEWARD_DEFAULTS, TRANSACTION_FEES } from '../shared/constants.mjs';
 import {
   getAgentProfile,
@@ -331,6 +332,32 @@ export function createAppServer(serverOptions = {}) {
       return res.status(400).json({ error: 'Invalid EVM wallet address.' });
     }
     const normalized = raw ? ethers.getAddress(raw) : '';
+    const isEmbedded =
+      normalized && String(req.user.wallet_address || '').toLowerCase() === normalized.toLowerCase();
+    if (normalized && !isEmbedded) {
+      // The payout address is also treated as an ownership identity (land + sculpture checks),
+      // so require proof of control and refuse addresses already linked to another account.
+      try {
+        verifyPayoutLinkSignature({
+          userId: req.user.id,
+          address: normalized,
+          issuedAt: req.body?.issuedAt,
+          signature: req.body?.signature
+        });
+      } catch (err) {
+        return res.status(err?.statusCode || 400).json({ error: err.message });
+      }
+      const taken = db
+        .prepare(
+          'SELECT id FROM users WHERE id != ? AND (LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?) LIMIT 1'
+        )
+        .get(req.user.id, normalized.toLowerCase(), normalized.toLowerCase());
+      if (taken) {
+        return res
+          .status(409)
+          .json({ error: 'That wallet address is already linked to another GRAFFILAND account.' });
+      }
+    }
     db.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?').run(
       normalized,
       req.user.id

@@ -130,6 +130,7 @@ import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
 } from '../../shared/landSignatureMessage.mjs';
+import { verifyPayoutLinkSignature } from '../../shared/payoutLinkMessage.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   haversineMeters,
@@ -1064,6 +1065,34 @@ export default {
         return jsonResponse({ error: 'Invalid EVM wallet address.' }, 400, request);
       }
       const normalized = raw ? ethers.getAddress(raw) : '';
+      const isEmbedded =
+        normalized && String(user.wallet_address || '').toLowerCase() === normalized.toLowerCase();
+      if (normalized && !isEmbedded) {
+        // The payout address doubles as an ownership identity (land + sculpture checks), so
+        // require proof of control and refuse addresses already linked to another account.
+        try {
+          verifyPayoutLinkSignature({
+            userId: user.id,
+            address: normalized,
+            issuedAt: body?.issuedAt,
+            signature: body?.signature
+          });
+        } catch (err) {
+          return jsonResponse({ error: err.message }, err?.statusCode || 400, request);
+        }
+        const taken = await env.DB.prepare(
+          'SELECT id FROM users WHERE id != ? AND (LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?) LIMIT 1'
+        )
+          .bind(user.id, normalized.toLowerCase(), normalized.toLowerCase())
+          .first();
+        if (taken) {
+          return jsonResponse(
+            { error: 'That wallet address is already linked to another GRAFFILAND account.' },
+            409,
+            request
+          );
+        }
+      }
       await env.DB.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?')
         .bind(normalized, user.id)
         .run();
