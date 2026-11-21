@@ -1131,4 +1131,132 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('MobileMapSheet defaults to Nearest Lands with nested sculptures, land/sculpture metadata, expiration countdown, and Google Maps links', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const now = Date.parse('2026-11-20T12:00:00.000Z');
+    const selectedSculptures = [];
+    const focusedParcels = [];
+    const parcels = [
+      {
+        parcelId: 'GLAND-FAR',
+        customName: 'Embarcadero Pier',
+        description: 'Waterfront sculpture deck',
+        centerLat: 37.7955,
+        centerLng: -122.3937,
+        bounds: { sw: [37.795, -122.394], ne: [37.796, -122.393], center: [37.7955, -122.3937] },
+        volume: { widthMeters: 20, depthMeters: 20, heightMeters: 30, footprintAreaSqM: 400 },
+        stewardName: 'Maya',
+        stewardType: 'human',
+        stewardStatus: 'awakened',
+        awakenedAt: '2026-11-10T00:00:00.000Z',
+        humanContributorCount: 3,
+        sculptureCount: 0
+      },
+      {
+        parcelId: 'GLAND-NEAR',
+        customName: 'Civic Neon Plaza',
+        description: 'Agent-staged plaza awaiting human art',
+        centerLat: 37.7755,
+        centerLng: -122.4194,
+        bounds: { sw: [37.775, -122.42], ne: [37.776, -122.419], center: [37.7755, -122.4194] },
+        volume: { widthMeters: 24, depthMeters: 16, heightMeters: 36, footprintAreaSqM: 384 },
+        stewardName: 'PainterBot',
+        stewardType: 'agent',
+        stewardStatus: 'dormant',
+        firstSparkBoost: true,
+        leaseExpiresAt: '2026-11-22T06:00:00.000Z',
+        openQuestCount: 2,
+        sculptureCount: 2
+      }
+    ];
+    const sculptures = [
+      {
+        id: 'sc-voxel-1',
+        parcelId: 'GLAND-NEAR',
+        title: 'Prism Arch',
+        description: 'Floating voxel gateway',
+        lat: 37.7755,
+        lng: -122.4194,
+        voxelCount: 142,
+        creatorName: 'Alex',
+        polScore: 94,
+        layerRole: 'artist_work',
+        createdAt: '2026-11-19T18:00:00.000Z',
+        chain: { txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef', simulated: true }
+      },
+      {
+        id: 'sc-glb-2',
+        parcelId: 'GLAND-NEAR',
+        title: 'Plinth Stage',
+        lat: 37.7755,
+        lng: -122.4194,
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', triangleCount: 3200 },
+        creatorName: 'PainterBot',
+        layerRole: 'steward_stage',
+        createdAt: '2026-11-18T10:00:00.000Z'
+      }
+    ];
+
+    const view = RTL.render(
+      React.createElement(MobileMapSheet, {
+        config: {},
+        location: { lat: 37.7749, lng: -122.4194 },
+        areaFilterMode: 'nearby',
+        setAreaFilterMode: () => {},
+        mapLoading: false,
+        loadPublicMapData: () => {},
+        areaSculpturesSorted: sculptures,
+        mapParcels: parcels,
+        onSelectParcel: (pid) => focusedParcels.push(pid),
+        onSelectSculpture: (sc) => selectedSculptures.push(sc.id),
+        onShowHint: () => {},
+        onClose: () => {},
+        nowMsOverride: now
+      })
+    );
+
+    const cards = view.getAllByTestId('mobile-land-card');
+    assert.equal(cards.length, 2);
+    // Nearest land (#1) must be Civic Neon Plaza, followed by Embarcadero Pier (#2)
+    assert.equal(cards[0].getAttribute('data-parcel-id'), 'GLAND-NEAR');
+    assert.equal(cards[1].getAttribute('data-parcel-id'), 'GLAND-FAR');
+
+    // Expiration countdown and Permanent badges render accurately
+    const expBadges = view.getAllByTestId('land-expiration-badge');
+    assert.ok(expBadges[0].textContent.includes('1d 18h left'));
+    assert.ok(expBadges[1].textContent.includes('Permanent'));
+    assert.ok(view.getByTestId('land-expiration-detail').textContent.includes('2x First-Spark XP'));
+
+    // Land metadata (dimensions, steward, quests, contributors) renders
+    assert.ok(cards[0].textContent.includes('24×16×36 m · 384 m²'));
+    assert.ok(cards[0].textContent.includes('AI: PainterBot'));
+    assert.ok(cards[0].textContent.includes('2 open quests'));
+    assert.ok(cards[1].textContent.includes('3 contributors'));
+
+    // Every land card includes a Google Maps link pointing to its coordinates
+    const gmapsLinks = view.getAllByTestId('land-google-maps-link');
+    assert.equal(gmapsLinks.length, 2);
+    assert.ok(gmapsLinks[0].getAttribute('href').startsWith('https://www.google.com/maps/dir/?api=1&destination=37.775500'));
+    assert.ok(gmapsLinks[1].getAttribute('href').startsWith('https://www.google.com/maps/dir/?api=1&destination=37.795500'));
+
+    // Nested sculptures appear directly under GLAND-NEAR with full metadata
+    const nestedItems = view.getAllByTestId('land-sculpture-item');
+    assert.equal(nestedItems.length, 2);
+    assert.ok(nestedItems[0].textContent.includes('Prism Arch'));
+    assert.ok(nestedItems[0].textContent.includes('142 blocks'));
+    assert.ok(nestedItems[0].textContent.includes('PoL 94'));
+    assert.ok(nestedItems[1].textContent.includes('GLB 3D · 3,200 tris'));
+
+    // Clicking Focus Map and 3D inspect fire callbacks cleanly
+    RTL.fireEvent.click(view.getByRole('button', { name: /Focus Civic Neon Plaza on map/i }));
+    assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
+    RTL.fireEvent.click(view.getAllByRole('button', { name: /3D/i })[0]);
+    assert.deepEqual(selectedSculptures, ['sc-voxel-1']);
+
+    cleanup();
+  });
 });

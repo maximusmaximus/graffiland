@@ -559,8 +559,8 @@ export default function StudioHudTopBar({
         type="button"
         className={`floating-map-btn hud-interactive ${mapOpen ? 'active' : ''}`}
         onClick={onOpenAreaMap}
-        aria-label="Open Public Area Map"
-        title="Public Area Sculpture Map & Directions"
+        aria-label="Open Nearest Lands Map"
+        title="Nearest Lands, Sculptures & Google Maps Directions"
       >
         <XeroIcon emoji="🗺️" size={22} />
         {nearbyCount > 0 && <span className="floating-map-badge">{nearbyCount}</span>}

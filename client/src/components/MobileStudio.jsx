@@ -1082,6 +1082,9 @@ export default function MobileStudio({
           areaSculpturesSorted={ar.areaSculpturesSorted}
           mapParcels={ar.mapParcels}
           mapSelectedSculpture={ar.mapSelectedSculpture}
+          selectedParcelId={ar.mapSelectedParcelId}
+          focusParcelTick={ar.mapFocusParcelTick}
+          onSelectParcel={ar.focusMapParcel}
           onSelectSculpture={ar.setMapSelectedSculpture}
           onShowHint={showTemporaryHint}
           onClose={() => ar.setMapOpen(false)}

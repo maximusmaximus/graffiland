@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
+import { groupNearestLandsWithSculptures } from '../utils/landMapHelpers.js';
 import {
   buildVoxelGroup,
   disposeObject3D,
@@ -44,6 +45,8 @@ export function useARPreview({
   const [mapParcels, setMapParcels] = useState([]);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapSelectedSculpture, setMapSelectedSculpture] = useState(null);
+  const [mapSelectedParcelId, setMapSelectedParcelId] = useState('');
+  const [mapFocusParcelTick, setMapFocusParcelTick] = useState(0);
 
   const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
     const mergedInitial = (lightList || []).map((sc) => {
@@ -425,9 +428,18 @@ export function useARPreview({
     if (modeRef.current === 'transform') {
       commitTransformAndExit('draw');
     }
+    setAreaFilterMode('nearby');
     setMapOpen(true);
     loadPublicMapData();
   }, [commitTransformAndExit, loadPublicMapData, modeRef, stopBrushPainting]);
+
+  const focusMapParcel = useCallback((parcelId) => {
+    const pid = String(parcelId || '');
+    setMapSelectedParcelId(pid);
+    if (pid) {
+      setMapFocusParcelTick((n) => n + 1);
+    }
+  }, []);
 
   const areaSculpturesSorted = useMemo(() => {
     const withDist = (mapSculptures || []).map((sc) => {
@@ -443,12 +455,25 @@ export function useARPreview({
     return withDist;
   }, [mapSculptures, location]);
 
+  const landGroups = useMemo(
+    () =>
+      groupNearestLandsWithSculptures({
+        parcels: mapParcels,
+        sculptures: mapSculptures,
+        location,
+        filterMode: areaFilterMode,
+        radiusMeters: 5000
+      }),
+    [mapParcels, mapSculptures, location, areaFilterMode]
+  );
+
   const displayedMapSculptures = useMemo(() => {
     if (areaFilterMode !== 'nearby' || !location) return areaSculpturesSorted;
-    return areaSculpturesSorted.filter(
+    const within = areaSculpturesSorted.filter(
       (s) => s.distanceMeters === null || s.distanceMeters <= 5000
     );
-  }, [areaFilterMode, areaSculpturesSorted, location]);
+    return within.length > 0 ? within : landGroups.displayedSculptures;
+  }, [areaFilterMode, areaSculpturesSorted, location, landGroups.displayedSculptures]);
 
   return {
     nearbySculptures,
@@ -468,10 +493,18 @@ export function useARPreview({
     mapLoading,
     mapSelectedSculpture,
     setMapSelectedSculpture,
+    mapSelectedParcelId,
+    setMapSelectedParcelId,
+    mapFocusParcelTick,
+    focusMapParcel,
     loadPublicMapData,
     openAreaMap,
     areaSculpturesSorted,
     displayedMapSculptures,
+    allLandsSorted: landGroups.allLands,
+    nearbyLandsSorted: landGroups.nearbyLands,
+    displayedMapLands: landGroups.displayedLands,
+    landsAutoFallback: landGroups.autoFallbackToAll,
     handleRefreshOrbRescan
   };
 }

@@ -13,6 +13,8 @@ export default function MapView({
   areaRadiusMeters = 5000,
   compact = false,
   selectedSculptureId = '',
+  selectedParcelId = '',
+  focusParcelTick = 0,
   initialView = null,
   onViewportChange = null,
   config = null,
@@ -160,7 +162,9 @@ export default function MapView({
 
     const parcelMap = new Map();
     for (const p of parcels) {
-      if (p?.bounds) parcelMap.set(p.parcelId, p);
+      if (p?.parcelId && (p?.bounds || p?.volume?.corners?.length >= 4)) {
+        parcelMap.set(p.parcelId, p);
+      }
     }
     for (const sc of sculptures) {
       if (sc?.parcelId && sc?.parcelBounds && !parcelMap.has(sc.parcelId)) {
@@ -172,43 +176,74 @@ export default function MapView({
       }
     }
 
-    const selectedParcelId =
-      sculptures.find((s) => s.id === selectedSculptureId)?.parcelId || '';
+    const effectiveSelectedParcelId =
+      selectedParcelId ||
+      sculptures.find((s) => s.id === selectedSculptureId)?.parcelId ||
+      '';
+
+    const coords = [];
 
     for (const p of parcelMap.values()) {
       const parcelSculptures = sculptures.filter((s) => s.parcelId === p.parcelId);
-      const isSelectedParcel = selectedParcelId && p.parcelId === selectedParcelId;
+      const isSelectedParcel =
+        Boolean(effectiveSelectedParcelId) && p.parcelId === effectiveSelectedParcelId;
       const isDormant = p.stewardStatus === 'dormant';
+      const isFrozen = Boolean(p.frozen || p.settings?.frozen);
       const hasQuests = Number(p.openQuestCount || 0) > 0;
       const strokeColor = isSelectedParcel
         ? '#ffd166'
+        : isFrozen
+        ? '#7dd3fc'
         : isDormant
         ? '#ff6b35'
         : hasQuests
         ? '#7b2cbf'
         : '#00f5d4';
-      const rect = L.rectangle([p.bounds.sw, p.bounds.ne], {
+
+      const styleOpts = {
         color: strokeColor,
-        weight: isSelectedParcel || isDormant ? 2.5 : 1.75,
+        weight: isSelectedParcel ? 3 : isDormant ? 2.5 : 1.75,
         dashArray: isDormant ? '6 4' : undefined,
         fillColor: strokeColor,
-        fillOpacity: isSelectedParcel ? 0.28 : isDormant ? 0.26 : 0.2
-      });
+        fillOpacity: isSelectedParcel ? 0.32 : isDormant ? 0.26 : 0.2
+      };
+
+      const corners = Array.isArray(p?.volume?.corners) ? p.volume.corners : [];
+      const shape =
+        corners.length >= 4
+          ? L.polygon(
+              corners.slice(0, 4).map(([lng, lat]) => [Number(lat), Number(lng)]),
+              styleOpts
+            )
+          : p?.bounds?.sw && p?.bounds?.ne
+          ? L.rectangle([p.bounds.sw, p.bounds.ne], styleOpts)
+          : null;
+
+      if (!shape) continue;
+
+      const pLat = Number(p?.volume?.centerLat ?? p?.centerLat ?? p?.bounds?.center?.[0]);
+      const pLng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
+      if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
+        coords.push([pLat, pLng]);
+      }
+
       const questTag = isDormant
         ? ' · 🔥 Needs First Spark (2x XP)'
         : hasQuests
         ? ` · 🎨 ${p.openQuestCount} Quest(s)`
         : '';
       const stewardTag = p.stewardType === 'agent' ? ' · 🤖 AI Steward' : '';
-      rect.bindTooltip(
-        `Virtual Land ${p.parcelId} (${parcelSculptures.length || p.sculptureCount} sculpture${(parcelSculptures.length || p.sculptureCount) === 1 ? '' : 's'}${questTag}${stewardTag})`
+      const landTitle = p.customName ? `${p.customName} (${p.parcelId})` : `Virtual Land ${p.parcelId}`;
+      const scCount = parcelSculptures.length || p.sculptureCount || 0;
+      shape.bindTooltip(
+        `${landTitle} (${scCount} sculpture${scCount === 1 ? '' : 's'}${questTag}${stewardTag})`
       );
-      if (parcelSculptures.length > 0 && onSelectSculpture) {
-        rect.on('click', () => onSelectSculpture(parcelSculptures[0]));
-      } else {
-        rect.on('click', () => onSelectParcelRef.current?.(p));
+      if (onSelectParcelRef.current) {
+        shape.on('click', () => onSelectParcelRef.current?.(p));
+      } else if (parcelSculptures.length > 0 && onSelectSculpture) {
+        shape.on('click', () => onSelectSculpture(parcelSculptures[0]));
       }
-      rect.addTo(layer);
+      shape.addTo(layer);
     }
 
     const pinUrl = xeroemoji.get('📍')?.svgUrl;
@@ -221,7 +256,6 @@ export default function MapView({
       iconAnchor: [14, 26]
     });
 
-    const coords = [];
     for (const sc of sculptures) {
       if (!Number.isFinite(Number(sc.lat)) || !Number.isFinite(Number(sc.lng))) continue;
       coords.push([Number(sc.lat), Number(sc.lng)]);
@@ -252,7 +286,31 @@ export default function MapView({
         }, 60);
       }
     }
-  }, [sculptures, parcels, userLocation, focusArea, areaRadiusMeters, selectedSculptureId, config, onSelectSculpture]);
+  }, [
+    sculptures,
+    parcels,
+    userLocation,
+    focusArea,
+    areaRadiusMeters,
+    selectedSculptureId,
+    selectedParcelId,
+    config,
+    onSelectSculpture
+  ]);
+
+  useEffect(() => {
+    if (!focusParcelTick || !selectedParcelId) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const match = parcels.find((p) => p?.parcelId === selectedParcelId);
+    if (!match) return;
+    const pLat = Number(match?.volume?.centerLat ?? match?.centerLat ?? match?.bounds?.center?.[0]);
+    const pLng = Number(match?.volume?.centerLng ?? match?.centerLng ?? match?.bounds?.center?.[1]);
+    if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
+      userAdjustedViewRef.current = true;
+      map.setView([pLat, pLng], Math.max(map.getZoom(), 16), { animate: true });
+    }
+  }, [focusParcelTick, selectedParcelId, parcels]);
 
   function centerOnUser() {
     const map = mapRef.current;
@@ -285,8 +343,9 @@ export default function MapView({
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
-        height: compact ? 'auto' : '100%',
-        flex: compact ? undefined : 1,
+        height: '100%',
+        width: '100%',
+        flex: 1,
         minHeight: 0
       }}
     >
@@ -329,7 +388,7 @@ export default function MapView({
             <XeroIcon emoji="🎯" size={14} /> My Area
           </button>
         )}
-        {sculptures.length === 0 && (
+        {sculptures.length === 0 && parcels.length === 0 && (
           <div
             style={{
               position: 'absolute',
@@ -344,7 +403,7 @@ export default function MapView({
               fontSize: 13
             }}
           >
-            <XeroIcon emoji="📍" size={16} /> No published sculptures in this view yet — explore Global view or create one nearby!
+            <XeroIcon emoji="📍" size={16} /> No virtual lands or sculptures in this view yet — explore All Lands or create one nearby!
           </div>
         )}
       </div>
