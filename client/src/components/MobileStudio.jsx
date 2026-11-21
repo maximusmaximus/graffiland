@@ -1084,6 +1084,8 @@ export default function MobileStudio({
 
       {ar.mapOpen && (
         <MobileMapSheet
+          user={user}
+          ownedParcelIds={(lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean)}
           config={config}
           location={pol.location}
           areaFilterMode={ar.areaFilterMode}
@@ -1100,6 +1102,27 @@ export default function MobileStudio({
           onSelectSculpture={ar.setMapSelectedSculpture}
           onOpenProfile={(handle) => {
             if (handle) setProfileHandle(handle);
+          }}
+          onManageLand={(pid) => {
+            ar.setMapOpen(false);
+            lands.setLandManageParcelId(pid || '');
+            lands.setLandManageOpen(true);
+          }}
+          onRenameLand={async (land, nextCustomName) => {
+            const res = await api.updateLandParcel(land.parcelId, {
+              customName: nextCustomName
+            });
+            const savedName =
+              res?.parcel?.customName !== undefined ? res.parcel.customName : nextCustomName;
+            ar.setMapParcels((prev) =>
+              (prev || []).map((p) =>
+                p.parcelId === land.parcelId
+                  ? { ...p, customName: savedName, slug: res?.parcel?.slug || p.slug }
+                  : p
+              )
+            );
+            lands.refreshMyLands();
+            ar.loadPublicMapData();
           }}
           onShowHint={showTemporaryHint}
           onClose={() => ar.setMapOpen(false)}
@@ -1141,6 +1164,7 @@ export default function MobileStudio({
           }}
           onWorkspaceChanged={async () => {
             await lands.refreshMyLands();
+            ar.loadPublicMapData();
             if (pol.location) {
               api
                 .listSculptures({ lat: pol.location.lat, lng: pol.location.lng, radiusMeters: 300 })

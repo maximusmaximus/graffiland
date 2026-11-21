@@ -9,7 +9,8 @@ import {
   formatLandExpiration,
   formatSculptureAssetMeta,
   formatSimpleLandLabel,
-  groupNearestLandsWithSculptures
+  groupNearestLandsWithSculptures,
+  isLandOwnedByUser
 } from '../client/src/utils/landMapHelpers.js';
 
 describe('Mobile Nearest Lands Map Helpers', () => {
@@ -266,5 +267,31 @@ describe('Mobile Nearest Lands Map Helpers', () => {
       [-121.8394, 39.7272],
       [-121.838, 39.7288]
     ]);
+  });
+
+  test('isLandOwnedByUser accurately identifies owned lands via ownedParcelIds, ownerSub, or wallet and returns false when signed out', () => {
+    const user = {
+      id: 'google:owner-1',
+      walletAddress: '0xAaBbCc0000000000000000000000000000000001',
+      customPayoutAddress: '0xAaBbCc0000000000000000000000000000000002'
+    };
+    const landById = { parcelId: 'GLAND-MINE1', ownerSub: 'someone-else' };
+    const landBySub = { parcelId: 'GLAND-MINE2', ownerSub: 'google:owner-1' };
+    const landByWallet = {
+      parcelId: 'GLAND-MINE3',
+      ownerSub: 'other',
+      firstClaimantAddress: '0xaabbcc0000000000000000000000000000000002'
+    };
+    const otherLand = {
+      parcelId: 'GLAND-OTHER',
+      ownerSub: 'google:stranger',
+      firstClaimantAddress: '0x9999990000000000000000000000000000000099'
+    };
+
+    assert.equal(isLandOwnedByUser(landBySub, { user: null, ownedParcelIds: ['GLAND-MINE2'] }), false);
+    assert.equal(isLandOwnedByUser(landById, { user, ownedParcelIds: ['gland-mine1'] }), true);
+    assert.equal(isLandOwnedByUser(landBySub, { user }), true);
+    assert.equal(isLandOwnedByUser(landByWallet, { user }), true);
+    assert.equal(isLandOwnedByUser(otherLand, { user, ownedParcelIds: ['GLAND-MINE1'] }), false);
   });
 });

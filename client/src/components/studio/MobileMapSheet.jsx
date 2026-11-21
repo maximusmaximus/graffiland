@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { buildParcelShareUrl } from '../../../../shared/landVolume.mjs';
+import { api } from '../../utils/api.js';
 import { getSculptureChainLinks } from '../../utils/chainLinks.js';
 import {
   buildSculptureShareUrl,
@@ -8,12 +9,16 @@ import {
 import {
   formatSculptureAssetMeta,
   formatShortDate,
-  groupNearestLandsWithSculptures
+  groupNearestLandsWithSculptures,
+  isLandOwnedByUser
 } from '../../utils/landMapHelpers.js';
+import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function MobileMapSheet({
+  user = null,
+  ownedParcelIds = [],
   config,
   location,
   areaFilterMode = 'nearby',
@@ -29,6 +34,8 @@ export default function MobileMapSheet({
   onSelectParcel,
   onSelectSculpture,
   onOpenProfile = null,
+  onManageLand = null,
+  onRenameLand = null,
   onShowHint,
   onClose,
   nowMsOverride = null
@@ -36,6 +43,11 @@ export default function MobileMapSheet({
   const [mapHeightMode, setMapHeightMode] = useState('compact'); // 'compact' | 'expanded' | 'hidden'
   const [collapsedLandIds, setCollapsedLandIds] = useState({});
   const [nowMs, setNowMs] = useState(() => (nowMsOverride ?? Date.now()));
+  const [editingParcelId, setEditingParcelId] = useState('');
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renameError, setRenameError] = useState('');
+  const [renamedNames, setRenamedNames] = useState({});
   const cardRefs = useRef(new Map());
 
   useEffect(() => {
@@ -47,6 +59,16 @@ export default function MobileMapSheet({
     return () => clearInterval(timer);
   }, [nowMsOverride]);
 
+  const effectiveParcels = useMemo(() => {
+    const keys = Object.keys(renamedNames);
+    if (keys.length === 0) return mapParcels;
+    return (mapParcels || []).map((p) =>
+      p?.parcelId && Object.prototype.hasOwnProperty.call(renamedNames, p.parcelId)
+        ? { ...p, customName: renamedNames[p.parcelId] }
+        : p
+    );
+  }, [mapParcels, renamedNames]);
+
   const effectiveSculptures = useMemo(
     () => (areaSculpturesSorted.length > 0 ? areaSculpturesSorted : displayedMapSculptures),
     [areaSculpturesSorted, displayedMapSculptures]
@@ -55,14 +77,14 @@ export default function MobileMapSheet({
   const grouped = useMemo(
     () =>
       groupNearestLandsWithSculptures({
-        parcels: mapParcels,
+        parcels: effectiveParcels,
         sculptures: effectiveSculptures,
         location,
         filterMode: areaFilterMode,
         radiusMeters: 5000,
         nowMs
       }),
-    [mapParcels, effectiveSculptures, location, areaFilterMode, nowMs]
+    [effectiveParcels, effectiveSculptures, location, areaFilterMode, nowMs]
   );
 
   const displayedLands = grouped.displayedLands;
@@ -103,6 +125,50 @@ export default function MobileMapSheet({
     });
     const ok = await copyToClipboard(shareUrl);
     onShowHint?.(ok ? `Copied share link for ${land.displayName}!` : 'Copy unavailable');
+  }
+
+  function startInlineRename(land) {
+    if (!land?.parcelId || renameSaving) return;
+    setEditingParcelId(land.parcelId);
+    setRenameDraft(String(land.customName || ''));
+    setRenameError('');
+  }
+
+  function cancelInlineRename() {
+    if (renameSaving) return;
+    setEditingParcelId('');
+    setRenameDraft('');
+    setRenameError('');
+  }
+
+  async function submitInlineRename(e, land) {
+    e.preventDefault();
+    if (!land?.parcelId || renameSaving) return;
+    const nextName = String(renameDraft || '').trim().replace(/[\r\n]+/g, ' ').slice(0, 48);
+    if (nextName === String(land.customName || '').trim()) {
+      setEditingParcelId('');
+      setRenameError('');
+      return;
+    }
+    setRenameSaving(true);
+    setRenameError('');
+    try {
+      if (typeof onRenameLand === 'function') {
+        await onRenameLand(land, nextName);
+      } else {
+        await api.updateLandParcel(land.parcelId, { customName: nextName });
+      }
+      setRenamedNames((prev) => ({ ...prev, [land.parcelId]: nextName }));
+      setEditingParcelId('');
+      setRenameDraft('');
+      onShowHint?.(
+        nextName ? `Renamed land to "${nextName}"!` : `Reset name for ${land.parcelId}`
+      );
+    } catch (err) {
+      setRenameError(err?.message || 'Could not rename land');
+    } finally {
+      setRenameSaving(false);
+    }
   }
 
   function cycleMapHeight() {
@@ -240,6 +306,8 @@ export default function MobileMapSheet({
           <div className="mobile-land-stack">
             {displayedLands.map((land, index) => {
               const isSelected = Boolean(selectedParcelId) && selectedParcelId === land.parcelId;
+              const isOwned = isLandOwnedByUser(land, { user, ownedParcelIds });
+              const isRenaming = isOwned && editingParcelId === land.parcelId;
               const isCollapsed = Boolean(collapsedLandIds[land.parcelId]);
               const exp = land.expiration;
               const expBadgeClass =
@@ -265,18 +333,88 @@ export default function MobileMapSheet({
                     else cardRefs.current.delete(land.parcelId);
                   }}
                   className={`card mobile-land-card ${isSelected ? 'is-selected' : ''} ${
-                    exp.urgent ? 'is-urgent-expiry' : ''
-                  }`}
+                    isOwned ? 'is-owned' : ''
+                  } ${exp.urgent ? 'is-urgent-expiry' : ''}`}
                   data-testid="mobile-land-card"
                   data-parcel-id={land.parcelId}
+                  data-owned={isOwned ? 'true' : 'false'}
                 >
-                  {/* Band 1: Identity + Distance + Expiration */}
+                  {/* Band 1: Identity + Distance + Expiration + Owner Gear */}
                   <div className="mobile-land-card-head">
                     <div className="mobile-land-title-col">
                       <div className="mobile-land-name-row">
                         <span className="mobile-land-rank">#{index + 1}</span>
-                        <h3 className="mobile-land-name">{land.displayName}</h3>
+                        {isRenaming ? (
+                          <form
+                            className="mobile-land-rename-form"
+                            data-testid="land-inline-rename-form"
+                            onSubmit={(e) => submitInlineRename(e, land)}
+                          >
+                            <EmojiInput
+                              autoFocus
+                              wrapperClassName="mobile-land-rename-wrap"
+                              className="input mobile-land-rename-input"
+                              aria-label="Rename land"
+                              maxLength={48}
+                              value={renameDraft}
+                              disabled={renameSaving}
+                              placeholder="Name your land… (type : for emojis)"
+                              onChange={(e) => {
+                                setRenameDraft(e.target.value);
+                                if (renameError) setRenameError('');
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  cancelInlineRename();
+                                }
+                              }}
+                            />
+                            <div className="mobile-land-rename-actions">
+                              <button
+                                type="submit"
+                                className="btn btn-xs btn-primary"
+                                disabled={renameSaving}
+                                data-testid="land-inline-rename-save"
+                                aria-label="Save land name"
+                              >
+                                {renameSaving ? '…' : '✓'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-xs"
+                                disabled={renameSaving}
+                                data-testid="land-inline-rename-cancel"
+                                aria-label="Cancel rename"
+                                onClick={cancelInlineRename}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </form>
+                        ) : isOwned ? (
+                          <button
+                            type="button"
+                            className="mobile-land-name-btn"
+                            data-testid="land-title-edit-trigger"
+                            aria-label={`Rename ${land.displayName}`}
+                            title="Tap to rename this land"
+                            onClick={() => startInlineRename(land)}
+                          >
+                            <span className="mobile-land-name">{land.displayName}</span>
+                            <span className="mobile-land-name-edit-cue" aria-hidden="true">
+                              ✏️
+                            </span>
+                          </button>
+                        ) : (
+                          <h3 className="mobile-land-name">{land.displayName}</h3>
+                        )}
                       </div>
+                      {isRenaming && renameError && (
+                        <div className="mobile-land-rename-error" role="alert">
+                          {renameError}
+                        </div>
+                      )}
                       <div className="mobile-land-id-row">
                         {land.customName && (
                           <span className="mobile-land-parcel-id">{land.parcelId}</span>
@@ -290,6 +428,18 @@ export default function MobileMapSheet({
                     </div>
 
                     <div className="mobile-land-head-badges">
+                      {isOwned && onManageLand && (
+                        <button
+                          type="button"
+                          className="btn btn-xs mobile-land-gear-btn"
+                          data-testid="land-manage-gear-btn"
+                          aria-label={`Manage ${land.displayName}`}
+                          title="Manage this land"
+                          onClick={() => onManageLand(land.parcelId)}
+                        >
+                          <XeroIcon emoji="⚙️" size={13} />
+                        </button>
+                      )}
                       {land.distanceLabel && (
                         <span className="badge teal" data-testid="land-distance-badge">
                           <XeroIcon emoji="📍" size={11} /> {land.distanceLabel}

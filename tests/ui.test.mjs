@@ -1934,4 +1934,114 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     cleanup();
   });
+
+  test('MobileMapSheet shows manage gear and inline click-to-rename title only for lands owned by the logged-in user', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const managedIds = [];
+    const renamedCalls = [];
+
+    const user = {
+      id: 'google:owner-7',
+      username: 'sky_artist',
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+    const parcels = [
+      {
+        parcelId: 'GLAND-OWNED01',
+        customName: 'Sunset Lot',
+        description: 'My corner plaza',
+        centerLat: 37.775,
+        centerLng: -122.419,
+        ownerSub: 'google:owner-7',
+        stewardStatus: 'awakened',
+        sculptureCount: 0
+      },
+      {
+        parcelId: 'GLAND-OTHER02',
+        customName: 'Stranger Park',
+        description: 'Someone else owns this',
+        centerLat: 37.776,
+        centerLng: -122.419,
+        ownerSub: 'google:someone-else',
+        stewardStatus: 'awakened',
+        sculptureCount: 0
+      }
+    ];
+
+    const view = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user,
+        ownedParcelIds: ['GLAND-OWNED01'],
+        config: {},
+        location: { lat: 37.775, lng: -122.419 },
+        areaFilterMode: 'nearby',
+        mapParcels: parcels,
+        displayedMapSculptures: [],
+        areaSculpturesSorted: [],
+        onManageLand: (pid) => managedIds.push(pid),
+        onRenameLand: async (land, nextName) => {
+          renamedCalls.push({ parcelId: land.parcelId, nextName });
+        },
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+
+    // Only the owned land renders the manage gear & clickable rename title
+    const cards = view.getAllByTestId('mobile-land-card');
+    assert.equal(cards.length, 2);
+    assert.equal(cards[0].getAttribute('data-owned'), 'true');
+    assert.equal(cards[1].getAttribute('data-owned'), 'false');
+
+    const gears = view.getAllByTestId('land-manage-gear-btn');
+    assert.equal(gears.length, 1);
+    RTL.fireEvent.click(gears[0]);
+    assert.deepEqual(managedIds, ['GLAND-OWNED01']);
+
+    const renameTriggers = view.getAllByTestId('land-title-edit-trigger');
+    assert.equal(renameTriggers.length, 1);
+
+    // Click title -> opens inline rename input, Escape cancels
+    RTL.fireEvent.click(renameTriggers[0]);
+    const input1 = view.getByLabelText('Rename land');
+    assert.equal(input1.value, 'Sunset Lot');
+    RTL.fireEvent.keyDown(input1, { key: 'Escape' });
+    assert.equal(view.queryByTestId('land-inline-rename-form'), null);
+
+    // Click title again -> type new name with :fire: emoji shortcode and save
+    RTL.fireEvent.click(view.getByTestId('land-title-edit-trigger'));
+    const input2 = view.getByLabelText('Rename land');
+    RTL.fireEvent.change(input2, { target: { value: 'Neon Courtyard :fire:', selectionStart: 21 } });
+    assert.equal(input2.value, 'Neon Courtyard 🔥');
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByTestId('land-inline-rename-save'));
+    });
+
+    assert.deepEqual(renamedCalls, [{ parcelId: 'GLAND-OWNED01', nextName: 'Neon Courtyard 🔥' }]);
+    assert.equal(view.queryByTestId('land-inline-rename-form'), null);
+    assert.ok(view.getByTestId('land-title-edit-trigger').textContent.includes('Neon Courtyard 🔥'));
+
+    // Signed-out user sees NO gear and NO clickable rename trigger
+    cleanup();
+    const guestView = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user: null,
+        ownedParcelIds: [],
+        config: {},
+        location: { lat: 37.775, lng: -122.419 },
+        areaFilterMode: 'nearby',
+        mapParcels: parcels,
+        displayedMapSculptures: [],
+        areaSculpturesSorted: [],
+        onManageLand: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.equal(guestView.queryAllByTestId('land-manage-gear-btn').length, 0);
+    assert.equal(guestView.queryAllByTestId('land-title-edit-trigger').length, 0);
+    cleanup();
+  });
 });

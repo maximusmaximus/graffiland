@@ -589,3 +589,48 @@ export function computeClosestLandsPerimeterFit({
     }
   };
 }
+
+/**
+ * Determines whether a land parcel belongs to the currently authenticated user.
+ * Checks explicit owned parcel IDs (from `/api/lands/mine`), account IDs (`ownerSub`,
+ * `stewardSub`, `claimedBy`), and linked wallet addresses (case-insensitive).
+ * Always returns `false` when no user is signed in.
+ * @param {any} land
+ * @param {{ user?: any, ownedParcelIds?: string[] }} [options]
+ * @returns {boolean}
+ */
+export function isLandOwnedByUser(land, { user = null, ownedParcelIds = [] } = {}) {
+  if (!user?.id || !land?.parcelId) return false;
+
+  const pid = String(land.parcelId).trim().toUpperCase();
+  if (
+    Array.isArray(ownedParcelIds) &&
+    ownedParcelIds.some((id) => String(id || '').trim().toUpperCase() === pid)
+  ) {
+    return true;
+  }
+
+  const uid = String(user.id).trim();
+  const ownerSubs = [land.ownerSub, land.stewardSub, land.claimedBy]
+    .filter(Boolean)
+    .map((v) => String(v).trim());
+  if (ownerSubs.includes(uid)) {
+    return true;
+  }
+
+  const userWallets = new Set(
+    [user.walletAddress, user.customPayoutAddress, user.activeMintRecipient]
+      .filter(Boolean)
+      .map((a) => String(a).trim().toLowerCase())
+  );
+  if (userWallets.size > 0) {
+    const landWallets = [land.firstClaimantAddress, land.ownerAddress, land.stewardAddress]
+      .filter(Boolean)
+      .map((a) => String(a).trim().toLowerCase());
+    if (landWallets.some((w) => userWallets.has(w))) {
+      return true;
+    }
+  }
+
+  return false;
+}
