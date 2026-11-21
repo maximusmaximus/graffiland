@@ -20,12 +20,14 @@ function detectInitialViewportTab() {
 export default function InfoTermsModal({
   config,
   user,
+  initialTab = 'guide',
   onUserUpdate,
+  onOpenProfile = null,
   onLogout,
   onRequestLogin,
   onClose
 }) {
-  const [tab, setTab] = useState('guide');
+  const [tab, setTab] = useState(initialTab);
   const [viewportGuide, setViewportGuide] = useState(detectInitialViewportTab);
   const [payoutInput, setPayoutInput] = useState(user?.customPayoutAddress || '');
   const [savingPayout, setSavingPayout] = useState(false);
@@ -384,10 +386,38 @@ export default function InfoTermsModal({
             ) : (
               <>
                 <div className="card">
-                  <div style={{ fontWeight: 700 }}>{user.name}</div>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {user.email}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        {user.name}{' '}
+                        {user.username && (
+                          <span className="badge teal" style={{ fontSize: 11, marginLeft: 4 }}>
+                            @{user.username}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        {user.email}
+                      </div>
+                    </div>
+                    {onOpenProfile && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => {
+                          onClose?.();
+                          onOpenProfile();
+                        }}
+                      >
+                        <XeroIcon emoji="👤" size={13} /> Edit Profile &amp; Public Page
+                      </button>
+                    )}
                   </div>
+                  {user.bio && (
+                    <div style={{ marginTop: 8, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.4 }}>
+                      {user.bio}
+                    </div>
+                  )}
                   <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
                     Embedded Robinhood Chain Wallet:
                   </div>

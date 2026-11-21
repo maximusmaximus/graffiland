@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { parseParcelParamFromLocation } from '../../../shared/landVolume.mjs';
+import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
 import {
   loadBoolPreference,
@@ -19,6 +20,7 @@ import { useVoxelBrush } from '../hooks/useVoxelBrush.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
+import ProfileModal from './ProfileModal.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
 import SculptureModal from './SculptureModal.jsx';
 import {
@@ -79,7 +81,11 @@ export default function MobileStudio({
   // Studio shell & UI state
   const [dockOpen, setDockOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [infoInitialTab, setInfoInitialTab] = useState('guide');
   const [loginOpen, setLoginOpen] = useState(false);
+  const [profileHandle, setProfileHandle] = useState(() =>
+    parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
+  );
   const [tutorialOpen, setTutorialOpen] = useState(
     () => !loadBoolPreference(TUTORIAL_SEEN_KEY, false)
   );
@@ -748,7 +754,11 @@ export default function MobileStudio({
           quickSculpt={quickSculpt}
           onToggleQuickSculpt={handleToggleQuickSculpt}
           onOpenTutorial={() => setTutorialOpen(true)}
-          onOpenInfo={() => setInfoOpen(true)}
+          onOpenInfo={() => {
+            setInfoInitialTab('guide');
+            setInfoOpen(true);
+          }}
+          onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
           hasOwnedLand={lands.hasOwnedLand}
           ownedLandCount={lands.ownedLandCount}
           onOpenLandManage={() => {
@@ -1086,6 +1096,9 @@ export default function MobileStudio({
           focusParcelTick={ar.mapFocusParcelTick}
           onSelectParcel={ar.focusMapParcel}
           onSelectSculpture={ar.setMapSelectedSculpture}
+          onOpenProfile={(handle) => {
+            if (handle) setProfileHandle(handle);
+          }}
           onShowHint={showTemporaryHint}
           onClose={() => ar.setMapOpen(false)}
         />
@@ -1146,11 +1159,65 @@ export default function MobileStudio({
         />
       )}
 
+      {profileHandle && (
+        <ProfileModal
+          handle={profileHandle}
+          user={user}
+          config={config}
+          onUserUpdate={(nextUser) => {
+            if (
+              profileHandle &&
+              user?.username &&
+              profileHandle.toLowerCase() === user.username.toLowerCase() &&
+              nextUser?.username
+            ) {
+              setProfileHandle(nextUser.username);
+            }
+            onUserUpdate(nextUser);
+          }}
+          onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
+          onOpenLand={(land) => {
+            if (!land?.parcelId) return;
+            setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
+            api
+              .getLandDetail(land.parcelId)
+              .then((res) => {
+                setParcelVisit({
+                  loading: false,
+                  parcel: res?.parcel || null,
+                  sculptures: res?.sculptures || [],
+                  error: res?.parcel ? '' : 'Land parcel not found.'
+                });
+              })
+              .catch((err) => {
+                setParcelVisit({
+                  loading: false,
+                  parcel: null,
+                  sculptures: [],
+                  error: err?.message || 'Could not load parcel.'
+                });
+              });
+          }}
+          onOpenWalletSettings={() => {
+            setInfoInitialTab('account');
+            setInfoOpen(true);
+          }}
+          onLogout={() => {
+            onLogout();
+            setProfileHandle('');
+          }}
+          onShowHint={showTemporaryHint}
+          onClose={() => setProfileHandle('')}
+        />
+      )}
+
       {infoOpen && (
         <InfoTermsModal
           config={config}
           user={user}
+          initialTab={infoInitialTab}
           onUserUpdate={onUserUpdate}
+          onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
           onLogout={() => {
             onLogout();
             setInfoOpen(false);
@@ -1159,7 +1226,10 @@ export default function MobileStudio({
             setInfoOpen(false);
             setLoginOpen(true);
           }}
-          onClose={() => setInfoOpen(false)}
+          onClose={() => {
+            setInfoOpen(false);
+            setInfoInitialTab('guide');
+          }}
         />
       )}
 

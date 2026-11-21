@@ -27,6 +27,11 @@ import {
 } from '../shared/agentQuestService.mjs';
 import { searchLocations } from '../shared/geocodeService.mjs';
 import {
+  checkUsernameAvailability,
+  getPublicProfile,
+  updateUserProfile
+} from '../shared/profileService.mjs';
+import {
   createMarketplaceListing,
   executeMarketplacePurchase,
   getEconomySplitsSummary,
@@ -364,6 +369,69 @@ export function createAppServer(serverOptions = {}) {
 
   app.get('/api/auth/me', requireAuth, (req, res) => {
     res.json({ user: sanitizeUser(req.user) });
+  });
+
+  // User Profiles: live username availability validation, profile update (username + bio), and public profiles
+  app.get('/api/profile/check-username', async (req, res) => {
+    try {
+      const authUser = getAuthUserFromRequest(req);
+      const result = await checkUsernameAvailability(chatDb, {
+        username: String(req.query?.username || ''),
+        excludeUserId: authUser?.id || ''
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Username check failed' });
+    }
+  });
+
+  app.get('/api/profile/me', requireAuth, async (req, res) => {
+    try {
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const pub = await getPublicProfile(chatDb, {
+        identifier: req.user.id,
+        origin,
+        pathname: '/'
+      });
+      res.json({ user: sanitizeUser(req.user), ...pub });
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to load profile' });
+    }
+  });
+
+  const handleProfileSave = async (req, res) => {
+    try {
+      const updated = await updateUserProfile(chatDb, {
+        user: req.user,
+        username: req.body?.username,
+        bio: req.body?.bio
+      });
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const pub = await getPublicProfile(chatDb, {
+        identifier: updated.id,
+        origin,
+        pathname: '/'
+      });
+      res.json({ user: sanitizeUser(updated), ...pub });
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to save profile' });
+    }
+  };
+  app.patch('/api/profile', requireAuth, handleProfileSave);
+  app.post('/api/profile', requireAuth, handleProfileSave);
+
+  app.get('/api/profiles/:handle', async (req, res) => {
+    try {
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const pub = await getPublicProfile(chatDb, {
+        identifier: decodeURIComponent(req.params.handle || ''),
+        origin,
+        pathname: '/'
+      });
+      res.json(pub);
+    } catch (err) {
+      res.status(err?.statusCode || 404).json({ error: err.message || 'Profile not found' });
+    }
   });
 
   app.post('/api/wallet/payout', requireAuth, (req, res) => {

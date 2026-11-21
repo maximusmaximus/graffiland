@@ -614,7 +614,7 @@ export default function SculptureModal({
             <XeroIcon emoji="🧊" size={24} />
             {sculpture.title}
           </h2>
-          <button className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
             <XeroIcon emoji="❌" size={16} />
           </button>
         </div>

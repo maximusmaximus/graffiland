@@ -386,12 +386,14 @@ export async function getDualLeaderboards(db, { limit = 25 } = {}) {
   const humanRows = await db.all(
     `SELECT s.creator_sub AS userId,
             MAX(s.creator_name) AS name,
+            MAX(u.username) AS username,
             MAX(s.recipient_address) AS walletAddress,
             COUNT(*) AS sculptureCount,
             COUNT(DISTINCT s.parcel_id) AS parcelsVisited,
             COALESCE(SUM(qc.awakened_parcel), 0) AS landsAwakened,
             COALESCE(SUM(qc.xp_awarded), COUNT(*) * 100) AS totalXp
      FROM sculptures s
+     LEFT JOIN users u ON u.id = s.creator_sub
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
      LEFT JOIN land_quest_completions qc ON qc.sculpture_id = s.id
      WHERE s.hidden = 0
@@ -415,6 +417,7 @@ export async function getDualLeaderboards(db, { limit = 25 } = {}) {
     humanArtists: (humanRows || []).map((r) => ({
       userId: r.userId,
       name: r.name || 'Street Artist',
+      username: r.username || '',
       walletAddress: r.walletAddress || '',
       sculptureCount: Number(r.sculptureCount || 0),
       parcelsVisited: Number(r.parcelsVisited || 0),

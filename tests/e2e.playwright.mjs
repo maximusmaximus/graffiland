@@ -735,11 +735,18 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(agentPrompt.includes('5,000 m²'));
     assert.ok((agentPrompt.match(/GLAND-[0-9A-Z]+/g) || []).length >= 2);
 
-    // Sign in and mint the first square from Desktop
+    // Sign in, complete mandatory username onboarding, and mint the first square from Desktop
     const initialOwned = Number(await stage.getAttribute('data-owned-count'));
     await page.getByRole('button', { name: /Sign In/i }).first().click();
     await page.getByRole('button', { name: /Continue with Google/i }).click();
-    await page.waitForSelector('.modal-backdrop', { state: 'detached' });
+    await page.waitForSelector('[data-testid="username-onboarding-modal"]', { timeout: 10000 });
+    await page.getByLabel('Choose username').fill('street_voxel_e2e');
+    await page.waitForSelector('[data-testid="onboarding-username-status"]:has-text("available")', {
+      timeout: 5000
+    });
+    await page.locator('[data-testid="onboarding-save-username-btn"]').click();
+    await page.waitForSelector('[data-testid="username-onboarding-modal"]', { state: 'detached' });
+    await page.waitForSelector('[data-testid="desktop-profile-btn"]:has-text("@street_voxel_e2e")');
 
     await page.getByRole('button', { name: /Mint This Land/i }).click();
     await page.waitForSelector('text=/Minted GLAND-/i');
@@ -877,6 +884,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ devProfile: { email: 'mobile-pair-e2e@graffiland.test', name: 'Mobile Owner' } })
     }).then((r) => r.json());
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({ username: 'mobile_owner', bio: 'Mobile AR creator' })
+    });
     const ownerClaim = await fetch(`${baseUrl}/api/lands/claim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
@@ -1034,7 +1046,92 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     );
     assert.ok(scModalZ >= 2000);
 
+    // Close modal & map, then open Mobile Profile pill (@mobile_owner) and verify bio + public land/action links
+    await hubPage.locator('.modal-backdrop').getByRole('button', { name: /Close/i }).first().click();
+    await hubPage.getByRole('button', { name: /Close map/i }).click();
+    await hubPage.locator('[data-testid="mobile-profile-btn"]').click();
+    await hubPage.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
+    assert.equal(await hubPage.locator('[data-testid="profile-handle"]').textContent(), '@mobile_owner');
+    assert.ok((await hubPage.locator('[data-testid="profile-bio"]').textContent()).includes('Mobile AR creator'));
+    assert.ok((await hubPage.locator('[data-testid="profile-land-public-link"]').count()) >= 1);
+
     assert.deepEqual(hubErrors, []);
     await hubCtx.close();
+  });
+
+  test('Onboarding requires unique username, profile allows changing username + bio with collision validation, and ?u= public profile links lands & actions', async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await context.addInitScript(() => {
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+    });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Sign In/i }).first().click();
+    await page.getByPlaceholder('you@gmail.com').fill('maya-profile-e2e@graffiland.test');
+    await page.getByPlaceholder('Your artist name').fill('Maya Profile');
+    await page.getByRole('button', { name: /Continue with Google/i }).click();
+
+    // Onboarding modal must require a unique username and reject an already-taken handle
+    await page.waitForSelector('[data-testid="username-onboarding-modal"]', { timeout: 10000 });
+    await page.getByLabel('Choose username').fill('street_voxel_e2e');
+    await page.waitForSelector('[data-testid="onboarding-username-status"]:has-text("already taken")', {
+      timeout: 5000
+    });
+    assert.equal(
+      await page.locator('[data-testid="onboarding-save-username-btn"]').isDisabled(),
+      true
+    );
+
+    // Choose a unique handle + bio and save
+    await page.getByLabel('Choose username').fill('maya_skyline');
+    await page.getByLabel('Profile bio').fill('3D street artist in SF');
+    await page.waitForSelector('[data-testid="onboarding-username-status"]:has-text("available")', {
+      timeout: 5000
+    });
+    await page.locator('[data-testid="onboarding-save-username-btn"]').click();
+    await page.waitForSelector('[data-testid="username-onboarding-modal"]', { state: 'detached' });
+
+    // Open own profile, edit username & bio, verify collision check, then save rename
+    await page.locator('[data-testid="desktop-profile-btn"]').click();
+    await page.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
+    assert.equal(await page.locator('[data-testid="profile-handle"]').textContent(), '@maya_skyline');
+    await page.locator('[data-testid="profile-edit-btn"]').click();
+    await page.getByLabel('Username').fill('mobile_owner');
+    await page.waitForSelector('[data-testid="profile-username-status"]:has-text("already taken")', {
+      timeout: 5000
+    });
+    assert.equal(await page.locator('[data-testid="profile-save-btn"]').isDisabled(), true);
+
+    await page.getByLabel('Username').fill('maya_cyber');
+    await page.getByLabel('Bio').fill('Neon sculptures & AR landmarks');
+    await page.waitForSelector('[data-testid="profile-username-status"]:has-text("available")', {
+      timeout: 5000
+    });
+    await page.locator('[data-testid="profile-save-btn"]').click();
+    await page.waitForSelector('[data-testid="profile-handle"]:has-text("@maya_cyber")', {
+      timeout: 10000
+    });
+    await page.waitForSelector('[data-testid="desktop-profile-btn"]:has-text("@maya_cyber")');
+    assert.deepEqual(pageErrors, []);
+    await context.close();
+
+    // Logged-out public visitor opens ?u=mobile_owner directly -> sees bio, public land links & actions
+    const pubCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const pubPage = await pubCtx.newPage();
+    const pubErrors = [];
+    pubPage.on('pageerror', (err) => pubErrors.push(err.message));
+
+    await pubPage.goto(`${baseUrl}/?u=mobile_owner`, { waitUntil: 'networkidle' });
+    await pubPage.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
+    assert.equal(await pubPage.locator('[data-testid="profile-handle"]').textContent(), '@mobile_owner');
+    assert.ok((await pubPage.locator('[data-testid="profile-bio"]').textContent()).includes('Mobile AR creator'));
+    assert.ok((await pubPage.locator('[data-testid="profile-land-public-link"]').count()) >= 1);
+    await pubPage.getByRole('tab', { name: /Actions/i }).click();
+    assert.ok((await pubPage.locator('[data-testid="profile-action-link"]').count()) >= 1);
+    assert.deepEqual(pubErrors, []);
+    await pubCtx.close();
   });
 });

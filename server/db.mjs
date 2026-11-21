@@ -17,6 +17,9 @@ export function getDb() {
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL,
       name TEXT NOT NULL,
+      username TEXT NOT NULL DEFAULT '',
+      bio TEXT NOT NULL DEFAULT '',
+      username_updated_at TEXT NOT NULL DEFAULT '',
       picture TEXT DEFAULT '',
       wallet_address TEXT NOT NULL,
       encrypted_wallet_json TEXT NOT NULL,
@@ -657,6 +660,26 @@ export function getDb() {
     db.exec('ALTER TABLE land_settings ADD COLUMN freeze_placements INTEGER NOT NULL DEFAULT 0');
   } catch {
     // Column already exists on upgraded SQLite DBs
+  }
+
+  for (const ddl of [
+    "ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN username_updated_at TEXT NOT NULL DEFAULT ''"
+  ]) {
+    try {
+      db.exec(ddl);
+    } catch {
+      // Column already exists on upgraded SQLite DBs
+    }
+  }
+
+  try {
+    db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username)) WHERE username != ''"
+    );
+  } catch {
+    // Ignore if index already exists
   }
 
   clearUnprovenPayoutAddresses(db);
