@@ -60,6 +60,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
         termsAccepted: true,
         location: { lat: 37.7749, lng: -122.4194, altitude: 18, accuracy: 5 },
         proofOfLocation: {
+          cameraFrames: 6,
+          gpsSamples: [
+            { lat: 37.7749, lng: -122.4194, t: Date.now() - 3000 },
+            { lat: 37.77491, lng: -122.41941, t: Date.now() - 500 }
+          ],
           frameHashes: ['e1', 'e2', 'e3', 'e4'],
           gyroSamples: [{ alpha: 1, beta: 2, gamma: 3 }, { alpha: 11, beta: 5, gamma: 2 }],
           flowCorrelation: 0.85,
