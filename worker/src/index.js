@@ -220,16 +220,51 @@ function getRuntimeConfig(env) {
       '0x000000000000000000000000000000000000dEaD',
     adminEmails,
     googleClientId: env.GOOGLE_CLIENT_ID || '',
-    allowDevGoogleAuth: env.ALLOW_DEV_GOOGLE_AUTH !== 'false',
+    // Opt-in only: a missing var must never enable passwordless dev logins.
+    allowDevGoogleAuth: env.ALLOW_DEV_GOOGLE_AUTH === 'true',
     publicUrl: env.PUBLIC_URL || 'https://maximusmaximus.github.io/graffiland',
     ipfsGateway: env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs',
     sessionSecret: env.SESSION_SECRET || 'graffiland-worker-dev-session-secret',
     walletEncryptionKey: env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-wallet-key',
     pinMasterKek:
       env.PIN_MASTER_KEK || env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-pin-kek',
-    relayerDailyQuota: Number(env.RELAYER_DAILY_QUOTA || 25)
+    relayerDailyQuota: Number(env.RELAYER_DAILY_QUOTA || 25),
+    missingSecrets: ['SESSION_SECRET', 'WALLET_ENCRYPTION_KEY'].filter((k) => !env[k]),
+    isLocalDev: isLocalDevUrl(env.PUBLIC_URL)
   };
 }
+
+function isLocalDevUrl(publicUrl) {
+  try {
+    const host = new URL(String(publicUrl || '')).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
+
+function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP') || 'anon';
+}
+
+const SAFE_PREVIEW_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_PREVIEW_DATA_URL_CHARS = 450000;
+// Content types the KV IPFS gateway may serve inline; anything else is a download.
+// SVG is allowed because the gateway sends CSP sandbox + default-src 'none' (no script).
+const SAFE_GATEWAY_MIME = new Set([
+  'image/svg+xml',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/json',
+  'model/gltf-binary',
+  'model/gltf+json',
+  'model/obj',
+  'model/stl',
+  'application/x-ply',
+  'application/octet-stream'
+]);
 
 function sanitizeUser(row) {
   if (!row) return null;
@@ -314,12 +349,18 @@ async function verifyGooglePayload(body, cfg) {
 }
 
 function decodePreviewDataUrl(previewDataUrl) {
-  if (typeof previewDataUrl === 'string' && previewDataUrl.startsWith('data:image/')) {
+  if (
+    typeof previewDataUrl === 'string' &&
+    previewDataUrl.startsWith('data:image/') &&
+    previewDataUrl.length <= MAX_PREVIEW_DATA_URL_CHARS
+  ) {
     const idx = previewDataUrl.indexOf(',');
-    if (idx !== -1) {
-      const header = previewDataUrl.slice(0, idx);
+    const header = idx !== -1 ? previewDataUrl.slice(0, idx) : '';
+    const mime = (header.match(/data:([^;]+)/)?.[1] || '').toLowerCase();
+    // Raster only: an attacker-supplied image/svg+xml preview would be served from the API
+    // origin as an active document.
+    if (idx !== -1 && SAFE_PREVIEW_MIME.has(mime) && /;base64$/i.test(header)) {
       const b64 = previewDataUrl.slice(idx + 1);
-      const mime = header.match(/data:([^;]+)/)?.[1] || 'image/png';
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -799,6 +840,19 @@ export default {
     const pathname = url.pathname;
     const cfg = getRuntimeConfig(env);
 
+    // Never sign sessions or encrypt custodial keys with the public dev fallbacks in a deployed
+    // Worker: anyone could forge JWTs for any account.
+    if (
+      cfg.missingSecrets.length > 0 &&
+      !cfg.isLocalDev &&
+      pathname.startsWith('/api/') &&
+      pathname !== '/api/health' &&
+      pathname !== '/api/config'
+    ) {
+      logStructured('error', 'worker_missing_secrets', { missing: cfg.missingSecrets });
+      return jsonResponse({ error: 'Service misconfigured. Please try again later.' }, 503, request);
+    }
+
     // LLM & A2A Agent Discovery Manifests
     if (pathname === '/llms.txt' && request.method === 'GET') {
       return new Response(buildLlmsTxt(url.origin), {
@@ -1205,6 +1259,12 @@ export default {
     // Zero-OAuth Agent Auth, Scouting, Free Claims, Quests & 5%/3%/2% Marketplace
     if (pathname === '/api/agents/challenge' && request.method === 'POST') {
       try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'agent_challenge',
+          key: clientIp(request),
+          windowSec: 60,
+          maxRequests: 20
+        });
         const body = await request.json().catch(() => ({}));
         const out = await issueAgentAuthChallenge(d1Adapter, {
           walletAddress: body?.walletAddress
@@ -1217,6 +1277,13 @@ export default {
 
     if (pathname === '/api/agents/register' && request.method === 'POST') {
       try {
+        // Each new wallet gets free dormant-claim slots; throttle bulk wallet registration.
+        await checkRateLimit(d1Adapter, {
+          scope: 'agent_register',
+          key: clientIp(request),
+          windowSec: 3600,
+          maxRequests: 10
+        });
         const body = await request.json().catch(() => ({}));
         const out = await registerOrLoginAgentWallet(d1Adapter, {
           walletAddress: body?.walletAddress,
@@ -1283,6 +1350,12 @@ export default {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
       try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'land_claim',
+          key: user.id,
+          windowSec: 60,
+          maxRequests: 10
+        });
         const body = await request.json().catch(() => ({}));
         const out = await claimDormantLand(d1Adapter, {
           agentUser: user,
@@ -1329,6 +1402,13 @@ export default {
 
     if (pathname === '/api/geocode/search' && request.method === 'GET') {
       try {
+        // Upstream Nominatim policy is ~1 req/s; don't let one client burn it for everyone.
+        await checkRateLimit(d1Adapter, {
+          scope: 'geocode',
+          key: clientIp(request),
+          windowSec: 60,
+          maxRequests: 30
+        });
         const out = await searchLocations({
           query: url.searchParams.get('q') || '',
           lat: url.searchParams.has('lat') ? Number(url.searchParams.get('lat')) : null,
@@ -1337,7 +1417,11 @@ export default {
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
-        return jsonResponse({ error: err.message || 'Location search failed' }, 400, request);
+        return jsonResponse(
+          { error: err.message || 'Location search failed' },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
@@ -1575,6 +1659,16 @@ export default {
     if (pathname === '/api/models/validate-url' && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'model_url',
+          key: user.id,
+          windowSec: 60,
+          maxRequests: 10
+        });
+      } catch (err) {
+        return jsonResponse({ error: err.message }, err?.statusCode || 429, request);
+      }
       const body = await request.json().catch(() => ({}));
       const modelUrl = String(body?.modelUrl || body?.url || '').trim();
       const formatHint = String(body?.modelFormat || body?.format || '').trim();
@@ -2714,11 +2808,14 @@ export default {
       const bin = atob(value);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const storedType = String(metadata?.contentType || '').toLowerCase();
       return new Response(bytes, {
         status: 200,
         headers: {
-          'Content-Type': metadata?.contentType || 'application/octet-stream',
+          'Content-Type': SAFE_GATEWAY_MIME.has(storedType) ? storedType : 'application/octet-stream',
           'Cache-Control': 'public, max-age=31536000, immutable',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "default-src 'none'; sandbox",
           ...corsHeaders(request)
         }
       });

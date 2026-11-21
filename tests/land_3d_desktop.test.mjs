@@ -23,6 +23,7 @@ import { buildSculptures3DGeoJson } from '../client/src/utils/sculpture3dGeoJson
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-3d-land-'));
 process.env.GRAFFILAND_DB_PATH = path.join(testTmpDir, 'land3d.sqlite');
 process.env.GRAFFILAND_IPFS_DIR = path.join(testTmpDir, 'ipfs');
+process.env.GRAFFILAND_ALLOW_PRIVATE_MODEL_HOSTS = '1';
 process.env.PINATA_JWT = '';
 process.env.ROBINHOOD_CONTRACT_ADDRESS = '';
 process.env.ROBINHOOD_RELAYER_PRIVATE_KEY = '';
