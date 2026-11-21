@@ -70,8 +70,20 @@ function EmojiFieldBase({
         setCaret(null);
       }
     };
+    const onScroll = (e) => {
+      if (!rootRef.current) return;
+      if (e?.target && rootRef.current.contains(e.target)) return;
+      const rect = rootRef.current.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > (window.innerHeight || 800)) {
+        setCaret(null);
+      }
+    };
     document.addEventListener('pointerdown', onOutside);
-    return () => document.removeEventListener('pointerdown', onOutside);
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('pointerdown', onOutside);
+      document.removeEventListener('scroll', onScroll, true);
+    };
   }, [isOpen]);
 
   const emitChange = useCallback(
