@@ -742,9 +742,10 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const afterOwned = Number(await stage.getAttribute('data-owned-count'));
     assert.equal(afterOwned, initialOwned + 1);
 
-    // After minting: glowing "+" button appears on the minted land (on map AND in Owned Plots) -> opens Add 3D Item prompt & Freeze Land!
+    // After minting: glowing "+" button appears on the minted land (on map AND in Owned Plots) -> click map "+" directly!
     await page.waitForSelector('.map3d-owned-plus-btn', { timeout: 6000 });
-    await page.locator('.land-owned-plus-btn').first().click();
+    await page.waitForSelector('.land-owned-plus-btn', { timeout: 6000 });
+    await page.locator('.map3d-owned-plus-btn').first().click();
     await page.waitForSelector('.add-item-modal-card');
     await page.getByRole('radio', { name: /\.GLB 3D Model/i }).click();
     const itemPromptVal = await page.getByLabel('Add 3D item agent prompt preview').inputValue();

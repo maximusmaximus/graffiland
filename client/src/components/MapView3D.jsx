@@ -1185,7 +1185,7 @@ export default function MapView3D({
         onSelectSculpture?.(sc);
       });
 
-      const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+      const marker = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -32] })
         .setLngLat([lng, lat])
         .setPopup(popup)
         .addTo(map);
@@ -1249,7 +1249,7 @@ export default function MapView3D({
       badge.textContent = p.customName || pid;
 
       wrap.append(plusBtn, badge);
-      const mk = new maplibregl.Marker({ element: wrap, anchor: 'center' })
+      const mk = new maplibregl.Marker({ element: wrap, anchor: 'left', offset: [28, 4] })
         .setLngLat([lng, lat])
         .addTo(map);
       ownedMarkersRef.current.push(mk);
