@@ -141,8 +141,10 @@ import {
 } from '../shared/landmarkService.mjs';
 import {
   deleteUserPasskey,
+  issuePasskeyAssertionOptions,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
+  verifyAndConsumePasskeyAssertionChallenge,
   verifyAndStorePasskeyRegistration
 } from '../shared/passkeyService.mjs';
 import {
@@ -339,15 +341,59 @@ export function createAppServer(serverOptions = {}) {
     res.json({ user: sanitizeUser(updated) });
   });
 
-  app.get('/api/wallet/export', requireAuth, (req, res) => {
+  app.get('/api/wallet/export', requireAuth, (_req, res) => {
+    res.status(403).json({
+      error: 'Hardware Passkey verification is required to export your embedded wallet key.',
+      code: 'PASSKEY_REQUIRED'
+    });
+  });
+
+  app.post('/api/wallet/export/challenge', requireAuth, async (req, res) => {
     try {
+      await checkRateLimit(chatDb, {
+        scope: 'wallet_export',
+        key: req.user.id,
+        windowSec: 300,
+        maxRequests: 10
+      });
+      const options = await issuePasskeyAssertionOptions(chatDb, {
+        user: req.user,
+        purpose: 'wallet_export',
+        rpId: getRequestRpId(req)
+      });
+      res.json(options);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message, ...(err?.extra || {}) });
+    }
+  });
+
+  app.post('/api/wallet/export', requireAuth, async (req, res) => {
+    try {
+      await checkRateLimit(chatDb, {
+        scope: 'wallet_export',
+        key: req.user.id,
+        windowSec: 300,
+        maxRequests: 10
+      });
+      await verifyAndConsumePasskeyAssertionChallenge(chatDb, {
+        user: req.user,
+        challenge: req.body?.challenge,
+        assertion: req.body?.assertion,
+        purpose: 'wallet_export',
+        expectedRpId: getRequestRpId(req)
+      });
       const privateKey = decryptPrivateKey(req.user.encrypted_wallet_json);
+      res.set('Cache-Control', 'no-store');
       res.json({
         walletAddress: req.user.wallet_address,
         privateKey
       });
-    } catch {
-      res.status(500).json({ error: 'Failed to export embedded wallet' });
+    } catch (err) {
+      const status = err?.statusCode || 500;
+      res.status(status).json({
+        error: err?.message || 'Failed to export embedded wallet',
+        ...(err?.extra || {})
+      });
     }
   });
 

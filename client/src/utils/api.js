@@ -44,7 +44,10 @@ export const api = {
   me: () => request('/api/auth/me'),
   setPayoutAddress: (address) =>
     request('/api/wallet/payout', { method: 'POST', body: JSON.stringify({ address }) }),
-  exportWalletKey: () => request('/api/wallet/export'),
+  getWalletExportChallenge: () =>
+    request('/api/wallet/export/challenge', { method: 'POST' }),
+  exportWalletKey: (payload) =>
+    request('/api/wallet/export', { method: 'POST', body: JSON.stringify(payload) }),
   listSculptures: (params = {}) => {
     const qs = new URLSearchParams();
     if (params.lat !== undefined && params.lng !== undefined) {

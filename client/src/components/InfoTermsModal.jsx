@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
 import { api } from '../utils/api.js';
+import {
+  isWebAuthnSupported,
+  registerHardwarePasskey,
+  requestPasskeyAssertion
+} from '../utils/passkeyClient.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -24,6 +29,8 @@ export default function InfoTermsModal({
   const [savingPayout, setSavingPayout] = useState(false);
   const [exportedKey, setExportedKey] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
+  const [needsPasskey, setNeedsPasskey] = useState(false);
 
   async function savePayout() {
     setSavingPayout(true);
@@ -39,13 +46,41 @@ export default function InfoTermsModal({
     }
   }
 
-  async function revealKey() {
+  async function enrollPasskeyForExport() {
+    setExportBusy(true);
     setStatusMsg('');
     try {
-      const res = await api.exportWalletKey();
-      setExportedKey(res.privateKey);
+      await registerHardwarePasskey('Wallet Export Passkey');
+      setNeedsPasskey(false);
+      setStatusMsg('Passkey registered. Click Export Embedded Key to unlock.');
     } catch (err) {
       setStatusMsg(err.message);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function revealKey() {
+    setExportBusy(true);
+    setStatusMsg('');
+    try {
+      if (!isWebAuthnSupported()) {
+        throw new Error('Hardware Passkeys (WebAuthn) are required to export your wallet key.');
+      }
+      const ch = await api.getWalletExportChallenge();
+      setStatusMsg('Confirm with your device Passkey…');
+      const assertion = await requestPasskeyAssertion(ch.challenge, ch.allowCredentials || []);
+      const res = await api.exportWalletKey({ challenge: ch.challenge, assertion });
+      setExportedKey(res.privateKey);
+      setNeedsPasskey(false);
+      setStatusMsg('');
+    } catch (err) {
+      if (err?.data?.code === 'PASSKEY_REQUIRED') {
+        setNeedsPasskey(true);
+      }
+      setStatusMsg(err.message);
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -362,9 +397,19 @@ export default function InfoTermsModal({
                     >
                       <XeroIcon emoji="✅" size={15} /> Save Recipient
                     </button>
-                    <button type="button" className="btn" onClick={revealKey}>
+                    <button type="button" className="btn" disabled={exportBusy} onClick={revealKey}>
                       <XeroIcon emoji="🔑" size={15} /> Export Embedded Key
                     </button>
+                    {needsPasskey && (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={exportBusy}
+                        onClick={enrollPasskeyForExport}
+                      >
+                        <XeroIcon emoji="🔐" size={15} /> Register Passkey
+                      </button>
+                    )}
                   </div>
                   {statusMsg && (
                     <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>

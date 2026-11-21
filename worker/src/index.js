@@ -116,8 +116,10 @@ import {
 } from '../../shared/landmarkService.mjs';
 import {
   deleteUserPasskey,
+  issuePasskeyAssertionOptions,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
+  verifyAndConsumePasskeyAssertionChallenge,
   verifyAndStorePasskeyRegistration
 } from '../../shared/passkeyService.mjs';
 import {
@@ -1074,14 +1076,90 @@ export default {
     if (pathname === '/api/wallet/export' && request.method === 'GET') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      return jsonResponse(
+        {
+          error: 'Hardware Passkey verification is required to export your embedded wallet key.',
+          code: 'PASSKEY_REQUIRED'
+        },
+        403,
+        request
+      );
+    }
+
+    if (pathname === '/api/wallet/export/challenge' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'wallet_export',
+          key: user.id,
+          windowSec: 300,
+          maxRequests: 10
+        });
+        const options = await issuePasskeyAssertionOptions(d1Adapter, {
+          user,
+          purpose: 'wallet_export',
+          rpId: resolveWorkerRpId(request, url)
+        });
+        return jsonResponse(options, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Passkey challenge failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/wallet/export' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'wallet_export',
+          key: user.id,
+          windowSec: 300,
+          maxRequests: 10
+        });
+        const body = await request.json().catch(() => ({}));
+        const reqOrigin = request.headers.get('Origin') || '';
+        const allowedOrigins = reqOrigin
+          ? [cfg.publicUrl, reqOrigin]
+              .map((u) => {
+                try {
+                  return new URL(u).origin;
+                } catch {
+                  return '';
+                }
+              })
+              .filter(Boolean)
+          : [];
+        await verifyAndConsumePasskeyAssertionChallenge(d1Adapter, {
+          user,
+          challenge: body?.challenge,
+          assertion: body?.assertion,
+          purpose: 'wallet_export',
+          expectedRpId: resolveWorkerRpId(request, url),
+          allowedOrigins
+        });
         const privateKey = await decryptWalletPrivateKey(
           user.encrypted_wallet_json,
           cfg.walletEncryptionKey
         );
-        return jsonResponse({ walletAddress: user.wallet_address, privateKey }, 200, request);
-      } catch {
-        return jsonResponse({ error: 'Failed to decrypt embedded wallet' }, 500, request);
+        return new Response(JSON.stringify({ walletAddress: user.wallet_address, privateKey }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            ...corsHeaders(request)
+          }
+        });
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to export embedded wallet', ...(err?.extra || {}) },
+          err?.statusCode || 500,
+          request
+        );
       }
     }
 
