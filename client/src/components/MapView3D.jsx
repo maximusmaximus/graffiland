@@ -18,6 +18,10 @@ import { api } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
+  computeClosestLandsPerimeterFit,
+  formatSimpleLandLabel
+} from '../utils/landMapHelpers.js';
+import {
   computePrismScreenGeometry,
   pointInPolygon2D
 } from '../utils/map3dProjection.js';
@@ -446,7 +450,7 @@ export default function MapView3D({
   viewMode = 'isometric',
   autoSwitchedHint = false,
   userLocation = null,
-  focusArea = false,
+  focusArea: _focusArea = false,
   selectedSculptureId = '',
   initialView = null,
   config = null,
@@ -985,8 +989,10 @@ export default function MapView3D({
       });
     };
 
-    const onDragStart = () => {
-      userAdjustedRef.current = true;
+    const onDragStart = (ev) => {
+      if (ev?.originalEvent) {
+        userAdjustedRef.current = true;
+      }
     };
 
     map.on('style.load', onStyleLoad);
@@ -1130,27 +1136,43 @@ export default function MapView3D({
     }
   }, [viewMode]);
 
-  // Fit initial view cleanly to sculptures when no saved session view exists
+  // Fit initial view tightly to the perimeter of the closest available lands across the full width
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || userAdjustedRef.current || focusArea) return;
+    if (!map || userAdjustedRef.current) return;
+    const closestFit = computeClosestLandsPerimeterFit({
+      parcels,
+      sculptures,
+      location: userLocation
+    });
+    if (closestFit.boundsLngLat) {
+      map.fitBounds(closestFit.boundsLngLat, {
+        padding: { left: 18, right: 18, top: 68, bottom: 48 },
+        maxZoom: 19.2,
+        duration: 0,
+        bearing: map.getBearing(),
+        pitch: map.getPitch()
+      });
+      drawWireframes();
+      return;
+    }
     const valid = (sculptures || []).filter(
       (sc) => Number.isFinite(Number(sc.lat)) && Number.isFinite(Number(sc.lng))
     );
     if (valid.length === 1) {
-      map.jumpTo({ center: [Number(valid[0].lng), Number(valid[0].lat)], zoom: 17 });
+      map.jumpTo({ center: [Number(valid[0].lng), Number(valid[0].lat)], zoom: 17.5 });
     } else if (valid.length > 1) {
       const bounds = new maplibregl.LngLatBounds();
       for (const sc of valid) bounds.extend([Number(sc.lng), Number(sc.lat)]);
       map.fitBounds(bounds, {
-        padding: 60,
-        maxZoom: 17,
+        padding: { left: 18, right: 18, top: 68, bottom: 48 },
+        maxZoom: 19,
         duration: 0,
         bearing: map.getBearing(),
         pitch: map.getPitch()
       });
     }
-  }, [sculptures, focusArea]);
+  }, [parcels, sculptures, userLocation, drawWireframes]);
 
   // Render sculpture pin markers with XeroEmoji icons & Popup previews
   useEffect(() => {
@@ -1325,7 +1347,10 @@ export default function MapView3D({
 
       const badge = document.createElement('span');
       badge.className = 'map3d-owned-plus-tag';
-      badge.textContent = p.customName || pid;
+      badge.dataset.testid = 'map3d-land-label';
+      badge.dataset.parcelId = pid;
+      badge.textContent = formatSimpleLandLabel(p);
+      badge.title = p.customName ? `${p.customName} (${pid})` : pid;
 
       wrap.append(btnRow, badge);
       const mk = new maplibregl.Marker({ element: wrap, anchor: 'left', offset: [28, 4] })
@@ -2011,6 +2036,25 @@ export default function MapView3D({
     map.easeTo({ bearing: 0, duration: 300 });
   }
 
+  function handleFitClosestLands() {
+    const map = mapRef.current;
+    if (!map) return;
+    const closestFit = computeClosestLandsPerimeterFit({
+      parcels,
+      sculptures,
+      location: userLocation
+    });
+    if (!closestFit.boundsLngLat) return;
+    userAdjustedRef.current = false;
+    map.fitBounds(closestFit.boundsLngLat, {
+      padding: { left: 18, right: 18, top: 68, bottom: 48 },
+      maxZoom: 19.2,
+      duration: 500,
+      bearing: map.getBearing(),
+      pitch: map.getPitch()
+    });
+  }
+
   function handleCenterOnUser() {
     const map = mapRef.current;
     if (!map || !userLocation) return;
@@ -2146,6 +2190,17 @@ export default function MapView3D({
           >
             <XeroIcon emoji="🏔️" size={12} /> Terrain
           </button>
+          {parcels.length > 0 && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: '4px 9px', fontSize: 11.5 }}
+              onClick={handleFitClosestLands}
+              title="Zoom in full-width on the perimeter of the closest lands"
+            >
+              <XeroIcon emoji="🗺️" size={12} /> Fit Lands
+            </button>
+          )}
           {userLocation && (
             <button
               type="button"

@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   buildGoogleMapsLandUrl,
+  computeClosestLandsPerimeterFit,
+  extractParcelPerimeterPoints,
   formatDistanceMeters,
   formatLandDimensions,
   formatLandExpiration,
   formatSculptureAssetMeta,
+  formatSimpleLandLabel,
   groupNearestLandsWithSculptures
 } from '../client/src/utils/landMapHelpers.js';
 
@@ -189,5 +192,79 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(farUser.autoFallbackToAll, true);
     assert.equal(farUser.displayedLands.length, 4);
     assert.equal(farUser.displayedLands[0].parcelId, 'GLAND-MID');
+  });
+
+  test('computeClosestLandsPerimeterFit frames all perimeter corners of the closest lands cluster and formatSimpleLandLabel stays concise', () => {
+    assert.equal(formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: '' }, 0), '#1 9R1652PV');
+    assert.equal(
+      formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: 'Civic Neon Plaza' }, 1),
+      '#2 Civic Neon Plaza'
+    );
+    assert.equal(
+      formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: 'Very Long Sculpture Courtyard Name' }),
+      'Very Long Sculpture…'
+    );
+
+    const p1 = {
+      parcelId: 'GLAND-CLOSE1',
+      customName: 'Block A',
+      centerLat: 39.7276,
+      centerLng: -121.8384,
+      volume: {
+        centerLat: 39.7276,
+        centerLng: -121.8384,
+        corners: [
+          [-121.8388, 39.7276],
+          [-121.8384, 39.7279],
+          [-121.838, 39.7275],
+          [-121.8384, 39.7272]
+        ]
+      }
+    };
+    const p2 = {
+      parcelId: 'GLAND-CLOSE2',
+      customName: 'Block B',
+      centerLat: 39.7283,
+      centerLng: -121.8389,
+      volume: {
+        centerLat: 39.7283,
+        centerLng: -121.8389,
+        corners: [
+          [-121.8394, 39.7283],
+          [-121.8389, 39.7288],
+          [-121.8383, 39.7283],
+          [-121.8389, 39.7278]
+        ]
+      }
+    };
+    const pFar = {
+      parcelId: 'GLAND-TOKYO',
+      customName: 'Far Away Lot',
+      centerLat: 35.6762,
+      centerLng: 139.6503,
+      bounds: { sw: [35.676, 139.65], ne: [35.6764, 139.6506], center: [35.6762, 139.6503] }
+    };
+
+    assert.equal(extractParcelPerimeterPoints(p1).length, 4);
+
+    // Closest cluster from SF (223 km away) picks BOTH Chico parcels and excludes the distant Tokyo outlier
+    const fit = computeClosestLandsPerimeterFit({
+      parcels: [pFar, p1, p2],
+      location: { lat: 37.7749, lng: -122.4194 }
+    });
+    assert.deepEqual(
+      fit.clusterLands.map((l) => l.parcelId).sort(),
+      ['GLAND-CLOSE1', 'GLAND-CLOSE2']
+    );
+    assert.equal(fit.perimeterPoints.length, 8);
+    // Exact perimeter outer corners must define boundsLatLng
+    assert.deepEqual(fit.boundsLatLng, [
+      [39.7272, -121.8394],
+      [39.7288, -121.838]
+    ]);
+    assert.deepEqual(fit.boundsLngLat, [
+      [-121.8394, 39.7272],
+      [-121.838, 39.7288]
+    ]);
   });
 });

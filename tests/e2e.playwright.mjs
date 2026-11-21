@@ -1023,11 +1023,12 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const firstScText = await sculptureItems.first().textContent();
     assert.ok(/blocks|3D/i.test(firstScText || ''));
 
-    // Verify zero horizontal overflow on mobile 390px viewport and visible Leaflet map height
+    // Verify zero horizontal overflow on mobile 390px viewport, visible Leaflet map height, and simple land labels
     const mapMetrics = await hubPage.evaluate(() => ({
       scrollWidth: globalThis.document.documentElement.scrollWidth,
       leafletHeight:
-        globalThis.document.querySelector('.mobile-map-canvas .leaflet-container')?.clientHeight || 0
+        globalThis.document.querySelector('.mobile-map-canvas .leaflet-container')?.clientHeight || 0,
+      landLabelCount: globalThis.document.querySelectorAll('[data-testid="map-land-label"]').length
     }));
     assert.ok(
       mapMetrics.scrollWidth <= 391,
@@ -1036,6 +1037,10 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(
       mapMetrics.leafletHeight >= 150,
       `Expected visible mobile Leaflet map height >= 150px, got ${mapMetrics.leafletHeight}`
+    );
+    assert.ok(
+      mapMetrics.landLabelCount >= 2,
+      `Expected >= 2 simple land labels on mobile map, got ${mapMetrics.landLabelCount}`
     );
 
     // Open a nested sculpture in 3D modal and verify modal sits cleanly above map overlay

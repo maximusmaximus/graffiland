@@ -3,7 +3,21 @@ import 'leaflet/dist/leaflet.css';
 import React, { useEffect, useRef } from 'react';
 import xeroemoji from 'xeroemoji';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
+import {
+  computeClosestLandsPerimeterFit,
+  extractParcelPerimeterPoints,
+  formatSimpleLandLabel
+} from '../utils/landMapHelpers.js';
 import XeroIcon from './XeroIcon.jsx';
+
+function escapeHtml(raw) {
+  return String(raw || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 export default function MapView({
   sculptures = [],
@@ -37,6 +51,8 @@ export default function MapView({
     )
   );
   const suppressViewSaveRef = useRef(false);
+  const lastAutoBoundsRef = useRef(null);
+  const lastFilterSignatureRef = useRef('');
 
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
@@ -67,12 +83,15 @@ export default function MapView({
     const map = L.map(mapHostRef.current, {
       center: initialCenter,
       zoom: initialZoom,
-      zoomControl: true
+      zoomControl: true,
+      zoomSnap: 0.25,
+      zoomDelta: 0.5
     });
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 19
+      maxNativeZoom: 19,
+      maxZoom: 20
     }).addTo(map);
 
     const markUserAdjusted = () => {
@@ -99,14 +118,34 @@ export default function MapView({
     mapRef.current = map;
     layerRef.current = layer;
 
+    const refitAutoBounds = () => {
+      if (userAdjustedViewRef.current || !lastAutoBoundsRef.current) return;
+      suppressViewSaveRef.current = true;
+      try {
+        map.stop();
+        map.fitBounds(lastAutoBoundsRef.current, {
+          paddingTopLeft: [10, 26],
+          paddingBottomRight: [10, 28],
+          maxZoom: 19.5,
+          animate: false
+        });
+      } finally {
+        setTimeout(() => {
+          suppressViewSaveRef.current = false;
+        }, 60);
+      }
+    };
+
     const resizeTimer = setTimeout(() => {
-      map.invalidateSize();
+      map.invalidateSize({ animate: false, pan: false });
+      refitAutoBounds();
     }, 90);
 
     let observer = null;
     if (typeof ResizeObserver === 'function' && mapHostRef.current) {
       observer = new ResizeObserver(() => {
-        map.invalidateSize({ animate: false });
+        map.invalidateSize({ animate: false, pan: false });
+        refitAutoBounds();
       });
       observer.observe(mapHostRef.current);
     }
@@ -129,7 +168,7 @@ export default function MapView({
     if (!map || !layer) return;
 
     layer.clearLayers();
-    map.invalidateSize();
+    map.invalidateSize({ animate: false, pan: false });
 
     const hasUser =
       userLocation &&
@@ -181,9 +220,20 @@ export default function MapView({
       sculptures.find((s) => s.id === selectedSculptureId)?.parcelId ||
       '';
 
-    const coords = [];
+    const parcelList = Array.from(parcelMap.values());
+    const closestFit = computeClosestLandsPerimeterFit({
+      parcels: parcelList,
+      sculptures,
+      location: hasUser ? userLocation : null
+    });
+    const filterSig = `${focusArea ? '1' : '0'}:${parcelList.map((p) => p.parcelId).join(',')}`;
+    if (lastFilterSignatureRef.current && lastFilterSignatureRef.current !== filterSig) {
+      userAdjustedViewRef.current = false;
+    }
+    lastFilterSignatureRef.current = filterSig;
 
-    for (const p of parcelMap.values()) {
+    for (let idx = 0; idx < parcelList.length; idx++) {
+      const p = parcelList[idx];
       const parcelSculptures = sculptures.filter((s) => s.parcelId === p.parcelId);
       const isSelectedParcel =
         Boolean(effectiveSelectedParcelId) && p.parcelId === effectiveSelectedParcelId;
@@ -202,10 +252,10 @@ export default function MapView({
 
       const styleOpts = {
         color: strokeColor,
-        weight: isSelectedParcel ? 3 : isDormant ? 2.5 : 1.75,
+        weight: isSelectedParcel ? 3 : isDormant ? 2.5 : 2,
         dashArray: isDormant ? '6 4' : undefined,
         fillColor: strokeColor,
-        fillOpacity: isSelectedParcel ? 0.32 : isDormant ? 0.26 : 0.2
+        fillOpacity: isSelectedParcel ? 0.34 : isDormant ? 0.26 : 0.22
       };
 
       const corners = Array.isArray(p?.volume?.corners) ? p.volume.corners : [];
@@ -223,9 +273,6 @@ export default function MapView({
 
       const pLat = Number(p?.volume?.centerLat ?? p?.centerLat ?? p?.bounds?.center?.[0]);
       const pLng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
-      if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
-        coords.push([pLat, pLng]);
-      }
 
       const questTag = isDormant
         ? ' · 🔥 Needs First Spark (2x XP)'
@@ -238,27 +285,54 @@ export default function MapView({
       shape.bindTooltip(
         `${landTitle} (${scCount} sculpture${scCount === 1 ? '' : 's'}${questTag}${stewardTag})`
       );
-      if (onSelectParcelRef.current) {
-        shape.on('click', () => onSelectParcelRef.current?.(p));
-      } else if (parcelSculptures.length > 0 && onSelectSculpture) {
-        shape.on('click', () => onSelectSculpture(parcelSculptures[0]));
-      }
+      const handleParcelClick = () => {
+        if (onSelectParcelRef.current) {
+          onSelectParcelRef.current(p);
+        } else if (parcelSculptures.length > 0 && onSelectSculpture) {
+          onSelectSculpture(parcelSculptures[0]);
+        }
+      };
+      shape.on('click', handleParcelClick);
       shape.addTo(layer);
+
+      // Permanent simple label directly on each land parcel
+      if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
+        const simpleLabel = formatSimpleLandLabel(p, idx);
+        const stateCls = isSelectedParcel
+          ? 'is-selected'
+          : isFrozen
+          ? 'is-frozen'
+          : isDormant
+          ? 'is-dormant'
+          : '';
+        const labelIcon = L.divIcon({
+          className: 'map-land-simple-label-marker',
+          html: `<span class="map-land-simple-label ${stateCls}" data-testid="map-land-label" data-parcel-id="${escapeHtml(
+            p.parcelId
+          )}">${escapeHtml(simpleLabel)}</span>`,
+          iconSize: null
+        });
+        const labelMarker = L.marker([pLat, pLng], {
+          icon: labelIcon,
+          zIndexOffset: isSelectedParcel ? 500 : 200
+        });
+        labelMarker.on('click', handleParcelClick);
+        labelMarker.addTo(layer);
+      }
     }
 
     const pinUrl = xeroemoji.get('📍')?.svgUrl;
     const customIcon = L.divIcon({
       className: 'graffiland-map-pin',
       html: pinUrl
-        ? `<img src="${pinUrl}" width="28" height="28" style="filter: drop-shadow(0 2px 6px rgba(0,245,212,0.65));" />`
+        ? `<img src="${pinUrl}" width="26" height="26" style="filter: drop-shadow(0 2px 6px rgba(0,245,212,0.65));" />`
         : '📍',
-      iconSize: [28, 28],
-      iconAnchor: [14, 26]
+      iconSize: [26, 26],
+      iconAnchor: [13, 24]
     });
 
     for (const sc of sculptures) {
       if (!Number.isFinite(Number(sc.lat)) || !Number.isFinite(Number(sc.lng))) continue;
-      coords.push([Number(sc.lat), Number(sc.lng)]);
       const chainLinks = getSculptureChainLinks(sc, config);
       const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : 'n/a';
       const marker = L.marker([Number(sc.lat), Number(sc.lng)], { icon: customIcon });
@@ -269,16 +343,23 @@ export default function MapView({
       marker.addTo(layer);
     }
 
+    lastAutoBoundsRef.current = closestFit.boundsLatLng;
+
     if (!userAdjustedViewRef.current) {
       suppressViewSaveRef.current = true;
       try {
-        if (coords.length > 0) {
-          if (hasUser && focusArea) {
-            coords.push([Number(userLocation.lat), Number(userLocation.lng)]);
-          }
-          map.fitBounds(coords, { padding: [44, 44], maxZoom: 16 });
+        map.stop();
+        if (closestFit.boundsLatLng) {
+          map.fitBounds(closestFit.boundsLatLng, {
+            paddingTopLeft: [10, 26],
+            paddingBottomRight: [10, 28],
+            maxZoom: 19.5,
+            animate: false
+          });
         } else if (hasUser) {
-          map.setView([Number(userLocation.lat), Number(userLocation.lng)], 14);
+          map.setView([Number(userLocation.lat), Number(userLocation.lng)], 15, {
+            animate: false
+          });
         }
       } finally {
         setTimeout(() => {
@@ -304,13 +385,46 @@ export default function MapView({
     if (!map) return;
     const match = parcels.find((p) => p?.parcelId === selectedParcelId);
     if (!match) return;
-    const pLat = Number(match?.volume?.centerLat ?? match?.centerLat ?? match?.bounds?.center?.[0]);
-    const pLng = Number(match?.volume?.centerLng ?? match?.centerLng ?? match?.bounds?.center?.[1]);
-    if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
+    const perimeter = extractParcelPerimeterPoints(match);
+    if (perimeter.length >= 2) {
       userAdjustedViewRef.current = true;
-      map.setView([pLat, pLng], Math.max(map.getZoom(), 16), { animate: true });
+      map.fitBounds(
+        perimeter.map((pt) => [pt.lat, pt.lng]),
+        { padding: [18, 18], maxZoom: 19.5, animate: true }
+      );
     }
   }, [focusParcelTick, selectedParcelId, parcels]);
+
+  function fitClosestLands() {
+    const map = mapRef.current;
+    if (!map) return;
+    const hasUser =
+      userLocation &&
+      Number.isFinite(Number(userLocation.lat)) &&
+      Number.isFinite(Number(userLocation.lng));
+    const closestFit = computeClosestLandsPerimeterFit({
+      parcels,
+      sculptures,
+      location: hasUser ? userLocation : null
+    });
+    if (closestFit.boundsLatLng) {
+      userAdjustedViewRef.current = false;
+      lastAutoBoundsRef.current = closestFit.boundsLatLng;
+      suppressViewSaveRef.current = true;
+      try {
+        map.fitBounds(closestFit.boundsLatLng, {
+          paddingTopLeft: [10, 26],
+          paddingBottomRight: [10, 28],
+          maxZoom: 19.5,
+          animate: true
+        });
+      } finally {
+        setTimeout(() => {
+          suppressViewSaveRef.current = false;
+        }, 120);
+      }
+    }
+  }
 
   function centerOnUser() {
     const map = mapRef.current;
@@ -378,15 +492,29 @@ export default function MapView({
 
       <div className={`map-container ${compact ? 'compact' : ''}`}>
         <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
-        {compact && userLocation && (
-          <button
-            type="button"
-            className="btn map-recenter-fab"
-            onClick={centerOnUser}
-            title="Center map on my GPS location"
-          >
-            <XeroIcon emoji="🎯" size={14} /> My Area
-          </button>
+        {compact && (parcels.length > 0 || userLocation) && (
+          <div className="map-compact-fab-row">
+            {parcels.length > 0 && (
+              <button
+                type="button"
+                className="btn map-recenter-fab"
+                onClick={fitClosestLands}
+                title="Zoom to fit closest lands perimeter"
+              >
+                <XeroIcon emoji="🗺️" size={13} /> Fit Lands
+              </button>
+            )}
+            {userLocation && (
+              <button
+                type="button"
+                className="btn map-recenter-fab"
+                onClick={centerOnUser}
+                title="Center map on my GPS location"
+              >
+                <XeroIcon emoji="🎯" size={13} /> Me
+              </button>
+            )}
+          </div>
         )}
         {sculptures.length === 0 && parcels.length === 0 && (
           <div
