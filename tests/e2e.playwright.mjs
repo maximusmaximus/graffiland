@@ -1128,9 +1128,43 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     );
     assert.ok(scModalZ >= 2000);
 
-    // Close modal & map, then open Mobile Profile pill (@mobile_owner) and verify bio + public land/action links
+    // Close sculpture modal, then verify owned land shows manage gear & click-to-rename title right in Nearest Lands
     await hubPage.locator('.modal-backdrop').getByRole('button', { name: /Close/i }).first().click();
-    await hubPage.getByRole('button', { name: /Close map/i }).click();
+
+    const ownedCards = hubPage.locator('[data-testid="mobile-land-card"][data-owned="true"]');
+    const otherCards = hubPage.locator('[data-testid="mobile-land-card"][data-owned="false"]');
+    assert.ok((await ownedCards.count()) >= 1, 'Expected at least 1 owned land card in Nearest Lands');
+    assert.ok((await otherCards.count()) >= 1, 'Expected at least 1 non-owned land card in Nearest Lands');
+    assert.equal(await otherCards.first().locator('[data-testid="land-manage-gear-btn"]').count(), 0);
+    assert.equal(await otherCards.first().locator('[data-testid="land-title-edit-trigger"]').count(), 0);
+
+    const myOwnedCard = ownedCards.first();
+    const myOwnedParcelId = await myOwnedCard.getAttribute('data-parcel-id');
+    assert.ok(myOwnedParcelId);
+
+    // Click owned land title -> rename inline with :fire: emoji -> save
+    await myOwnedCard.locator('[data-testid="land-title-edit-trigger"]').click();
+    const inlineInput = myOwnedCard.getByLabel('Rename land');
+    await inlineInput.fill('');
+    await inlineInput.type('Bayfront Studio :fire:');
+    assert.equal(await inlineInput.inputValue(), 'Bayfront Studio 🔥');
+    await myOwnedCard.locator('[data-testid="land-inline-rename-save"]').click();
+    await hubPage.waitForSelector(
+      `[data-parcel-id="${myOwnedParcelId}"] [data-testid="land-title-edit-trigger"]:has-text("Bayfront Studio 🔥")`,
+      { timeout: 10000 }
+    );
+
+    // Click the gear button on the owned land -> opens Land Management focused on that exact parcel
+    await myOwnedCard.locator('[data-testid="land-manage-gear-btn"]').click();
+    await hubPage.waitForSelector('[aria-label="Land Management"]', { timeout: 10000 });
+    assert.equal(
+      await hubPage.getByTestId('land-mgmt-iso-preview').getAttribute('data-parcel-id'),
+      myOwnedParcelId
+    );
+    assert.equal(await hubPage.getByLabel('Land Name', { exact: true }).inputValue(), 'Bayfront Studio 🔥');
+    await hubPage.getByRole('button', { name: /Close land management/i }).click();
+
+    // Open Mobile Profile pill (@mobile_owner) and verify bio + public land/action links
     await hubPage.locator('[data-testid="mobile-profile-btn"]').click();
     await hubPage.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
     assert.equal(await hubPage.locator('[data-testid="profile-handle"]').textContent(), '@mobile_owner');

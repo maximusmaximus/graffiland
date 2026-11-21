@@ -490,6 +490,7 @@ export function useARPreview({
     mapSculptures,
     setMapSculptures,
     mapParcels,
+    setMapParcels,
     mapLoading,
     mapSelectedSculpture,
     setMapSelectedSculpture,

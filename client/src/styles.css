@@ -4489,6 +4489,15 @@ select {
   box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.28), 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+.mobile-land-card.is-owned {
+  border-color: rgba(0, 245, 212, 0.36);
+  box-shadow: inset 0 0 0 1px rgba(0, 245, 212, 0.08);
+}
+
+.mobile-land-card.is-owned.is-selected {
+  border-color: rgba(255, 209, 102, 0.75);
+}
+
 .mobile-land-card.is-urgent-expiry {
   border-color: rgba(255, 107, 53, 0.55);
 }
@@ -4535,6 +4544,91 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mobile-land-name-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 6px 2px 3px;
+  margin: -2px 0 -2px -3px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.mobile-land-name-btn:hover,
+.mobile-land-name-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.1);
+  border-color: rgba(0, 245, 212, 0.36);
+  outline: none;
+}
+
+.mobile-land-name-edit-cue {
+  font-size: 11px;
+  opacity: 0.72;
+  flex-shrink: 0;
+  transition: opacity 140ms ease;
+}
+
+.mobile-land-name-btn:hover .mobile-land-name-edit-cue {
+  opacity: 1;
+}
+
+.mobile-land-rename-form {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mobile-land-rename-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mobile-land-rename-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 28px;
+}
+
+.mobile-land-rename-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mobile-land-rename-error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #fda4af;
+}
+
+.mobile-land-gear-btn {
+  padding: 3px 7px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 245, 212, 0.14);
+  border-color: rgba(0, 245, 212, 0.42);
+  color: var(--accent);
+}
+
+.mobile-land-gear-btn:hover {
+  background: rgba(0, 245, 212, 0.24);
+  border-color: var(--accent);
 }
 
 .mobile-land-id-row {
