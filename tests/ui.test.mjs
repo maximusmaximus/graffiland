@@ -32,8 +32,16 @@ async function loadJsxModule(relPath) {
             path: 'stub.css',
             namespace: 'stub-css'
           }));
+          build.onResolve({ filter: /\?url$/ }, () => ({
+            path: 'stub-url',
+            namespace: 'stub-url'
+          }));
           build.onLoad({ filter: /.*/, namespace: 'stub-css' }, () => ({
             contents: '',
+            loader: 'js'
+          }));
+          build.onLoad({ filter: /.*/, namespace: 'stub-url' }, () => ({
+            contents: 'export default "";',
             loader: 'js'
           }));
         }
@@ -1552,5 +1560,262 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(dismissClicks, 1);
 
     cleanup();
+  });
+
+  test('landPreviewHelpers computes exact isometric camera fit, scale bar, cardinal coords, and spatial context', async () => {
+    const helpers = await import('../client/src/utils/landPreviewHelpers.js');
+
+    // 1) Defensively reconstructs volume corners/ring even when only geohash parcelId is supplied
+    const decodedVol = helpers.resolveParcelVolume({ parcelId: 'GLAND-9Q8YYK8Y' });
+    assert.ok(decodedVol);
+    assert.equal(decodedVol.corners.length, 4);
+    assert.equal(decodedVol.ring.length, 5);
+    assert.ok(decodedVol.centerLat > 37.7 && decodedVol.centerLat < 37.85);
+
+    // 2) Exact isometric fit scales zoom inversely with parcel footprint & height
+    const smallVol = helpers.resolveParcelVolume({
+      parcelId: 'GLAND-9Q8YYK8Y',
+      volume: {
+        centerLat: 37.7793,
+        centerLng: -122.4193,
+        widthMeters: 12,
+        depthMeters: 12,
+        heightMeters: 12,
+        rotationDeg: 15
+      }
+    });
+    const largeVol = helpers.resolveParcelVolume({
+      parcelId: 'GLAND-9Q8YYK8Z',
+      volume: {
+        centerLat: 37.7793,
+        centerLng: -122.4193,
+        widthMeters: 50,
+        depthMeters: 45,
+        heightMeters: 40,
+        rotationDeg: 0
+      }
+    });
+
+    const smallIso = helpers.computeIsometricCameraFit(smallVol, {
+      viewportWidth: 640,
+      viewportHeight: 272,
+      viewMode: 'isometric'
+    });
+    const largeIso = helpers.computeIsometricCameraFit(largeVol, {
+      viewportWidth: 640,
+      viewportHeight: 272,
+      viewMode: 'isometric'
+    });
+    const contextView = helpers.computeIsometricCameraFit(smallVol, {
+      viewportWidth: 640,
+      viewportHeight: 272,
+      viewMode: 'context'
+    });
+    const topDownView = helpers.computeIsometricCameraFit(smallVol, {
+      viewportWidth: 640,
+      viewportHeight: 272,
+      viewMode: 'topdown'
+    });
+
+    assert.equal(smallIso.pitch, 55);
+    assert.equal(smallIso.bearing, -30); // rotationDeg (15) - 45 = -30
+    assert.ok(smallIso.zoom > largeIso.zoom, 'Smaller parcel should zoom closer than larger parcel');
+    assert.ok(smallIso.padding.top > smallIso.padding.bottom, 'Isometric fit shifts padding for Z-height');
+    assert.ok(contextView.zoom < smallIso.zoom - 1.5, 'Area context view zooms out cleanly');
+    assert.equal(topDownView.pitch, 0);
+    assert.equal(topDownView.bearing, 0);
+
+    // 3) Scale bar, cardinal coords & spatial summary with nearest owned land
+    const bar = helpers.computeScaleBarForZoom(37.7793, smallIso.zoom, 92);
+    assert.ok(bar.meters >= 5 && bar.widthPx >= 28 && bar.widthPx <= 92);
+    assert.equal(helpers.formatCardinalCoords(37.7793, -122.4193), '37.77930° N, 122.41930° W');
+
+    const summary = helpers.buildParcelGeoSummary(
+      { parcelId: 'GLAND-9Q8YYK8Y', customName: 'Civic Plaza', volume: smallVol },
+      {
+        allParcels: [
+          { parcelId: 'GLAND-9Q8YYK8Y', customName: 'Civic Plaza', volume: smallVol },
+          {
+            parcelId: 'GLAND-9Q8YYM22',
+            customName: 'Ferry Tower',
+            volume: {
+              centerLat: 37.7955,
+              centerLng: -122.3937,
+              widthMeters: 20,
+              depthMeters: 20,
+              heightMeters: 24
+            }
+          }
+        ],
+        placeContext: { shortLabel: 'Market St · Civic Center, San Francisco, CA' }
+      }
+    );
+    assert.equal(summary.placePrimary, 'Market St · Civic Center, San Francisco, CA');
+    assert.ok(summary.googleMapsUrl.includes('37.779300'));
+    assert.equal(summary.nearestOwnedLand.name, 'Ferry Tower');
+    assert.equal(summary.nearestOwnedLand.cardinal, 'SW');
+  });
+
+  test('LandManagementModal renders perfectly fit isometric preview and reloads view when another land is selected', async () => {
+    const { default: LandManagementModal } = await loadJsxModule(
+      'client/src/components/LandManagementModal.jsx'
+    );
+
+    let mineFetchCount = 0;
+    const reverseCalls = [];
+    const focusedParcels = [];
+    const origFetch = globalThis.fetch;
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/mine')) {
+        mineFetchCount += 1;
+        return {
+          ok: true,
+          json: async () => ({
+            ownerAddress: '0x1234',
+            parcelCount: 2,
+            parcels: [
+              {
+                parcelId: 'GLAND-9Q8YYK8Y',
+                geohash: '9q8yyk8y',
+                customName: 'Civic Plaza',
+                description: 'Downtown civic showcase',
+                curationNote: 'Downtown civic showcase',
+                centerLat: 37.7793,
+                centerLng: -122.4193,
+                volume: {
+                  parcelId: 'GLAND-9Q8YYK8Y',
+                  geohash: '9q8yyk8y',
+                  centerLat: 37.7793,
+                  centerLng: -122.4193,
+                  widthMeters: 18,
+                  depthMeters: 16,
+                  heightMeters: 20,
+                  rotationDeg: 10
+                },
+                sculptureCount: 1,
+                frozen: false,
+                settings: { allowAgentErase: true, allowContributorEdits: true, frozen: false },
+                securityPolicy: { requirePasskeyUnlock: false, requireOrbUnlock: false, minOrbInliers: 8 },
+                contributors: [],
+                eligibleVisitors: [],
+                sculptures: [{ id: 'sc-1', title: 'Neon Arch', lat: 37.7793, lng: -122.4193, voxelCount: 12 }]
+              },
+              {
+                parcelId: 'GLAND-DR5RU6N5',
+                geohash: 'dr5ru6n5',
+                customName: 'Midtown Rooftop',
+                description: 'Skyline gallery',
+                curationNote: 'Skyline gallery',
+                centerLat: 40.758,
+                centerLng: -73.9855,
+                volume: {
+                  parcelId: 'GLAND-DR5RU6N5',
+                  geohash: 'dr5ru6n5',
+                  centerLat: 40.758,
+                  centerLng: -73.9855,
+                  widthMeters: 28,
+                  depthMeters: 24,
+                  heightMeters: 32,
+                  rotationDeg: 29
+                },
+                sculptureCount: 2,
+                frozen: true,
+                settings: { allowAgentErase: true, allowContributorEdits: true, frozen: true },
+                securityPolicy: { requirePasskeyUnlock: false, requireOrbUnlock: false, minOrbInliers: 8 },
+                contributors: [],
+                eligibleVisitors: [],
+                sculptures: []
+              }
+            ]
+          })
+        };
+      }
+      if (u.includes('/api/geocode/reverse')) {
+        reverseCalls.push(u);
+        if (u.includes('40.758')) {
+          return {
+            ok: true,
+            json: async () => ({
+              shortLabel: 'Broadway · Times Square, New York, NY',
+              city: 'New York',
+              region: 'NY'
+            })
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            shortLabel: 'Polk St · Civic Center, San Francisco, CA',
+            city: 'San Francisco',
+            region: 'CA'
+          })
+        };
+      }
+      if (u.includes('/api/passkeys/status')) {
+        return { ok: true, json: async () => ({ passkeys: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(LandManagementModal, {
+          user: { id: 'u1', walletAddress: '0x1234' },
+          onFocusParcel: (p) => focusedParcels.push(p.parcelId),
+          onClose: () => {}
+        })
+      );
+
+      // 1) Initial land loads in isometric view with geographic place & coordinates
+      await RTL.waitFor(() => {
+        const preview = view.getByTestId('land-mgmt-iso-preview');
+        assert.equal(preview.getAttribute('data-parcel-id'), 'GLAND-9Q8YYK8Y');
+        assert.equal(preview.getAttribute('data-view-mode'), 'isometric');
+        assert.ok(view.getByTestId('land-preview-place').textContent.includes('San Francisco'));
+      });
+      assert.ok(view.getByTestId('land-preview-coords').textContent.includes('37.77930° N'));
+      assert.ok(view.getByTestId('land-preview-scale').textContent.includes('m'));
+
+      // Toggle view modes (Area Context -> 2D -> Iso)
+      RTL.fireEvent.click(view.getByRole('button', { name: /Area/i }));
+      assert.equal(
+        view.getByTestId('land-mgmt-iso-preview').getAttribute('data-view-mode'),
+        'context'
+      );
+      RTL.fireEvent.click(view.getByRole('button', { name: /2D/i }));
+      assert.equal(
+        view.getByTestId('land-mgmt-iso-preview').getAttribute('data-view-mode'),
+        'topdown'
+      );
+
+      // 2) Selecting another land immediately loads that land's isometric preview (and resets to isometric)
+      RTL.fireEvent.click(view.getByRole('tab', { name: /Midtown Rooftop/i }));
+      await RTL.waitFor(() => {
+        const preview = view.getByTestId('land-mgmt-iso-preview');
+        assert.equal(preview.getAttribute('data-parcel-id'), 'GLAND-DR5RU6N5');
+        assert.equal(preview.getAttribute('data-view-mode'), 'isometric');
+        assert.ok(view.getByTestId('land-preview-place').textContent.includes('Times Square'));
+      });
+      assert.ok(view.getByTestId('land-preview-coords').textContent.includes('40.75800° N'));
+      assert.equal(mineFetchCount, 1, 'Switching lands must NOT re-fetch /api/lands/mine');
+
+      // 3) Clicking Next land cycles back to Civic Plaza cleanly
+      RTL.fireEvent.click(view.getByRole('button', { name: /Next land/i }));
+      await RTL.waitFor(() => {
+        assert.equal(
+          view.getByTestId('land-mgmt-iso-preview').getAttribute('data-parcel-id'),
+          'GLAND-9Q8YYK8Y'
+        );
+      });
+
+      // 4) Open on Map triggers onFocusParcel with active parcel
+      RTL.fireEvent.click(view.getByRole('button', { name: /Open on Map/i }));
+      assert.deepEqual(focusedParcels, ['GLAND-9Q8YYK8Y']);
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
   });
 });

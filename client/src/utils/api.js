@@ -322,6 +322,13 @@ export const api = {
     }
     return request(`/api/geocode/search?${qs.toString()}`);
   },
+  reverseGeocode: (lat, lng) => {
+    const qs = new URLSearchParams({
+      lat: String(Number(lat).toFixed(6)),
+      lng: String(Number(lng).toFixed(6))
+    });
+    return request(`/api/geocode/reverse?${qs.toString()}`);
+  },
   getLandTelemetry: (parcelId) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/telemetry`),
   listMarketplaceListings: (params = {}) => {

@@ -350,6 +350,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     }
   }
   const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
+  const stewardMap = new Map((stewardRows || []).map((st) => [st.parcel_id, st]));
   for (const st of stewardRows || []) {
     if (
       (ownerId && st.steward_sub === ownerId) ||
@@ -368,6 +369,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   for (const pid of ownedParcelSet) {
     const onLand = (allRows || []).filter((s) => s.parcel_id === pid);
     const lp = lpMap.get(pid);
+    const st = stewardMap.get(pid);
     const cur = curationMap.get(pid);
     const settings = await getLandSettingsInternal(db, pid);
     const contribRows = await db.all(
@@ -394,6 +396,17 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
         parsedCorners = [];
       }
     }
+    const fallbackFootprint = vr
+      ? computeOrientedFootprintLngLat({
+          lat: Number(vr.center_lat),
+          lng: Number(vr.center_lng),
+          widthMeters: Number(vr.width_meters),
+          depthMeters: Number(vr.depth_meters),
+          rotationDeg: Number(vr.rotation_deg)
+        })
+      : null;
+    const resolvedCorners =
+      parsedCorners.length >= 4 ? parsedCorners.slice(0, 4) : fallbackFootprint?.corners || [];
     const volume = vr
       ? {
           parcelId: pid,
@@ -408,7 +421,11 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
           baseAltitudeM: Number(vr.base_altitude_m || 0),
           footprintAreaSqM: Number(vr.footprint_area_sqm),
           volumeCubicM: Number(vr.volume_cubic_m),
-          corners: parsedCorners
+          corners: resolvedCorners,
+          ring:
+            resolvedCorners.length >= 4
+              ? [...resolvedCorners, resolvedCorners[0]]
+              : fallbackFootprint?.ring || []
         }
       : bounds
       ? buildDefaultVolumeFromBounds(bounds, pid, geohash)
@@ -422,6 +439,9 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       volume,
       centerLat: volume?.centerLat ?? bounds?.center?.[0] ?? null,
       centerLng: volume?.centerLng ?? bounds?.center?.[1] ?? null,
+      stewardStatus: st?.status || 'awakened',
+      leaseExpiresAt: st?.lease_expires_at || '',
+      awakenedAt: st?.awakened_at || '',
       customName: cur?.custom_name || '',
       description: cur?.curation_note || '',
       curationNote: cur?.curation_note || '',

@@ -25,7 +25,7 @@ import {
   scoutLands,
   updateLandVolume
 } from '../shared/agentQuestService.mjs';
-import { searchLocations } from '../shared/geocodeService.mjs';
+import { reverseGeocodeLocation, searchLocations } from '../shared/geocodeService.mjs';
 import {
   checkUsernameAvailability,
   getPublicProfile,
@@ -1119,6 +1119,16 @@ export function createAppServer(serverOptions = {}) {
         lat: req.query?.lat !== undefined ? Number(req.query.lat) : null,
         lng: req.query?.lng !== undefined ? Number(req.query.lng) : null,
         limit: req.query?.limit ? Number(req.query.limit) : 6
+      })
+    )
+  );
+
+  app.get(
+    '/api/geocode/reverse',
+    handleChatRoute((req) =>
+      reverseGeocodeLocation({
+        lat: req.query?.lat !== undefined ? Number(req.query.lat) : null,
+        lng: req.query?.lng !== undefined ? Number(req.query.lng) : null
       })
     )
   );

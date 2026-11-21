@@ -1740,8 +1740,19 @@ export default function DesktopHub({
         <LandManagementModal
           user={user}
           initialParcelId={landManageParcelId}
+          userLocation={userLocation}
           onSelectSculpture={(sc) => openSculpture(sc)}
           onOpenAddLandItem={(p) => handleOpenAddLandItem(p)}
+          onFocusParcel={(p, vol) => {
+            const cLat = Number(vol?.centerLat ?? p?.volume?.centerLat ?? p?.centerLat ?? p?.bounds?.center?.[0]);
+            const cLng = Number(vol?.centerLng ?? p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
+            if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+              setMapFocusTarget({ lat: cLat, lng: cLng, zoom: 17.8, ts: Date.now() });
+              setMapViewport((prev) => ({ ...(prev || {}), lat: cLat, lng: cLng, zoom: 17.8 }));
+            }
+            setViewMode('isometric');
+            setLandManageOpen(false);
+          }}
           onWorkspaceChanged={() => {
             refreshData();
             refreshMyLands();
