@@ -373,3 +373,219 @@ export function groupNearestLandsWithSculptures({
     expiringCount
   };
 }
+
+/**
+ * Extract all corner points `{ lat, lng }` describing a land parcel's real perimeter.
+ * Uses oriented `volume.corners` first, then `bounds.sw`/`bounds.ne`, then a small
+ * ~12 m fallback footprint around the parcel center so single-point lands still frame cleanly.
+ * @param {any} parcel
+ * @returns {Array<{ lat: number, lng: number }>}
+ */
+export function extractParcelPerimeterPoints(parcel) {
+  if (!parcel || typeof parcel !== 'object') return [];
+
+  const corners = Array.isArray(parcel.volume?.corners) ? parcel.volume.corners : [];
+  if (corners.length >= 3) {
+    const pts = [];
+    for (const pair of corners) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      const lng = Number(pair[0]);
+      const lat = Number(pair[1]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        pts.push({ lat, lng });
+      }
+    }
+    if (pts.length >= 3) return pts;
+  }
+
+  if (Array.isArray(parcel.bounds?.sw) && Array.isArray(parcel.bounds?.ne)) {
+    const swLat = Number(parcel.bounds.sw[0]);
+    const swLng = Number(parcel.bounds.sw[1]);
+    const neLat = Number(parcel.bounds.ne[0]);
+    const neLng = Number(parcel.bounds.ne[1]);
+    if (
+      Number.isFinite(swLat) &&
+      Number.isFinite(swLng) &&
+      Number.isFinite(neLat) &&
+      Number.isFinite(neLng)
+    ) {
+      return [
+        { lat: swLat, lng: swLng },
+        { lat: swLat, lng: neLng },
+        { lat: neLat, lng: neLng },
+        { lat: neLat, lng: swLng }
+      ];
+    }
+  }
+
+  const center = resolveLandCoords(parcel);
+  if (!center) return [];
+  const dLat = 12 / 111320;
+  const cosLat = Math.max(0.2, Math.cos((center.lat * Math.PI) / 180));
+  const dLng = 12 / (111320 * cosLat);
+  return [
+    { lat: center.lat - dLat, lng: center.lng - dLng },
+    { lat: center.lat - dLat, lng: center.lng + dLng },
+    { lat: center.lat + dLat, lng: center.lng + dLng },
+    { lat: center.lat + dLat, lng: center.lng - dLng }
+  ];
+}
+
+/**
+ * Format a clean, concise label for a land parcel on map views.
+ * @param {any} parcel
+ * @param {number | null} [rankIndex]
+ * @returns {string}
+ */
+export function formatSimpleLandLabel(parcel, rankIndex = null) {
+  const custom = String(parcel?.customName || '').trim();
+  const pid = String(parcel?.parcelId || '').trim();
+  const shortId = pid.replace(/^GLAND-/i, '') || pid || 'Land';
+  let base = custom || shortId;
+  if (base.length > 20) {
+    base = `${base.slice(0, 19).trimEnd()}…`;
+  }
+  if (typeof rankIndex === 'number' && Number.isFinite(rankIndex) && rankIndex >= 0) {
+    return `#${rankIndex + 1} ${base}`;
+  }
+  return base;
+}
+
+/**
+ * Select the closest available lands cluster and compute the tight combined bounding box
+ * across ALL of their perimeter corners so map views zoom in edge-to-edge on the lands.
+ * @param {{
+ *   parcels?: any[],
+ *   sculptures?: any[],
+ *   location?: { lat: number, lng: number } | null,
+ *   maxClusterSpanMeters?: number,
+ *   maxLands?: number
+ * }} [options]
+ */
+export function computeClosestLandsPerimeterFit({
+  parcels = [],
+  sculptures = [],
+  location = null,
+  maxClusterSpanMeters = 2500,
+  maxLands = 12
+} = {}) {
+  const hasLocation =
+    Boolean(location) &&
+    Number.isFinite(Number(location?.lat)) &&
+    Number.isFinite(Number(location?.lng));
+  const userLat = hasLocation ? Number(location.lat) : 0;
+  const userLng = hasLocation ? Number(location.lng) : 0;
+
+  /** @type {Map<string, any>} */
+  const landMap = new Map();
+  for (const p of parcels || []) {
+    if (!p?.parcelId) continue;
+    landMap.set(p.parcelId, p);
+  }
+  for (const sc of sculptures || []) {
+    if (!sc?.parcelId || landMap.has(sc.parcelId)) continue;
+    if (sc.parcelBounds || (Number.isFinite(Number(sc.lat)) && Number.isFinite(Number(sc.lng)))) {
+      landMap.set(sc.parcelId, {
+        parcelId: sc.parcelId,
+        bounds: sc.parcelBounds || null,
+        centerLat: Number.isFinite(Number(sc.lat)) ? Number(sc.lat) : null,
+        centerLng: Number.isFinite(Number(sc.lng)) ? Number(sc.lng) : null
+      });
+    }
+  }
+
+  /** @type {Array<{ parcel: any, center: { lat: number, lng: number }, perimeter: Array<{ lat: number, lng: number }>, distanceFromUser: number | null }>} */
+  const candidates = [];
+  for (const parcel of landMap.values()) {
+    const center = resolveLandCoords(parcel);
+    const perimeter = extractParcelPerimeterPoints(parcel);
+    if (!center || perimeter.length === 0) continue;
+    const distanceFromUser = hasLocation
+      ? haversineMeters(userLat, userLng, center.lat, center.lng)
+      : null;
+    candidates.push({ parcel, center, perimeter, distanceFromUser });
+  }
+
+  if (candidates.length === 0) {
+    return {
+      clusterLands: [],
+      perimeterPoints: [],
+      boundsLatLng: null,
+      boundsLngLat: null,
+      center: null
+    };
+  }
+
+  if (hasLocation) {
+    candidates.sort(
+      (a, b) =>
+        (a.distanceFromUser ?? Number.POSITIVE_INFINITY) -
+        (b.distanceFromUser ?? Number.POSITIVE_INFINITY)
+    );
+  }
+
+  const anchor = candidates[0];
+  const cluster = [];
+  for (const item of candidates) {
+    if (cluster.length >= maxLands) break;
+    const spanFromAnchor = haversineMeters(
+      anchor.center.lat,
+      anchor.center.lng,
+      item.center.lat,
+      item.center.lng
+    );
+    if (spanFromAnchor <= maxClusterSpanMeters) {
+      cluster.push(item);
+    }
+  }
+  if (cluster.length === 0) {
+    cluster.push(anchor);
+  }
+
+  const clusterIds = new Set(cluster.map((c) => c.parcel.parcelId));
+  /** @type {Array<{ lat: number, lng: number }>} */
+  const perimeterPoints = [];
+  for (const item of cluster) {
+    for (const pt of item.perimeter) {
+      perimeterPoints.push(pt);
+    }
+  }
+  for (const sc of sculptures || []) {
+    if (
+      sc?.parcelId &&
+      clusterIds.has(sc.parcelId) &&
+      Number.isFinite(Number(sc.lat)) &&
+      Number.isFinite(Number(sc.lng))
+    ) {
+      perimeterPoints.push({ lat: Number(sc.lat), lng: Number(sc.lng) });
+    }
+  }
+
+  let minLat = Number.POSITIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
+  let minLng = Number.POSITIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+  for (const pt of perimeterPoints) {
+    if (pt.lat < minLat) minLat = pt.lat;
+    if (pt.lat > maxLat) maxLat = pt.lat;
+    if (pt.lng < minLng) minLng = pt.lng;
+    if (pt.lng > maxLng) maxLng = pt.lng;
+  }
+
+  return {
+    clusterLands: cluster.map((c) => c.parcel),
+    perimeterPoints,
+    boundsLatLng: [
+      [minLat, minLng],
+      [maxLat, maxLng]
+    ],
+    boundsLngLat: [
+      [minLng, minLat],
+      [maxLng, maxLat]
+    ],
+    center: {
+      lat: (minLat + maxLat) / 2,
+      lng: (minLng + maxLng) / 2
+    }
+  };
+}
