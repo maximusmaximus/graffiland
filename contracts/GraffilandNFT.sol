@@ -51,6 +51,10 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
     mapping(bytes32 => uint256[]) private _parcelTokens;
     mapping(bytes32 => LandLease) public landLeases;
 
+    /// @notice Max simultaneous dormant (unawakened) leases a steward can hold when self-claiming.
+    uint256 public maxDormantLeasesPerSteward = 3;
+    mapping(address => uint256) public activeDormantLeases;
+
     event SculptureMinted(
         uint256 indexed tokenId,
         address indexed recipient,
@@ -78,6 +82,7 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
     event RelayerUpdated(address indexed previousRelayer, address indexed newRelayer);
     event RoyaltyReceiverUpdated(address indexed previousReceiver, address indexed newReceiver);
     event ContractURIUpdated();
+    event MaxDormantLeasesUpdated(uint256 previousMax, uint256 newMax);
 
     modifier onlyRelayerOrOwner() {
         require(msg.sender == relayer || msg.sender == owner(), "GraffilandNFT: unauthorized minter");
@@ -113,6 +118,18 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         royaltyRouter = newRouter;
     }
 
+    function setMaxDormantLeasesPerSteward(uint256 newMax) external onlyOwner {
+        require(newMax > 0, "GraffilandNFT: zero max leases");
+        emit MaxDormantLeasesUpdated(maxDormantLeasesPerSteward, newMax);
+        maxDormantLeasesPerSteward = newMax;
+    }
+
+    function _releaseDormantSlot(address steward) private {
+        if (activeDormantLeases[steward] > 0) {
+            activeDormantLeases[steward] -= 1;
+        }
+    }
+
     function contractURI() external view returns (string memory) {
         return _contractMetadataURI;
     }
@@ -144,8 +161,19 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         LandLease storage existing = landLeases[landParcelId];
         if (existing.exists) {
             require(!existing.awakened && block.timestamp > existing.expiresAt, "GraffilandNFT: parcel active");
+            _releaseDormantSlot(existing.steward);
             emit DormantLandReleased(landParcelId, existing.steward);
         }
+
+        // Self-claims are capped per steward so one wallet cannot squat unlimited parcels.
+        // The relayer/owner path is gated off-chain by the API's slot accounting.
+        if (msg.sender == steward && msg.sender != relayer && msg.sender != owner()) {
+            require(
+                activeDormantLeases[steward] < maxDormantLeasesPerSteward,
+                "GraffilandNFT: dormant lease limit"
+            );
+        }
+        activeDormantLeases[steward] += 1;
 
         uint64 expiresAt = uint64(block.timestamp) + ttlSeconds;
         landLeases[landParcelId] = LandLease({
@@ -181,6 +209,7 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         lease.awakened = true;
         lease.awakenedAt = uint64(block.timestamp);
         lease.awakenedBy = firstHumanArtist;
+        _releaseDormantSlot(lease.steward);
 
         emit LandAwakened(landParcelId, lease.steward, firstHumanArtist, proofOfLocationHash);
     }
@@ -190,6 +219,7 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         require(lease.exists && !lease.awakened, "GraffilandNFT: not dormant");
         require(block.timestamp > lease.expiresAt, "GraffilandNFT: lease still active");
         address prev = lease.steward;
+        _releaseDormantSlot(prev);
         delete landLeases[landParcelId];
         emit DormantLandReleased(landParcelId, prev);
     }
@@ -204,6 +234,11 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         int32 latE6,
         int32 lngE6
     ) external returns (uint256 tokenId) {
+        // Only the parcel's current steward may self-mint onto it; otherwise anyone could attach
+        // unlimited tokens (and fake proof hashes) to any parcel, bloating getParcelTokens().
+        LandLease storage lease = landLeases[landParcelId];
+        require(lease.exists && lease.steward == msg.sender, "GraffilandNFT: not parcel steward");
+        require(lease.awakened || block.timestamp <= lease.expiresAt, "GraffilandNFT: lease expired");
         return _mintSculptureInternal(msg.sender, metadataURI, landParcelId, proofOfLocationHash, latE6, lngE6);
     }
 
