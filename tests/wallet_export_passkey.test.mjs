@@ -5,6 +5,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { ethers } from 'ethers';
+import jwt from 'jsonwebtoken';
 
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-pk-export-'));
 process.env.GRAFFILAND_DB_PATH = path.join(testTmpDir, 'test.sqlite');
@@ -14,6 +15,7 @@ process.env.ROBINHOOD_CONTRACT_ADDRESS = '';
 process.env.ROBINHOOD_RELAYER_PRIVATE_KEY = '';
 
 const { createAppServer } = await import('../server/index.mjs');
+const { CONFIG } = await import('../server/config.mjs');
 const worker = (await import('../worker/src/index.js')).default;
 
 let server;
@@ -272,5 +274,70 @@ describe('Embedded wallet export requires hardware Passkey', () => {
     assert.equal(ok.status, 200);
     assert.equal(ok.headers.get('cache-control'), 'no-store');
     assert.equal(new ethers.Wallet(ok.body.privateKey).address, loginRes.body.user.walletAddress);
+
+    // Untrusted Origin header cannot expand allowedOrigins or spoof rpId on Passkey registration or export
+    const evilRegOpts = await wFetch('/api/passkeys/register/options', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Origin: 'https://evil.example' }
+    });
+    assert.equal(evilRegOpts.status, 200);
+    assert.equal(evilRegOpts.body.rp.id, 'app.example.dev');
+    const evilKeyPair = await globalThis.crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['sign', 'verify']
+    );
+    const evilSpki = new Uint8Array(
+      await globalThis.crypto.subtle.exportKey('spki', evilKeyPair.publicKey)
+    );
+    const evilVerify = await wFetch('/api/passkeys/register/verify', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Origin: 'https://evil.example' },
+      body: JSON.stringify({
+        credentialId: b64u(globalThis.crypto.getRandomValues(new Uint8Array(16))),
+        publicKeySpkiB64: b64u(evilSpki),
+        clientDataJSON: b64u(
+          new TextEncoder().encode(
+            JSON.stringify({
+              type: 'webauthn.create',
+              challenge: evilRegOpts.body.challenge,
+              origin: 'https://evil.example'
+            })
+          )
+        ),
+        deviceLabel: 'Evil Origin Device'
+      })
+    });
+    assert.equal(evilVerify.status, 403);
+    assert.match(evilVerify.body.error, /Untrusted WebAuthn registration origin/i);
+
+    const chEvil = await wFetch('/api/wallet/export/challenge', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Origin: 'https://evil.example' }
+    });
+    assert.equal(chEvil.status, 200);
+    assert.equal(chEvil.body.rpId, 'app.example.dev');
+  });
+
+  test('stale stolen JWT (>15m old) cannot register a rogue Passkey to bypass wallet export gate', async () => {
+    const victim = await login('pk-stale@graffiland.test');
+    const staleIat = Math.floor(Date.now() / 1000) - 3600;
+    const staleToken = jwt.sign(
+      {
+        sub: victim.user.id,
+        email: victim.user.email,
+        isAdmin: false,
+        iat: staleIat,
+        exp: staleIat + 14 * 86400
+      },
+      CONFIG.sessionSecret
+    );
+
+    const opts = await apiJson('/api/passkeys/register/options', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${staleToken}` }
+    });
+    assert.equal(opts.status, 403);
+    assert.equal(opts.body.code, 'REAUTH_REQUIRED');
   });
 });

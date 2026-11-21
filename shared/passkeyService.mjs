@@ -82,11 +82,30 @@ export async function listUserPasskeys(db, userId) {
   }));
 }
 
+export const PASSKEY_MANAGE_MAX_SESSION_AGE_SEC = 15 * 60;
+
+export function assertRecentSessionForPasskeyChange(
+  user,
+  maxAgeSec = PASSKEY_MANAGE_MAX_SESSION_AGE_SEC
+) {
+  const issuedAt = Number(user?.sessionIssuedAt || 0);
+  if (!Number.isFinite(issuedAt) || issuedAt <= 0) return;
+  const ageSec = Math.floor(Date.now() / 1000) - issuedAt;
+  if (ageSec > maxAgeSec) {
+    throw new PasskeyError(
+      'Recent Google sign-in (within 15 minutes) is required to manage hardware Passkeys. Sign out and sign back in first.',
+      403,
+      { code: 'REAUTH_REQUIRED' }
+    );
+  }
+}
+
 export async function issuePasskeyRegistrationOptions(
   user,
   { db = null, rpId = 'localhost' } = {}
 ) {
   if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
+  assertRecentSessionForPasskeyChange(user);
   const challengeBytes = new Uint8Array(32);
   crypto.getRandomValues(challengeBytes);
   const challenge = uint8ToB64Url(challengeBytes);
@@ -131,6 +150,7 @@ export async function verifyAndStorePasskeyRegistration(
   { user, body, rpId = '', allowedOrigins = [] }
 ) {
   if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
+  assertRecentSessionForPasskeyChange(user);
   const credentialId = String(body?.credentialId || body?.id || '').trim();
   const publicKeySpkiB64 = String(body?.publicKeySpkiB64 || '').trim();
   const clientDataJSON = String(body?.clientDataJSON || '').trim();
@@ -158,21 +178,25 @@ export async function verifyAndStorePasskeyRegistration(
     );
   }
 
-  // Verify stored single-use registration challenge if challenges table is present
+  // Require and atomically consume the single-use registration challenge issued by the server.
   const actualCh = String(clientData?.challenge || '').trim();
-  if (actualCh) {
-    const chRow = await db
-      .get('SELECT * FROM webauthn_reg_challenges WHERE challenge = ? AND user_id = ?', [
-        actualCh,
-        user.id
-      ])
-      .catch(() => null);
-    if (chRow) {
-      if (Number(chRow.used) !== 0 || Date.now() > new Date(chRow.expires_at).getTime()) {
-        throw new PasskeyError('WebAuthn registration challenge expired or already used.', 400);
-      }
-      await db.run('UPDATE webauthn_reg_challenges SET used = 1 WHERE challenge = ?', [actualCh]);
-    }
+  if (!actualCh) {
+    throw new PasskeyError('WebAuthn registration challenge is required.', 400);
+  }
+  const chRow = await db.get(
+    'SELECT * FROM webauthn_reg_challenges WHERE challenge = ? AND user_id = ?',
+    [actualCh, user.id]
+  );
+  if (!chRow || Date.now() > new Date(chRow.expires_at).getTime()) {
+    throw new PasskeyError('WebAuthn registration challenge not found or expired.', 400);
+  }
+  const consumed = await db.run(
+    'UPDATE webauthn_reg_challenges SET used = 1 WHERE challenge = ? AND user_id = ? AND used = 0',
+    [actualCh, user.id]
+  );
+  const chChanges = Number(consumed?.changes ?? consumed?.meta?.changes ?? 0);
+  if (chChanges < 1) {
+    throw new PasskeyError('WebAuthn registration challenge has already been used.', 400);
   }
 
   try {
@@ -211,8 +235,9 @@ export async function verifyAndStorePasskeyRegistration(
   };
 }
 
-export async function deleteUserPasskey(db, { userId, passkeyId }) {
+export async function deleteUserPasskey(db, { userId, passkeyId, user = null }) {
   if (!userId) throw new PasskeyError('Google sign-in required.', 401);
+  if (user) assertRecentSessionForPasskeyChange(user);
   const res = await db.run('DELETE FROM user_passkeys WHERE id = ? AND user_id = ?', [
     passkeyId,
     userId

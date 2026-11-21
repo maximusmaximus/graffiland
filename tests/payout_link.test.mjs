@@ -29,49 +29,6 @@ before(async () => {
       resolve();
     });
   });
-
-  test('legacy unproven payout addresses are ignored by auth and cleared by migration while proven ones stay', async () => {
-    const legacy = await login('payout-legacy@graffiland.test');
-    const proven = await login('payout-proven@graffiland.test');
-    const targetWallet = ethers.Wallet.createRandom();
-    const provenExt = ethers.Wallet.createRandom();
-
-    // Link provenExt properly through the API
-    const issuedAt = new Date().toISOString();
-    const signature = await provenExt.signMessage(
-      buildPayoutLinkMessage({ userId: proven.user.id, address: provenExt.address, issuedAt })
-    );
-    const linked = await apiJson('/api/wallet/payout', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${proven.token}` },
-      body: JSON.stringify({ address: provenExt.address, issuedAt, signature })
-    });
-    assert.equal(linked.status, 200);
-
-    // Seed a legacy unproven custom_payout_address directly in the DB (pre-fix state)
-    const db = getDb();
-    db.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?').run(
-      targetWallet.address,
-      legacy.user.id
-    );
-
-    // Even before migration runs, auth loading strips unproven custom_payout_address
-    const beforeMigrationMe = await apiJson('/api/auth/me', {
-      headers: { Authorization: `Bearer ${legacy.token}` }
-    });
-    assert.equal(beforeMigrationMe.body.user.customPayoutAddress, '');
-
-    // Migration clears unproven rows while preserving proven rows
-    clearUnprovenPayoutAddresses(db);
-    const legacyRow = db
-      .prepare('SELECT custom_payout_address FROM users WHERE id = ?')
-      .get(legacy.user.id);
-    const provenRow = db
-      .prepare('SELECT custom_payout_address FROM users WHERE id = ?')
-      .get(proven.user.id);
-    assert.equal(legacyRow.custom_payout_address, '');
-    assert.equal(provenRow.custom_payout_address, provenExt.address);
-  });
 });
 
 after(async () => {

@@ -148,6 +148,7 @@ export function getAuthUserFromRequest(req) {
           .get(agentRow.agent_id);
         return {
           ...userRow,
+          sessionIssuedAt: Number(decoded.iat || 0),
           actorType: 'agent',
           agent: formatAgentProfile(agentRow, {
             activeDormantSlots: Number(slotRow?.cnt || 0)
@@ -155,7 +156,7 @@ export function getAuthUserFromRequest(req) {
         };
       }
     }
-    return userRow;
+    return { ...userRow, sessionIssuedAt: Number(decoded.iat || 0) };
   } catch {
     return null;
   }

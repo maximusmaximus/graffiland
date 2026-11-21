@@ -176,9 +176,45 @@ export function createAppServer(serverOptions = {}) {
   const db = getDb();
   const app = express();
 
-  function getRequestRpId(req) {
+  function getTrustedWebAuthnOrigins(req) {
+    const trusted = new Set();
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')
+      .split(',')[0]
+      .trim();
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
+      .split(',')[0]
+      .trim();
+    if (hostHeader) trusted.add(`${proto}://${hostHeader}`);
+    if (CONFIG.publicUrl) {
+      try {
+        trusted.add(new URL(String(CONFIG.publicUrl)).origin);
+      } catch {
+        // ignore invalid publicUrl
+      }
+    }
     const originHeader = String(req.headers?.origin || '').trim();
     if (originHeader) {
+      try {
+        const ro = new URL(originHeader);
+        const h = ro.hostname.toLowerCase();
+        const hostName = hostHeader.split(':')[0].toLowerCase();
+        if (
+          (hostName === 'localhost' || hostName === '127.0.0.1') &&
+          (h === 'localhost' || h === '127.0.0.1')
+        ) {
+          trusted.add(ro.origin);
+        }
+      } catch {
+        // ignore invalid origin
+      }
+    }
+    return [...trusted];
+  }
+
+  function getRequestRpId(req) {
+    const originHeader = String(req.headers?.origin || '').trim();
+    const trusted = getTrustedWebAuthnOrigins(req);
+    if (originHeader && trusted.includes(originHeader)) {
       try {
         const originHost = new URL(originHeader).hostname.toLowerCase();
         if (originHost) return originHost;
@@ -425,7 +461,8 @@ export function createAppServer(serverOptions = {}) {
         challenge: req.body?.challenge,
         assertion: req.body?.assertion,
         purpose: 'wallet_export',
-        expectedRpId: getRequestRpId(req)
+        expectedRpId: getRequestRpId(req),
+        allowedOrigins: getTrustedWebAuthnOrigins(req)
       });
       const privateKey = decryptPrivateKey(req.user.encrypted_wallet_json);
       res.set('Cache-Control', 'no-store');
@@ -655,7 +692,9 @@ export function createAppServer(serverOptions = {}) {
         const result = await fn(req);
         res.json(result);
       } catch (err) {
-        res.status(err?.statusCode || 400).json({ error: err.message || 'Chat request failed' });
+        res
+          .status(err?.statusCode || 400)
+          .json({ error: err.message || 'Chat request failed', ...(err?.extra || {}) });
       }
     };
   }
@@ -1453,7 +1492,8 @@ export function createAppServer(serverOptions = {}) {
       verifyAndStorePasskeyRegistration(chatDb, {
         user: req.user,
         body: req.body,
-        rpId: getRequestRpId(req)
+        rpId: getRequestRpId(req),
+        allowedOrigins: getTrustedWebAuthnOrigins(req)
       })
     )
   );
@@ -1462,7 +1502,7 @@ export function createAppServer(serverOptions = {}) {
     '/api/passkeys/:id',
     requireAuth,
     handleChatRoute((req) =>
-      deleteUserPasskey(chatDb, { userId: req.user.id, passkeyId: req.params.id })
+      deleteUserPasskey(chatDb, { userId: req.user.id, passkeyId: req.params.id, user: req.user })
     )
   );
 
