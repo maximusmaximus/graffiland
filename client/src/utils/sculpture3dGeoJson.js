@@ -123,7 +123,7 @@ function buildVoxelSculptureFeatures(sc, isSelected) {
 
   // Architectural desktop display scale so AR voxel sculptures stand crisply in 3D inside their parcel
   let stride = 1;
-  let unitMeters = Math.max(0.35, Math.min(1.15, 5.4 / Math.max(spanX, spanZ, 4)));
+  let unitMeters = Math.max(0.45, Math.min(1.5, 7.2 / Math.max(spanX, spanZ, 4)));
 
   const groupColumns = (gridStride) => {
     const colMap = new Map();
