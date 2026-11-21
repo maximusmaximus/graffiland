@@ -195,7 +195,7 @@ export async function registerOrLoginAgentWallet(
     'UPDATE agent_auth_challenges SET used = 1 WHERE nonce = ? AND used = 0',
     [cleanNonce]
   );
-  const changes = Number(consumed?.meta?.changes ?? consumed?.changes ?? 1);
+  const changes = Number(consumed?.meta?.changes ?? consumed?.changes ?? 0);
   if (changes < 1) {
     throw new McpServiceError('Agent auth challenge nonce has already been used.', 400);
   }

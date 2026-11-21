@@ -229,7 +229,10 @@ function getRuntimeConfig(env) {
     pinMasterKek:
       env.PIN_MASTER_KEK || env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-pin-kek',
     relayerDailyQuota: Number(env.RELAYER_DAILY_QUOTA || 25),
-    missingSecrets: ['SESSION_SECRET', 'WALLET_ENCRYPTION_KEY'].filter((k) => !env[k]),
+    missingSecrets: ['SESSION_SECRET', 'WALLET_ENCRYPTION_KEY'].filter((k) => {
+      const val = String(env[k] || '').trim();
+      return !val || val.startsWith('graffiland-worker-dev-');
+    }),
     isLocalDev: isLocalDevUrl(env.PUBLIC_URL)
   };
 }
@@ -360,11 +363,15 @@ function decodePreviewDataUrl(previewDataUrl) {
     // Raster only: an attacker-supplied image/svg+xml preview would be served from the API
     // origin as an active document.
     if (idx !== -1 && SAFE_PREVIEW_MIME.has(mime) && /;base64$/i.test(header)) {
-      const b64 = previewDataUrl.slice(idx + 1);
-      const bin = atob(b64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return { bytes, mime };
+      try {
+        const b64 = previewDataUrl.slice(idx + 1);
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return { bytes, mime };
+      } catch {
+        // Fall back to safe placeholder SVG when client supplies malformed base64.
+      }
     }
   }
   const svg =

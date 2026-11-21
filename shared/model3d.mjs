@@ -419,8 +419,10 @@ export function isBlockedModelHost(rawHost) {
   ) {
     return true;
   }
-  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  const v4 = host.match(/^(\d{1,4})\.(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/);
   if (v4) {
+    // Reject octal-prefixed IPv4 octets (e.g. 0177.0.0.1) defensively even if called outside new URL().
+    if (v4.slice(1).some((part) => part.length > 1 && part.startsWith('0'))) return true;
     const [a, b] = [Number(v4[1]), Number(v4[2])];
     return (
       a === 0 ||
@@ -433,14 +435,15 @@ export function isBlockedModelHost(rawHost) {
       a >= 224
     );
   }
+  // Shorthand numeric IPv4 forms (e.g. 127.1, 127.0.1, 0x7f.1) are never legitimate public hosts.
+  if (/^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,2}$/.test(host)) return true;
   if (host.includes(':')) {
     if (host === '::' || host === '::1') return true;
+    if (/^(?:0{1,4}:){7}0{0,3}[01]$/.test(host) || /^0+::0*[01]?$/.test(host)) return true;
     if (/^f[cd]/.test(host) || /^fe[89ab]/.test(host)) return true;
-    const mapped = host.match(/^::ffff:(.+)$/);
+    const mapped = host.match(/^(?:(?:0{1,4}:){5}|::)ffff:(.+)$/);
     if (mapped) return mapped[1].includes('.') ? isBlockedModelHost(mapped[1]) : true;
   }
-  // Integer / hex / octal IPv4 forms (e.g. 2130706433, 0x7f000001) are never legitimate here.
-  if (/^(0x[0-9a-f]+|\d+)$/.test(host)) return true;
   return false;
 }
 

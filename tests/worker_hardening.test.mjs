@@ -48,10 +48,13 @@ function req(path, init = {}) {
 }
 
 describe('Worker hardening', () => {
-  test('deployed Worker fails closed when session/wallet secrets are missing', async () => {
+  test('deployed Worker fails closed when session/wallet secrets are missing or dev defaults', async () => {
     const env = makeEnv({ SESSION_SECRET: undefined });
     const res = await worker.fetch(req('/api/auth/me'), env);
     assert.equal(res.status, 503);
+    const devDefaultEnv = makeEnv({ SESSION_SECRET: 'graffiland-worker-dev-session-secret' });
+    const res2 = await worker.fetch(req('/api/auth/me'), devDefaultEnv);
+    assert.equal(res2.status, 503);
     const health = await worker.fetch(req('/api/health'), env);
     assert.notEqual(health.status, 503);
   });
@@ -107,6 +110,9 @@ describe('Worker hardening', () => {
       '192.168.0.1',
       '169.254.169.254',
       '[::1]',
+      '0:0:0:0:0:0:0:1',
+      '0177.0.0.1',
+      '127.1',
       'metadata.google.internal',
       '2130706433'
     ]) {
