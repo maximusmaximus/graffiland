@@ -7,6 +7,7 @@ import {
   scaleFootprintToLimit
 } from '../../../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { EmojiInput } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 
 async function copyTextSafe(text) {
@@ -382,9 +383,10 @@ export function DesktopLandBuilderPanel({
                 <div className="land-draft-main">
                   <div className="land-draft-title">
                     <span className="land-draft-index">#{idx + 1}</span>
-                    <input
+                    <EmojiInput
                       type="text"
                       className="land-draft-inline-title"
+                      wrapperStyle={{ flex: '1 1 auto', minWidth: 80, maxWidth: 160 }}
                       aria-label={`Title for plot #${idx + 1}`}
                       maxLength={48}
                       value={draft.customName || ''}
@@ -529,11 +531,12 @@ export function DesktopLandBuilderPanel({
               <label className="land-name-field" htmlFor="land-square-name-input">
                 <span>Land Title</span>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <input
+                  <EmojiInput
                     id="land-square-name-input"
                     type="text"
+                    wrapperStyle={{ flex: 1, minWidth: 0 }}
                     maxLength={48}
-                    placeholder="e.g., Corner Plaza"
+                    placeholder="e.g., Corner Plaza (: for emojis)"
                     value={activeDraft.customName || ''}
                     onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
                   />
@@ -552,11 +555,11 @@ export function DesktopLandBuilderPanel({
               </label>
               <label className="land-name-field" htmlFor="land-square-desc-input">
                 <span>Description (optional)</span>
-                <input
+                <EmojiInput
                   id="land-square-desc-input"
                   type="text"
                   maxLength={240}
-                  placeholder="Short description for visitors & agents"
+                  placeholder="Short description (: for emojis)"
                   value={activeDraft.description || ''}
                   onChange={(e) => onUpdateDraft?.(activeDraft.id, { description: e.target.value })}
                 />

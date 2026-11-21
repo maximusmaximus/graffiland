@@ -842,4 +842,133 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(nearFrozen.getByText(/frozen by the owner/i));
     cleanup();
   });
+
+  test('EmojiInput and EmojiTextarea insert emojis via : shortcode autocomplete & auto-replace while ignoring URLs', async () => {
+    const { EmojiInput, EmojiTextarea } = await loadJsxModule('client/src/components/EmojiField.jsx');
+
+    function Harness() {
+      const [title, setTitle] = React.useState('');
+      const [desc, setDesc] = React.useState('');
+      return React.createElement(
+        'div',
+        null,
+        React.createElement(EmojiInput, {
+          'aria-label': 'Emoji Test Input',
+          value: title,
+          onChange: (e) => setTitle(e.target.value)
+        }),
+        React.createElement(EmojiTextarea, {
+          'aria-label': 'Emoji Test Textarea',
+          value: desc,
+          onChange: (e) => setDesc(e.target.value)
+        })
+      );
+    }
+
+    const view = RTL.render(React.createElement(Harness));
+    const input = view.getByLabelText('Emoji Test Input');
+    const textarea = view.getByLabelText('Emoji Test Textarea');
+
+    // 1) Typing partial `:fir` shows suggestions listbox & Enter inserts 🔥
+    RTL.fireEvent.change(input, { target: { value: 'Neon :fir', selectionStart: 9 } });
+    const listbox = view.getByRole('listbox', { name: /Emoji suggestions/i });
+    assert.ok(listbox.textContent.includes(':fire:'));
+    RTL.fireEvent.keyDown(input, { key: 'Enter' });
+    assert.equal(input.value, 'Neon 🔥');
+
+    // 2) Typing completed `:rocket:` immediately replaces with 🚀
+    RTL.fireEvent.change(textarea, {
+      target: { value: 'Launch :rocket:', selectionStart: 15 }
+    });
+    assert.equal(textarea.value, 'Launch 🚀');
+
+    // 3) URLs and timestamps must NOT trigger emoji autocomplete
+    RTL.fireEvent.change(input, {
+      target: { value: 'Visit https://example.com at 12:30', selectionStart: 34 }
+    });
+    assert.equal(view.queryByRole('listbox', { name: /Emoji suggestions/i }), null);
+    cleanup();
+  });
+
+  test('LandManagementModal is concise with clickable "i" tooltips & supports ":" emojis in Land Name and Description', async () => {
+    const { default: LandManagementModal } = await loadJsxModule(
+      'client/src/components/LandManagementModal.jsx'
+    );
+    const savedCalls = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/lands/mine')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ownerAddress: '0x1234',
+            parcelCount: 1,
+            parcels: [
+              {
+                parcelId: 'GLAND-9Q8YYK8Y',
+                customName: 'Civic Plaza',
+                description: 'Original desc',
+                curationNote: 'Original desc',
+                sculptureCount: 0,
+                frozen: false,
+                settings: { allowAgentErase: true, allowContributorEdits: true, frozen: false },
+                securityPolicy: { requirePasskeyUnlock: false, requireOrbUnlock: false, minOrbInliers: 8 },
+                contributors: [],
+                eligibleVisitors: [],
+                sculptures: []
+              }
+            ]
+          })
+        };
+      }
+      if (u.includes('/api/passkeys/status')) {
+        return { ok: true, json: async () => ({ passkeys: [] }) };
+      }
+      if (u.includes('/update')) {
+        savedCalls.push(JSON.parse(opts.body || '{}'));
+        return { ok: true, json: async () => ({ parcel: { parcelId: 'GLAND-9Q8YYK8Y' } }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(LandManagementModal, {
+          user: { id: 'u1', walletAddress: '0x1234' },
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(view.getByLabelText('Land Name'));
+      });
+
+      // Clickable "i" tooltips reveal extra feature context on demand
+      RTL.fireEvent.click(view.getByRole('button', { name: /Info: Freeze Land/i }));
+      assert.ok(view.getByRole('tooltip').textContent.includes('Blocks all new sculptures'));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Contributors Work/i }));
+      assert.ok(view.getByRole('tooltip').textContent.includes('physically visited'));
+
+      // Type :fire: and :art: into Land Name & Land Description and save
+      RTL.fireEvent.change(view.getByLabelText('Land Name'), {
+        target: { value: 'Sunset Plaza :fire:', selectionStart: 19 }
+      });
+      RTL.fireEvent.change(view.getByLabelText('Land Description'), {
+        target: { value: 'Sculpture park :art:', selectionStart: 20 }
+      });
+      assert.equal(view.getByLabelText('Land Name').value, 'Sunset Plaza 🔥');
+      assert.equal(view.getByLabelText('Land Description').value, 'Sculpture park 🎨');
+
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /Save Land Settings/i }));
+      });
+      assert.equal(savedCalls.length, 1);
+      assert.equal(savedCalls[0].customName, 'Sunset Plaza 🔥');
+      assert.equal(savedCalls[0].description, 'Sculpture park 🎨');
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

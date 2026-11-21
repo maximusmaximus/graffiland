@@ -21,6 +21,7 @@ import {
   copyToClipboard
 } from '../utils/clipboard.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -1262,20 +1263,20 @@ export default function SculptureModal({
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
                 {canModerateLand ? 'Modify Artwork Placed on Your Land' : 'Modify Sculpture as Verified Contributor'}
               </div>
-              <input
+              <EmojiInput
                 className="input"
                 maxLength={48}
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="Sculpture title"
+                placeholder="Sculpture title (type : for emojis)"
               />
-              <textarea
+              <EmojiTextarea
                 className="textarea"
                 rows={2}
                 maxLength={240}
                 value={editDesc}
                 onChange={(e) => setEditDesc(e.target.value)}
-                placeholder="Description"
+                placeholder="Description (type : for emojis)"
               />
               <div className="add-item-offset-row">
                 <label>

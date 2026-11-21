@@ -805,16 +805,28 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.title-land-modal-card', { state: 'detached' });
     await page.waitForSelector('text=/Minted GLAND-/i');
 
-    // Verify minted land has on-map copy share link icon & Land Management lets user edit Land Name + Description
+    // Verify minted land has on-map copy share link icon & cleaned-up Land Management ("i" tooltips + ":" emoji entry)
     await page.waitForSelector('.map3d-parcel-share-btn');
     await page.locator('.desktop-nav').getByRole('button', { name: /Land Management/i }).click();
-    await page.waitForSelector('text=Land Details, Curations & Permissions');
-    await page.getByLabel('Land Name').fill('Market Street Gallery');
-    await page
-      .getByLabel('Land Description')
-      .fill('Updated public sculpture gallery description.');
+    await page.waitForSelector('[aria-label="Land Management"]');
+    await page.getByRole('button', { name: /Info: Freeze Land/i }).click();
+    await page.waitForSelector('[role="tooltip"]');
+    await page.keyboard.press('Escape');
+
+    const landNameInput = page.getByLabel('Land Name', { exact: true });
+    await landNameInput.fill('');
+    await landNameInput.type('Market Gallery :fire:');
+    assert.equal(await landNameInput.inputValue(), 'Market Gallery 🔥');
+
+    const landDescInput = page.getByLabel('Land Description', { exact: true });
+    await landDescInput.fill('');
+    await landDescInput.type('Public sculpture garden :art');
+    await page.waitForSelector('[aria-label="Emoji suggestions"]');
+    await landDescInput.press('Enter');
+    assert.ok((await landDescInput.inputValue()).includes('🎨'));
+
     await page.getByRole('button', { name: /Save Land Settings/i }).click();
-    await page.waitForSelector('text=/Saved settings, permissions/i');
+    await page.waitForSelector('text=/Saved settings for GLAND-/i');
     await page.getByRole('button', { name: /Close land management/i }).click();
     assert.deepEqual(pageErrors, []);
     await context.close();

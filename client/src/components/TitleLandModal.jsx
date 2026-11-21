@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { slugifyLandTitle } from '../../../shared/landVolume.mjs';
+import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function TitleLandModal({
@@ -79,14 +80,14 @@ export default function TitleLandModal({
 
           <label className="land-name-field">
             <span>Land Title / Name</span>
-            <input
+            <EmojiInput
               type="text"
               autoFocus
               aria-label="Land Title"
               maxLength={48}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Civic Neon Plaza"
+              placeholder="e.g. Civic Neon Plaza (type : for emojis)"
             />
           </label>
 
@@ -96,14 +97,14 @@ export default function TitleLandModal({
 
           <label className="land-name-field">
             <span>Land Description (shown to visitors &amp; agents)</span>
-            <textarea
+            <EmojiTextarea
               className="textarea"
               aria-label="Land Description"
               rows={3}
               maxLength={240}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe what belongs on this land or welcome visitors..."
+              placeholder="Describe what belongs on this land (type : for emojis)..."
             />
           </label>
 
