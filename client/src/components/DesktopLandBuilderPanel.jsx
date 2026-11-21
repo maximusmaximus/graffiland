@@ -65,6 +65,9 @@ export function DesktopLandBuilderPanel({
   onMintAll,
   onUpdateOwnedVolume,
   onOpenAddLandItem = null,
+  onOpenTitleDraft = null,
+  onOpenTitleOwned = null,
+  onCopyOwnedShareLink = null,
   onToggleFreezeParcel = null,
   onOpenLandManagement = null,
   mintBusy = false,
@@ -226,10 +229,28 @@ export function DesktopLandBuilderPanel({
       lat: activeVolume.centerLat ?? activeItem.lat,
       lng: activeVolume.centerLng ?? activeItem.lng,
       volume: activeVolume,
-      customName: activeItem.customName
+      customName: activeItem.customName,
+      compact: activeMode === 'owned'
     });
     const ok = await copyTextSafe(shareUrl);
     flashCopy(ok ? `Copied parcel link for ${activeItem.parcelId}` : shareUrl);
+  };
+
+  const handleCopyMintedParcelLink = async (parcel) => {
+    if (!parcel?.parcelId) return;
+    if (onCopyOwnedShareLink) {
+      await onCopyOwnedShareLink(parcel);
+      return;
+    }
+    const shareUrl = buildParcelShareUrl({
+      origin,
+      pathname,
+      parcelId: parcel.parcelId,
+      customName: parcel.customName || '',
+      compact: true
+    });
+    const ok = await copyTextSafe(shareUrl);
+    flashCopy(ok ? `Copied share link for ${parcel.customName || parcel.parcelId}` : shareUrl);
   };
 
   const handleCopyAllForAgent = async () => {
@@ -361,7 +382,18 @@ export function DesktopLandBuilderPanel({
                 <div className="land-draft-main">
                   <div className="land-draft-title">
                     <span className="land-draft-index">#{idx + 1}</span>
-                    <span>{label}</span>
+                    <input
+                      type="text"
+                      className="land-draft-inline-title"
+                      aria-label={`Title for plot #${idx + 1}`}
+                      maxLength={48}
+                      value={draft.customName || ''}
+                      placeholder={`Title ${draft.parcelId}…`}
+                      onFocus={() => onSelectDraft?.(draft.id)}
+                      onChange={(e) =>
+                        onUpdateDraft?.(draft.id, { customName: e.target.value })
+                      }
+                    />
                   </div>
                   <div className="land-draft-meta">
                     {Math.round(draft.widthMeters)}×{Math.round(draft.depthMeters)}×{Math.round(draft.heightMeters)}m · {Math.round(draft.rotationDeg || 0)}° · {Math.round(draft.footprintAreaSqM || 0)} m²
@@ -371,6 +403,20 @@ export function DesktopLandBuilderPanel({
                   <span className={`badge ${hasIssue ? 'badge-error' : 'badge-cyan'}`}>
                     {draft.hasOverlap ? 'Overlap' : draft.valid === false ? 'Limit' : 'Ready'}
                   </span>
+                  {onOpenTitleDraft && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs land-icon-btn"
+                      aria-label={`Title popup for ${label}`}
+                      title="Title & describe land in popup"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenTitleDraft(draft);
+                      }}
+                    >
+                      ✎
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
@@ -419,12 +465,32 @@ export function DesktopLandBuilderPanel({
                       type="button"
                       className="btn btn-xs btn-primary land-owned-plus-btn"
                       aria-label={`Add 3D item to ${parcel.parcelId}`}
-                      title={`Add 3D item to ${parcel.parcelId} (Copy Agent Prompt)`}
+                      title={`Add 3D item to ${parcel.parcelId} (Model Link or Agent Prompt)`}
                       onClick={() => onOpenAddLandItem(parcel)}
                     >
                       +
                     </button>
                   )}
+                  {onOpenTitleOwned && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline land-icon-btn"
+                      aria-label={`Rename ${parcel.parcelId}`}
+                      title="Edit land name & description"
+                      onClick={() => onOpenTitleOwned(parcel)}
+                    >
+                      ✎
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-outline land-icon-btn"
+                    aria-label={`Copy share link for ${parcel.parcelId}`}
+                    title="Copy shareable visit link for this minted parcel"
+                    onClick={() => handleCopyMintedParcelLink(parcel)}
+                  >
+                    🔗
+                  </button>
                 </div>
               );
             })}
@@ -459,17 +525,43 @@ export function DesktopLandBuilderPanel({
           )}
 
           {activeMode === 'draft' && (
-            <label className="land-name-field" htmlFor="land-square-name-input">
-              <span>Label</span>
-              <input
-                id="land-square-name-input"
-                type="text"
-                maxLength={64}
-                placeholder="e.g., Corner Plaza"
-                value={activeDraft.customName || ''}
-                onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
-              />
-            </label>
+            <>
+              <label className="land-name-field" htmlFor="land-square-name-input">
+                <span>Land Title</span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    id="land-square-name-input"
+                    type="text"
+                    maxLength={48}
+                    placeholder="e.g., Corner Plaza"
+                    value={activeDraft.customName || ''}
+                    onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
+                  />
+                  {onOpenTitleDraft && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      aria-label="Open title popup for selected plot"
+                      title="Edit title & description in popup"
+                      onClick={() => onOpenTitleDraft(activeDraft)}
+                    >
+                      ✎
+                    </button>
+                  )}
+                </div>
+              </label>
+              <label className="land-name-field" htmlFor="land-square-desc-input">
+                <span>Description (optional)</span>
+                <input
+                  id="land-square-desc-input"
+                  type="text"
+                  maxLength={240}
+                  placeholder="Short description for visitors & agents"
+                  value={activeDraft.description || ''}
+                  onChange={(e) => onUpdateDraft?.(activeDraft.id, { description: e.target.value })}
+                />
+              </label>
+            </>
           )}
 
           <div className="land-slider-row">
@@ -652,14 +744,27 @@ export function DesktopLandBuilderPanel({
               Copy Parcel Link
             </button>
             {activeMode === 'draft' ? (
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={activeDraft.valid === false || activeDraft.hasOverlap || Boolean(mintBusy)}
-                onClick={() => onMintDraft?.(activeDraft)}
-              >
-                {mintBusy ? 'Minting…' : 'Mint This Land'}
-              </button>
+              <>
+                {onOpenTitleDraft && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    aria-label="Title and mint selected land"
+                    title="Open title popup before minting"
+                    onClick={() => onOpenTitleDraft(activeDraft)}
+                  >
+                    🏷️ Title
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={activeDraft.valid === false || activeDraft.hasOverlap || Boolean(mintBusy)}
+                  onClick={() => onMintDraft?.(activeDraft)}
+                >
+                  {mintBusy ? 'Minting…' : 'Mint This Land'}
+                </button>
+              </>
             ) : (
               <>
                 <button

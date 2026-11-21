@@ -30,6 +30,7 @@ import {
   applyUpdateSculpture,
   updateLandSettings
 } from './landMutations.mjs';
+import { updateLandVolume } from '../agentQuestService.mjs';
 
 export function formatSignatureRequestRow(row) {
   if (!row) return null;
@@ -241,6 +242,12 @@ export async function executeValidatedSignatureRow(
       parcelId: reqRow.parcel_id,
       user: ownerUser,
       body: payload
+    });
+  } else if (reqRow.action === 'update_land_volume') {
+    result = await updateLandVolume(db, {
+      parcelId: reqRow.parcel_id,
+      user: ownerUser,
+      volume: payload.volume || payload
     });
   } else if (reqRow.action === 'update_parcel') {
     const parcelCtx = await checkParcelOwnership(db, {

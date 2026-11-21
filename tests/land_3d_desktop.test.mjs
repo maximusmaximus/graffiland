@@ -733,4 +733,121 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     });
     assert.equal(allowedDirectCreate.status, 200);
   });
+
+  test('Direct 3D model URL validation & upload, land name/description update, and public slug lookup', async () => {
+    const http = await import('node:http');
+    const sampleObj = [
+      'o PyramidMesh',
+      'v 0 0 0',
+      'v 1 0 0',
+      'v 0.5 1 0',
+      'v 0.5 0 1',
+      'f 1 2 3',
+      'f 1 2 4',
+      'f 2 3 4',
+      'f 3 1 4'
+    ].join('\n');
+
+    const assetServer = http.createServer((req, res) => {
+      if (req.url === '/models/neon-pyramid.obj') {
+        res.writeHead(200, { 'Content-Type': 'model/obj' });
+        res.end(sampleObj);
+        return;
+      }
+      if (req.url === '/models/bad.txt') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('just plain text not a 3d mesh');
+        return;
+      }
+      res.writeHead(404);
+      res.end('not found');
+    });
+    await new Promise((r) => assetServer.listen(0, '127.0.0.1', r));
+    const assetBase = `http://127.0.0.1:${assetServer.address().port}`;
+
+    try {
+      // 1) Validate valid .obj URL -> 200 valid: true
+      const okValRes = await fetch(`${baseUrl}/api/models/validate-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({ modelUrl: `${assetBase}/models/neon-pyramid.obj` })
+      });
+      const okVal = await okValRes.json();
+      assert.equal(okValRes.status, 200, JSON.stringify(okVal));
+      assert.equal(okVal.valid, true);
+      assert.equal(okVal.format, 'obj');
+      assert.equal(okVal.stats.triangleCount, 4);
+      assert.equal(okVal.suggestedTitle, 'neon pyramid');
+
+      // 2) Reject unsupported plain text link -> 400 valid: false
+      const badValRes = await fetch(`${baseUrl}/api/models/validate-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({ modelUrl: `${assetBase}/models/bad.txt` })
+      });
+      const badVal = await badValRes.json();
+      assert.equal(badValRes.status, 400);
+      assert.equal(badVal.valid, false);
+
+      // 3) Upload validated URL directly onto owned parcel (without requiring manual modelFormat)
+      const upRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/sculptures`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({
+          title: 'URL Pyramid Statue',
+          description: 'Directly uploaded from validated Wavefront OBJ model URL.',
+          modelUrl: `${assetBase}/models/neon-pyramid.obj`
+        })
+      });
+      const upBody = await upRes.json();
+      assert.equal(upRes.status, 200, JSON.stringify(upBody));
+      assert.equal(upBody.sculpture.modelType, 'custom-3d');
+      assert.equal(upBody.sculpture.customModel.format, 'obj');
+
+      // 4) Update Land Name & Description under Land Management -> resolves by parcelId AND slug
+      const updRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({
+          customName: 'Sunset Neon Courtyard',
+          description: 'Open rooftop plaza for glowing AR voxel art and custom 3D statues.'
+        })
+      });
+      const updBody = await updRes.json();
+      assert.equal(updRes.status, 200, JSON.stringify(updBody));
+      assert.equal(updBody.parcel.customName, 'Sunset Neon Courtyard');
+      assert.equal(
+        updBody.parcel.description,
+        'Open rooftop plaza for glowing AR voxel art and custom 3D statues.'
+      );
+      assert.equal(updBody.parcel.slug, 'sunset-neon-courtyard');
+      assert.ok(updBody.parcel.shareUrl.includes('slug=sunset-neon-courtyard'));
+
+      // Public lookup by slug
+      const bySlugRes = await fetch(`${baseUrl}/api/lands/sunset-neon-courtyard`);
+      const bySlug = await bySlugRes.json();
+      assert.equal(bySlugRes.status, 200, JSON.stringify(bySlug));
+      assert.equal(bySlug.parcel.parcelId, firstClaimedParcelId);
+      assert.equal(bySlug.parcel.customName, 'Sunset Neon Courtyard');
+      assert.equal(
+        bySlug.parcel.description,
+        'Open rooftop plaza for glowing AR voxel art and custom 3D statues.'
+      );
+      assert.ok(bySlug.sculptures.some((s) => s.title === 'URL Pyramid Statue'));
+    } finally {
+      await new Promise((r) => assetServer.close(r));
+    }
+  });
 });

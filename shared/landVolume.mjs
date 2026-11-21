@@ -325,21 +325,68 @@ export function footprintsOverlap(volA, volB, edgeToleranceMeters = 0.15) {
 }
 
 /**
- * Builds a shareable parcel link carrying exact 3D footprint, Z height, and rotation params.
+ * Turns a custom land title into a clean URL-safe slug (e.g. "Civic Neon Plaza" -> "civic-neon-plaza").
+ */
+export function slugifyLandTitle(name = '') {
+  return String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+/**
+ * Parses a shared parcel ID or friendly slug from URL search params or /p/<slug> pathname.
+ */
+export function parseParcelParamFromLocation(search = '', pathname = '') {
+  try {
+    const params = new URLSearchParams(String(search || ''));
+    const rawParcel = String(params.get('parcel') || '').trim();
+    const rawSlug = String(params.get('slug') || '').trim();
+    if (rawParcel) {
+      return { parcelId: rawParcel.toUpperCase(), slug: rawSlug };
+    }
+    if (rawSlug) {
+      return { parcelId: '', slug: rawSlug };
+    }
+    const pathMatch = String(pathname || '').match(/\/p\/([a-z0-9-]+)\/?$/i);
+    if (pathMatch) {
+      const token = pathMatch[1];
+      if (/^GLAND-[0-9A-Z]{6,10}$/i.test(token)) {
+        return { parcelId: token.toUpperCase(), slug: '' };
+      }
+      return { parcelId: '', slug: token.toLowerCase() };
+    }
+  } catch {
+    // ignore malformed URL params
+  }
+  return { parcelId: '', slug: '' };
+}
+
+/**
+ * Builds a shareable parcel link. When `compact: true` (minted parcels), produces a clean
+ * slugged visit link (`?parcel=GLAND-...&slug=...`). Otherwise carries full draft 3D bounds.
  */
 export function buildParcelShareUrl({
   origin = 'https://maximusmaximus.github.io',
   pathname = '/graffiland/',
-  parcelId,
-  lat,
-  lng,
+  parcelId = '',
+  lat = undefined,
+  lng = undefined,
   volume = null,
-  customName = ''
-}) {
+  customName = '',
+  compact = false
+} = {}) {
   const baseOrigin = String(origin || 'https://maximusmaximus.github.io').replace(/\/$/, '');
   const cleanPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
   const url = new URL(`${baseOrigin}${cleanPath}`);
   if (parcelId) url.searchParams.set('parcel', String(parcelId).toUpperCase());
+  const slug = slugifyLandTitle(customName);
+  if (slug) url.searchParams.set('slug', slug);
+  if (compact) {
+    return url.toString();
+  }
   const cLat = Number(volume?.centerLat ?? lat);
   const cLng = Number(volume?.centerLng ?? lng);
   if (Number.isFinite(cLat)) url.searchParams.set('lat', String(Number(cLat.toFixed(6))));
