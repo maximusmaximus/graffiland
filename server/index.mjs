@@ -8,6 +8,7 @@ import express from 'express';
 import { ethers } from 'ethers';
 import { WebSocketServer } from 'ws';
 import { CONFIG, POLICY, ROOT_DIR } from './config.mjs';
+import { verifyPayoutLinkSignature } from '../shared/payoutLinkMessage.mjs';
 import { STEWARD_DEFAULTS, TRANSACTION_FEES } from '../shared/constants.mjs';
 import {
   getAgentProfile,
@@ -141,8 +142,10 @@ import {
 } from '../shared/landmarkService.mjs';
 import {
   deleteUserPasskey,
+  issuePasskeyAssertionOptions,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
+  verifyAndConsumePasskeyAssertionChallenge,
   verifyAndStorePasskeyRegistration
 } from '../shared/passkeyService.mjs';
 import {
@@ -173,9 +176,45 @@ export function createAppServer(serverOptions = {}) {
   const db = getDb();
   const app = express();
 
-  function getRequestRpId(req) {
+  function getTrustedWebAuthnOrigins(req) {
+    const trusted = new Set();
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost')
+      .split(',')[0]
+      .trim();
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
+      .split(',')[0]
+      .trim();
+    if (hostHeader) trusted.add(`${proto}://${hostHeader}`);
+    if (CONFIG.publicUrl) {
+      try {
+        trusted.add(new URL(String(CONFIG.publicUrl)).origin);
+      } catch {
+        // ignore invalid publicUrl
+      }
+    }
     const originHeader = String(req.headers?.origin || '').trim();
     if (originHeader) {
+      try {
+        const ro = new URL(originHeader);
+        const h = ro.hostname.toLowerCase();
+        const hostName = hostHeader.split(':')[0].toLowerCase();
+        if (
+          (hostName === 'localhost' || hostName === '127.0.0.1') &&
+          (h === 'localhost' || h === '127.0.0.1')
+        ) {
+          trusted.add(ro.origin);
+        }
+      } catch {
+        // ignore invalid origin
+      }
+    }
+    return [...trusted];
+  }
+
+  function getRequestRpId(req) {
+    const originHeader = String(req.headers?.origin || '').trim();
+    const trusted = getTrustedWebAuthnOrigins(req);
+    if (originHeader && trusted.includes(originHeader)) {
       try {
         const originHost = new URL(originHeader).hostname.toLowerCase();
         if (originHost) return originHost;
@@ -331,6 +370,50 @@ export function createAppServer(serverOptions = {}) {
       return res.status(400).json({ error: 'Invalid EVM wallet address.' });
     }
     const normalized = raw ? ethers.getAddress(raw) : '';
+    const isEmbedded =
+      normalized && String(req.user.wallet_address || '').toLowerCase() === normalized.toLowerCase();
+    let verifiedProof = null;
+    if (normalized && !isEmbedded) {
+      // The payout address is also treated as an ownership identity (land + sculpture checks),
+      // so require proof of control and refuse addresses already linked to another account.
+      try {
+        verifiedProof = verifyPayoutLinkSignature({
+          userId: req.user.id,
+          address: normalized,
+          issuedAt: req.body?.issuedAt,
+          signature: req.body?.signature
+        });
+      } catch (err) {
+        return res.status(err?.statusCode || 400).json({ error: err.message });
+      }
+      const taken = db
+        .prepare(
+          'SELECT id FROM users WHERE id != ? AND (LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?) LIMIT 1'
+        )
+        .get(req.user.id, normalized.toLowerCase(), normalized.toLowerCase());
+      if (taken) {
+        return res
+          .status(409)
+          .json({ error: 'That wallet address is already linked to another GRAFFILAND account.' });
+      }
+      db.prepare(
+        `INSERT INTO payout_address_proofs (user_id, address, message, signature, verified_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           address = excluded.address,
+           message = excluded.message,
+           signature = excluded.signature,
+           verified_at = excluded.verified_at`
+      ).run(
+        req.user.id,
+        normalized,
+        verifiedProof.message,
+        String(req.body?.signature || '').trim(),
+        new Date().toISOString()
+      );
+    } else {
+      db.prepare('DELETE FROM payout_address_proofs WHERE user_id = ?').run(req.user.id);
+    }
     db.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?').run(
       normalized,
       req.user.id
@@ -339,15 +422,60 @@ export function createAppServer(serverOptions = {}) {
     res.json({ user: sanitizeUser(updated) });
   });
 
-  app.get('/api/wallet/export', requireAuth, (req, res) => {
+  app.get('/api/wallet/export', requireAuth, (_req, res) => {
+    res.status(403).json({
+      error: 'Hardware Passkey verification is required to export your embedded wallet key.',
+      code: 'PASSKEY_REQUIRED'
+    });
+  });
+
+  app.post('/api/wallet/export/challenge', requireAuth, async (req, res) => {
     try {
+      await checkRateLimit(chatDb, {
+        scope: 'wallet_export',
+        key: req.user.id,
+        windowSec: 300,
+        maxRequests: 10
+      });
+      const options = await issuePasskeyAssertionOptions(chatDb, {
+        user: req.user,
+        purpose: 'wallet_export',
+        rpId: getRequestRpId(req)
+      });
+      res.json(options);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message, ...(err?.extra || {}) });
+    }
+  });
+
+  app.post('/api/wallet/export', requireAuth, async (req, res) => {
+    try {
+      await checkRateLimit(chatDb, {
+        scope: 'wallet_export',
+        key: req.user.id,
+        windowSec: 300,
+        maxRequests: 10
+      });
+      await verifyAndConsumePasskeyAssertionChallenge(chatDb, {
+        user: req.user,
+        challenge: req.body?.challenge,
+        assertion: req.body?.assertion,
+        purpose: 'wallet_export',
+        expectedRpId: getRequestRpId(req),
+        allowedOrigins: getTrustedWebAuthnOrigins(req)
+      });
       const privateKey = decryptPrivateKey(req.user.encrypted_wallet_json);
+      res.set('Cache-Control', 'no-store');
       res.json({
         walletAddress: req.user.wallet_address,
         privateKey
       });
-    } catch {
-      res.status(500).json({ error: 'Failed to export embedded wallet' });
+    } catch (err) {
+      const status = err?.statusCode || 500;
+      res.status(status).json({
+        error: err?.message || 'Failed to export embedded wallet',
+        ...(err?.extra || {})
+      });
     }
   });
 
@@ -564,7 +692,9 @@ export function createAppServer(serverOptions = {}) {
         const result = await fn(req);
         res.json(result);
       } catch (err) {
-        res.status(err?.statusCode || 400).json({ error: err.message || 'Chat request failed' });
+        res
+          .status(err?.statusCode || 400)
+          .json({ error: err.message || 'Chat request failed', ...(err?.extra || {}) });
       }
     };
   }
@@ -1362,7 +1492,8 @@ export function createAppServer(serverOptions = {}) {
       verifyAndStorePasskeyRegistration(chatDb, {
         user: req.user,
         body: req.body,
-        rpId: getRequestRpId(req)
+        rpId: getRequestRpId(req),
+        allowedOrigins: getTrustedWebAuthnOrigins(req)
       })
     )
   );
@@ -1371,7 +1502,7 @@ export function createAppServer(serverOptions = {}) {
     '/api/passkeys/:id',
     requireAuth,
     handleChatRoute((req) =>
-      deleteUserPasskey(chatDb, { userId: req.user.id, passkeyId: req.params.id })
+      deleteUserPasskey(chatDb, { userId: req.user.id, passkeyId: req.params.id, user: req.user })
     )
   );
 

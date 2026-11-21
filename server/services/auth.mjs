@@ -26,7 +26,9 @@ export async function verifyGoogleSignIn({ credential, devProfile }) {
   }
 
   if (CONFIG.allowDevGoogleAuth && devProfile) {
-    const email = String(devProfile.email || '').trim().toLowerCase();
+    const email = String(devProfile.email || '')
+      .trim()
+      .toLowerCase();
     const name = String(devProfile.name || '').trim() || email.split('@')[0] || 'Artist';
     if (!email || !email.includes('@')) {
       throw new Error('Valid email is required for Google dev sign-in');
@@ -49,21 +51,25 @@ export function upsertGoogleUser(profile) {
 
   const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(profile.sub);
   if (existing) {
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE users
       SET email = ?, name = ?, picture = ?, is_admin = ?, last_login_at = ?
       WHERE id = ?
-    `).run(profile.email, profile.name, profile.picture, isAdmin, now, profile.sub);
+    `
+    ).run(profile.email, profile.name, profile.picture, isAdmin, now, profile.sub);
     return db.prepare('SELECT * FROM users WHERE id = ?').get(profile.sub);
   }
 
   const wallet = createEncryptedWallet();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO users (
       id, email, name, picture, wallet_address, encrypted_wallet_json,
       custom_payout_address, is_admin, created_at, last_login_at
     ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)
-  `).run(
+  `
+  ).run(
     profile.sub,
     profile.email,
     profile.name,
@@ -113,6 +119,23 @@ export function getAuthUserFromRequest(req) {
     const db = getDb();
     const userRow = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.sub) || null;
     if (!userRow) return null;
+    if (
+      userRow.custom_payout_address &&
+      String(userRow.custom_payout_address).toLowerCase() !==
+        String(userRow.wallet_address || '').toLowerCase()
+    ) {
+      let proof = null;
+      try {
+        proof = db
+          .prepare(
+            'SELECT user_id FROM payout_address_proofs WHERE user_id = ? AND LOWER(address) = ?'
+          )
+          .get(userRow.id, String(userRow.custom_payout_address).toLowerCase());
+      } catch {
+        proof = null;
+      }
+      if (!proof) userRow.custom_payout_address = '';
+    }
     if (decoded.actorType === 'agent' || String(userRow.id).startsWith('agent:')) {
       const agentRow = db
         .prepare('SELECT * FROM agent_accounts WHERE agent_id = ?')
@@ -125,6 +148,7 @@ export function getAuthUserFromRequest(req) {
           .get(agentRow.agent_id);
         return {
           ...userRow,
+          sessionIssuedAt: Number(decoded.iat || 0),
           actorType: 'agent',
           agent: formatAgentProfile(agentRow, {
             activeDormantSlots: Number(slotRow?.cnt || 0)
@@ -132,7 +156,7 @@ export function getAuthUserFromRequest(req) {
         };
       }
     }
-    return userRow;
+    return { ...userRow, sessionIssuedAt: Number(decoded.iat || 0) };
   } catch {
     return null;
   }

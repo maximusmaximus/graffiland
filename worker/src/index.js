@@ -116,8 +116,10 @@ import {
 } from '../../shared/landmarkService.mjs';
 import {
   deleteUserPasskey,
+  issuePasskeyAssertionOptions,
   issuePasskeyRegistrationOptions,
   listUserPasskeys,
+  verifyAndConsumePasskeyAssertionChallenge,
   verifyAndStorePasskeyRegistration
 } from '../../shared/passkeyService.mjs';
 import {
@@ -130,6 +132,7 @@ import {
   buildPropertyOwnerPrompt,
   normalizePairingCode
 } from '../../shared/landSignatureMessage.mjs';
+import { verifyPayoutLinkSignature } from '../../shared/payoutLinkMessage.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import {
   haversineMeters,
@@ -149,14 +152,50 @@ const NFT_ABI = [
   'event SculptureMinted(uint256 indexed tokenId, address indexed recipient, bytes32 indexed landParcelId, bytes32 proofOfLocationHash, string tokenURI, int32 latE6, int32 lngE6)'
 ];
 
-function resolveWorkerRpId(request, fallbackUrl) {
-  const originHeader = request.headers.get('Origin');
-  if (originHeader) {
+function resolveTrustedWebAuthnOrigins(request, cfg) {
+  const trusted = new Set();
+  let publicHost = 'localhost';
+  try {
+    const pu = new URL(String(cfg?.publicUrl || ''));
+    if (pu.origin) trusted.add(pu.origin);
+    publicHost = pu.hostname.toLowerCase();
+  } catch {
+    // ignore invalid publicUrl
+  }
+  const isLocalPublic =
+    publicHost === 'localhost' || publicHost === '127.0.0.1' || publicHost.endsWith('.local');
+  const reqOrigin = String(request?.headers?.get?.('Origin') || '').trim();
+  if (reqOrigin && isLocalPublic) {
+    try {
+      const ro = new URL(reqOrigin);
+      const h = ro.hostname.toLowerCase();
+      if (h === 'localhost' || h === '127.0.0.1' || h.endsWith('.local')) {
+        trusted.add(ro.origin);
+      }
+    } catch {
+      // ignore invalid Origin
+    }
+  }
+  return [...trusted];
+}
+
+function resolveWorkerRpId(request, fallbackUrl, cfg = null) {
+  const originHeader = String(request?.headers?.get?.('Origin') || '').trim();
+  const trusted = cfg ? resolveTrustedWebAuthnOrigins(request, cfg) : [];
+  if (originHeader && (trusted.length === 0 || trusted.includes(originHeader))) {
     try {
       const originHost = new URL(originHeader).hostname.toLowerCase();
       if (originHost) return originHost;
     } catch {
       // ignore invalid origin
+    }
+  }
+  if (cfg?.publicUrl) {
+    try {
+      const pubHost = new URL(String(cfg.publicUrl)).hostname.toLowerCase();
+      if (pubHost) return pubHost;
+    } catch {
+      // ignore invalid publicUrl
     }
   }
   return (fallbackUrl?.hostname || 'localhost').toLowerCase();
@@ -292,6 +331,19 @@ async function getAuthUser(request, env, cfg) {
     const decoded = await verifyJwt(token, cfg.sessionSecret);
     const userRow = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(decoded.sub).first();
     if (!userRow) return null;
+    if (
+      userRow.custom_payout_address &&
+      String(userRow.custom_payout_address).toLowerCase() !==
+        String(userRow.wallet_address || '').toLowerCase()
+    ) {
+      const proof = await env.DB.prepare(
+        'SELECT user_id FROM payout_address_proofs WHERE user_id = ? AND LOWER(address) = ?'
+      )
+        .bind(userRow.id, String(userRow.custom_payout_address).toLowerCase())
+        .first()
+        .catch(() => null);
+      if (!proof) userRow.custom_payout_address = '';
+    }
     if (decoded.actorType === 'agent' || String(userRow.id).startsWith('agent:')) {
       const agentRow = await env.DB.prepare('SELECT * FROM agent_accounts WHERE agent_id = ?')
         .bind(userRow.id)
@@ -304,6 +356,7 @@ async function getAuthUser(request, env, cfg) {
           .first();
         return {
           ...userRow,
+          sessionIssuedAt: Number(decoded.iat || 0),
           actorType: 'agent',
           agent: formatAgentProfile(agentRow, {
             activeDormantSlots: Number(slotRow?.cnt || 0)
@@ -311,7 +364,7 @@ async function getAuthUser(request, env, cfg) {
         };
       }
     }
-    return userRow;
+    return { ...userRow, sessionIssuedAt: Number(decoded.iat || 0) };
   } catch {
     return null;
   }
@@ -1125,6 +1178,56 @@ export default {
         return jsonResponse({ error: 'Invalid EVM wallet address.' }, 400, request);
       }
       const normalized = raw ? ethers.getAddress(raw) : '';
+      const isEmbedded =
+        normalized && String(user.wallet_address || '').toLowerCase() === normalized.toLowerCase();
+      if (normalized && !isEmbedded) {
+        // The payout address doubles as an ownership identity (land + sculpture checks), so
+        // require proof of control and refuse addresses already linked to another account.
+        let verifiedProof;
+        try {
+          verifiedProof = verifyPayoutLinkSignature({
+            userId: user.id,
+            address: normalized,
+            issuedAt: body?.issuedAt,
+            signature: body?.signature
+          });
+        } catch (err) {
+          return jsonResponse({ error: err.message }, err?.statusCode || 400, request);
+        }
+        const taken = await env.DB.prepare(
+          'SELECT id FROM users WHERE id != ? AND (LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?) LIMIT 1'
+        )
+          .bind(user.id, normalized.toLowerCase(), normalized.toLowerCase())
+          .first();
+        if (taken) {
+          return jsonResponse(
+            { error: 'That wallet address is already linked to another GRAFFILAND account.' },
+            409,
+            request
+          );
+        }
+        await env.DB.prepare(
+          `INSERT INTO payout_address_proofs (user_id, address, message, signature, verified_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             address = excluded.address,
+             message = excluded.message,
+             signature = excluded.signature,
+             verified_at = excluded.verified_at`
+        )
+          .bind(
+            user.id,
+            normalized,
+            verifiedProof.message,
+            String(body?.signature || '').trim(),
+            new Date().toISOString()
+          )
+          .run();
+      } else {
+        await env.DB.prepare('DELETE FROM payout_address_proofs WHERE user_id = ?')
+          .bind(user.id)
+          .run();
+      }
       await env.DB.prepare('UPDATE users SET custom_payout_address = ? WHERE id = ?')
         .bind(normalized, user.id)
         .run();
@@ -1135,14 +1238,79 @@ export default {
     if (pathname === '/api/wallet/export' && request.method === 'GET') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      return jsonResponse(
+        {
+          error: 'Hardware Passkey verification is required to export your embedded wallet key.',
+          code: 'PASSKEY_REQUIRED'
+        },
+        403,
+        request
+      );
+    }
+
+    if (pathname === '/api/wallet/export/challenge' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'wallet_export',
+          key: user.id,
+          windowSec: 300,
+          maxRequests: 10
+        });
+        const options = await issuePasskeyAssertionOptions(d1Adapter, {
+          user,
+          purpose: 'wallet_export',
+          rpId: resolveWorkerRpId(request, url, cfg)
+        });
+        return jsonResponse(options, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Passkey challenge failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/wallet/export' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        await checkRateLimit(d1Adapter, {
+          scope: 'wallet_export',
+          key: user.id,
+          windowSec: 300,
+          maxRequests: 10
+        });
+        const body = await request.json().catch(() => ({}));
+        const allowedOrigins = resolveTrustedWebAuthnOrigins(request, cfg);
+        await verifyAndConsumePasskeyAssertionChallenge(d1Adapter, {
+          user,
+          challenge: body?.challenge,
+          assertion: body?.assertion,
+          purpose: 'wallet_export',
+          expectedRpId: resolveWorkerRpId(request, url, cfg),
+          allowedOrigins
+        });
         const privateKey = await decryptWalletPrivateKey(
           user.encrypted_wallet_json,
           cfg.walletEncryptionKey
         );
-        return jsonResponse({ walletAddress: user.wallet_address, privateKey }, 200, request);
-      } catch {
-        return jsonResponse({ error: 'Failed to decrypt embedded wallet' }, 500, request);
+        return new Response(JSON.stringify({ walletAddress: user.wallet_address, privateKey }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            ...corsHeaders(request)
+          }
+        });
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Failed to export embedded wallet', ...(err?.extra || {}) },
+          err?.statusCode || 500,
+          request
+        );
       }
     }
 
@@ -1906,11 +2074,19 @@ export default {
     if (pathname === '/api/passkeys/register/options' && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
-      const opts = await issuePasskeyRegistrationOptions(user, {
-        db: d1Adapter,
-        rpId: resolveWorkerRpId(request, url)
-      });
-      return jsonResponse(opts, 200, request);
+      try {
+        const opts = await issuePasskeyRegistrationOptions(user, {
+          db: d1Adapter,
+          rpId: resolveWorkerRpId(request, url, cfg)
+        });
+        return jsonResponse(opts, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Passkey registration options failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
     }
 
     if (pathname === '/api/passkeys/register/verify' && request.method === 'POST') {
@@ -1918,25 +2094,20 @@ export default {
       if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
       try {
         const body = await request.json().catch(() => ({}));
-        const reqOrigin = request.headers.get('Origin') || '';
-        const allowedOrigins = reqOrigin
-          ? [cfg.publicUrl, reqOrigin].map((u) => {
-              try {
-                return new URL(u).origin;
-              } catch {
-                return '';
-              }
-            }).filter(Boolean)
-          : [];
+        const allowedOrigins = resolveTrustedWebAuthnOrigins(request, cfg);
         const out = await verifyAndStorePasskeyRegistration(d1Adapter, {
           user,
           body,
-          rpId: resolveWorkerRpId(request, url),
+          rpId: resolveWorkerRpId(request, url, cfg),
           allowedOrigins
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
-        return jsonResponse({ error: err.message || 'Passkey registration failed' }, err?.statusCode || 400, request);
+        return jsonResponse(
+          { error: err.message || 'Passkey registration failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
@@ -1947,11 +2118,16 @@ export default {
       try {
         const out = await deleteUserPasskey(d1Adapter, {
           userId: user.id,
-          passkeyId: decodeURIComponent(pkDelMatch[1])
+          passkeyId: decodeURIComponent(pkDelMatch[1]),
+          user
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
-        return jsonResponse({ error: err.message || 'Passkey removal failed' }, err?.statusCode || 400, request);
+        return jsonResponse(
+          { error: err.message || 'Passkey removal failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
