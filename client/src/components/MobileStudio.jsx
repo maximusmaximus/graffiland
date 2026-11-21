@@ -730,6 +730,20 @@ export default function MobileStudio({
           dockOpen={dockOpen}
           location={pol.location}
           pairedCode={pairing.pairedCode}
+          videoRef={pol.videoRef}
+          pairCodeInput={pairing.pairCodeInput}
+          setPairCodeInput={pairing.setPairCodeInput}
+          pairError={pairing.pairError}
+          onConnectPairCode={pairing.connectPairCode}
+          onDisconnectDesktopPair={pairing.disconnectDesktopPair}
+          mcpPairingsState={pairing.mcpPairingsState}
+          mcpPairBusy={pairing.mcpPairBusy}
+          mcpPairNotice={pairing.mcpPairNotice}
+          setMcpPairNotice={pairing.setMcpPairNotice}
+          onCreateMcpPairing={pairing.handleCreateMcpPairing}
+          onDisconnectMcpPairing={pairing.handleDisconnectMcpPairing}
+          onOpenAgentHandoff={drafts.openAgentHandoff}
+          onOpenLogin={() => setLoginOpen(true)}
           voxels={brush.voxels}
           quickSculpt={quickSculpt}
           onToggleQuickSculpt={handleToggleQuickSculpt}
@@ -776,9 +790,11 @@ export default function MobileStudio({
             setLoginOpen(true);
           }}
           pendingSignatures={pairing.pendingSignatures}
+          signatureHistory={pairing.signatureHistory}
           pendingSigBusyId={pairing.pendingSigBusyId}
           onMobileSignPending={pairing.handleMobileSignPending}
           onMobileRejectPending={pairing.handleMobileRejectPending}
+          onRefreshSignatures={pairing.refreshPendingSignatures}
           mapOpen={ar.mapOpen}
           nearbyCount={ar.nearbySculptures.length}
           onOpenAreaMap={ar.openAreaMap}
@@ -894,11 +910,13 @@ export default function MobileStudio({
       {pairing.pairOpen && (
         <PairDesktopMcpModal
           user={user}
+          videoRef={pol.videoRef}
           pairCodeInput={pairing.pairCodeInput}
           setPairCodeInput={pairing.setPairCodeInput}
           pairedCode={pairing.pairedCode}
           pairError={pairing.pairError}
           onConnectPairCode={pairing.connectPairCode}
+          onDisconnectDesktopPair={pairing.disconnectDesktopPair}
           mcpPairingsState={pairing.mcpPairingsState}
           mcpPairBusy={pairing.mcpPairBusy}
           mcpPairNotice={pairing.mcpPairNotice}

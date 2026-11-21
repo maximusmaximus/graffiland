@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import XeroIcon from '../XeroIcon.jsx';
+import MobilePairApprovalDropdown from './MobilePairApprovalDropdown.jsx';
 
 export default function StudioHudTopBar({
   user,
@@ -7,6 +8,20 @@ export default function StudioHudTopBar({
   dockOpen,
   location,
   pairedCode,
+  videoRef = null,
+  pairCodeInput = '',
+  setPairCodeInput,
+  pairError = '',
+  onConnectPairCode,
+  onDisconnectDesktopPair,
+  mcpPairingsState = { mcpActive: false, activePairing: null, pairings: [] },
+  mcpPairBusy = false,
+  mcpPairNotice = '',
+  setMcpPairNotice,
+  onCreateMcpPairing,
+  onDisconnectMcpPairing,
+  onOpenAgentHandoff,
+  onOpenLogin,
   voxels,
   quickSculpt,
   onToggleQuickSculpt,
@@ -41,10 +56,12 @@ export default function StudioHudTopBar({
   originStatus,
   sceneScan,
   onOpenLoginFromHint,
-  pendingSignatures,
-  pendingSigBusyId,
+  pendingSignatures = [],
+  signatureHistory = [],
+  pendingSigBusyId = '',
   onMobileSignPending,
   onMobileRejectPending,
+  onRefreshSignatures,
   mapOpen,
   nearbyCount,
   onOpenAreaMap,
@@ -52,54 +69,153 @@ export default function StudioHudTopBar({
   selectedPlinthSlot = null,
   onSnapToPlinthSlot = null
 }) {
+  const [pairHubOpen, setPairHubOpen] = useState(false);
+  const [pairHubTab, setPairHubTab] = useState('pair');
+
+  const pendingCount = pendingSignatures.length;
+  const isPaired = Boolean(pairedCode || mcpPairingsState?.mcpActive);
+
+  const togglePairHub = (preferredTab = '') => {
+    if (pairHubOpen && (!preferredTab || preferredTab === pairHubTab)) {
+      setPairHubOpen(false);
+      return;
+    }
+    const nextTab = preferredTab || (pendingCount > 0 ? 'pending' : 'pair');
+    setPairHubTab(nextTab);
+    setPairHubOpen(true);
+  };
+
   return (
     <>
-      <button
-        className="info-fab"
-        onClick={onOpenInfo}
-        aria-label="Info and Terms"
-        title="Info & Terms"
-      >
-        <XeroIcon emoji="ℹ️" size={24} label="Info" />
-      </button>
+      <div className="mobile-top-hud-right hud-interactive">
+        <div className="mobile-top-hud-row">
+          <button
+            type="button"
+            data-pair-hub-trigger="1"
+            data-testid="mobile-pair-hub-btn"
+            className={`top-mini-pill pair-hub-pill ${pairHubOpen ? 'active' : ''} ${
+              isPaired ? 'is-paired' : ''
+            } ${pendingCount > 0 ? 'has-pending' : ''}`}
+            onClick={() => togglePairHub()}
+            aria-label={
+              pendingCount > 0
+                ? `Pairing and Approvals (${pendingCount} pending)`
+                : 'Pairing and Approvals'
+            }
+            aria-expanded={pairHubOpen}
+            aria-haspopup="dialog"
+            title="Pair Desktop QR, copy Agent Connector, and approve pending agent requests"
+          >
+            <XeroIcon emoji="🔗" size={13} />
+            <span>{isPaired ? 'Paired' : 'Pair'}</span>
+            {isPaired && <span className="pair-live-dot" aria-hidden="true" />}
+            {pendingCount > 0 && (
+              <span
+                className="pair-notify-badge"
+                data-testid="mobile-pending-pill"
+                aria-label={`${pendingCount} pending approvals`}
+              >
+                {pendingCount}
+              </span>
+            )}
+          </button>
 
-      <div className="top-mode-pills hud-interactive">
-        <button
-          type="button"
-          className={`top-mini-pill ${quickSculpt ? 'active' : ''}`}
-          onClick={onToggleQuickSculpt}
-          title={
-            quickSculpt
-              ? 'Quick Sculpt active (simplified HUD) — tap for Pro Mode'
-              : 'Pro HUD active — tap for simplified Quick Sculpt Mode'
-          }
-        >
-          <XeroIcon emoji="⚡" size={13} />
-          <span>{quickSculpt ? 'Quick' : 'Pro'}</span>
-        </button>
-        <button
-          type="button"
-          className="top-mini-pill"
-          onClick={onOpenTutorial}
-          aria-label="Open Tutorial Guide"
-          title="Quick Start Tutorial"
-        >
-          <XeroIcon emoji="❓" size={13} />
-        </button>
+          <button
+            type="button"
+            className={`top-mini-pill ${quickSculpt ? 'active' : ''}`}
+            onClick={onToggleQuickSculpt}
+            title={
+              quickSculpt
+                ? 'Quick Sculpt active (simplified HUD) — tap for Pro Mode'
+                : 'Pro HUD active — tap for simplified Quick Sculpt Mode'
+            }
+          >
+            <XeroIcon emoji="⚡" size={13} />
+            <span>{quickSculpt ? 'Quick' : 'Pro'}</span>
+          </button>
+
+          <button
+            type="button"
+            className="info-fab-inline"
+            onClick={onOpenInfo}
+            aria-label="Info and Terms"
+            title="Info & Terms"
+          >
+            <XeroIcon emoji="ℹ️" size={19} label="Info" />
+          </button>
+        </div>
+
+        <div className="mobile-top-hud-subrow">
+          {pendingCount > 0 && !pairHubOpen && (
+            <button
+              type="button"
+              data-pair-hub-trigger="1"
+              data-testid="mobile-pending-alert-pill"
+              className="pending-alert-pill"
+              onClick={() => togglePairHub('pending')}
+              aria-label={`Review ${pendingCount} pending approval${pendingCount === 1 ? '' : 's'}`}
+            >
+              <XeroIcon emoji="🔔" size={12} />
+              <span>
+                {pendingCount} pending approval{pendingCount === 1 ? '' : 's'}
+              </span>
+              <span aria-hidden="true">▾</span>
+            </button>
+          )}
+
+          {hasOwnedLand && (
+            <button
+              type="button"
+              className="land-manage-pill"
+              onClick={onOpenLandManage}
+              aria-label="Land Management"
+              title="Land Management (Contributors, 3D Models & Agent Controls)"
+            >
+              <XeroIcon emoji="🗺️" size={14} label="Land" />
+              <span>Land ({ownedLandCount})</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="top-mini-pill"
+            onClick={onOpenTutorial}
+            aria-label="Open Tutorial Guide"
+            title="Quick Start Tutorial"
+          >
+            <XeroIcon emoji="❓" size={13} />
+          </button>
+        </div>
+
+        <MobilePairApprovalDropdown
+          open={pairHubOpen}
+          activeTab={pairHubTab}
+          onSelectTab={setPairHubTab}
+          onClose={() => setPairHubOpen(false)}
+          user={user}
+          onOpenLogin={onOpenLogin || onOpenLoginFromHint}
+          videoRef={videoRef}
+          pairCodeInput={pairCodeInput}
+          setPairCodeInput={setPairCodeInput}
+          pairedCode={pairedCode}
+          pairError={pairError}
+          onConnectPairCode={onConnectPairCode}
+          onDisconnectDesktopPair={onDisconnectDesktopPair}
+          mcpPairingsState={mcpPairingsState}
+          mcpPairBusy={mcpPairBusy}
+          mcpPairNotice={mcpPairNotice}
+          setMcpPairNotice={setMcpPairNotice}
+          onCreateMcpPairing={onCreateMcpPairing}
+          onDisconnectMcpPairing={onDisconnectMcpPairing}
+          onOpenAgentHandoff={onOpenAgentHandoff}
+          pendingSignatures={pendingSignatures}
+          signatureHistory={signatureHistory}
+          pendingSigBusyId={pendingSigBusyId}
+          onMobileSignPending={onMobileSignPending}
+          onMobileRejectPending={onMobileRejectPending}
+          onRefreshSignatures={onRefreshSignatures}
+        />
       </div>
-
-      {hasOwnedLand && (
-        <button
-          type="button"
-          className="land-manage-fab hud-interactive"
-          onClick={onOpenLandManage}
-          aria-label="Land Management"
-          title="Land Management (Contributors, 3D Models & Agent Controls)"
-        >
-          <XeroIcon emoji="🗺️" size={18} label="Land" />
-          <span>Land ({ownedLandCount})</span>
-        </button>
-      )}
 
       {editingSculpture && (
         <div
@@ -436,56 +552,6 @@ export default function StudioHudTopBar({
             <XeroIcon emoji="⚠️" size={14} />
             <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
           </span>
-        </div>
-      )}
-
-      {pendingSignatures.length > 0 && !arSelectHint && (
-        <div
-          className={`mobile-hud-banner hud-interactive ${dockOpen && mode === 'draw' ? 'under-pol' : ''}`}
-          role="status"
-          aria-live="polite"
-          style={{
-            borderColor: 'rgba(255, 209, 102, 0.72)',
-            background: 'rgba(32, 24, 10, 0.94)',
-            zIndex: 29
-          }}
-        >
-          {(() => {
-            const reqItem = pendingSignatures[0];
-            const busy = pendingSigBusyId === reqItem.id;
-            return (
-              <>
-                <span className="mobile-hud-banner-text">
-                  <XeroIcon emoji="✍️" size={14} />
-                  <span>
-                    Agent <strong>{reqItem.agentName || 'MCP Agent'}</strong> requests signature to{' '}
-                    <strong>{reqItem.action.replace(/_/g, ' ')}</strong> on{' '}
-                    <span className="mono">{reqItem.parcelId}</span>
-                  </span>
-                </span>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ padding: '4px 10px', fontSize: 11 }}
-                    disabled={busy}
-                    onClick={() => onMobileSignPending(reqItem)}
-                  >
-                    {busy ? 'Signing...' : '✍️ Sign & Approve'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    style={{ padding: '4px 9px', fontSize: 11 }}
-                    disabled={busy}
-                    onClick={() => onMobileRejectPending(reqItem.id)}
-                  >
-                    Reject
-                  </button>
-                </div>
-              </>
-            );
-          })()}
         </div>
       )}
 

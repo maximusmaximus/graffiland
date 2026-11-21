@@ -46,6 +46,7 @@ export function usePairing({
   const [mcpPairBusy, setMcpPairBusy] = useState(false);
   const [mcpPairNotice, setMcpPairNotice] = useState('');
   const [pendingSignatures, setPendingSignatures] = useState([]);
+  const [signatureHistory, setSignatureHistory] = useState([]);
   const [pendingSigBusyId, setPendingSigBusyId] = useState('');
   const [agentPublishPrompt, setAgentPublishPrompt] = useState(null);
 
@@ -72,12 +73,16 @@ export function usePairing({
   const refreshPendingSignatures = useCallback(async () => {
     if (!user?.id) {
       setPendingSignatures([]);
+      setSignatureHistory([]);
       return [];
     }
     try {
-      const res = await api.listPendingSignatures();
+      const res = await api.listPendingSignatures({ includeHistory: true });
       const list = res.requests || [];
       setPendingSignatures(list);
+      if (Array.isArray(res.history)) {
+        setSignatureHistory(res.history);
+      }
       return list;
     } catch {
       return [];
@@ -88,6 +93,7 @@ export function usePairing({
     if (!user?.id) {
       setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
       setPendingSignatures([]);
+      setSignatureHistory([]);
       return undefined;
     }
     refreshMcpPairings();
@@ -250,6 +256,17 @@ export function usePairing({
     [refreshMcpPairings]
   );
 
+  const disconnectDesktopPair = useCallback(() => {
+    try {
+      wsRef.current?.close();
+    } catch {
+      // ignore
+    }
+    wsRef.current = null;
+    setPairedCode('');
+    setPairError('');
+  }, []);
+
   const handleMobileSignPending = useCallback(
     async (reqItem) => {
       if (!reqItem?.id) return;
@@ -306,6 +323,7 @@ export function usePairing({
     pairedCode,
     pairError,
     connectPairCode,
+    disconnectDesktopPair,
     mcpPairingsState,
     mcpPairBusy,
     mcpPairNotice,
@@ -314,6 +332,7 @@ export function usePairing({
     handleCreateMcpPairing,
     handleDisconnectMcpPairing,
     pendingSignatures,
+    signatureHistory,
     pendingSigBusyId,
     refreshPendingSignatures,
     handleMobileSignPending,

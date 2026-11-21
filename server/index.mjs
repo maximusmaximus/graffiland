@@ -126,6 +126,7 @@ import {
   listMcpPairings,
   listPendingSignaturesForUser,
   listSculptureRevisions,
+  listSignatureHistoryForUser,
   rejectSignatureRequest,
   removeLandContributor,
   signRequestByAgent,
@@ -1510,7 +1511,23 @@ export function createAppServer(serverOptions = {}) {
   app.get(
     '/api/signatures/pending',
     requireAuth,
-    handleChatRoute((req) => listPendingSignaturesForUser(chatDb, { user: req.user }))
+    handleChatRoute((req) =>
+      listPendingSignaturesForUser(chatDb, {
+        user: req.user,
+        includeHistory: String(req.query?.includeHistory || '') === '1'
+      })
+    )
+  );
+
+  app.get(
+    '/api/signatures/history',
+    requireAuth,
+    handleChatRoute((req) =>
+      listSignatureHistoryForUser(chatDb, {
+        user: req.user,
+        limit: Number(req.query?.limit || 40)
+      })
+    )
   );
 
   app.post('/api/signatures/requests', requireAuth, async (req, res) => {

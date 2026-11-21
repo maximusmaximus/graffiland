@@ -32,9 +32,127 @@ import {
 } from './landMutations.mjs';
 import { updateLandVolume } from '../agentQuestService.mjs';
 
+export function describeSignatureAction({ action, parcelId = '', sculptureId = '', payload = {} }) {
+  const p = /** @type {any} */ (payload && typeof payload === 'object' ? payload : {});
+  const clip = (text, max = 110) => {
+    const clean = String(text || '').trim().replace(/\s+/g, ' ').replace(/\.+$/, '');
+    return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  };
+  const target = parcelId ? `parcel ${parcelId}` : 'your land';
+
+  if (action === 'create_sculpture') {
+    const title = clip(p.title || 'Untitled Artwork', 56);
+    const fmt = String(p.modelFormat || '').trim().toUpperCase();
+    const voxelCount = Array.isArray(p.voxels) ? p.voxels.length : 0;
+    const kind = fmt ? `${fmt} 3D model` : voxelCount > 0 ? `${voxelCount}-block voxel sculpture` : '3D artwork';
+    const desc = clip(p.description || '');
+    return {
+      summaryTitle: `Place "${title}"`,
+      summaryDescription: `Add ${kind} on ${target}${desc ? ` — ${desc}` : ''}.`
+    };
+  }
+  if (action === 'update_sculpture') {
+    const changes = [];
+    if (p.title) changes.push(`rename to "${clip(p.title, 40)}"`);
+    if (p.description) changes.push('update description');
+    if (p.modelFormat || p.modelUrl || p.modelBase64 || p.modelData) changes.push('replace 3D model');
+    else if (Array.isArray(p.voxels)) changes.push(`replace ${p.voxels.length} voxels`);
+    if (p.anchorOffset) changes.push('adjust placement offset');
+    const detail = changes.length ? changes.join(', ') : 'modify sculpture metadata';
+    return {
+      summaryTitle: p.title ? `Update "${clip(p.title, 48)}"` : 'Update Artwork',
+      summaryDescription: `${detail.charAt(0).toUpperCase()}${detail.slice(1)} on ${target}.`
+    };
+  }
+  if (action === 'set_sculpture_visibility') {
+    const hiding = Boolean(p.hidden);
+    const reason = clip(p.reason || '');
+    return {
+      summaryTitle: hiding ? 'Hide Artwork' : 'Restore Artwork',
+      summaryDescription: `${hiding ? 'Hide' : 'Unhide'} artwork ${sculptureId ? `(${sculptureId.slice(0, 8)}…) ` : ''}on ${target}${reason ? ` — ${reason}` : ''}.`
+    };
+  }
+  if (action === 'rollback_sculpture_revision') {
+    return {
+      summaryTitle: `Rollback to Rev #${p.revNum ?? '?'}`,
+      summaryDescription: `Restore previous revision #${p.revNum ?? '?'} on ${target}.`
+    };
+  }
+  if (action === 'delete_sculpture') {
+    return {
+      summaryTitle: 'Delete Artwork',
+      summaryDescription: `Permanently hide/remove artwork ${sculptureId ? `(${sculptureId.slice(0, 8)}…) ` : ''}from ${target}.`
+    };
+  }
+  if (action === 'update_parcel') {
+    const parts = [];
+    if (p.customName) parts.push(`name "${clip(p.customName, 44)}"`);
+    if (p.description || p.curationNote) parts.push(`"${clip(p.description || p.curationNote, 70)}"`);
+    return {
+      summaryTitle: 'Update Land Details',
+      summaryDescription: parts.length
+        ? `Set ${parts.join(' · ')} on ${target}.`
+        : `Update curation details on ${target}.`
+    };
+  }
+  if (action === 'update_land_settings') {
+    const flags = [];
+    if (p.frozen !== undefined) flags.push(p.frozen ? 'Freeze land' : 'Unfreeze land');
+    if (p.allowContributorEdits !== undefined) {
+      flags.push(p.allowContributorEdits ? 'Allow contributor edits' : 'Disable contributor edits');
+    }
+    if (p.allowAgentErase !== undefined) {
+      flags.push(p.allowAgentErase ? 'Allow agent erase' : 'Block agent erase');
+    }
+    return {
+      summaryTitle: p.frozen === true ? 'Freeze Land' : p.frozen === false ? 'Unfreeze Land' : 'Update Land Settings',
+      summaryDescription: `${flags.length ? flags.join(' · ') : 'Modify access settings'} on ${target}.`
+    };
+  }
+  if (action === 'update_land_volume') {
+    const dims = [
+      p.widthMeters ? `${p.widthMeters}m W` : '',
+      p.depthMeters ? `${p.depthMeters}m D` : '',
+      p.heightMeters ? `${p.heightMeters}m H` : '',
+      p.rotationDeg !== undefined ? `${p.rotationDeg}° rot` : ''
+    ].filter(Boolean);
+    return {
+      summaryTitle: 'Resize 3D Land Bounds',
+      summaryDescription: `Adjust 3D prism (${dims.join(' · ') || 'volume'}) on ${target}.`
+    };
+  }
+  if (action === 'erase_land') {
+    const reason = clip(p.reason || '');
+    return {
+      summaryTitle: 'Erase All Land Artworks',
+      summaryDescription: `Erase all artworks & curations on ${target}${reason ? ` — ${reason}` : ''}.`
+    };
+  }
+  if (action === 'publish_sculpture') {
+    const title = clip(p.title || 'Sculpture', 56);
+    const desc = clip(p.description || '');
+    return {
+      summaryTitle: `Publish "${title}"`,
+      summaryDescription: `Sign & mint mobile artwork on ${target}${desc ? ` — ${desc}` : ''}.`
+    };
+  }
+  const readable = String(action || 'land_action').replace(/_/g, ' ');
+  return {
+    summaryTitle: `${readable.charAt(0).toUpperCase()}${readable.slice(1)}`,
+    summaryDescription: `Execute ${readable} on ${target}.`
+  };
+}
+
 export function formatSignatureRequestRow(row) {
   if (!row) return null;
   const expired = new Date(row.expires_at).getTime() < Date.now();
+  const payload = JSON.parse(row.payload_json || '{}');
+  const summary = describeSignatureAction({
+    action: row.action,
+    parcelId: row.parcel_id,
+    sculptureId: row.sculpture_id || '',
+    payload
+  });
   return {
     id: row.id,
     pairingCode: row.pairing_code || '',
@@ -43,12 +161,14 @@ export function formatSignatureRequestRow(row) {
     action: row.action,
     parcelId: row.parcel_id,
     sculptureId: row.sculpture_id || '',
-    payload: JSON.parse(row.payload_json || '{}'),
+    payload,
     payloadHash: row.payload_hash,
     canonicalMessage: row.canonical_message,
     nonce: row.nonce,
     requestedBy: row.requested_by,
     agentName: row.agent_name || '',
+    summaryTitle: summary.summaryTitle,
+    summaryDescription: summary.summaryDescription,
     status: expired && row.status === 'pending' ? 'expired' : row.status,
     signedBy: row.signed_by || '',
     signerAddress: row.signer_address || '',
@@ -409,8 +529,27 @@ export async function createPublishSignatureRequestForMobile(
   };
 }
 
-export async function listPendingSignaturesForUser(db, { user }) {
+export async function listPendingSignaturesForUser(
+  db,
+  { user, includeHistory = false, historyLimit = 30 }
+) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  if (includeHistory) {
+    const safeLimit = Math.max(1, Math.min(100, Number(historyLimit) || 30));
+    const allRows = await db.all(
+      `SELECT * FROM land_signature_requests
+       WHERE owner_sub = ?
+       ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      [user.id, safeLimit + 25]
+    );
+    const formatted = (allRows || []).map(formatSignatureRequestRow);
+    const pending = formatted.filter((r) => r.status === 'pending').slice(0, 25);
+    const history = formatted.filter((r) => r.status !== 'pending').slice(0, safeLimit);
+    return {
+      requests: pending,
+      history
+    };
+  }
   const rows = await db.all(
     `SELECT * FROM land_signature_requests
      WHERE owner_sub = ? AND status = 'pending'
@@ -421,6 +560,25 @@ export async function listPendingSignaturesForUser(db, { user }) {
     requests: (rows || [])
       .map(formatSignatureRequestRow)
       .filter((r) => r.status === 'pending')
+  };
+}
+
+export async function listSignatureHistoryForUser(db, { user, limit = 40 }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 40));
+  const rows = await db.all(
+    `SELECT * FROM land_signature_requests
+     WHERE owner_sub = ?
+     ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+    [user.id, safeLimit]
+  );
+  const formatted = (rows || []).map(formatSignatureRequestRow);
+  const pending = formatted.filter((r) => r.status === 'pending');
+  const history = formatted.filter((r) => r.status !== 'pending');
+  return {
+    pending,
+    history,
+    requests: formatted
   };
 }
 
