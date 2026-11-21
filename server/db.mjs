@@ -457,6 +457,16 @@ export function getDb() {
       used INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS webauthn_auth_challenges (
+      challenge TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'wallet_export',
+      rp_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sculptures_hidden_lat_lng
       ON sculptures (hidden, lat, lng);
 

@@ -50,6 +50,89 @@ after(async () => {
   }
 });
 
+async function exportWalletWithPasskey(token) {
+  const b64u = (bytes) =>
+    Buffer.from(bytes)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+  const keyPair = await globalThis.crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign', 'verify']
+  );
+  const spki = new Uint8Array(await globalThis.crypto.subtle.exportKey('spki', keyPair.publicKey));
+  const credentialId = b64u(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+  const regOpts = await apiJson('/api/passkeys/register/options', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal(regOpts.status, 200);
+  const regVerify = await apiJson('/api/passkeys/register/verify', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      credentialId,
+      publicKeySpkiB64: b64u(spki),
+      clientDataJSON: b64u(
+        new TextEncoder().encode(
+          JSON.stringify({
+            type: 'webauthn.create',
+            challenge: regOpts.body.challenge,
+            origin: baseUrl
+          })
+        )
+      ),
+      deviceLabel: 'Test Export Passkey'
+    })
+  });
+  assert.equal(regVerify.status, 200);
+
+  const ch = await apiJson('/api/wallet/export/challenge', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal(ch.status, 200);
+
+  const rpHash = new Uint8Array(
+    await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(regOpts.body.rp.id))
+  );
+  const authData = new Uint8Array(37);
+  authData.set(rpHash, 0);
+  authData[32] = 0x05;
+  new DataView(authData.buffer).setUint32(33, 1, false);
+  const clientDataBytes = new TextEncoder().encode(
+    JSON.stringify({ type: 'webauthn.get', challenge: ch.body.challenge, origin: baseUrl })
+  );
+  const clientHash = new Uint8Array(
+    await globalThis.crypto.subtle.digest('SHA-256', clientDataBytes)
+  );
+  const payload = new Uint8Array(authData.length + clientHash.length);
+  payload.set(authData, 0);
+  payload.set(clientHash, authData.length);
+  const sig = new Uint8Array(
+    await globalThis.crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      keyPair.privateKey,
+      payload
+    )
+  );
+  return apiJson('/api/wallet/export', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      challenge: ch.body.challenge,
+      assertion: {
+        credentialId,
+        clientDataJSON: b64u(clientDataBytes),
+        authenticatorData: b64u(authData),
+        signature: b64u(sig)
+      }
+    })
+  });
+}
+
 async function apiJson(route, options = {}) {
   const res = await fetch(`${baseUrl}${route}`, {
     ...options,
@@ -330,7 +413,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         voxels: [{ x: 0.2, y: 0.4, z: -1.0, color: '#00f5d4', material: 'neon' }]
       })
     );
-    desktopWs.send(JSON.stringify({ type: 'desktop_command', action: 'set_color', color: '#ff3e7f' }));
+    desktopWs.send(
+      JSON.stringify({ type: 'desktop_command', action: 'set_color', color: '#ff3e7f' })
+    );
     await new Promise((r) => setTimeout(r, 80));
 
     assert.ok(desktopMsgQueue.some((m) => m.type === 'voxels_sync' && m.voxels.length === 1));
@@ -344,17 +429,23 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
     const creatorAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'test-artist@graffiland.local', name: 'Test Artist' } })
+      body: JSON.stringify({
+        devProfile: { email: 'test-artist@graffiland.local', name: 'Test Artist' }
+      })
     });
     const creatorUser = creatorAuth.body.user;
 
     const visAAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'visitorA@graffiland.local', name: 'Visitor A' } })
+      body: JSON.stringify({
+        devProfile: { email: 'visitorA@graffiland.local', name: 'Visitor A' }
+      })
     });
     const visBAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'visitorB@graffiland.local', name: 'Visitor B' } })
+      body: JSON.stringify({
+        devProfile: { email: 'visitorB@graffiland.local', name: 'Visitor B' }
+      })
     });
 
     const creatorId = await chatCrypto.getOrCreateDeviceIdentity(creatorUser.id);
@@ -703,7 +794,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const tokenMeta = await apiJson(`/api/sculptures/${createdSculptureId}/metadata.json`);
     assert.equal(tokenMeta.status, 200);
     assert.equal(tokenMeta.body.animation_mime_type, 'model/gltf-binary');
-    assert.ok(tokenMeta.body.animation_url.endsWith(`/api/sculptures/${createdSculptureId}/model.glb`));
+    assert.ok(
+      tokenMeta.body.animation_url.endsWith(`/api/sculptures/${createdSculptureId}/model.glb`)
+    );
     assert.equal(tokenMeta.body.seller_fee_basis_points, 500);
 
     const byTokenId = await apiJson(`/api/tokens/${tokenId}.json`);
@@ -1028,7 +1121,10 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${tokenA}` }
     });
     assert.equal(afterPublishList.status, 200);
-    assert.equal(afterPublishList.body.drafts.some((d) => d.id === draftId), false);
+    assert.equal(
+      afterPublishList.body.drafts.some((d) => d.id === draftId),
+      false
+    );
   });
 
   test('Property ownership land editing, active-pairing MCP gate, and two-way agent/mobile signing', async () => {
@@ -1212,7 +1308,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
 
     // Mobile receives both HTTP pending queue & WS notification
     await new Promise((r) => setTimeout(r, 80));
-    assert.ok(wsPushEvents.some((e) => e.type === 'signature_request' && e.request?.id === pendingContent.request.id));
+    assert.ok(
+      wsPushEvents.some(
+        (e) => e.type === 'signature_request' && e.request?.id === pendingContent.request.id
+      )
+    );
     const mobilePending = await apiJson('/api/signatures/pending', {
       headers: { Authorization: `Bearer ${ownerToken}` }
     });
@@ -1220,19 +1320,20 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.ok(mobilePending.body.requests.some((r) => r.id === pendingContent.request.id));
 
     // Mobile signs & approves
-    const mobileSign = await apiJson(`/api/signatures/requests/${pendingContent.request.id}/mobile-sign`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${ownerToken}` }
-    });
+    const mobileSign = await apiJson(
+      `/api/signatures/requests/${pendingContent.request.id}/mobile-sign`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ownerToken}` }
+      }
+    );
     assert.equal(mobileSign.status, 200);
     assert.equal(mobileSign.body.request.status, 'executed');
     assert.equal(mobileSign.body.request.signedBy, 'mobile-wallet');
     assert.equal(mobileSign.body.result.sculpture.title, 'Founding Beacon (Mobile Approved)');
 
     // 5. Agent holds owner private key & signs transaction directly from agent side!
-    const exportedKeyRes = await apiJson('/api/wallet/export', {
-      headers: { Authorization: `Bearer ${ownerToken}` }
-    });
+    const exportedKeyRes = await exportWalletWithPasskey(ownerToken);
     assert.equal(exportedKeyRes.status, 200);
     const agentWallet = new ethers.Wallet(exportedKeyRes.body.privateKey);
 
@@ -1336,15 +1437,21 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
     const holderAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'pin-holder@graffiland.test', name: 'Pin Holder' } })
+      body: JSON.stringify({
+        devProfile: { email: 'pin-holder@graffiland.test', name: 'Pin Holder' }
+      })
     });
     const visitorAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'pin-visitor@graffiland.test', name: 'Pin Visitor' } })
+      body: JSON.stringify({
+        devProfile: { email: 'pin-visitor@graffiland.test', name: 'Pin Visitor' }
+      })
     });
     const thiefAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'pin-thief@graffiland.test', name: 'Challenge Thief' } })
+      body: JSON.stringify({
+        devProfile: { email: 'pin-thief@graffiland.test', name: 'Challenge Thief' }
+      })
     });
     assert.equal(holderAuth.status, 200);
     assert.equal(visitorAuth.status, 200);
@@ -1479,7 +1586,10 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const enterHolder = await apiJson(`/api/sculptures/${pinSc.id}/chat/enter`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
-      body: JSON.stringify({ sightProof: await sightMaker(holderId), deviceProfile: { isMobile: true } })
+      body: JSON.stringify({
+        sightProof: await sightMaker(holderId),
+        deviceProfile: { isMobile: true }
+      })
     });
     assert.equal(enterHolder.status, 200);
     assert.equal(enterHolder.body.isLandHolder, true);
@@ -1535,7 +1645,10 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     // Low camera/gyro motion telemetry rejected (403)
     const onSiteSight = await sightMaker(visitorId);
     const lowSensorPol = { ...goodPolSnap, opticalFlowCorrelation: 0.05, cameraFrames: 1 };
-    const lowSensorSight = await sightMaker(visitorId, { cameraFrames: 1, opticalFlowCorrelation: 0.05 });
+    const lowSensorSight = await sightMaker(visitorId, {
+      cameraFrames: 1,
+      opticalFlowCorrelation: 0.05
+    });
     const lowSensorSigned = await chatCrypto.signParcelPresenceProof(visitorId, {
       sculptureId: pinSc.id,
       parcelId: pinSc.parcelId,
@@ -1672,15 +1785,21 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const mobileUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148';
     const holderAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'm3d-holder@graffiland.test', name: 'Land Boss' } })
+      body: JSON.stringify({
+        devProfile: { email: 'm3d-holder@graffiland.test', name: 'Land Boss' }
+      })
     });
     const visitorAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'm3d-visitor@graffiland.test', name: 'IRL Contributor' } })
+      body: JSON.stringify({
+        devProfile: { email: 'm3d-visitor@graffiland.test', name: 'IRL Contributor' }
+      })
     });
     const strangerAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'm3d-stranger@graffiland.test', name: 'Desktop Stranger' } })
+      body: JSON.stringify({
+        devProfile: { email: 'm3d-stranger@graffiland.test', name: 'Desktop Stranger' }
+      })
     });
     assert.equal(holderAuth.status, 200);
     assert.equal(visitorAuth.status, 200);
@@ -1690,9 +1809,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const visitorToken = visitorAuth.body.token;
     const strangerToken = strangerAuth.body.token;
 
-    const holderWalletRes = await apiJson('/api/wallet/export', {
-      headers: { Authorization: `Bearer ${holderToken}` }
-    });
+    const holderWalletRes = await exportWalletWithPasskey(holderToken);
     const holderSigner = new ethers.Wallet(holderWalletRes.body.privateKey);
 
     const samplePol = {
@@ -1838,7 +1955,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
 
     // Also load a raw binary .glb file via put_sculpture_on_land
     const { buildSculptureGlb } = await import('../shared/glb.mjs');
-    const glbBytes = buildSculptureGlb([{ x: 0.1, y: 0.2, z: 0.1, color: '#ffd166', material: 'neon' }]);
+    const glbBytes = buildSculptureGlb([
+      { x: 0.1, y: 0.2, z: 0.1, color: '#ffd166', material: 'neon' }
+    ]);
     const glbB64 = Buffer.from(glbBytes).toString('base64');
     const glbStep = await apiJson('/api/mcp', {
       method: 'POST',
@@ -1973,7 +2092,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${holderToken}` }
     });
     assert.equal(listContribs.status, 200);
-    assert.ok(listContribs.body.eligibleVisitors.some((v) => v.email === 'm3d-visitor@graffiland.test'));
+    assert.ok(
+      listContribs.body.eligibleVisitors.some((v) => v.email === 'm3d-visitor@graffiland.test')
+    );
 
     const addContrib = await apiJson(`/api/lands/${parcelId}/contributors`, {
       method: 'POST',
@@ -2322,7 +2443,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     });
     const visitorAuth = await apiJson('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ devProfile: { email: 'visitor17@graffiland.test', name: 'Visitor 17' } })
+      body: JSON.stringify({
+        devProfile: { email: 'visitor17@graffiland.test', name: 'Visitor 17' }
+      })
     });
     const holderToken = holderAuth.body.token;
     const visitorToken = visitorAuth.body.token;
@@ -2334,7 +2457,8 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${holderToken}`, 'User-Agent': mobileUa },
       body: JSON.stringify({
         title: 'Passkey ORB Citadel',
-        description: 'Protected by ORB landmarks, KEK seal encryption, and hardware WebAuthn passkeys.',
+        description:
+          'Protected by ORB landmarks, KEK seal encryption, and hardware WebAuthn passkeys.',
         termsAccepted: true,
         location: { lat: pLat, lng: pLng, altitude: 22, accuracy: 4 },
         proofOfLocation: {
@@ -2371,9 +2495,27 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       };
     };
     const validKeyframes = [
-      { yawOffsetDeg: -24, pitchDeg: 2, frameWidth: 160, frameHeight: 120, features: [1, 2, 3, 4, 5, 6].map(makeFeat) },
-      { yawOffsetDeg: 0, pitchDeg: 1, frameWidth: 160, frameHeight: 120, features: [7, 8, 9, 10, 11, 12].map(makeFeat) },
-      { yawOffsetDeg: 25, pitchDeg: -1, frameWidth: 160, frameHeight: 120, features: [13, 14, 15, 16, 17, 18].map(makeFeat) }
+      {
+        yawOffsetDeg: -24,
+        pitchDeg: 2,
+        frameWidth: 160,
+        frameHeight: 120,
+        features: [1, 2, 3, 4, 5, 6].map(makeFeat)
+      },
+      {
+        yawOffsetDeg: 0,
+        pitchDeg: 1,
+        frameWidth: 160,
+        frameHeight: 120,
+        features: [7, 8, 9, 10, 11, 12].map(makeFeat)
+      },
+      {
+        yawOffsetDeg: 25,
+        pitchDeg: -1,
+        frameWidth: 160,
+        frameHeight: 120,
+        features: [13, 14, 15, 16, 17, 18].map(makeFeat)
+      }
     ];
 
     const rejectRawPack = await apiJson(`/api/lands/${parcelId}/landmark-pack`, {
@@ -2407,7 +2549,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     const farMobileFetch = await apiJson(`/api/lands/${parcelId}/landmark-pack/fetch`, {
       method: 'POST',
       headers: { 'User-Agent': mobileUa },
-      body: JSON.stringify({ lat: pLat + 0.005, lng: pLng + 0.005, deviceProfile: { isMobile: true } })
+      body: JSON.stringify({
+        lat: pLat + 0.005,
+        lng: pLng + 0.005,
+        deviceProfile: { isMobile: true }
+      })
     });
     assert.equal(farMobileFetch.status, 403);
 
@@ -2433,10 +2579,20 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       .prepare('SELECT seal_secret_b64 FROM sculpture_pin_batches WHERE sculpture_id = ?')
       .get(sc.id);
     rawDb.close();
-    assert.ok(pinDbRow.seal_secret_b64.startsWith('kek-v1:'), 'seal_secret_b64 must be envelope-encrypted with KEK');
+    assert.ok(
+      pinDbRow.seal_secret_b64.startsWith('kek-v1:'),
+      'seal_secret_b64 must be envelope-encrypted with KEK'
+    );
 
     const encBatch = await chatCrypto.encryptPinnedIpfsBatch({
-      pins: [{ id: 'p17', text: 'Only real Passkey + ORB visitors can decrypt this', authorName: 'Holder 17', createdAt: new Date().toISOString() }],
+      pins: [
+        {
+          id: 'p17',
+          text: 'Only real Passkey + ORB visitors can decrypt this',
+          authorName: 'Holder 17',
+          createdAt: new Date().toISOString()
+        }
+      ],
       sculptureId: sc.id,
       parcelId,
       geohash: sc.geohash,
@@ -2468,7 +2624,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       true,
       ['sign', 'verify']
     );
-    const spkiBuf = new Uint8Array(await globalThis.crypto.subtle.exportKey('spki', pkKeyPair.publicKey));
+    const spkiBuf = new Uint8Array(
+      await globalThis.crypto.subtle.exportKey('spki', pkKeyPair.publicKey)
+    );
     const regOpts = await apiJson('/api/passkeys/register/options', {
       method: 'POST',
       headers: { Authorization: `Bearer ${visitorToken}` },
@@ -2483,7 +2641,15 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       body: JSON.stringify({
         credentialId,
         publicKeySpkiB64: b64u(spkiBuf),
-        clientDataJSON: b64u(new TextEncoder().encode(JSON.stringify({ type: 'webauthn.create', challenge: regOpts.body.challenge, origin: baseUrl }))),
+        clientDataJSON: b64u(
+          new TextEncoder().encode(
+            JSON.stringify({
+              type: 'webauthn.create',
+              challenge: regOpts.body.challenge,
+              origin: baseUrl
+            })
+          )
+        ),
         deviceLabel: 'Test iPhone SecureEnclave'
       })
     });
@@ -2541,8 +2707,14 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       return { ch: ch.body, signed };
     };
 
-    const signWebAuthnAssertion = async (nonceB64u, signCount, signWithPrivateKey = pkKeyPair.privateKey) => {
-      const rpHash = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(rpId)));
+    const signWebAuthnAssertion = async (
+      nonceB64u,
+      signCount,
+      signWithPrivateKey = pkKeyPair.privateKey
+    ) => {
+      const rpHash = new Uint8Array(
+        await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(rpId))
+      );
       const authData = new Uint8Array(37);
       authData.set(rpHash, 0);
       authData[32] = 0x05; // UP + UV flags set
@@ -2550,12 +2722,18 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       const clientDataBytes = new TextEncoder().encode(
         JSON.stringify({ type: 'webauthn.get', challenge: nonceB64u, origin: baseUrl })
       );
-      const clientHash = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', clientDataBytes));
+      const clientHash = new Uint8Array(
+        await globalThis.crypto.subtle.digest('SHA-256', clientDataBytes)
+      );
       const payloadToSign = new Uint8Array(authData.length + clientHash.length);
       payloadToSign.set(authData, 0);
       payloadToSign.set(clientHash, authData.length);
       const p1363Sig = new Uint8Array(
-        await globalThis.crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signWithPrivateKey, payloadToSign)
+        await globalThis.crypto.subtle.sign(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          signWithPrivateKey,
+          payloadToSign
+        )
       );
       return {
         credentialId,
@@ -2603,7 +2781,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       body: JSON.stringify({
         ...p3.signed,
         orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
-        webauthnAssertion: await signWebAuthnAssertion(p3.ch.challengeNonce, 1, wrongKeyPair.privateKey),
+        webauthnAssertion: await signWebAuthnAssertion(
+          p3.ch.challengeNonce,
+          1,
+          wrongKeyPair.privateKey
+        ),
         deviceProfile: { isMobile: true }
       })
     });
@@ -2657,7 +2839,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       for (let f = 0; f < 5; f += 1) {
         const feat = validKeyframes[k].features[f];
         const origBytes = new Uint8Array(Buffer.from(feat.descB64, 'base64'));
-        const invBytes = origBytes.map((b) => (~b) & 0xff);
+        const invBytes = origBytes.map((b) => ~b & 0xff);
         badMatches.push({
           keyframeIndex: k,
           featureIndex: f,
@@ -2746,7 +2928,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(typeof metricsAdmin.body.relayerTodayOps, 'number');
 
     // 2. Spatial bounding box SQL query + includeVoxels=0
-    const sfSpatial = await apiJson('/api/sculptures?lat=37.7749&lng=-122.4194&radiusMeters=250&includeVoxels=0');
+    const sfSpatial = await apiJson(
+      '/api/sculptures?lat=37.7749&lng=-122.4194&radiusMeters=250&includeVoxels=0'
+    );
     assert.equal(sfSpatial.status, 200);
     assert.ok(
       sfSpatial.body.sculptures.every(
@@ -2767,14 +2951,20 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       const rlLogin = await fetch(`${rlBaseUrl}/api/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ devProfile: { email: 'ratelimit-user@graffiland.test', name: 'RL User' } })
+        body: JSON.stringify({
+          devProfile: { email: 'ratelimit-user@graffiland.test', name: 'RL User' }
+        })
       }).then((r) => r.json());
       const tok = rlLogin.token;
 
       // Bad PoL (teleporting GPS trajectory > 60 m/s) increments publish RL 1/2 & fails 422 before consuming quota
       const badPol = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tok}`,
+          'User-Agent': mobileUa
+        },
         body: JSON.stringify({
           title: 'Quota Safe Sculpture',
           description: 'Verifies relayer quota is not lost on failed attempts.',
@@ -2802,7 +2992,10 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         location: { lat: 37.775, lng: -122.418, accuracy: 5 },
         proofOfLocation: {
           frameHashes: ['a1', 'a2', 'a3', 'a4'],
-          gyroSamples: [{ alpha: 1, beta: 2, gamma: 3 }, { alpha: 9, beta: 4, gamma: 2 }],
+          gyroSamples: [
+            { alpha: 1, beta: 2, gamma: 3 },
+            { alpha: 9, beta: 4, gamma: 2 }
+          ],
           flowCorrelation: 0.85,
           skyPalette: ['#00f5d4'],
           visualDHash: '1111000011110000',
@@ -2813,7 +3006,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       };
       const rl1 = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tok}`,
+          'User-Agent': mobileUa
+        },
         body: JSON.stringify(okBody)
       });
       assert.equal(rl1.status, 201);
@@ -2847,7 +3044,11 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       // Next publish hits publishRateLimit (3 > 2/min) -> 429 + Retry-After header!
       const rl2 = await fetch(`${rlBaseUrl}/api/sculptures/publish`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}`, 'User-Agent': mobileUa },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tok}`,
+          'User-Agent': mobileUa
+        },
         body: JSON.stringify(okBody)
       });
       assert.equal(rl2.status, 429);

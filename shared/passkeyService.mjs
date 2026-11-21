@@ -7,7 +7,9 @@ export class PasskeyError extends Error {
 }
 
 export function b64UrlToUint8(b64url) {
-  let b64 = String(b64url || '').replace(/-/g, '+').replace(/_/g, '/');
+  let b64 = String(b64url || '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
   while (b64.length % 4 !== 0) b64 += '=';
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -132,7 +134,9 @@ export async function verifyAndStorePasskeyRegistration(
   const credentialId = String(body?.credentialId || body?.id || '').trim();
   const publicKeySpkiB64 = String(body?.publicKeySpkiB64 || '').trim();
   const clientDataJSON = String(body?.clientDataJSON || '').trim();
-  const deviceLabel = String(body?.deviceLabel || 'Hardware Device Passkey').trim().slice(0, 64);
+  const deviceLabel = String(body?.deviceLabel || 'Hardware Device Passkey')
+    .trim()
+    .slice(0, 64);
 
   if (!credentialId || !publicKeySpkiB64 || !clientDataJSON) {
     throw new PasskeyError('credentialId, publicKeySpkiB64, and clientDataJSON are required.', 400);
@@ -148,7 +152,10 @@ export async function verifyAndStorePasskeyRegistration(
     throw new PasskeyError('Expected WebAuthn creation ceremony.', 400);
   }
   if (allowedOrigins.length > 0 && !allowedOrigins.includes(clientData?.origin)) {
-    throw new PasskeyError(`Untrusted WebAuthn registration origin (${clientData?.origin || 'none'}).`, 403);
+    throw new PasskeyError(
+      `Untrusted WebAuthn registration origin (${clientData?.origin || 'none'}).`,
+      403
+    );
   }
 
   // Verify stored single-use registration challenge if challenges table is present
@@ -234,7 +241,10 @@ export async function verifyPasskeyAssertion(
     [credentialId, user.id]
   );
   if (!credRow) {
-    throw new PasskeyError('Registered hardware Passkey credential not found for this account.', 403);
+    throw new PasskeyError(
+      'Registered hardware Passkey credential not found for this account.',
+      403
+    );
   }
 
   const clientDataBytes = b64UrlToUint8(clientDataJSONB64);
@@ -248,7 +258,10 @@ export async function verifyPasskeyAssertion(
     throw new PasskeyError('Invalid WebAuthn ceremony type (expected webauthn.get).', 403);
   }
   if (allowedOrigins.length > 0 && !allowedOrigins.includes(clientData?.origin)) {
-    throw new PasskeyError(`Untrusted WebAuthn assertion origin (${clientData?.origin || 'none'}).`, 403);
+    throw new PasskeyError(
+      `Untrusted WebAuthn assertion origin (${clientData?.origin || 'none'}).`,
+      403
+    );
   }
 
   // Normalize base64url challenge comparison
@@ -291,8 +304,15 @@ export async function verifyPasskeyAssertion(
     0,
     false
   );
-  if (Number(credRow.sign_count || 0) > 0 && signCount > 0 && signCount <= Number(credRow.sign_count)) {
-    throw new PasskeyError('Hardware Passkey signCount rollback detected (cloned authenticator blocked).', 403);
+  if (
+    Number(credRow.sign_count || 0) > 0 &&
+    signCount > 0 &&
+    signCount <= Number(credRow.sign_count)
+  ) {
+    throw new PasskeyError(
+      'Hardware Passkey signCount rollback detected (cloned authenticator blocked).',
+      403
+    );
   }
 
   const clientHash = new Uint8Array(await crypto.subtle.digest('SHA-256', clientDataBytes));
@@ -324,10 +344,96 @@ export async function verifyPasskeyAssertion(
     throw new PasskeyError('Invalid hardware WebAuthn Passkey ES256 signature.', 403);
   }
 
-  await db.run(
-    'UPDATE user_passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?',
-    [Math.max(Number(credRow.sign_count || 0), signCount), new Date().toISOString(), credRow.id]
-  );
+  await db.run('UPDATE user_passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?', [
+    Math.max(Number(credRow.sign_count || 0), signCount),
+    new Date().toISOString(),
+    credRow.id
+  ]);
 
   return { verified: true, credentialId, signCount };
+}
+
+export async function issuePasskeyAssertionOptions(
+  db,
+  { user, purpose = 'wallet_export', rpId = 'localhost', ttlMs = 2 * 60 * 1000 }
+) {
+  if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
+  if (String(user.id).startsWith('agent:') || user.actorType === 'agent') {
+    throw new PasskeyError('Agent accounts do not have an embedded wallet key to export.', 403);
+  }
+  const passkeys = await listUserPasskeys(db, user.id);
+  if (passkeys.length === 0) {
+    throw new PasskeyError(
+      'Register a hardware Passkey first to export your embedded wallet key.',
+      403,
+      { code: 'PASSKEY_REQUIRED', passkeyCount: 0 }
+    );
+  }
+  const challengeBytes = new Uint8Array(32);
+  crypto.getRandomValues(challengeBytes);
+  const challenge = uint8ToB64Url(challengeBytes);
+  const nowMs = Date.now();
+  await db.run(
+    `INSERT INTO webauthn_auth_challenges (challenge, user_id, purpose, rp_id, created_at, expires_at, used)
+     VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    [
+      challenge,
+      user.id,
+      purpose,
+      rpId,
+      new Date(nowMs).toISOString(),
+      new Date(nowMs + ttlMs).toISOString()
+    ]
+  );
+  return {
+    challenge,
+    rpId,
+    timeout: 60000,
+    userVerification: 'preferred',
+    allowCredentials: passkeys.map((p) => p.credentialId)
+  };
+}
+
+export async function verifyAndConsumePasskeyAssertionChallenge(
+  db,
+  { user, challenge, assertion, purpose = 'wallet_export', expectedRpId = '', allowedOrigins = [] }
+) {
+  if (!user?.id) throw new PasskeyError('Google sign-in required.', 401);
+  if (String(user.id).startsWith('agent:') || user.actorType === 'agent') {
+    throw new PasskeyError('Agent accounts do not have an embedded wallet key to export.', 403);
+  }
+  const cleanChallenge = String(challenge || '').trim();
+  if (!cleanChallenge) {
+    throw new PasskeyError('Hardware Passkey challenge and assertion are required.', 403, {
+      code: 'PASSKEY_REQUIRED'
+    });
+  }
+  const chRow = await db.get(
+    'SELECT * FROM webauthn_auth_challenges WHERE challenge = ? AND user_id = ? AND purpose = ?',
+    [cleanChallenge, user.id, purpose]
+  );
+  if (!chRow) {
+    throw new PasskeyError(
+      'Passkey export challenge not found or expired. Request a new challenge and try again.',
+      403
+    );
+  }
+  if (Date.now() > new Date(chRow.expires_at).getTime()) {
+    throw new PasskeyError('Passkey export challenge expired. Try again.', 403);
+  }
+  const consumed = await db.run(
+    'UPDATE webauthn_auth_challenges SET used = 1 WHERE challenge = ? AND user_id = ? AND purpose = ? AND used = 0',
+    [cleanChallenge, user.id, purpose]
+  );
+  const changes = Number(consumed?.changes ?? consumed?.meta?.changes ?? 0);
+  if (changes < 1) {
+    throw new PasskeyError('Passkey export challenge has already been used.', 403);
+  }
+  return verifyPasskeyAssertion(db, {
+    user,
+    assertion,
+    expectedChallengeB64: cleanChallenge,
+    expectedRpId: expectedRpId || chRow.rp_id,
+    allowedOrigins
+  });
 }
