@@ -2,8 +2,10 @@ import { buildParcelShareUrl } from './landVolume.mjs';
 import { listLandsWithCurations } from './mcp/landMutations.mjs';
 import {
   buildPublicProfileUrl,
+  formatUserNumber,
   normalizeUsername,
   validateBio,
+  validateProfileImage,
   validateUsername
 } from './profileRules.mjs';
 
@@ -11,6 +13,24 @@ function makeError(message, statusCode = 400) {
   const err = new Error(message);
   /** @type {any} */ (err).statusCode = statusCode;
   return err;
+}
+
+async function ensureUserNumber(db, userRow) {
+  if (!userRow?.id) return 0;
+  const current = Number(userRow.user_number || 0);
+  if (current > 0) return current;
+  try {
+    const maxRow = await db.get('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users');
+    const nextNum = Number(maxRow?.max_num || 0) + 1;
+    await db.run('UPDATE users SET user_number = ? WHERE id = ? AND COALESCE(user_number, 0) <= 0', [
+      nextNum,
+      userRow.id
+    ]);
+    const refreshed = await db.get('SELECT user_number FROM users WHERE id = ?', [userRow.id]);
+    return Number(refreshed?.user_number || nextNum);
+  } catch {
+    return 0;
+  }
 }
 
 function buildSculptureLink(origin, pathname, sculptureId) {
@@ -77,12 +97,15 @@ export async function checkUsernameAvailability(db, { username, excludeUserId = 
 }
 
 /**
- * Update an authenticated user's unique username and/or bio.
- * Enforces format rules + case-insensitive uniqueness across all accounts.
+ * Update an authenticated user's unique username, bio, custom bio image (avatar), and/or profile header.
+ * Enforces format rules + case-insensitive uniqueness across all accounts + strict raster image validation.
  * @param {any} db
- * @param {{ user: any, username?: string, bio?: string }} params
+ * @param {{ user: any, username?: string, bio?: string, avatarImage?: string, headerImage?: string }} params
  */
-export async function updateUserProfile(db, { user, username, bio } = {}) {
+export async function updateUserProfile(
+  db,
+  { user, username, bio, avatarImage, headerImage } = {}
+) {
   if (!user?.id) {
     throw makeError('Authentication required.', 401);
   }
@@ -122,6 +145,26 @@ export async function updateUserProfile(db, { user, username, bio } = {}) {
     nextBio = bioCheck.bio;
   }
 
+  let nextAvatarImage = String(currentRow.avatar_image || '');
+  if (avatarImage !== undefined) {
+    const avCheck = validateProfileImage(avatarImage, { kind: 'avatar' });
+    if (!avCheck.ok) {
+      throw makeError(avCheck.error, 400);
+    }
+    nextAvatarImage = avCheck.value;
+  }
+
+  let nextHeaderImage = String(currentRow.header_image || '');
+  if (headerImage !== undefined) {
+    const hdrCheck = validateProfileImage(headerImage, { kind: 'header' });
+    if (!hdrCheck.ok) {
+      throw makeError(hdrCheck.error, 400);
+    }
+    nextHeaderImage = hdrCheck.value;
+  }
+
+  const ensuredUserNumber = await ensureUserNumber(db, currentRow);
+
   const now = new Date().toISOString();
   const nextUpdatedAt = usernameChanged
     ? now
@@ -129,8 +172,18 @@ export async function updateUserProfile(db, { user, username, bio } = {}) {
 
   try {
     await db.run(
-      'UPDATE users SET username = ?, bio = ?, username_updated_at = ? WHERE id = ?',
-      [nextUsername, nextBio, nextUpdatedAt, user.id]
+      `UPDATE users
+       SET username = ?, bio = ?, avatar_image = ?, header_image = ?, user_number = ?, username_updated_at = ?
+       WHERE id = ?`,
+      [
+        nextUsername,
+        nextBio,
+        nextAvatarImage,
+        nextHeaderImage,
+        ensuredUserNumber,
+        nextUpdatedAt,
+        user.id
+      ]
     );
   } catch (err) {
     const msg = String(err?.message || '');
@@ -161,19 +214,21 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
   let userRow = null;
   if (normalizedHandle) {
     userRow = await db.get(
-      'SELECT id, name, username, bio, picture, wallet_address, custom_payout_address, created_at FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
+      'SELECT id, name, username, bio, picture, avatar_image, header_image, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
       [normalizedHandle]
     );
   }
   if (!userRow) {
     userRow = await db.get(
-      'SELECT id, name, username, bio, picture, wallet_address, custom_payout_address, created_at FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, name, username, bio, picture, avatar_image, header_image, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE id = ? LIMIT 1',
       [raw]
     );
   }
   if (!userRow) {
     throw makeError('Profile not found.', 404);
   }
+
+  const userNumber = await ensureUserNumber(db, userRow);
 
   const userId = String(userRow.id);
   const accountType = userId.startsWith('agent:') ? 'agent' : 'human';
@@ -443,14 +498,21 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
   const baseXp = Number(xpRow?.xp || 0);
   const totalXp = baseXp > 0 ? baseXp : sculptures.length * 100;
   const publicHandle = String(userRow.username || '').trim();
+  const avatarImage = String(userRow.avatar_image || '');
+  const headerImage = String(userRow.header_image || '');
+  const effectivePicture = avatarImage || userRow.picture || '';
 
   return {
     profile: {
       id: userId,
+      userNumber,
+      userNumberLabel: formatUserNumber(userNumber),
       username: publicHandle,
       displayName: userRow.name || publicHandle || 'Creator',
       bio: userRow.bio || '',
-      picture: userRow.picture || '',
+      picture: effectivePicture,
+      avatarImage,
+      headerImage,
       walletAddress: userRow.custom_payout_address || userRow.wallet_address || '',
       accountType,
       joinedAt: userRow.created_at,

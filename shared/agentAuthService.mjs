@@ -246,20 +246,25 @@ export async function registerOrLoginAgentWallet(
   const agentEmail = `${walletLower}@agent.graffiland.local`;
   const existingShadowUser = await db.get('SELECT * FROM users WHERE id = ?', [agentId]);
   if (!existingShadowUser) {
+    const maxRow = await db.get('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users');
+    const nextUserNumber = Number(maxRow?.max_num || 0) + 1;
     await db.run(
       `INSERT INTO users (
-        id, email, name, picture, wallet_address, encrypted_wallet_json,
+        id, email, name, picture, user_number, wallet_address, encrypted_wallet_json,
         custom_payout_address, is_admin, created_at, last_login_at
-      ) VALUES (?, ?, ?, '', ?, '{"agentManaged":true}', '', 0, ?, ?)`,
-      [agentId, agentEmail, effectiveName, checksum, now, now]
+      ) VALUES (?, ?, ?, '', ?, ?, '{"agentManaged":true}', '', 0, ?, ?)`,
+      [agentId, agentEmail, effectiveName, nextUserNumber, checksum, now, now]
     );
   } else {
-    await db.run('UPDATE users SET name = ?, wallet_address = ?, last_login_at = ? WHERE id = ?', [
-      effectiveName,
-      checksum,
-      now,
-      agentId
-    ]);
+    let userNumber = Number(existingShadowUser.user_number || 0);
+    if (userNumber <= 0) {
+      const maxRow = await db.get('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users');
+      userNumber = Number(maxRow?.max_num || 0) + 1;
+    }
+    await db.run(
+      'UPDATE users SET name = ?, wallet_address = ?, user_number = ?, last_login_at = ? WHERE id = ?',
+      [effectiveName, checksum, userNumber, now, agentId]
+    );
   }
 
   const saved = await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [agentId]);

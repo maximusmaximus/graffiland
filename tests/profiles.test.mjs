@@ -5,11 +5,17 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
   buildPublicProfileUrl,
+  findHeaderPreset,
+  formatUserNumber,
   parseProfileParamFromLocation,
   suggestUsernameFromName,
   validateBio,
+  validateProfileImage,
   validateUsername
 } from '../shared/profileRules.mjs';
+
+const TINY_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 describe('Usernames, Onboarding Validation, Bio & Public Profiles', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-profile-test-'));
@@ -67,6 +73,32 @@ describe('Usernames, Onboarding Validation, Bio & Public Profiles', () => {
     assert.equal(parseProfileParamFromLocation('?u=neon_voxel-42'), 'neon_voxel-42');
     assert.equal(parseProfileParamFromLocation('?profile=@maya_art'), 'maya_art');
     assert.equal(validateUsername(suggestUsernameFromName('Maya Chen', 'maya@test.io')).ok, true);
+
+    // User number formatting, presets & strict raster image validation
+    assert.equal(formatUserNumber(1), '#0001');
+    assert.equal(formatUserNumber(42), '#0042');
+    assert.equal(formatUserNumber(12345), '#12345');
+    assert.equal(formatUserNumber(0), '');
+    assert.equal(findHeaderPreset('preset:sunset-voxel')?.id, 'sunset-voxel');
+
+    assert.equal(validateProfileImage('', { kind: 'avatar' }).ok, true);
+    assert.equal(validateProfileImage(TINY_PNG_DATA_URL, { kind: 'avatar' }).ok, true);
+    assert.equal(validateProfileImage('https://cdn.example.com/icon.webp', { kind: 'avatar' }).ok, true);
+    assert.equal(validateProfileImage('preset:neon-skyline', { kind: 'header' }).ok, true);
+    assert.equal(validateProfileImage('preset:neon-skyline', { kind: 'avatar' }).ok, false);
+    assert.equal(
+      validateProfileImage('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=', { kind: 'avatar' }).ok,
+      false,
+      'SVG uploads must be blocked'
+    );
+    assert.equal(
+      validateProfileImage('javascript:alert(1)', { kind: 'header' }).ok,
+      false
+    );
+    assert.equal(
+      validateProfileImage('https://127.0.0.1/internal.png', { kind: 'header' }).ok,
+      false
+    );
   });
 
   test('Onboarding requires username, blocks duplicate claims case-insensitively, allows rename, and serves public profile with lands, sculptures & actions', async () => {
@@ -201,5 +233,56 @@ describe('Usernames, Onboarding Validation, Bio & Public Profiles', () => {
     assert.ok(pub.actions.length >= 2);
     assert.ok(pub.actions.some((a) => a.type === 'sculpture_published' && a.url.includes('?sculpture=')));
     assert.ok(pub.actions.some((a) => a.type === 'land_claimed' && a.url.includes(claimLand.parcelId)));
+
+    // 7. Sequential user numbers, custom bio image & profile header persist cleanly (and reject SVG)
+    assert.ok(pub.profile.userNumber >= 1);
+    assert.equal(pub.profile.userNumberLabel, formatUserNumber(pub.profile.userNumber));
+    assert.ok(authB.user.userNumber > authA.user.userNumber, 'User B gets a higher sequential user number');
+
+    const badSvgRes = await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authA.token}` },
+      body: JSON.stringify({ avatarImage: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' })
+    });
+    assert.equal(badSvgRes.status, 400);
+
+    const mediaUpdate = await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authA.token}` },
+      body: JSON.stringify({
+        avatarImage: TINY_PNG_DATA_URL,
+        headerImage: 'preset:neon-skyline'
+      })
+    });
+    assert.equal(mediaUpdate.status, 200);
+    const mediaJson = await mediaUpdate.json();
+    assert.equal(mediaJson.user.avatarImage, TINY_PNG_DATA_URL);
+    assert.equal(mediaJson.user.picture, TINY_PNG_DATA_URL);
+    assert.equal(mediaJson.user.headerImage, 'preset:neon-skyline');
+
+    // Google re-login must NOT overwrite the user's custom bio image or header background
+    const reloginA = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: {
+          email: 'alice@graffiland.test',
+          name: 'Alice Art',
+          picture: 'https://lh3.googleusercontent.com/google-default.png'
+        }
+      })
+    }).then((r) => r.json());
+    assert.equal(reloginA.user.avatarImage, TINY_PNG_DATA_URL);
+    assert.equal(reloginA.user.picture, TINY_PNG_DATA_URL);
+    assert.equal(reloginA.user.headerImage, 'preset:neon-skyline');
+    assert.equal(reloginA.user.userNumber, pub.profile.userNumber);
+
+    // Public profile serves custom bio image, header background, and user number banner metadata
+    const pubMedia = await fetch(`${baseUrl}/api/profiles/alice_cyber`).then((r) => r.json());
+    assert.equal(pubMedia.profile.avatarImage, TINY_PNG_DATA_URL);
+    assert.equal(pubMedia.profile.picture, TINY_PNG_DATA_URL);
+    assert.equal(pubMedia.profile.headerImage, 'preset:neon-skyline');
+    assert.equal(pubMedia.profile.userNumber, pub.profile.userNumber);
+    assert.equal(pubMedia.profile.userNumberLabel, formatUserNumber(pub.profile.userNumber));
   });
 });

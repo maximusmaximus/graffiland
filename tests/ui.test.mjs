@@ -1818,4 +1818,120 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('ProfileModal renders clean public banner with user number, username, icon & background and saves custom bio image + header', async () => {
+    const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
+    const savedPayloads = [];
+    const TINY_PNG =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const mockData = {
+      profile: {
+        id: 'u42',
+        userNumber: 42,
+        userNumberLabel: '#0042',
+        username: 'maya_neon',
+        displayName: 'Maya Chen',
+        bio: 'Sculpting neon plazas',
+        picture: '',
+        avatarImage: '',
+        headerImage: 'preset:cyber-grid',
+        walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        accountType: 'human',
+        joinedAt: '2026-11-01T00:00:00.000Z'
+      },
+      stats: { landCount: 0, sculptureCount: 0, activeListingCount: 0, actionCount: 0, totalBlocks: 0 },
+      lands: [],
+      sculptures: [],
+      listings: [],
+      actions: []
+    };
+
+    const view = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'maya_neon',
+        user: { id: 'u42', userNumber: 42, username: 'maya_neon', name: 'Maya Chen' },
+        fetchProfileFn: async () => mockData,
+        checkUsernameFn: async (u) => ({ available: true, username: u, reason: `@${u} is available!` }),
+        saveProfileFn: async (payload) => {
+          savedPayloads.push(payload);
+          return {
+            ...mockData,
+            user: {
+              id: 'u42',
+              userNumber: 42,
+              username: payload.username,
+              bio: payload.bio,
+              avatarImage: payload.avatarImage || '',
+              picture: payload.avatarImage || '',
+              headerImage: payload.headerImage || ''
+            },
+            profile: {
+              ...mockData.profile,
+              username: payload.username,
+              bio: payload.bio,
+              avatarImage: payload.avatarImage || '',
+              picture: payload.avatarImage || '',
+              headerImage: payload.headerImage || ''
+            }
+          };
+        },
+        onClose: () => {}
+      })
+    );
+
+    // 1) Public banner displays user number, @username, icon, and initial preset background
+    await RTL.waitFor(() => {
+      assert.equal(view.getByTestId('profile-user-number').textContent.trim(), 'USER #0042');
+      assert.equal(view.getByTestId('profile-handle').textContent.trim(), '@maya_neon');
+      assert.equal(
+        view.getByTestId('public-profile-banner').getAttribute('data-header-preset'),
+        'cyber-grid'
+      );
+    });
+
+    // 2) Open Edit Profile, select Sunset Voxel header preset, and upload a PNG bio image
+    RTL.fireEvent.click(view.getByTestId('profile-edit-btn'));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Header preset: Sunset Voxel/i }));
+    assert.equal(
+      view.getByTestId('public-profile-banner').getAttribute('data-header-preset'),
+      'sunset-voxel'
+    );
+
+    // Enter a valid HTTPS bio image URL & check live avatar preview updates immediately
+    RTL.fireEvent.change(view.getByLabelText('Bio image URL'), {
+      target: { value: 'https://cdn.example.com/maya-avatar.png' }
+    });
+    assert.equal(
+      view.getByTestId('profile-banner-avatar-img').getAttribute('src'),
+      'https://cdn.example.com/maya-avatar.png'
+    );
+
+    // Also test uploading a real PNG file into the bio image input
+    const pngBytes = Buffer.from(TINY_PNG.split(',')[1], 'base64');
+    const avatarFile = new globalThis.window.File([pngBytes], 'avatar.png', { type: 'image/png' });
+    await RTL.act(async () => {
+      RTL.fireEvent.change(view.getByTestId('profile-avatar-file-input'), {
+        target: { files: [avatarFile] }
+      });
+    });
+
+    await RTL.waitFor(() => {
+      assert.equal(view.getByTestId('profile-banner-avatar-img').getAttribute('src'), TINY_PNG);
+    });
+
+    // Save profile and verify payload includes avatarImage + headerImage
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByTestId('profile-save-btn'));
+    });
+
+    assert.equal(savedPayloads.length, 1);
+    assert.equal(savedPayloads[0].avatarImage, TINY_PNG);
+    assert.equal(savedPayloads[0].headerImage, 'preset:sunset-voxel');
+    assert.equal(
+      view.getByTestId('public-profile-banner').getAttribute('data-header-preset'),
+      'sunset-voxel'
+    );
+    cleanup();
+  });
 });

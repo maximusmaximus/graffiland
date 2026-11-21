@@ -972,9 +972,14 @@ export default function DesktopHub({
               className="btn"
               data-testid="desktop-profile-btn"
               onClick={() => setProfileHandle(user.username || user.id)}
-              title="Open your public profile, edit @username & bio, and view your lands & actions"
+              title="Open your public profile, edit @username, bio, icon & header banner"
             >
-              <XeroIcon emoji="👤" size={16} /> {user.username ? `@${user.username}` : user.name}
+              {user.picture ? (
+                <img className="nav-profile-avatar" src={user.picture} alt="" />
+              ) : (
+                <XeroIcon emoji="👤" size={16} />
+              )}{' '}
+              {user.username ? `@${user.username}` : user.name}
             </button>
           ) : (
             <button type="button" className="btn" onClick={() => setLoginOpen(true)}>
