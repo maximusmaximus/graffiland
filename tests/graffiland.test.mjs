@@ -50,18 +50,6 @@ after(async () => {
   }
 });
 
-// Realistic client sensor evidence (the mobile client always sends GPS samples + camera frames).
-function polEvidenceAt(lat, lng) {
-  const now = Date.now();
-  return {
-    cameraFrames: 6,
-    gpsSamples: [
-      { lat, lng, t: now - 3000 },
-      { lat: lat + 0.00001, lng: lng + 0.00001, t: now - 500 }
-    ]
-  };
-}
-
 async function apiJson(route, options = {}) {
   const res = await fetch(`${baseUrl}${route}`, {
     ...options,
@@ -72,6 +60,18 @@ async function apiJson(route, options = {}) {
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };
+}
+
+// Realistic client sensor evidence (the mobile client always sends GPS samples + camera frames).
+function polEvidenceAt(lat, lng) {
+  const now = Date.now();
+  return {
+    cameraFrames: 6,
+    gpsSamples: [
+      { lat, lng, t: now - 3000 },
+      { lat: lat + 0.00001, lng: lng + 0.00001, t: now - 500 }
+    ]
+  };
 }
 
 describe('GRAFFILAND Full-Stack Verification', () => {
