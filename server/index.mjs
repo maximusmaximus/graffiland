@@ -1511,9 +1511,15 @@ export function createAppServer(serverOptions = {}) {
         });
       }
 
+      // Only compare against previous IRL mobile PoL publishes (exclude remote MCP / owner land placements).
       const previousPublish = db
         .prepare(
-          'SELECT lat, lng, created_at FROM sculptures WHERE creator_sub = ? ORDER BY created_at DESC LIMIT 1'
+          `SELECT lat, lng, created_at
+           FROM sculptures
+           WHERE creator_sub = ?
+             AND pol_json NOT LIKE '%"propertyAuthorized":true%'
+           ORDER BY created_at DESC
+           LIMIT 1`
         )
         .get(req.user.id);
       const travel = assessTravelFeasibility(

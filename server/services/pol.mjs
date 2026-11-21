@@ -208,6 +208,7 @@ export const POL_LIMITS = {
   maxSampleAgeMs: 30 * 60 * 1000,
   maxFutureSkewMs: 2 * 60 * 1000,
   minCameraFrames: 1,
+  minFallbackCameraFrames: 4,
   minGyroSamples: 1,
   // Cross-publish "impossible travel": faster than a commercial jet between two publishes.
   maxTravelSpeedMs: 280,
@@ -237,6 +238,7 @@ export function assessPolEvidence({
   gpsSamples = [],
   gyroSamples = 0,
   cameraFrames = 0,
+  visualDHash = '',
   now = Date.now()
 }) {
   const issues = [];
@@ -261,7 +263,15 @@ export function assessPolEvidence({
     }
   }
   if (cameraFrames < POL_LIMITS.minCameraFrames) issues.push('Live camera frames are required');
-  if (gyroSamples < POL_LIMITS.minGyroSamples) issues.push('Device motion samples are required');
+  // iOS Safari 13+ may run in touch-drag fallback (gyroSamples === 0) if motion permission is
+  // declined; allow continuous live camera scan (>=4 frames + visual dHash) to satisfy motion check.
+  const hasCameraFallback =
+    cameraFrames >= POL_LIMITS.minFallbackCameraFrames && String(visualDHash || '').trim().length >= 8;
+  if (gyroSamples < POL_LIMITS.minGyroSamples && !hasCameraFallback) {
+    issues.push(
+      `Device motion samples (or at least ${POL_LIMITS.minFallbackCameraFrames} live camera scan frames) are required`
+    );
+  }
   return issues;
 }
 
@@ -341,7 +351,7 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
   for (let i = 1; i < gpsSamples.length; i++) {
     const a = gpsSamples[i - 1];
     const b = gpsSamples[i];
-    const dtSec = Math.max(0.5, (sampleTime(b) - sampleTime(a)) / 1000);
+    const dtSec = Math.max(0.5, Math.abs(sampleTime(b) - sampleTime(a)) / 1000);
     const dist = haversineMeters(Number(a?.lat), Number(a?.lng), Number(b?.lat), Number(b?.lng));
     const implied = dist / dtSec;
     if (implied > maxTeleportSpeed) maxTeleportSpeed = implied;
@@ -350,7 +360,6 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
 
   const gyroSamples = Math.max(0, countish(polInput?.gyroSamples));
   const cameraFrames = Math.max(0, countish(polInput?.cameraFrames));
-  const evidenceIssues = assessPolEvidence({ lat, lng, gpsSamples, gyroSamples, cameraFrames });
   const opticalFlowCorrelation = Math.max(
     0,
     Math.min(1, Number(polInput?.opticalFlowCorrelation ?? 0))
@@ -360,6 +369,14 @@ export async function verifyAndEnrichLocation(locationInput, polInput, userSub) 
     ? polInput.ambientPalette.slice(0, 6).map((c) => String(c))
     : [];
   const visualDHash = String(polInput?.visualDHash || '').slice(0, 64);
+  const evidenceIssues = assessPolEvidence({
+    lat,
+    lng,
+    gpsSamples,
+    gyroSamples,
+    cameraFrames,
+    visualDHash
+  });
   const cameraFacingMode = String(polInput?.cameraFacingMode || 'environment');
   const cameraResolution = String(polInput?.cameraResolution || 'unknown');
   const sculptDurationMs = Math.max(0, Number(polInput?.sculptDurationMs || 0));
