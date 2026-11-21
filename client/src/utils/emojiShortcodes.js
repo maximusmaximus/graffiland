@@ -187,7 +187,7 @@ export function detectActiveEmojiToken(text = '', caretPos = null) {
   const str = String(text || '');
   const end = caretPos === null || caretPos === undefined ? str.length : Math.min(str.length, Math.max(0, Number(caretPos)));
   const before = str.slice(0, end);
-  const match = before.match(/(?:^|[\s([{"'.,!?-]):([a-z][a-z0-9_+-]{0,27}|\+1|100)$/i);
+  const match = before.match(/(?:^|[^A-Za-z0-9:]):([a-z][a-z0-9_+-]{0,27}|\+1|100)$/i);
   if (!match) return null;
   const query = match[1];
   const colonIdx = before.length - query.length - 1;
@@ -205,7 +205,7 @@ export function replaceCompletedEmojiShortcodes(text = '', caretPos = null) {
   const str = String(text || '');
   const end = caretPos === null || caretPos === undefined ? str.length : Math.min(str.length, Math.max(0, Number(caretPos)));
   const before = str.slice(0, end);
-  const match = before.match(/(?:^|[\s([{"'.,!?-]):([a-z][a-z0-9_+-]{1,27}|\+1|100):$/i);
+  const match = before.match(/(?:^|[^A-Za-z0-9:]):([a-z][a-z0-9_+-]{1,27}|\+1|100):$/i);
   if (!match) return null;
   const code = match[1];
   const emoji = resolveExactEmojiShortcode(code);
