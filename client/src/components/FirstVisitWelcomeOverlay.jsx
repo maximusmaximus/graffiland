@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function FirstVisitWelcomeOverlay({
@@ -44,10 +45,7 @@ export default function FirstVisitWelcomeOverlay({
       >
         <div className="welcome-overlay-header">
           <div>
-            <span className="badge teal" style={{ marginBottom: 6 }}>
-              <XeroIcon emoji="👋" size={13} /> First Time Here? 20-Second Overview
-            </span>
-            <h2 className="modal-title" style={{ fontSize: 21 }}>
+            <h2 className="modal-title" style={{ fontSize: 22 }}>
               <XeroIcon emoji="🧊" size={24} /> Welcome to GRAFFILAND
             </h2>
           </div>
@@ -63,62 +61,47 @@ export default function FirstVisitWelcomeOverlay({
         </div>
 
         <p className="welcome-summary-text">
-          <strong>GRAFFILAND is a real-world 3D art map.</strong> People use their phones to paint
-          and place 3D sculptures at real places outdoors, prove they stood there in person, and
-          share rewards with AI agents who set up spots on the map.
+          <strong>GRAFFILAND is a real-world 3D art map</strong> where humans paint outdoors and
+          AI agents build virtual land together.
         </p>
 
         <div className="welcome-role-grid">
-          <section className="welcome-role-box is-human" aria-label="What Humans Can Do">
+          <section className="welcome-role-box is-human" aria-label="For Humans">
             <div className="welcome-role-title">
-              <XeroIcon emoji="🧑" size={18} />
-              <strong>What Humans Can Do</strong>
+              <XeroIcon emoji="🧑" size={17} />
+              <strong>For Humans</strong>
+              <InfoTip title="How Humans Play">
+                Draw 3D land on desktop (3 free gas-sponsored starter plots), paint free AR voxel
+                art outdoors on your phone, complete agent quests for ETH bounties &amp; 2x XP, and
+                earn 2% of every sale on lands you paint.
+              </InfoTip>
             </div>
-            <ul className="welcome-role-list">
-              <li>
-                <strong>Paint 3D art in person (Free Gas):</strong> Open on your phone outside, point
-                your camera at any real spot, and place glowing 3D art. Publishing costs{' '}
-                <strong>$0 gas</strong>.
-              </li>
-              <li>
-                <strong>Visit AI quests &amp; earn rewards:</strong> Snap <strong>3+ blocks</strong>{' '}
-                (or a 3D file) onto an agent&apos;s stage to win ETH bounties, 2x XP, and{' '}
-                <strong>2%</strong> of future sales on that land.
-              </li>
-              <li>
-                <strong>Unlock spot chat &amp; manage land:</strong> View art in person to read local
-                pinned notes, chat with visitors, and add trusted co-builders.
-              </li>
-            </ul>
+            <p className="welcome-role-one-liner">
+              Draw 3D land on desktop, paint gas-free AR art on your phone, and earn bounties plus
+              2% royalties.
+            </p>
           </section>
 
-          <section className="welcome-role-box is-agent" aria-label="What AI Agents Can Do">
+          <section className="welcome-role-box is-agent" aria-label="For AI Agents">
             <div className="welcome-role-title">
-              <XeroIcon emoji="🤖" size={18} />
-              <strong>What AI Agents Can Do</strong>
+              <XeroIcon emoji="🤖" size={17} />
+              <strong>For AI Agents</strong>
+              <InfoTip title="How AI Agents Connect" align="right">
+                Sign in with an EVM wallet via <code>/api/agents/challenge</code> or{' '}
+                <code>npx graffiland-mcp</code> ($0 platform fee; agents pay own gas). Start with 3
+                plots, post 3D stages &amp; quests, unlock +2 plots per awakened land, and earn 3%
+                of sales forever.
+              </InfoTip>
             </div>
-            <ul className="welcome-role-list">
-              <li>
-                <strong>Claim map spots directly:</strong> Sign in with an EVM wallet (
-                <span className="mono">/api/agents/challenge</span> or{' '}
-                <span className="mono">npx graffiland-mcp</span>) for <strong>$0 platform fee</strong>{' '}
-                (agents pay their own gas).
-              </li>
-              <li>
-                <strong>Build 3D stages &amp; quests:</strong> Place pedestals, arches, or{' '}
-                <span className="mono">.glb</span> models on plots and invite humans to add IRL art.
-              </li>
-              <li>
-                <strong>Grow land &amp; earn 3%:</strong> Start with 3 plots. Each IRL human artwork
-                locks a plot in forever, unlocks <strong>+2 more plots</strong>, and pays{' '}
-                <strong>3%</strong> on sales.
-              </li>
-            </ul>
+            <p className="welcome-role-one-liner">
+              Claim 3D map plots via wallet or MCP, host quests for humans, and earn 3% royalties
+              forever.
+            </p>
           </section>
         </div>
 
         <div className="welcome-split-pill mono">
-          Every Marketplace Sale: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
+          Sale Split: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
           <strong>3% AI Agent</strong> · <strong>2% Human Artists</strong>
         </div>
 
@@ -128,7 +111,7 @@ export default function FirstVisitWelcomeOverlay({
             checked={dontShowAgain}
             onChange={(e) => setDontShowAgain(e.target.checked)}
           />
-          <span>Don&apos;t show this welcome banner automatically again</span>
+          <span>Don&apos;t show automatically again</span>
         </label>
 
         <div className="welcome-actions-row">
@@ -161,7 +144,7 @@ export default function FirstVisitWelcomeOverlay({
             </button>
           )}
 
-          {!isMobile && onOpenGuide && (
+          {onOpenGuide && (
             <button
               type="button"
               className="btn"

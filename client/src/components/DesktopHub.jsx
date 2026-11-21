@@ -516,6 +516,7 @@ export default function DesktopHub({
     setDraftParcelsRaw((prev) => [...prev, newDraft]);
     setSelectedDraftId(nextId);
     setSidebarTab('land');
+    setDrawMode(false);
     setLandStatus('');
     if (currentCount === 0 && viewModeRef.current === '2d') {
       setViewMode('3d');
@@ -554,7 +555,12 @@ export default function DesktopHub({
         draftParcelsRaw[draftParcelsRaw.length - 1];
       targetRotation = normalizeRotationDeg(selectedDraft.rotationDeg ?? defaultCamRotation);
       const rotRad = (targetRotation * Math.PI) / 180;
-      const stepMeters = Math.max(18, Number(selectedDraft.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters) + 4);
+      const stepMeters = Math.max(
+        30,
+        Number(selectedDraft.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters) / 2 +
+          LAND_VOLUME_LIMITS.defaultWidthMeters / 2 +
+          14
+      );
       const mPerDegLng = 111320 * Math.max(0.08, Math.cos((Number(selectedDraft.centerLat ?? anchorLat) * Math.PI) / 180));
       anchorLat =
         Number(selectedDraft.centerLat ?? selectedDraft.lat ?? anchorLat) +
@@ -874,6 +880,7 @@ export default function DesktopHub({
                 setSelectedDraftId(id);
                 setSidebarTab('land');
               }}
+              onUpdateDraft={handleUpdateDraft}
               onViewModeChange={(nextMode) => setViewMode(nextMode)}
               onToggleDrawMode={() => {
                 const next = !drawMode;

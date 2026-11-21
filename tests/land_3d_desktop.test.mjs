@@ -9,6 +9,8 @@ import {
   computeCameraAlignedDraftBox,
   computeMaxHeightForFootprint,
   footprintsOverlap,
+  resizeDraftFromEdge,
+  scaleDraftFromCorner,
   scaleFootprintToLimit,
   validateAndNormalizeLandVolume
 } from '../shared/landVolume.mjs';
@@ -265,6 +267,63 @@ describe('3D Land Volume Geometry & Prompt Unit Tests', () => {
     assert.equal(smallPlotH.heightMeters, 250);
     const largePlotH = computeMaxHeightForFootprint({ widthMeters: 100, depthMeters: 50 });
     assert.equal(largePlotH.heightMeters, 100);
+  });
+
+  test('scaleDraftFromCorner & resizeDraftFromEdge anchor opposite side, preserve rotation & cap to 5,000 m²', () => {
+    const base = validateAndNormalizeLandVolume({
+      lat: 37.7749,
+      lng: -122.4194,
+      widthMeters: 20,
+      depthMeters: 20,
+      heightMeters: 18,
+      rotationDeg: 315
+    }).volume;
+
+    // Pull corner 0 (NW in local frame) far outward -> scales cleanly & caps <= 5,000 m²
+    const scaled = scaleDraftFromCorner({
+      draft: base,
+      cornerIndex: 0,
+      pointerLat: 37.777,
+      pointerLng: -122.423
+    });
+    assert.ok(scaled);
+    assert.equal(scaled.rotationDeg, 315);
+    assert.ok(scaled.widthMeters * scaled.depthMeters <= LAND_VOLUME_LIMITS.maxFootprintAreaSqM);
+    assert.ok(scaled.widthMeters * scaled.depthMeters > 400);
+    // Opposite corner (index 2) remains anchored in place
+    const scaledVol = validateAndNormalizeLandVolume(scaled).volume;
+    assert.ok(Math.abs(scaledVol.corners[2][0] - base.corners[2][0]) < 1e-4);
+    assert.ok(Math.abs(scaledVol.corners[2][1] - base.corners[2][1]) < 1e-4);
+
+    // Pull North edge (edgeIndex=0) outward on an axis-aligned plot -> changes ONLY depthMeters!
+    const aligned = validateAndNormalizeLandVolume({
+      lat: 37.7749,
+      lng: -122.4194,
+      widthMeters: 24,
+      depthMeters: 16,
+      heightMeters: 18,
+      rotationDeg: 0
+    }).volume;
+    const stretchedNorth = resizeDraftFromEdge({
+      draft: aligned,
+      edgeIndex: 0,
+      pointerLat: 37.7753,
+      pointerLng: -122.4194
+    });
+    assert.ok(stretchedNorth);
+    assert.equal(stretchedNorth.widthMeters, 24);
+    assert.ok(stretchedNorth.depthMeters > 30 && stretchedNorth.depthMeters <= LAND_VOLUME_LIMITS.maxDepthMeters);
+
+    // Pull East edge (edgeIndex=1) outward -> changes ONLY widthMeters!
+    const stretchedEast = resizeDraftFromEdge({
+      draft: aligned,
+      edgeIndex: 1,
+      pointerLat: 37.7749,
+      pointerLng: -122.4188
+    });
+    assert.ok(stretchedEast);
+    assert.equal(stretchedEast.depthMeters, 16);
+    assert.ok(stretchedEast.widthMeters > 35 && stretchedEast.widthMeters <= LAND_VOLUME_LIMITS.maxWidthMeters);
   });
 });
 

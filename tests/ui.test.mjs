@@ -132,7 +132,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     }
   });
 
-  test('InfoTermsModal displays Proof of Location threat model & Takedown/Dispute policy tabs', async () => {
+  test('InfoTermsModal organizes Guide by Desktop vs Mobile viewport, toggles "i" tooltips & shows Terms', async () => {
     const { default: InfoTermsModal } = await loadJsxModule(
       'client/src/components/InfoTermsModal.jsx'
     );
@@ -145,8 +145,19 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    assert.ok(view.getByText(/Proof of Location Threat Model & Transparency/i));
-    assert.ok(view.getByText(/Agentic-First Stewardship, Quests & 5% \/ 3% \/ 2% Splits/i));
+    assert.ok(view.getByRole('tab', { name: /Desktop Map & 3D Land/i }));
+    assert.ok(view.getByRole('tab', { name: /Mobile AR Studio/i }));
+    assert.ok(view.getByTestId('info-guide-desktop'));
+    assert.ok(view.getByText(/Draw, Shape & Mint 3D Land/i));
+    assert.ok(view.getByText(/Proof of Location Threat Model/i));
+
+    // Switch to Mobile AR Studio guide tab
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Mobile AR Studio/i }));
+    assert.ok(view.getByTestId('info-guide-mobile'));
+    assert.ok(view.getByText(/Tap Surface & Paint 3D Voxels/i));
+
+    // Click the "i" tooltip button next to Threat Model to pull up full security summary
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Transparency & Security Details/i }));
     assert.ok(view.getByText(POLICY.threatModelSummary));
 
     RTL.fireEvent.click(view.getByText(/Terms & Virtual Land/i));
@@ -351,17 +362,22 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     };
 
     renderBanner('human');
-    assert.ok(view.getByText(/Mobile Required for Full Functionality/i));
+    assert.ok(view.getByText(/A real-world 3D art map where humans draw land/i));
+    // Open clickable "i" tooltip on a feature chip
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Desktop 3D Land Builder/i }));
+    assert.ok(view.getByRole('tooltip'));
+    assert.ok(view.getByText(/hold vertical bars to rotate/i));
+
     RTL.fireEvent.click(view.getByText(/Copy Property-Agent Prompt/i));
     await RTL.waitFor(() => {
       assert.equal(copiedTexts.length, 1);
       assert.ok(copiedTexts[0].includes('GLP-ABCD-EFGH-JKLM-NPQR'));
     });
 
-    RTL.fireEvent.click(view.getByRole('tab', { name: /Agentic User \/ AI Steward/i }));
+    RTL.fireEvent.click(view.getByRole('tab', { name: /AI Agents/i }));
     assert.equal(activeRole, 'agent');
     renderBanner('agent');
-    assert.ok(view.getByText(/Autonomous AI Agents Connect Without OAuth/i));
+    assert.ok(view.getByText(/Wallet \/ MCP Auth/i));
 
     RTL.fireEvent.click(view.getByText(/Preview Prompt/i));
     assert.ok(view.getByText(/Zero-OAuth Autonomous Agent Steward/i));
@@ -374,15 +390,15 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       assert.ok(copiedTexts[1].includes('own chain gas'));
     });
 
-    RTL.fireEvent.click(view.getByRole('tab', { name: /Collectors & Scouts/i }));
+    RTL.fireEvent.click(view.getByRole('tab', { name: /Collectors/i }));
     assert.equal(activeRole, 'collector');
     renderBanner('collector');
-    assert.ok(view.getByText(/Collect Real-World Verified 3D NFTs/i));
-    assert.ok(view.getByText(/Proof of Real Presence/i));
+    assert.ok(view.getByText(/Verified IRL 3D NFTs/i));
+    assert.ok(view.getByText(/5% \/ 3% \/ 2% Split/i));
     cleanup();
   });
 
-  test('FirstVisitWelcomeOverlay explains product, human capabilities, and AI agent capabilities in simple terms', async () => {
+  test('FirstVisitWelcomeOverlay explains product in one sentence with Human/Agent cards & clickable "i" tooltips', async () => {
     const { default: FirstVisitWelcomeOverlay } = await loadJsxModule(
       'client/src/components/FirstVisitWelcomeOverlay.jsx'
     );
@@ -405,13 +421,15 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     assert.ok(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
-    assert.ok(view.getByText(/What Humans Can Do/i));
-    assert.ok(view.getByText(/What AI Agents Can Do/i));
+    assert.ok(view.getByText(/^For Humans$/i));
+    assert.ok(view.getByText(/^For AI Agents$/i));
     assert.ok(view.getByText(/90% Seller/i));
 
-    // Clicking inside the card must keep the overlay open
-    RTL.fireEvent.click(view.getByText(/What Humans Can Do/i));
-    RTL.fireEvent.click(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
+    // Clicking inside the card or opening an "i" tooltip must keep the overlay open
+    RTL.fireEvent.click(view.getByText(/^For Humans$/i));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Humans Play/i }));
+    assert.ok(view.getByRole('tooltip'));
+    assert.ok(view.getByText(/3 free gas-sponsored starter plots/i));
     assert.equal(exploreCalls.length, 0);
 
     // Starting a pointer press inside the card and releasing on the backdrop must NOT close it
@@ -525,6 +543,9 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(limitsCard.textContent.includes('5,000 m²'));
     assert.ok(limitsCard.textContent.includes('500,000 m³'));
     assert.ok(limitsCard.textContent.includes('3 free human claims'));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: 3D Land Limits & Rules/i }));
+    assert.ok(view.getByRole('tooltip'));
+    assert.ok(view.getByText(/AI agents pay own gas/i));
 
     RTL.fireEvent.change(view.getByLabelText('Width (m)'), { target: { value: '32' } });
     RTL.fireEvent.change(view.getByLabelText('Depth (m)'), { target: { value: '24' } });

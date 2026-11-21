@@ -6,6 +6,7 @@ import {
 } from '../../../shared/landSignatureMessage.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function DesktopIntroBanner({
@@ -51,7 +52,10 @@ export default function DesktopIntroBanner({
     () =>
       buildPropertyOwnerPrompt({
         apiOrigin,
-        pairingCode: mcpState?.activePairing?.code || mcpState?.pairings?.[0]?.code || '<YOUR_GLP_PAIRING_CODE>',
+        pairingCode:
+          mcpState?.activePairing?.code ||
+          mcpState?.pairings?.[0]?.code ||
+          '<YOUR_GLP_PAIRING_CODE>',
         ownerAddress: user?.activeMintRecipient || user?.walletAddress || '<YOUR_WALLET_ADDRESS>'
       }),
     [apiOrigin, mcpState, user]
@@ -68,18 +72,14 @@ export default function DesktopIntroBanner({
     const ok = await copyToClipboard(autonomousPrompt);
     flashCopy(
       ok
-        ? 'Copied Autonomous Agent Prompt! Paste into Claude, OpenClaw, Cursor, or LangGraph.'
+        ? 'Copied Autonomous Agent Prompt! Paste into your AI agent.'
         : 'Clipboard unavailable — open Preview Prompt to copy.'
     );
   }
 
   async function handleCopyStdioConfig() {
     const ok = await copyToClipboard(stdioConfigJson);
-    flashCopy(
-      ok
-        ? 'Copied graffiland-mcp stdio MCP JSON config! Set GRAFFILAND_PRIVATE_KEY before running.'
-        : 'Clipboard unavailable.'
-    );
+    flashCopy(ok ? 'Copied graffiland-mcp JSON config!' : 'Clipboard unavailable.');
   }
 
   async function handleCopyPropertyOwnerPrompt() {
@@ -87,15 +87,16 @@ export default function DesktopIntroBanner({
       const ok = await copyToClipboard(ownerPromptPreview);
       flashCopy(
         ok
-          ? 'Copied starter Property-Agent Prompt! Sign in + Pair Phone to insert your personal GLP pairing code.'
-          : 'Sign in first to generate your personal GLP pairing code.'
+          ? 'Copied Property-Agent Prompt! Sign in to insert your personal GLP code.'
+          : 'Sign in first to generate your personal GLP code.'
       );
       return;
     }
     setBusy(true);
     try {
       let code =
-        mcpState?.activePairing?.code || mcpState?.pairings?.find((p) => p.status === 'pending')?.code;
+        mcpState?.activePairing?.code ||
+        mcpState?.pairings?.find((p) => p.status === 'pending')?.code;
       let prompt = '';
       if (!code) {
         const created = await api.createMcpPairing({ apiOrigin });
@@ -117,11 +118,7 @@ export default function DesktopIntroBanner({
         });
       }
       const ok = await copyToClipboard(prompt);
-      flashCopy(
-        ok
-          ? `Copied Property-Agent Prompt with pairing code ${code}!`
-          : `Generated ${code} — open Preview Prompt to copy.`
-      );
+      flashCopy(ok ? `Copied Property-Agent Prompt (${code})!` : `Generated ${code}.`);
     } catch (err) {
       flashCopy(err?.message || 'Could not generate pairing prompt.');
     } finally {
@@ -136,213 +133,207 @@ export default function DesktopIntroBanner({
       className={`desktop-mobile-notice desktop-intro-card ${roleTab === 'agent' ? 'is-agent-tab' : ''}`}
       aria-label="Desktop Introduction and Agent Connection"
     >
-      <div className="desktop-intro-top">
-        <div className="desktop-intro-tabs" role="tablist" aria-label="Choose your GRAFFILAND role">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={roleTab === 'human'}
-            className={`btn ${roleTab === 'human' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: 12 }}
-            onClick={() => onRoleTabChange?.('human')}
-          >
-            <XeroIcon emoji="🧑" size={14} /> Human Creator
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={roleTab === 'agent'}
-            className={`btn ${roleTab === 'agent' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: 12 }}
-            onClick={() => onRoleTabChange?.('agent')}
-          >
-            <XeroIcon emoji="🤖" size={14} /> Agentic User / AI Steward
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={roleTab === 'collector'}
-            className={`btn ${roleTab === 'collector' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: 12 }}
-            onClick={() => onRoleTabChange?.('collector')}
-          >
-            <XeroIcon emoji="💎" size={14} /> Collectors &amp; Scouts
-          </button>
+      <div className="desktop-intro-headline-row">
+        <div className="desktop-intro-headline">
+          <strong>GRAFFILAND</strong>
+          <span>
+            A real-world 3D art map where humans draw land &amp; paint free AR art outdoors, and AI
+            agents build stages &amp; share royalties.
+          </span>
         </div>
 
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {onOpenWelcome && (
+        <div className="desktop-intro-controls">
+          <div className="desktop-intro-tabs" role="tablist" aria-label="Choose your GRAFFILAND role">
             <button
               type="button"
-              className="btn"
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-              onClick={onOpenWelcome}
-              title="Reopen the first-visit simple overview banner"
+              role="tab"
+              aria-selected={roleTab === 'human'}
+              className={`btn btn-xs ${roleTab === 'human' ? 'btn-primary' : ''}`}
+              onClick={() => onRoleTabChange?.('human')}
             >
-              <XeroIcon emoji="👋" size={13} /> Intro
+              <XeroIcon emoji="🧑" size={12} /> Humans
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={roleTab === 'agent'}
+              className={`btn btn-xs ${roleTab === 'agent' ? 'btn-primary' : ''}`}
+              onClick={() => onRoleTabChange?.('agent')}
+            >
+              <XeroIcon emoji="🤖" size={12} /> AI Agents
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={roleTab === 'collector'}
+              className={`btn btn-xs ${roleTab === 'collector' ? 'btn-primary' : ''}`}
+              onClick={() => onRoleTabChange?.('collector')}
+            >
+              <XeroIcon emoji="💎" size={12} /> Collectors
+            </button>
+          </div>
+
+          {onOpenWelcome && (
+            <button type="button" className="btn btn-xs" onClick={onOpenWelcome} title="Overview">
+              <XeroIcon emoji="👋" size={12} /> Intro
             </button>
           )}
           <button
             type="button"
-            className="btn"
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
+            className="btn btn-xs"
             aria-expanded={showPreview}
             onClick={() => setShowPreview((v) => !v)}
           >
-            <XeroIcon emoji="👀" size={13} /> {showPreview ? 'Hide Prompt' : 'Preview Prompt'}
+            <XeroIcon emoji="👀" size={12} /> {showPreview ? 'Hide Prompt' : 'Preview Prompt'}
           </button>
           <button
             type="button"
-            className="btn"
-            style={{ padding: '4px 8px' }}
+            className="btn btn-xs"
             onClick={onDismiss}
-            aria-label="Dismiss mobile notice"
-            title="Minimize intro banner (re-open via Connect Agent button)"
+            aria-label="Dismiss intro banner"
+            title="Minimize banner"
           >
-            <XeroIcon emoji="❌" size={13} />
+            <XeroIcon emoji="✕" size={12} />
           </button>
         </div>
       </div>
 
       {roleTab === 'human' ? (
-        <div className="desktop-intro-body">
-          <div className="desktop-mobile-notice-body">
-            <XeroIcon emoji="📱" size={20} />
-            <div>
-              <strong>Mobile Required for Full Functionality</strong> — Use Desktop to browse the
-              world map, find Art Quests, and pair with an AI helper. Open GRAFFILAND on your phone
-              when you are ready to sculpt IRL.
-            </div>
+        <div key="human" className="desktop-intro-compact-row">
+          <div className="desktop-intro-chips">
+            <span className="intro-chip">
+              Draw 3D Land
+              <InfoTip title="Desktop 3D Land Builder">
+                Click <strong>Draw Land</strong> on the map to place a 3D parcel, drag corners to
+                scale up to 5,000 m², hold vertical bars to rotate, and mint 3 free starter plots.
+              </InfoTip>
+            </span>
+            <span className="intro-chip">
+              Phone AR Free Gas
+              <InfoTip title="Mobile AR Sculpting">
+                Sculpting &amp; publishing IRL requires a phone camera + GPS. Human publishes cost
+                $0 gas and unlock 2% royalties + bounties on agent quests.
+              </InfoTip>
+            </span>
+            <span className="intro-chip">
+              Pair Helper AI
+              <InfoTip title="Connect Your Personal Agent">
+                Copy a GLP pairing prompt so your AI helper can build on lands you own, with
+                two-way approval on your phone.
+              </InfoTip>
+            </span>
           </div>
-          <div className="desktop-selling-grid">
-            <div className="desktop-selling-card">
-              <strong>Paint &amp; Mint Free IRL</strong>
-              <span>Sculpt with your phone camera + GPS and mint NFTs with zero gas fees.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>Earn Quests &amp; 2% Pool</strong>
-              <span>Add 3+ blocks to an agent plinth to win ETH bounties, 2x XP &amp; 2% royalties.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>Connect Your Helper AI</strong>
-              <span>Copy a GLP pairing prompt below so your AI agent can build on lands you own.</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button type="button" className="btn btn-primary" onClick={handleCopyPropertyOwnerPrompt} disabled={busy}>
-              <XeroIcon emoji="📋" size={14} />{' '}
-              {busy ? 'Generating GLP Code...' : 'Copy Property-Agent Prompt'}
+
+          <div className="desktop-intro-actions">
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              onClick={handleCopyPropertyOwnerPrompt}
+              disabled={busy}
+            >
+              <XeroIcon emoji="📋" size={12} /> {busy ? 'Generating...' : 'Copy Property-Agent Prompt'}
             </button>
             {!user && onRequestLogin && (
-              <button type="button" className="btn" onClick={onRequestLogin}>
-                <XeroIcon emoji="🔐" size={14} /> Sign In for GLP Code
+              <button type="button" className="btn btn-xs" onClick={onRequestLogin}>
+                Sign In
               </button>
             )}
-            <button type="button" className="btn" onClick={onOpenPair}>
-              <XeroIcon emoji="🔗" size={14} /> Pair with QR Code
+            <button type="button" className="btn btn-xs" onClick={onOpenPair}>
+              <XeroIcon emoji="🔗" size={12} /> Pair Phone
             </button>
             {onOpenQuests && (
-              <button type="button" className="btn" onClick={onOpenQuests}>
-                <XeroIcon emoji="🔥" size={14} /> Explore Quests
+              <button type="button" className="btn btn-xs" onClick={onOpenQuests}>
+                <XeroIcon emoji="🔥" size={12} /> Quests
               </button>
             )}
-            <button type="button" className="btn" onClick={onOpenInfo}>
-              <XeroIcon emoji="ℹ️" size={14} /> How It Works
+            <button type="button" className="btn btn-xs" onClick={onOpenInfo}>
+              <XeroIcon emoji="ℹ️" size={12} /> Guide
             </button>
           </div>
         </div>
       ) : roleTab === 'agent' ? (
-        <div className="desktop-intro-body">
-          <div className="desktop-mobile-notice-body">
-            <XeroIcon emoji="🤖" size={20} />
-            <div>
-              <strong>Autonomous AI Agents Connect Without OAuth</strong> — Sign in with your own
-              EVM wallet (<span className="mono">/api/agents/challenge</span>) or{' '}
-              <span className="mono">npx graffiland-mcp</span>. Agents claim land with{' '}
-              <strong>0 platform fee and pay their own chain gas</strong>.
-            </div>
+        <div key="agent" className="desktop-intro-compact-row">
+          <div className="desktop-intro-chips">
+            <span className="intro-chip">
+              Wallet / MCP Auth
+              <InfoTip title="Zero-OAuth Autonomous Login">
+                Sign an EIP-191 challenge at <code>/api/agents/challenge</code> or run{' '}
+                <code>npx graffiland-mcp</code>. Start with 3 land slots.
+              </InfoTip>
+            </span>
+            <span className="intro-chip">
+              Agents Pay Own Gas
+              <InfoTip title="Agent Gas & Fees">
+                $0 platform claim fee. Autonomous agents cover their own chain network gas when
+                minting or building on-chain.
+              </InfoTip>
+            </span>
+            <span className="intro-chip">
+              3% Royalties Forever
+              <InfoTip title="Steward Incentives">
+                Place 3D stages + quests. When an IRL human adds 3+ blocks, your land locks in
+                permanently, unlocks +2 more slots, and earns 3% of sales forever.
+              </InfoTip>
+            </span>
           </div>
-          <div className="desktop-selling-grid">
-            <div className="desktop-selling-card">
-              <strong>Direct Wallet Login</strong>
-              <span>Zero browser pairing needed. Start with 3 land claims via API or MCP.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>Pay Only Your Own Gas</strong>
-              <span>$0 platform claim fee — agents cover their own gas when minting on-chain.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>3% Steward Royalties Forever</strong>
-              <span>Build 3D stages + quests; IRL human visits unlock +2 slots &amp; 3% splits.</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button type="button" className="btn btn-primary" onClick={handleCopyAutonomousPrompt}>
-              <XeroIcon emoji="📋" size={14} /> Copy Autonomous Agent Prompt
+
+          <div className="desktop-intro-actions">
+            <button type="button" className="btn btn-xs btn-primary" onClick={handleCopyAutonomousPrompt}>
+              <XeroIcon emoji="📋" size={12} /> Copy Autonomous Agent Prompt
             </button>
-            <button type="button" className="btn" onClick={handleCopyStdioConfig}>
-              <XeroIcon emoji="⚙️" size={14} /> Copy graffiland-mcp Config
+            <button type="button" className="btn btn-xs" onClick={handleCopyStdioConfig}>
+              <XeroIcon emoji="⚙️" size={12} /> MCP Config
             </button>
-            <a
-              className="btn"
-              href={`${apiOrigin}/llms.txt`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <XeroIcon emoji="📄" size={14} /> /llms.txt
+            <a className="btn btn-xs" href={`${apiOrigin}/llms.txt`} target="_blank" rel="noreferrer">
+              /llms.txt
             </a>
             <a
-              className="btn"
+              className="btn btn-xs"
               href={`${apiOrigin}/.well-known/agent.json`}
               target="_blank"
               rel="noreferrer"
             >
-              <XeroIcon emoji="🧬" size={14} /> agent.json
+              agent.json
             </a>
           </div>
         </div>
       ) : (
-        <div className="desktop-intro-body">
-          <div className="desktop-mobile-notice-body">
-            <XeroIcon emoji="💎" size={20} />
-            <div>
-              <strong>Collect Real-World Verified 3D NFTs</strong> — Every artwork is backed by
-              physical Proof of Location, stored permanently as a 3D{' '}
-              <span className="mono">.glb</span> file, and settles transparently on-chain.
-            </div>
+        <div key="collector" className="desktop-intro-compact-row">
+          <div className="desktop-intro-chips">
+            <span className="intro-chip">
+              Verified IRL 3D NFTs
+              <InfoTip title="Proof of Real Presence">
+                Every piece is verified via live phone camera, motion sensors, and GPS, and saved
+                as a standard ERC-721 + 3D <code>.glb</code> asset.
+              </InfoTip>
+            </span>
+            <span className="intro-chip">
+              5% / 3% / 2% Split
+              <InfoTip title="On-Chain Revenue Split">
+                Every marketplace trade pays 90% Seller, 5% Platform, 3% AI Agent Steward, and 2%
+                to verified IRL Human Artists.
+              </InfoTip>
+            </span>
           </div>
-          <div className="desktop-selling-grid">
-            <div className="desktop-selling-card">
-              <strong>Proof of Real Presence</strong>
-              <span>Camera, motion sensors, and GPS verify every piece was placed at that spot.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>Clear 5% / 3% / 2% Splits</strong>
-              <span>Every trade pays 90% seller, 5% platform, 3% agent, and 2% human builders.</span>
-            </div>
-            <div className="desktop-selling-card">
-              <strong>Spot Rising Neighborhoods</strong>
-              <span>Track active parcels, quest activity, and top creators directly on the map.</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+
+          <div className="desktop-intro-actions">
             {onOpenMarket && (
-              <button type="button" className="btn btn-primary" onClick={onOpenMarket}>
-                <XeroIcon emoji="🛒" size={14} /> Browse Marketplace
+              <button type="button" className="btn btn-xs btn-primary" onClick={onOpenMarket}>
+                <XeroIcon emoji="🛒" size={12} /> Marketplace
               </button>
             )}
             {onOpenQuests && (
-              <button type="button" className="btn" onClick={onOpenQuests}>
-                <XeroIcon emoji="🔥" size={14} /> Active Quests
+              <button type="button" className="btn btn-xs" onClick={onOpenQuests}>
+                <XeroIcon emoji="🔥" size={12} /> Quests
               </button>
             )}
             {onOpenLeaders && (
-              <button type="button" className="btn" onClick={onOpenLeaders}>
-                <XeroIcon emoji="🏆" size={14} /> View Leaderboard
+              <button type="button" className="btn btn-xs" onClick={onOpenLeaders}>
+                <XeroIcon emoji="🏆" size={12} /> Leaders
               </button>
             )}
-            <button type="button" className="btn" onClick={handleCopyAutonomousPrompt}>
-              <XeroIcon emoji="🤖" size={14} /> Copy Agent Setup Prompt
+            <button type="button" className="btn btn-xs" onClick={handleCopyAutonomousPrompt}>
+              <XeroIcon emoji="🤖" size={12} /> Copy Agent Prompt
             </button>
           </div>
         </div>

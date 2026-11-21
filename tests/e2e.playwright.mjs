@@ -249,9 +249,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.equal(layerAudit.hitAtZoomCoveredByOverlay, true);
     assert.equal(layerAudit.allPointsInsideCard, true);
 
-    // Clicking inside the welcome card keeps it open
-    await page.getByText('What Humans Can Do').click();
-    await page.waitForTimeout(300);
+    // Clicking inside the welcome card or clicking an "i" tooltip keeps it open
+    await page.getByText('For Humans', { exact: true }).click();
+    await page.getByRole('button', { name: /Info: How Humans Play/i }).click();
+    await page.waitForSelector('[role="tooltip"]');
+    await page.waitForTimeout(250);
     assert.equal(await page.isVisible(welcomeSelector), true);
 
     // Uncheck "Don't show automatically again" and click off card onto the dark backdrop
@@ -284,19 +286,22 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.equal(await page.locator(welcomeSelector).count(), 0);
 
     // Reopen via Intro button and test "Connect AI Agent" CTA
-    await page.getByRole('button', { name: /Intro/i }).click();
+    await page.getByRole('button', { name: /^Intro$/i }).click();
     await page.waitForSelector(welcomeSelector);
     await page.getByRole('button', { name: /Connect AI Agent/i }).click();
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
-    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+    await page.waitForSelector('text=Wallet / MCP Auth');
     const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
-    assert.ok(selectedTabText.includes('Agentic User / AI Steward'));
+    assert.ok(selectedTabText.includes('AI Agents'));
 
-    // Reopen via Intro button and test "Full Guide" CTA opening Info modal above MapLibre
-    await page.getByRole('button', { name: /Intro/i }).click();
+    // Reopen via Intro button and test "Full Guide" CTA opening viewport-tabbed Info modal above MapLibre
+    await page.getByRole('button', { name: /^Intro$/i }).click();
     await page.waitForSelector(welcomeSelector);
     await page.getByRole('button', { name: /Full Guide/i }).click();
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    await page.waitForSelector('[data-testid="info-guide-desktop"]');
+    await page.getByRole('tab', { name: /Mobile AR Studio/i }).click();
+    await page.waitForSelector('[data-testid="info-guide-mobile"]');
     await page.waitForSelector('text=Proof of Location Threat Model');
 
     const infoModalAudit = await page.evaluate(() => {
@@ -334,15 +339,18 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     const bodyText = await page.textContent('body');
     assert.ok(bodyText.includes('Desktop Map Explorer'));
-    assert.ok(bodyText.includes('Mobile Required for Full Functionality'));
+    assert.ok(bodyText.includes('A real-world 3D art map where humans draw land'));
     assert.ok(bodyText.includes('E2E Lighthouse Cube'));
 
-    // Exercise Desktop Intro Banner tabs (Human Creator <-> Collectors & Scouts <-> Agentic User / AI Steward) & Prompt Preview
+    // Exercise Desktop Intro Banner tabs (Humans <-> Collectors <-> AI Agents), clickable "i" tooltip & Prompt Preview
     await page.getByRole('button', { name: /Copy Property-Agent Prompt/i }).waitFor();
-    await page.getByRole('tab', { name: /Collectors & Scouts/i }).click();
-    await page.waitForSelector('text=Collect Real-World Verified 3D NFTs');
-    await page.getByRole('tab', { name: /Agentic User \/ AI Steward/i }).click();
-    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+    await page.getByRole('tab', { name: /Collectors/i }).click();
+    await page.waitForSelector('text=Verified IRL 3D NFTs');
+    await page.getByRole('tab', { name: /AI Agents/i }).click();
+    await page.waitForSelector('text=Wallet / MCP Auth');
+    await page.getByRole('button', { name: /Info: Zero-OAuth Autonomous Login/i }).click();
+    await page.waitForSelector('[role="tooltip"]');
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: /Preview Prompt/i }).click();
     await page.waitForSelector('text=Zero-OAuth Autonomous Agent Steward');
 
@@ -391,9 +399,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     await page.getByRole('button', { name: /Copy Autonomous Agent Prompt/i }).click();
     await page.waitForSelector('text=Copied Autonomous Agent Prompt');
-    await page.getByRole('button', { name: /Dismiss mobile notice/i }).click();
+    await page.getByRole('button', { name: /Dismiss intro banner/i }).click();
     await page.getByRole('button', { name: /Connect Agent/i }).click();
-    await page.waitForSelector('text=Autonomous AI Agents Connect Without OAuth');
+    await page.waitForSelector('text=Wallet / MCP Auth');
 
     // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
     await page.getByRole('button', { name: /Quests/i }).click();
@@ -537,12 +545,12 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.equal(Number(await stage.getAttribute('data-pitch')), 52);
     assert.equal(Number(await stage.getAttribute('data-bearing')), -45);
 
-    // Search intersection / coordinate spot and jump map
+    // Dynamic live search: typing auto-opens dropdown without clicking Find; Enter jumps & drops a target pin
     const searchInput = page.getByLabel('Search locations, intersections, or businesses');
     await searchInput.fill('37.786, -122.408');
-    await page.getByRole('button', { name: /^Find$/i }).click();
-    await page.waitForSelector('.map3d-search-item');
-    await page.locator('.map3d-search-item').first().click();
+    await page.waitForSelector('.map3d-search-item', { timeout: 6000 });
+    await searchInput.press('Enter');
+    await page.waitForSelector('.map3d-search-pin', { timeout: 5000 });
     await page.waitForTimeout(350);
 
     // Activate Draw Land directly from the map toolbar while in Isometric view
@@ -551,19 +559,83 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="land-limits-card"]');
     assert.equal(await stage.getAttribute('data-draw-mode'), 'on');
 
-    // Drag-draw a huge rectangle right on the Isometric map -> inherits Isometric orientation (315 deg) & caps cleanly at 5,000 m² limit!
+    // Drag-draw a rectangle right on the Isometric map -> inherits 315° orientation, caps cleanly, & auto-exits drawMode!
     const mapBox = await page.locator('.map-container').boundingBox();
     assert.ok(mapBox && mapBox.width > 200 && mapBox.height > 200);
-    await page.mouse.move(mapBox.x + mapBox.width * 0.3, mapBox.y + mapBox.height * 0.35);
+    await page.mouse.move(mapBox.x + mapBox.width * 0.36, mapBox.y + mapBox.height * 0.42);
     await page.mouse.down();
-    await page.mouse.move(mapBox.x + mapBox.width * 0.78, mapBox.y + mapBox.height * 0.78, { steps: 8 });
+    await page.mouse.move(mapBox.x + mapBox.width * 0.62, mapBox.y + mapBox.height * 0.66, { steps: 8 });
     await page.mouse.up();
 
     await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
     assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
+    assert.equal(await stage.getAttribute('data-draw-mode'), 'off');
     const drawnText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(drawnText.includes('315°'), `Expected drawn square to inherit 315° isometric orientation, got: ${drawnText}`);
-    assert.ok(drawnText.includes('Ready'), `Expected large drag capped cleanly to valid limit size, got: ${drawnText}`);
+    assert.ok(drawnText.includes('Ready'), `Expected drawn plot to be valid Ready, got: ${drawnText}`);
+
+    // Verify hover-to-select & on-map 3D CAD gizmo handles (corner ball scale, side bar stretch, vertical bar rotate, body move)
+    await page.waitForFunction(() => Boolean(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-active-gizmo')));
+    const readGizmo = async () =>
+      JSON.parse(await stage.getAttribute('data-active-gizmo'));
+
+    let gizmo = await readGizmo();
+    // 1) Hover over drawn plot selects it & shows handle hint pill
+    await page.mouse.move(mapBox.x + gizmo.center[0], mapBox.y + gizmo.center[1]);
+    await page.waitForFunction(
+      (id) => globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-hovered-draft-id') === id,
+      gizmo.id
+    );
+    await page.waitForSelector('.map3d-gizmo-pill');
+
+    // 2) Drag a corner ball outward to scale footprint smoothly
+    const beforeCornerText = await page.locator('.land-draft-item').first().textContent();
+    await page.mouse.move(mapBox.x + gizmo.corner0[0], mapBox.y + gizmo.corner0[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.corner0[0] - 28, mapBox.y + gizmo.corner0[1] - 22, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const afterCornerText = await page.locator('.land-draft-item').first().textContent();
+    assert.notEqual(afterCornerText, beforeCornerText, 'Expected dragging corner ball to resize footprint');
+    assert.ok(afterCornerText.includes('Ready'), `Expected corner-scaled plot to stay Ready, got: ${afterCornerText}`);
+
+    // 3) Drag a side segment bar inward toward center to move/resize a single edge cleanly
+    gizmo = await readGizmo();
+    const beforeEdgeText = await page.locator('.land-draft-item').first().textContent();
+    const edgeTargetX = mapBox.x + gizmo.edge0[0] + (gizmo.center[0] - gizmo.edge0[0]) * 0.45;
+    const edgeTargetY = mapBox.y + gizmo.edge0[1] + (gizmo.center[1] - gizmo.edge0[1]) * 0.45;
+    await page.mouse.move(mapBox.x + gizmo.edge0[0], mapBox.y + gizmo.edge0[1]);
+    await page.mouse.down();
+    await page.mouse.move(edgeTargetX, edgeTargetY, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const afterEdgeText = await page.locator('.land-draft-item').first().textContent();
+    assert.notEqual(afterEdgeText, beforeEdgeText, 'Expected dragging side segment bar to resize side');
+
+    // 4) Hold & drag a vertical corner bar to rotate the box
+    gizmo = await readGizmo();
+    const rotBefore = await page.getByLabel('Rotate (°)').inputValue();
+    await page.mouse.move(mapBox.x + gizmo.vbar0[0], mapBox.y + gizmo.vbar0[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.vbar0[0] + 45, mapBox.y + gizmo.vbar0[1] + 20, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const rotAfter = await page.getByLabel('Rotate (°)').inputValue();
+    assert.notEqual(rotAfter, rotBefore, `Expected holding & dragging vertical bar to rotate box (before=${rotBefore}, after=${rotAfter})`);
+
+    // 5) Drag center body to move the entire property on canvas
+    gizmo = await readGizmo();
+    const idBeforeMove = await page.locator('.land-editor-id').textContent();
+    await page.mouse.move(mapBox.x + gizmo.center[0], mapBox.y + gizmo.center[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.center[0] + 42, mapBox.y + gizmo.center[1] + 24, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const gizmoAfterMove = await readGizmo();
+    assert.ok(
+      Math.hypot(gizmoAfterMove.center[0] - gizmo.center[0], gizmoAfterMove.center[1] - gizmo.center[1]) >= 10,
+      `Expected center body drag to move parcel (${idBeforeMove})`
+    );
 
     // Verify scale-to-limit & max-height controls keep parcel valid up to the exact limit
     await page.getByRole('button', { name: /Max Limit Size/i }).click();
@@ -571,10 +643,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const scaledText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(scaledText.includes('Ready'), `Expected Max Limit Size + Max Height to remain valid Ready, got: ${scaledText}`);
 
-    // Verify 2D -> 3D auto-switch still works if user clears, switches to 2D, and draws
+    // Verify 2D -> 3D auto-switch still works if user clears, switches to 2D, activates Draw Land, and draws
     await page.getByRole('button', { name: /^Clear \(1\)$/i }).click();
     await page.locator('.map3d-toolbar').getByRole('button', { name: /^2D$/i }).click();
     assert.equal(await stage.getAttribute('data-view-mode'), '2d');
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /Draw Land/i }).click();
     await page.waitForTimeout(250);
     const cx = mapBox.x + mapBox.width * 0.54;
     const cy = mapBox.y + mapBox.height * 0.56;

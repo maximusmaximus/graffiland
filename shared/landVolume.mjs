@@ -532,3 +532,201 @@ export function computeMaxHeightForFootprint({
     zScale: maxZScale
   };
 }
+
+/**
+ * Scales an oriented 3D draft box by dragging one of its 4 corners (0=NW, 1=NE, 2=SE, 3=SW),
+ * anchoring the opposite corner, preserving rotationDeg, and capping cleanly to platform limits.
+ */
+export function scaleDraftFromCorner({
+  draft,
+  cornerIndex = 0,
+  pointerLat,
+  pointerLng,
+  limits = LAND_VOLUME_LIMITS
+}) {
+  if (!draft) return null;
+  const idx = ((Number(cornerIndex) % 4) + 4) % 4;
+  const oppIdx = (idx + 2) % 4;
+  const rotationDeg = normalizeRotationDeg(draft.rotationDeg || 0);
+  const corners =
+    Array.isArray(draft.corners) && draft.corners.length >= 4
+      ? draft.corners
+      : computeOrientedFootprintLngLat({
+          lat: draft.centerLat,
+          lng: draft.centerLng,
+          widthMeters: draft.widthMeters,
+          depthMeters: draft.depthMeters,
+          rotationDeg
+        }).corners;
+
+  const [oppLng, oppLat] = corners[oppIdx];
+  const theta = (rotationDeg * Math.PI) / 180;
+  const cosR = Math.cos(theta);
+  const sinR = Math.sin(theta);
+  const mPerDegLng = metersPerDegLngAtLat(oppLat);
+
+  const dEast = (Number(pointerLng) - oppLng) * mPerDegLng;
+  const dNorth = (Number(pointerLat) - oppLat) * METERS_PER_DEG_LAT;
+  const localX = dEast * cosR - dNorth * sinR;
+  const localY = dEast * sinR + dNorth * cosR;
+
+  // Expected local axis sign of dragged corner relative to opposite anchor corner
+  const cornerSigns = [
+    [-1, 1], // 0: NW
+    [1, 1],  // 1: NE
+    [1, -1], // 2: SE
+    [-1, -1] // 3: SW
+  ];
+  const [signX, signY] = cornerSigns[idx];
+
+  let widthMeters = Math.max(
+    limits.minWidthMeters,
+    Math.min(limits.maxWidthMeters, localX * signX)
+  );
+  let depthMeters = Math.max(
+    limits.minDepthMeters,
+    Math.min(limits.maxDepthMeters, localY * signY)
+  );
+
+  if (widthMeters * depthMeters > limits.maxFootprintAreaSqM) {
+    const scale = Math.sqrt(limits.maxFootprintAreaSqM / (widthMeters * depthMeters));
+    widthMeters = Math.max(limits.minWidthMeters, Math.floor(widthMeters * scale * 10) / 10);
+    depthMeters = Math.max(limits.minDepthMeters, Math.floor(depthMeters * scale * 10) / 10);
+    while (
+      widthMeters * depthMeters > limits.maxFootprintAreaSqM &&
+      widthMeters > limits.minWidthMeters
+    ) {
+      widthMeters = Number((widthMeters - 0.1).toFixed(1));
+    }
+  } else {
+    widthMeters = Number(widthMeters.toFixed(1));
+    depthMeters = Number(depthMeters.toFixed(1));
+  }
+
+  const halfLocalX = (signX * widthMeters) / 2;
+  const halfLocalY = (signY * depthMeters) / 2;
+  const centerEastM = halfLocalX * cosR + halfLocalY * sinR;
+  const centerNorthM = -halfLocalX * sinR + halfLocalY * cosR;
+  const centerLng = Number((oppLng + centerEastM / mPerDegLng).toFixed(7));
+  const centerLat = Number((oppLat + centerNorthM / METERS_PER_DEG_LAT).toFixed(7));
+
+  const nextArea = Math.max(1, widthMeters * depthMeters);
+  const curH = Number(draft.heightMeters || limits.defaultHeightMeters);
+  const maxAllowedH = Math.min(
+    limits.maxHeightMeters,
+    Math.max(limits.minHeightMeters, Math.floor((limits.maxVolumeCubicM / nextArea) * 10) / 10)
+  );
+  const heightMeters = Number(Math.min(curH, maxAllowedH).toFixed(1));
+  const zScale = Number((heightMeters / limits.defaultHeightMeters).toFixed(3));
+
+  return {
+    centerLat,
+    centerLng,
+    widthMeters,
+    depthMeters,
+    heightMeters,
+    zScale,
+    rotationDeg
+  };
+}
+
+/**
+ * Stretches or shrinks a single side segment (0=North, 1=East, 2=South, 3=West),
+ * anchoring the opposite edge in place and capping to platform footprint & volume limits.
+ */
+export function resizeDraftFromEdge({
+  draft,
+  edgeIndex = 0,
+  pointerLat,
+  pointerLng,
+  limits = LAND_VOLUME_LIMITS
+}) {
+  if (!draft) return null;
+  const idx = ((Number(edgeIndex) % 4) + 4) % 4;
+  const rotationDeg = normalizeRotationDeg(draft.rotationDeg || 0);
+  const corners =
+    Array.isArray(draft.corners) && draft.corners.length >= 4
+      ? draft.corners
+      : computeOrientedFootprintLngLat({
+          lat: draft.centerLat,
+          lng: draft.centerLng,
+          widthMeters: draft.widthMeters,
+          depthMeters: draft.depthMeters,
+          rotationDeg
+        }).corners;
+
+  // Opposite edge midpoint stays fixed
+  const cOppA = corners[(idx + 2) % 4];
+  const cOppB = corners[(idx + 3) % 4];
+  const anchorLng = (cOppA[0] + cOppB[0]) / 2;
+  const anchorLat = (cOppA[1] + cOppB[1]) / 2;
+
+  const theta = (rotationDeg * Math.PI) / 180;
+  const cosR = Math.cos(theta);
+  const sinR = Math.sin(theta);
+  const mPerDegLng = metersPerDegLngAtLat(anchorLat);
+
+  const dEast = (Number(pointerLng) - anchorLng) * mPerDegLng;
+  const dNorth = (Number(pointerLat) - anchorLat) * METERS_PER_DEG_LAT;
+  const localX = dEast * cosR - dNorth * sinR;
+  const localY = dEast * sinR + dNorth * cosR;
+
+  let widthMeters = Number(draft.widthMeters || limits.defaultWidthMeters);
+  let depthMeters = Number(draft.depthMeters || limits.defaultDepthMeters);
+  let halfLocalX = 0;
+  let halfLocalY = 0;
+
+  if (idx === 0 || idx === 2) {
+    // North (+localY) or South (-localY) edge -> modifies depthMeters only
+    const signY = idx === 0 ? 1 : -1;
+    const maxDepthForArea = Math.min(
+      limits.maxDepthMeters,
+      Math.max(
+        limits.minDepthMeters,
+        Math.floor((limits.maxFootprintAreaSqM / Math.max(1, widthMeters)) * 10) / 10
+      )
+    );
+    depthMeters = Number(
+      Math.max(limits.minDepthMeters, Math.min(maxDepthForArea, localY * signY)).toFixed(1)
+    );
+    halfLocalY = (signY * depthMeters) / 2;
+  } else {
+    // East (+localX) or West (-localX) edge -> modifies widthMeters only
+    const signX = idx === 1 ? 1 : -1;
+    const maxWidthForArea = Math.min(
+      limits.maxWidthMeters,
+      Math.max(
+        limits.minWidthMeters,
+        Math.floor((limits.maxFootprintAreaSqM / Math.max(1, depthMeters)) * 10) / 10
+      )
+    );
+    widthMeters = Number(
+      Math.max(limits.minWidthMeters, Math.min(maxWidthForArea, localX * signX)).toFixed(1)
+    );
+    halfLocalX = (signX * widthMeters) / 2;
+  }
+
+  const centerEastM = halfLocalX * cosR + halfLocalY * sinR;
+  const centerNorthM = -halfLocalX * sinR + halfLocalY * cosR;
+  const centerLng = Number((anchorLng + centerEastM / mPerDegLng).toFixed(7));
+  const centerLat = Number((anchorLat + centerNorthM / METERS_PER_DEG_LAT).toFixed(7));
+
+  const nextArea = Math.max(1, widthMeters * depthMeters);
+  const curH = Number(draft.heightMeters || limits.defaultHeightMeters);
+  const maxAllowedH = Math.min(
+    limits.maxHeightMeters,
+    Math.max(limits.minHeightMeters, Math.floor((limits.maxVolumeCubicM / nextArea) * 10) / 10)
+  );
+  const heightMeters = Number(Math.min(curH, maxAllowedH).toFixed(1));
+  const zScale = Number((heightMeters / limits.defaultHeightMeters).toFixed(3));
+
+  return {
+    centerLat,
+    centerLng,
+    widthMeters,
+    depthMeters,
+    heightMeters,
+    zScale,
+    rotationDeg
+  };
+}

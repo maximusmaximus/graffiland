@@ -1,6 +1,14 @@
 import React, { useState } from 'react';
 import { api } from '../utils/api.js';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
+
+function detectInitialViewportTab() {
+  if (typeof window !== 'undefined' && Number(window.innerWidth) > 0 && window.innerWidth <= 900) {
+    return 'mobile';
+  }
+  return 'desktop';
+}
 
 export default function InfoTermsModal({
   config,
@@ -11,6 +19,7 @@ export default function InfoTermsModal({
   onClose
 }) {
   const [tab, setTab] = useState('guide');
+  const [viewportGuide, setViewportGuide] = useState(detectInitialViewportTab);
   const [payoutInput, setPayoutInput] = useState(user?.customPayoutAddress || '');
   const [savingPayout, setSavingPayout] = useState(false);
   const [exportedKey, setExportedKey] = useState('');
@@ -47,198 +56,221 @@ export default function InfoTermsModal({
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">
-            <XeroIcon emoji="ℹ️" size={24} />
+            <XeroIcon emoji="ℹ️" size={22} />
             GRAFFILAND Guide &amp; Terms
           </h2>
           <button className="btn" onClick={onClose} aria-label="Close info">
-            <XeroIcon emoji="❌" size={16} />
+            <XeroIcon emoji="✕" size={16} />
           </button>
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
           <button
-            className={`btn ${tab === 'guide' ? 'btn-primary' : ''}`}
+            type="button"
+            className={`btn btn-sm ${tab === 'guide' ? 'btn-primary' : ''}`}
             onClick={() => setTab('guide')}
           >
-            <XeroIcon emoji="🖌️" size={16} /> How It Works
+            <XeroIcon emoji="📘" size={14} /> Guide
           </button>
           <button
-            className={`btn ${tab === 'terms' ? 'btn-primary' : ''}`}
+            type="button"
+            className={`btn btn-sm ${tab === 'terms' ? 'btn-primary' : ''}`}
             onClick={() => setTab('terms')}
           >
-            <XeroIcon emoji="📜" size={16} /> Terms &amp; Virtual Land
+            <XeroIcon emoji="📜" size={14} /> Terms &amp; Virtual Land
           </button>
           <button
-            className={`btn ${tab === 'account' ? 'btn-primary' : ''}`}
+            type="button"
+            className={`btn btn-sm ${tab === 'account' ? 'btn-primary' : ''}`}
             onClick={() => setTab('account')}
           >
-            <XeroIcon emoji="👤" size={16} /> Account &amp; Wallet
+            <XeroIcon emoji="👤" size={14} /> Account &amp; Wallet
           </button>
         </div>
 
         {tab === 'guide' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13, lineHeight: 1.55 }}>
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="📱" size={18} /> Phone as a 3D Brush &amp; Stacker
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
+            {/* Clean Viewport Menu: Desktop vs Mobile */}
+            <div className="info-viewport-menu" role="tablist" aria-label="Choose device guide">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewportGuide === 'desktop'}
+                className={`btn btn-sm ${viewportGuide === 'desktop' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setViewportGuide('desktop')}
+              >
+                <XeroIcon emoji="🖥️" size={14} /> Desktop Map &amp; 3D Land
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewportGuide === 'mobile'}
+                className={`btn btn-sm ${viewportGuide === 'mobile' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setViewportGuide('mobile')}
+              >
+                <XeroIcon emoji="📱" size={14} /> Mobile AR Studio
+              </button>
+            </div>
+
+            {viewportGuide === 'desktop' ? (
+              <div key="desktop" className="info-simple-list" data-testid="info-guide-desktop">
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🗺️" size={16} />
+                    <strong>Isometric 3D Map &amp; Live Search</strong>
+                    <InfoTip title="Map Camera & Search">
+                      Desktop starts in Isometric 3D with real OpenFreeMap buildings. Search any
+                      street intersection (e.g., <em>Market &amp; 5th</em>), nearby business,
+                      address, coordinates, or <code>GLAND-...</code> parcel. Switch between 2D,
+                      3D, and Isometric anytime, tilt (0°–65°), rotate (±15°), or toggle Terrain.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Explore 3D buildings, jump to any intersection or business, and inspect nearby
+                    sculptures, quests, and land parcels.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🏗️" size={16} />
+                    <strong>Draw, Shape &amp; Mint 3D Land</strong>
+                    <InfoTip title="3D Box Controls & Limits">
+                      Click <strong>Draw Land</strong> and drag to place a plot matched to your map
+                      angle. Hover any plot to select it: drag <strong>corner balls</strong> to
+                      scale, drag <strong>side bars</strong> to stretch edges, hold &amp; drag{' '}
+                      <strong>vertical corner bars</strong> to rotate, or drag the{' '}
+                      <strong>center</strong> to move. Limits: 4–120m sides, max 5,000 m² area,
+                      4–250m height, max 500,000 m³ volume, 3 free human starter claims.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Draw a 3D box on the map, adjust corners, edges, rotation, and height right on
+                    canvas, then mint or copy all plots for your AI agent.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🤖" size={16} />
+                    <strong>AI Agents, Quests &amp; 5% / 3% / 2% Splits</strong>
+                    <InfoTip title="Agentic Stewardship Economics">
+                      AI Agents sign in directly with a wallet (<code>npx graffiland-mcp</code> or{' '}
+                      <code>/llms.txt</code>) with 3 starter slots ($0 platform fee — agents pay
+                      own gas) under a 7-day lease. When an IRL human adds 3+ blocks, the land
+                      awakens permanently, unlocks +2 agent slots, and every sale splits 90% Seller
+                      · 5% Platform · 3% Agent · 2% Human Pool.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Connect an autonomous AI steward or pair a personal helper (<code>GLP-...</code>
+                    ) to build stages, launch quests, and share sales.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🔗" size={16} />
+                    <strong>Pair Phone &amp; Land Management</strong>
+                    <InfoTip title="QR Mirroring & Parcel Controls">
+                      Tap <strong>Pair Phone</strong> to watch phone AR strokes live on a big
+                      screen. Open <strong>Land Management</strong> to rename owned parcels, add
+                      IRL Contributors, or allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Mirror mobile AR sculpting live over QR and manage permissions on parcels you
+                    own.
+                  </p>
+                </div>
               </div>
-              <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Use the centered <strong>Key Button</strong> at the bottom of your screen — swipe{' '}
-                <strong>left or right</strong> across it to switch tools (Brush → Stack → Erase →
-                Lock &amp; Scale → Preview → Agent Code → Publish). Your gyroscope aims the 4x
-                high-precision <strong>0.05m voxel</strong> cursor inside a{' '}
-                <strong>10,000 × 10,000 × 10,000 block</strong> area limit:
+            ) : (
+              <div key="mobile" className="info-simple-list" data-testid="info-guide-mobile">
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🖌️" size={16} />
+                    <strong>Tap Surface &amp; Paint 3D Voxels</strong>
+                    <InfoTip title="Mobile Tool Carousel">
+                      Tap any floor, wall, or table to anchor your grid, then swipe the bottom Key
+                      Button: <strong>Brush → Stack → Erase → Lock &amp; Scale → Preview → Agent
+                      Code → Publish</strong>. Supports 4x precision (<code>0.05m</code> grid),
+                      matte/neon/glass finishes, up to 4,096 blocks, and auto-saved cloud drafts.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Point your phone camera outdoors, tap a real surface, and draw or stack glowing
+                    3D blocks in space.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="📡" size={16} />
+                    <strong>Scene Scan &amp; Proof of Location</strong>
+                    <InfoTip title="Hybrid WebXR, ORB & Passkeys">
+                      Move your phone across angles to clear grayscale cells and lock GPS/altitude.
+                      Binary ORB descriptors anchor art without uploading raw photos; landholders
+                      can add hardware ES256 Passkeys for locked notes.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Sweep your phone around to clear grayscale areas and prove you are standing at
+                    that real spot before publishing.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🪙" size={16} />
+                    <strong>Free Gas Minting &amp; Local AR Chat</strong>
+                    <InfoTip title="ERC-721, GLB & Encrypted Chat">
+                      Human IRL mints run gas-free on{' '}
+                      <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> as
+                      standard ERC-721 NFTs with <code>.glb</code> 3D files and a 5% ERC-2981
+                      royalty. Tap glowing AR bases outdoors to join camera-locked AES-256-GCM
+                      chat or decrypt parcel-locked IPFS notes.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Publish gas-free 3D NFTs, unlock spot-locked encrypted chat outdoors, and earn
+                    quest bounties + 2% royalties.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🗺️" size={16} />
+                    <strong>Area Map, Navigation &amp; Agent Drafts</strong>
+                    <InfoTip title="Navigate & Stage with AI">
+                      Open the bottom-left Map to inspect nearby sculptures and launch Google Maps
+                      directions. Generate a <code>GRF-...</code> code so an AI agent can stage a
+                      3D draft at your GPS spot for you to review and publish.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Walk to nearby artworks with Google Maps or invite an AI agent to stage a 3D
+                    draft right where you stand.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 209, 102, 0.25)' }}>
+              <div className="info-simple-title">
+                <XeroIcon emoji="🛡️" size={15} />
+                <strong>Proof of Location Threat Model</strong>
+                <InfoTip title="Transparency & Security Details">
+                  {policy?.threatModelSummary ||
+                    'GRAFFILAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB landmarks, and optional ES256 WebAuthn Passkeys. Client sensors remain vulnerable to dedicated hardware replay rigs on public plots; enable Passkeys and ORB checks on high-value parcels.'}
+                </InfoTip>
+              </div>
+              <p>
+                Camera, motion, GPS, ORB landmarks, and optional Passkeys verify physical presence
+                (click <strong>i</strong> for full security notes).
               </p>
-              <ul style={{ margin: '8px 0 0 18px', padding: 0, color: 'var(--text)' }}>
-                <li>
-                  <XeroIcon emoji="📌" size={14} /> <strong>Tap-to-Set Start Surface:</strong> Tap any floor, table, wall, scene spot, or existing block face to anchor your glowing 3D start ring + grid plane directly onto that surface (toggle <strong>Locked / Free 3D</strong> or tap <strong>+ Seed</strong> in the top-left pill).
-                </li>
-                <li>
-                  <XeroIcon emoji="🖌️" size={14} /> <strong>Brush Mode:</strong> Sweep continuous, gap-free interpolated 4x resolution 3D graffiti voxels along your locked surface or freely in mid-air (up to 4,096 blocks).
-                </li>
-                <li>
-                  <XeroIcon emoji="🧱" size={14} /> <strong>Stack Mode (Hold to Draw):</strong> Aim at an existing voxel face to snap &amp; stack new blocks directly onto it — tap for a single block or hold down the Stack button (Key Button or menu) to draw &amp; stack continuously.
-                </li>
-                <li>
-                  <XeroIcon emoji="🧽" size={14} /> <strong>Eraser (Hold to Erase):</strong> Hold down the menu Eraser button (or Key Button in Erase mode) and sweep across blocks to erase continuously; tap for single-block removal.
-                </li>
-                <li>
-                  <XeroIcon emoji="🗑️" size={14} /> <strong>Trash Bin (Clear Canvas):</strong> Immediately clears your current canvas (tap Undo ↩️ right afterward if you need to restore it).
-                </li>
-                <li>
-                  <XeroIcon emoji="✅" size={14} /> <strong>Check Mark (Lock &amp; Transform):</strong> Tap <strong>✅</strong> to lock your art piece and pinch/drag or use sliders to scale, rotate, and move it in 3D space — tap <strong>✅</strong> again to bake the transform and resume drawing.
-                </li>
-                <li>
-                  <XeroIcon emoji="👁️" size={14} /> <strong>AR Preview Mode:</strong> See nearby sculptures built by real phones anchored at their exact physical coordinates and altitude, complete with solar shadows, 4x live camera reflections, and real-time foreground occlusion.
-                </li>
-                <li>
-                  <XeroIcon emoji="📋" size={14} /> <strong>Agent Sculpture Code (Final Tool Before Publish):</strong> Generate and copy a location-anchored code (<code>GRF-...</code>) so an AI agent can read <code>/api/agent/spec</code> (colors, blocks, 4x limits) and stage a 3D draft at your exact GPS spot — then inspect it in AR and tap Publish on your phone to mint.
-                </li>
-                <li>
-                  <XeroIcon emoji="💬" size={14} /> <strong>Camera-Locked Encrypted Chat &amp; Glowing AR Bases:</strong> Every sculpture rendered in real-life AR Preview displays an animated <strong>glowing ground base</strong> showing it is clickable — tap the sculpture or its base (or center it in your view) to inspect its title, description, and pinned messages, and automatically join its chatbox. Secured client-side with AES-256-GCM &amp; ECDH P-256 so neither desktop browsers nor our server can read chat history.
-                </li>
-                <li>
-                  <XeroIcon emoji="📌" size={14} /> <strong>Parcel-Locked Pinned IPFS Messages (Unspoofable):</strong> Land holders on a <code>GLAND-...</code> parcel can pin, update, or alter messages stored exclusively as client-encrypted <code>AES-256-GCM</code> batches on <strong>IPFS</strong>. Visitors can decrypt those pinned messages <strong>only in real life at that exact Geohash-8 parcel</strong> after passing single-use signed challenge + multi-sensor Proof of Location (live camera frames, perceptual frame hash, gyro optical-flow correlation, GPS accuracy, and teleport checks).
-                </li>
-                <li>
-                  <XeroIcon emoji="🪞" size={14} /> <strong>Foreground Occlusion:</strong> Objects or hands passing close in front of the lens naturally occlude your anchored 3D art (toggleable via the mirror icon).
-                </li>
-                <li>
-                  <XeroIcon emoji="🔗" size={14} /> <strong>Desktop Pair:</strong> Enter a 6-letter code from the Desktop app to view your entire 3D sculpture live on a big screen while sculpting!
-                </li>
-                <li>
-                  <XeroIcon emoji="💾" size={14} /> <strong>Auto-Saved Drafts:</strong> Your unfinished blocks, title, description, and surface anchor automatically save on-device (and sync to your cloud account when signed in) so you can safely leave and resume anytime before publishing.
-                </li>
-                <li>
-                  <XeroIcon emoji="🗺️" size={14} /> <strong>Public Area Map &amp; Google Maps Navigate:</strong> Tap the bottom-left Map button to explore public sculptures near your location, inspect any piece in interactive 3D, and tap <strong>Navigate</strong> for turn-by-turn Google Maps directions.
-                </li>
-                <li>
-                  <XeroIcon emoji="🔒" size={14} /> <strong>Tool Readiness &amp; Prerequisite Guides:</strong> Tools that are not usable yet (for example Stack/Erase/Clear/Lock before placing blocks, or Publish before finishing prerequisites) appear greyed out — selecting them tells you what to do first.
-                </li>
-              </ul>
             </div>
 
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="📡" size={18} /> Grayscale Scene Mapping &amp; Origin Visibility
-              </div>
-              <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Move your phone around left, right, and slightly up/down when sculpting — everything
-                not mapped yet renders as a <strong>grayscale preview</strong> in your camera view
-                (and bottom-right coverage window) until you sweep over it and unlock{' '}
-                <strong>Mapping complete for this space!</strong> Your sculpture&apos;s 3D{' '}
-                <strong>origin point</strong> must remain visible: anything passing or sitting in
-                front of it occludes that part of the sculpture and alerts you that the origin is
-                blocked if you try to start painting.
-              </p>
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🗺️" size={18} /> Desktop Map Explorer &amp; Mobile AR Studio
-              </div>
-              <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
-                <li>
-                  <strong>Desktop Full-Screen 3D Isometric Explorer &amp; Land Builder:</strong> Desktop opens directly in <strong>Isometric 3D view</strong> with real 3D OSM buildings, toggleable terrain, 2D/3D/Isometric switching, and intersection/business location search. Click <strong>Draw Land</strong> on the map toolbar to drag-draw 3D wireframe plots matched to your current map orientation, scale smoothly up to the full <code>5,000 m²</code> / <code>500,000 m³</code> limit, rotate (<code>0°–359°</code>), adjust Z height, copy shareable links, mint up to 3 gas-sponsored human starter parcels, or click <strong>Copy All Properties for Agent</strong>.
-                </li>
-                <li>
-                  <strong>Mobile Phone Required to Create &amp; Publish IRL:</strong> Sculpting and claiming live in AR requires a phone with a camera, motion sensors, and GPS. Mobile humans publish gas-free.
-                </li>
-                <li>
-                  <strong>QR Pair Modal (Big-Screen 3D View):</strong> Tap <strong>Pair Phone</strong> on desktop to open a QR code and watch your 3D strokes appear live on a large monitor while sculpting on your phone.
-                </li>
-              </ul>
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🔐" size={18} /> Land Controls, 3D File Uploads &amp; AI Pairing
-              </div>
-              <ul style={{ margin: '6px 0 0 18px', padding: 0, color: 'var(--muted)' }}>
-                <li>
-                  <XeroIcon emoji="🔒" size={14} /> <strong>Manage Your Land:</strong> Once you publish your first piece, tap <strong>Land Management (🗺️)</strong> to rename your parcel, add verified IRL visitors as Contributors, allow <code>.glb/.gltf/.obj/.stl/.ply</code> 3D uploads via MCP, or let your paired agent clear the land.
-                </li>
-                <li>
-                  <strong>Paired Agent Access:</strong> Personal MCP control (<code>/api/mcp</code>) stays locked until you generate a <code>GLP-XXXX-XXXX-XXXX-XXXX</code> code and pair your agent. Disconnect anytime to revoke access.
-                </li>
-                <li>
-                  <strong>Two-Way Approval:</strong> Agents holding your wallet key can sign updates directly. Without a key, every agent edit sends an instant <strong>Sign &amp; Approve</strong> alert to your phone.
-                </li>
-              </ul>
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🤖" size={18} /> Agentic-First Stewardship, Quests &amp; 5% / 3% / 2% Splits
-              </div>
-              <p style={{ margin: 0, color: 'var(--muted)' }}>
-                <strong>AI Agents</strong> sign in directly via wallet signature (<code>npx graffiland-mcp</code> or <code>/llms.txt</code>) with <strong>3 free land slots</strong> (<strong>0 platform fee — agents pay their own chain gas</strong>) under a 7-day lease, place 3D stages, and post Art Quests. <strong>Human Creators</strong> walk there IRL with a phone, snap <strong>3+ blocks</strong> (or a 3D model) onto a stage for free to permanently awaken the land, win quest bounties + 2x XP, and unlock <strong>+2 more slots</strong> for the agent. Every Marketplace trade or bounty automatically shares revenue forever: <strong>5% Platform · 3% Agent Steward · 2% Human Artists Pool · 90% Seller Net</strong>.
-              </p>
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🪙" size={18} /> Standard ERC-721 NFTs + 3D GLB + Free Human Minting
-              </div>
-              <p style={{ margin: 0, color: 'var(--muted)' }}>
-                Human IRL mints run gas-free on <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> (autonomous AI agents pay their own chain gas when building on-chain). Every sculpture exports as a standard <strong>ERC-721</strong> NFT with a real <strong>glTF 2.0 (.glb)</strong> 3D file and a <strong>5% ERC-2981</strong> resale royalty, ready for MetaMask, hardware wallets, or NFT marketplaces.
-              </p>
-            </div>
-
-            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontWeight: 700, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="🛡️" size={16} /> Hybrid WebXR + ORB Relocalization, Passkeys &amp; Revisions
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)' }}>
-                <li>
-                  <strong>Ground AR Parcel Borders &amp; Spatial Streaming:</strong> Nearby Virtual Land parcels render ground perimeters in AR Preview (pulsing gold when standing inside). Maps load lightweight metadata first and hydrate full 3D geometry smoothly within <code>65m</code>.
-                </li>
-                <li>
-                  <strong>Non-Reversible 3-Angle ORB Anchoring:</strong> Moving across 3 angles during Scene Scan extracts privacy-safe binary ORB descriptors (zero raw pixels leave your phone) for WebXR / iOS Safari relocalization and local <code>anchorOffset</code> placement.
-                </li>
-                <li>
-                  <strong>Draco/Meshopt 3D Assets &amp; Immutable Revisions:</strong> Custom <code>.glb/.gltf/.obj/.stl/.ply</code> uploads support Draco &amp; Meshopt decoding within a mobile-safe <code>150k</code> triangle / <code>8</code> texture budget, with immutable IPFS revisions, <code>expectedRev</code> optimistic locking, <code>ERC-4906</code> MetadataUpdate events, and 1-click Land Holder rollback.
-                </li>
-                <li>
-                  <strong>Hardware ES256 Passkeys &amp; KEK Seals:</strong> Landholders can enforce WebAuthn Passkeys, live ORB PnP inlier proofs, and server <code>PIN_MASTER_KEK</code> envelope protection before unlocking on-site encrypted IPFS pinned batches.
-                </li>
-                <li>
-                  <strong>Quick Sculpt Mode, First-Run Guide &amp; Instanced AR Engine:</strong> Toggle <code>⚡ Quick</code> for a streamlined beginner HUD or tap <code>❓</code> for the interactive tutorial. Nearby voxel sculptures render via batched <code>InstancedMesh</code> draw calls with 25m distance LOD and a WebGL recovery boundary.
-                </li>
-              </ul>
-            </div>
-
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji="⚠️" size={18} /> Proof of Location Threat Model &amp; Transparency
-              </div>
-              <p style={{ margin: 0, color: 'var(--muted)' }}>
-                {policy?.threatModelSummary ||
-                  'GRAFFILAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB Hamming landmark matching, and optional hardware ES256 WebAuthn Passkeys. Because client browsers supply raw camera/sensor streams, determined adversaries with virtual cameras + emulated GPS/gyro remain a residual risk on public parcels; enable strict ORB + Passkey requirements and relayer quotas on high-value parcels.'}
-              </p>
-            </div>
-
-            <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 4 }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 2 }}>
               Icons: Xero Emoji by Max Infeld (CC BY 4.0)
             </div>
           </div>
@@ -257,21 +289,21 @@ export default function InfoTermsModal({
             <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
               <strong>Limited Terms Rules:</strong> Title {policy?.titleMin}–{policy?.titleMax} chars;
               Description {policy?.descriptionMin}–{policy?.descriptionMax} chars (max{' '}
-              {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs, scams, or hate speech.
+              {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs, scams,
+              or hate speech.
             </div>
             <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
-              <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong>{' '}
-              Every on-chain Marketplace sale and quest bounty allocates <strong>5% Platform Treasury</strong>,{' '}
-              <strong>3% Land Steward (AI Agent or Pioneer)</strong>, <strong>2% Pro-Rata Human Contributor Pool</strong>{' '}
-              shared among verified IRL visitors with &gt;=3 voxels on that parcel, and <strong>90% Net Seller</strong>.
-              Dormant agent claims with zero IRL human art expire after 7 days; human <code>artist_work</code> NFTs stay isolated under creator custody.
+              <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong> Every
+              sale allocates <strong>5% Platform</strong>, <strong>3% Land Steward</strong>,{' '}
+              <strong>2% Human Contributor Pool</strong> (&ge;3 voxels IRL), and{' '}
+              <strong>90% Net Seller</strong>. Unawakened agent claims expire after 7 days.
             </div>
             <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
               <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}
               {Array.isArray(policy?.takedownAndDisputePolicy)
                 ? policy.takedownAndDisputePolicy.join(' ')
                 : policy?.takedownAndDisputePolicy ||
-                  'GRAFFILAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history. Virtual Land disputes resolve first-valid Proof-of-Location claim on-chain with admin abuse suppression for spoofed claims.'}
+                  'GRAFFILAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history.'}
             </div>
           </div>
         )}
@@ -281,9 +313,9 @@ export default function InfoTermsModal({
             {!user ? (
               <div className="card" style={{ textAlign: 'center' }}>
                 <p style={{ color: 'var(--muted)', marginTop: 0 }}>
-                  Sign in with Google to receive minted sculptures directly in your wallet.
+                  Sign in with Google to receive minted land &amp; sculptures in your wallet.
                 </p>
-                <button className="btn btn-primary" onClick={onRequestLogin}>
+                <button type="button" className="btn btn-primary" onClick={onRequestLogin}>
                   <XeroIcon emoji="🔐" size={16} /> Sign in with Google
                 </button>
               </div>
@@ -291,37 +323,54 @@ export default function InfoTermsModal({
               <>
                 <div className="card">
                   <div style={{ fontWeight: 700 }}>{user.name}</div>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>{user.email}</div>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    {user.email}
+                  </div>
                   <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
                     Embedded Robinhood Chain Wallet:
                   </div>
-                  <div className="mono" style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)' }}>
+                  <div
+                    className="mono"
+                    style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)' }}
+                  >
                     {user.walletAddress}
                   </div>
                 </div>
 
                 <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="field-label">
-                    <span>Optional Custom EVM Payout Address (for new mints &amp; external wallets)</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Already minted an NFT into your embedded wallet? Open any sculpture you own in Desktop Map/Gallery to transfer it to an external wallet or export its 3D <code>.glb</code> asset.
+                    <span>
+                      Custom EVM Payout Address{' '}
+                      <InfoTip title="External Payout Wallet">
+                        Leave blank to use your embedded wallet. For already-minted NFTs, open any
+                        sculpture you own to transfer it or download its <code>.glb</code> file.
+                      </InfoTip>
+                    </span>
                   </div>
                   <input
                     className="input mono"
                     value={payoutInput}
                     onChange={(e) => setPayoutInput(e.target.value)}
-                    placeholder="0x... (leave blank to use embedded wallet)"
+                    placeholder="0x... (optional)"
                   />
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button className="btn btn-primary" disabled={savingPayout} onClick={savePayout}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={savingPayout}
+                      onClick={savePayout}
+                    >
                       <XeroIcon emoji="✅" size={15} /> Save Recipient
                     </button>
-                    <button className="btn" onClick={revealKey}>
+                    <button type="button" className="btn" onClick={revealKey}>
                       <XeroIcon emoji="🔑" size={15} /> Export Embedded Key
                     </button>
                   </div>
-                  {statusMsg && <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>{statusMsg}</div>}
+                  {statusMsg && (
+                    <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>
+                      {statusMsg}
+                    </div>
+                  )}
                   {exportedKey && (
                     <div
                       className="mono"
@@ -340,7 +389,7 @@ export default function InfoTermsModal({
                   )}
                 </div>
 
-                <button className="btn btn-danger" onClick={onLogout}>
+                <button type="button" className="btn btn-danger" onClick={onLogout}>
                   <XeroIcon emoji="🚪" size={16} /> Sign Out
                 </button>
               </>
