@@ -3200,3 +3200,195 @@ select {
   font-size: 10.5px;
   color: var(--accent);
 }
+
+/* Cleaned-up Land Management Sections & Compact Controls */
+.land-mgmt-modal {
+  max-width: 680px;
+}
+
+.land-mgmt-section {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.land-mgmt-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.land-mgmt-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.land-mgmt-pid {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(0, 245, 212, 0.12);
+  color: var(--accent);
+}
+
+.land-mgmt-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.land-mgmt-toggle-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.land-mgmt-toggle-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+}
+
+.land-mgmt-toggle-item label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.land-mgmt-security-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(0, 245, 212, 0.05);
+  border: 1px solid rgba(0, 245, 212, 0.22);
+}
+
+.land-mgmt-inliers-input {
+  width: 48px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 2px 5px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
+.land-mgmt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.land-mgmt-row.is-active {
+  border: 1px solid rgba(0, 245, 212, 0.28);
+}
+
+.land-mgmt-upload-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 9px;
+  background: rgba(0, 245, 212, 0.05);
+  border: 1px solid rgba(0, 245, 212, 0.22);
+}
+
+.land-mgmt-item-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Inline ":" Emoji Shortcode Autocomplete Picker */
+.emoji-field-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.emoji-field-wrap > input,
+.emoji-field-wrap > textarea {
+  width: 100%;
+}
+
+.emoji-picker-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  min-width: 220px;
+  max-width: min(320px, 90vw);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 2600;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(9, 14, 26, 0.98);
+  border: 1px solid rgba(0, 245, 212, 0.45);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.emoji-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.emoji-picker-option:hover,
+.emoji-picker-option.is-active {
+  background: rgba(0, 245, 212, 0.16);
+}
+
+.emoji-picker-glyph {
+  font-size: 16px;
+  line-height: 1;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.emoji-picker-code {
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.emoji-picker-name {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

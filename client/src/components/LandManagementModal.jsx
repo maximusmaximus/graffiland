@@ -4,6 +4,8 @@ import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
+import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import InfoTip from './InfoTip.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -35,6 +37,7 @@ export default function LandManagementModal({
   const [manualContribInput, setManualContribInput] = useState('');
   const [eraseConfirmInput, setEraseConfirmInput] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [showLocalUpload, setShowLocalUpload] = useState(false);
 
   // Direct browser custom 3D model uploader + anchorOffset calibration
   const [uploadTitle, setUploadTitle] = useState('');
@@ -111,9 +114,9 @@ export default function LandManagementModal({
       const out = await registerHardwarePasskey(label);
       const pkRes = await api.getPasskeyStatus();
       setPasskeys(pkRes?.passkeys || []);
-      setNotice(`Registered hardware ES256 Passkey (${out.passkey?.deviceLabel || 'Device'}).`);
+      setNotice(`Registered Passkey (${out.passkey?.deviceLabel || 'Device'}).`);
     } catch (err) {
-      setErrorMsg(err.message || 'Could not register hardware Passkey');
+      setErrorMsg(err.message || 'Could not register Passkey');
     } finally {
       setBusy('');
     }
@@ -127,7 +130,7 @@ export default function LandManagementModal({
       await api.deletePasskey(pkId);
       const pkRes = await api.getPasskeyStatus();
       setPasskeys(pkRes?.passkeys || []);
-      setNotice('Removed Passkey credential.');
+      setNotice('Removed Passkey.');
     } catch (err) {
       setErrorMsg(err.message || 'Could not remove Passkey');
     } finally {
@@ -140,11 +143,11 @@ export default function LandManagementModal({
     if (!file) return;
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
     if (!['glb', 'gltf', 'obj', 'stl', 'ply'].includes(ext)) {
-      setErrorMsg('Unsupported 3D file type. Use .glb, .gltf, .obj, .stl, or .ply.');
+      setErrorMsg('Unsupported format. Use .glb, .gltf, .obj, .stl, or .ply.');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setErrorMsg('3D file exceeds 5 MB upload cap. Compress meshes or use Draco.');
+      setErrorMsg('File exceeds 5 MB limit.');
       return;
     }
     setErrorMsg('');
@@ -176,7 +179,7 @@ export default function LandManagementModal({
         title: uploadTitle.trim() || uploadFileName || '3D Model Sculpture',
         description:
           uploadDesc.trim() ||
-          `Custom ${uploadFormat.toUpperCase()} 3D model placed directly on Virtual Land ${activeParcel.parcelId}.`,
+          `Custom ${uploadFormat.toUpperCase()} 3D model placed on Virtual Land ${activeParcel.parcelId}.`,
         modelFormat: uploadFormat,
         modelBase64: uploadBase64,
         modelScale: Number(uploadScale || 1),
@@ -191,6 +194,7 @@ export default function LandManagementModal({
       setUploadDesc('');
       setUploadBase64('');
       setUploadFileName('');
+      setShowLocalUpload(false);
       await loadWorkspace();
       onWorkspaceChanged?.();
       setNotice(
@@ -227,7 +231,7 @@ export default function LandManagementModal({
       });
       await loadWorkspace();
       onWorkspaceChanged?.();
-      setNotice(`Saved settings, permissions & security policy for ${activeParcel.parcelId}.`);
+      setNotice(`Saved settings for ${activeParcel.parcelId}.`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not update land settings');
     } finally {
@@ -246,7 +250,7 @@ export default function LandManagementModal({
       await loadWorkspace();
       onWorkspaceChanged?.();
       setNotice(
-        `Added ${res?.contributor?.name || res?.contributor?.email || 'visitor'} as Contributor on ${activeParcel.parcelId}.`
+        `Added ${res?.contributor?.name || res?.contributor?.email || 'visitor'} as Contributor.`
       );
     } catch (err) {
       setErrorMsg(err.message || 'Could not add contributor');
@@ -293,11 +297,9 @@ export default function LandManagementModal({
         ownerAddress: workspace?.ownerAddress || user?.activeMintRecipient || user?.walletAddress,
         parcelId: activeParcel.parcelId
       });
-      await navigator.clipboard?.writeText(promptText);
+      await copyToClipboard(promptText);
       setPromptCopied(true);
-      setNotice(
-        `Copied Property Agent MCP Prompt for ${activeParcel.parcelId} (Code: ${code}) — includes load_3d_model_on_land & erase_land.`
-      );
+      setNotice(`Copied MCP Agent Prompt for ${activeParcel.parcelId} (${code}).`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not copy MCP prompt');
     } finally {
@@ -308,7 +310,7 @@ export default function LandManagementModal({
   async function handleEraseLand() {
     if (!activeParcel) return;
     if (eraseConfirmInput.trim().toUpperCase() !== activeParcel.parcelId) {
-      setErrorMsg(`Type "${activeParcel.parcelId}" exactly to confirm erasing this land.`);
+      setErrorMsg(`Type "${activeParcel.parcelId}" to confirm erasing.`);
       return;
     }
     setBusy('erase');
@@ -322,7 +324,7 @@ export default function LandManagementModal({
       await loadWorkspace();
       onWorkspaceChanged?.();
       setNotice(
-        `Erased ${res.parcelId} (${res.erasedSculptureCount} sculpture(s) removed from public land).`
+        `Erased ${res.parcelId} (${res.erasedSculptureCount} item(s) removed).`
       );
     } catch (err) {
       setErrorMsg(err.message || 'Could not erase land');
@@ -333,69 +335,85 @@ export default function LandManagementModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-card wide land-mgmt-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Land Management"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
-          <div>
-            <h2 className="modal-title">
-              <XeroIcon emoji="🗺️" size={22} /> Land Management
-            </h2>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Manage owned Virtual Land parcels, IRL Contributor permissions, non-voxel MCP 3D models &amp; erasure rights
-            </div>
-          </div>
+          <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <XeroIcon emoji="🗺️" size={21} />
+            <span>Land Management</span>
+            <InfoTip title="How Land Management Works">
+              Manage your minted Virtual Land parcels in one place: edit land name &amp; description,
+              share visit links, freeze placements, add verified IRL contributors, upload or curate
+              3D artworks, and configure unlock security.
+            </InfoTip>
+          </h2>
           <button type="button" className="btn" onClick={onClose} aria-label="Close land management">
-            <XeroIcon emoji="❌" size={16} />
+            <XeroIcon emoji="✕" size={15} />
           </button>
         </div>
 
         {loading ? (
           <div style={{ padding: 20, textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>
-            <XeroIcon emoji="⏳" size={18} /> Loading your Virtual Land parcels...
+            <XeroIcon emoji="⏳" size={18} /> Loading your lands…
           </div>
         ) : !workspace?.parcels?.length ? (
-          <div className="card" style={{ padding: 16, textAlign: 'center' }}>
-            <p style={{ margin: '0 0 8px', fontSize: 13 }}>
-              No active Virtual Land parcels found under your account yet.
-            </p>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
-              Publish your first 3D sculpture on mobile to claim a parcel and unlock post-publish Land Management.
-            </p>
+          <div className="card" style={{ padding: 16, textAlign: 'center', fontSize: 13 }}>
+            No minted land parcels yet. Draw and mint a 3D plot on the map to manage it here.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Parcel Selector */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Compact Parcel Selector */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {workspace.parcels.map((p) => (
                 <button
                   key={p.parcelId}
                   type="button"
-                  className={`btn ${activeParcel?.parcelId === p.parcelId ? 'btn-primary' : ''}`}
+                  className={`btn btn-sm ${activeParcel?.parcelId === p.parcelId ? 'btn-primary' : ''}`}
                   onClick={() => selectParcel(p)}
                 >
-                  <XeroIcon emoji="📍" size={14} />{' '}
-                  {p.customName ? `${p.customName} (${p.parcelId})` : p.parcelId} ·{' '}
-                  {p.sculptureCount} item{p.sculptureCount === 1 ? '' : 's'}
+                  <XeroIcon emoji="📍" size={13} />{' '}
+                  {p.customName || p.parcelId} · {p.sculptureCount}
                 </button>
               ))}
             </div>
 
+            {notice && (
+              <div className="status-banner" role="status">
+                {notice}
+              </div>
+            )}
+            {errorMsg && (
+              <div className="status-banner status-banner-error" role="alert">
+                {errorMsg}
+              </div>
+            )}
+
             {activeParcel && (
               <>
-                {/* Land Details & Agent Permissions */}
+                {/* 1) Land Details, Permissions & Security */}
                 <form
                   onSubmit={handleSaveCurationAndSettings}
-                  className="card"
-                  style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
+                  className="card land-mgmt-section"
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent)' }}>
-                      Land Details, Curations &amp; Permissions ({activeParcel.parcelId})
-                    </span>
+                  <div className="land-mgmt-section-head">
+                    <div className="land-mgmt-heading">
+                      <strong>Land Details</strong>
+                      <code className="land-mgmt-pid">{activeParcel.parcelId}</code>
+                      <InfoTip title="Land Name, Description & MCP">
+                        Set a public name and description for this parcel (type <code>:</code> like{' '}
+                        <code>:fire:</code> to insert emojis). Your name also creates a friendly
+                        share slug URL for mobile visitors.
+                      </InfoTip>
+                    </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       <button
                         type="button"
-                        className="btn"
-                        style={{ fontSize: 11, padding: '5px 10px' }}
+                        className="btn btn-xs"
                         aria-label={`Copy share link for ${activeParcel.parcelId}`}
                         onClick={async () => {
                           const shareUrl = buildParcelShareUrl({
@@ -409,125 +427,138 @@ export default function LandManagementModal({
                           setNotice(ok ? `Copied share link: ${shareUrl}` : shareUrl);
                         }}
                       >
-                        🔗 Copy Share Link
+                        🔗 Share
                       </button>
                       <button
                         type="button"
-                        className="btn btn-primary"
-                        style={{ fontSize: 11, padding: '5px 10px' }}
+                        className="btn btn-xs btn-outline"
                         disabled={busy !== ''}
                         onClick={handleCopyMcpPrompt}
                       >
-                        <XeroIcon emoji="📋" size={13} />{' '}
-                        {promptCopied ? 'Copied MCP Prompt!' : 'Copy Agent MCP Prompt (3D Models + Erase)'}
+                        <XeroIcon emoji="📋" size={12} />{' '}
+                        {promptCopied ? 'Copied!' : 'MCP Prompt'}
                       </button>
                     </div>
                   </div>
 
-                  <label className="land-name-field">
-                    <span>Land Name</span>
-                    <input
-                      className="input"
-                      aria-label="Land Name"
-                      maxLength={48}
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      placeholder="Custom Virtual Land title (e.g. Neon Courtyard)"
-                    />
-                  </label>
-                  <label className="land-name-field">
-                    <span>Land Description</span>
-                    <textarea
-                      className="textarea"
-                      aria-label="Land Description"
-                      rows={2}
-                      maxLength={240}
-                      value={curationNote}
-                      onChange={(e) => setCurationNote(e.target.value)}
-                      placeholder="Describe this land, visitor guidelines, or curation notes..."
-                    />
-                  </label>
+                  <div className="land-mgmt-fields">
+                    <label className="land-name-field">
+                      <span>Land Name</span>
+                      <EmojiInput
+                        className="input"
+                        aria-label="Land Name"
+                        maxLength={48}
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        placeholder="e.g. Neon Courtyard (type : for emojis)"
+                      />
+                    </label>
+                    <label className="land-name-field">
+                      <span>Land Description</span>
+                      <EmojiTextarea
+                        className="textarea"
+                        aria-label="Land Description"
+                        rows={2}
+                        maxLength={240}
+                        value={curationNote}
+                        onChange={(e) => setCurationNote(e.target.value)}
+                        placeholder="Short description for visitors & agents (type : for emojis)"
+                      />
+                    </label>
+                  </div>
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={allowContributorEdits}
-                      onChange={(e) => setAllowContributorEdits(e.target.checked)}
-                    />
-                    <span>
-                      Allow added <strong>Contributors</strong> (verified IRL visitors who chatted here) to modify sculptures on this land
-                    </span>
-                  </label>
+                  {/* Concise Permission Checkboxes with Clickable "i" Context */}
+                  <div className="land-mgmt-toggle-grid">
+                    <div className="land-mgmt-toggle-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={allowContributorEdits}
+                          onChange={(e) => setAllowContributorEdits(e.target.checked)}
+                        />
+                        <span>Contributor Edits</span>
+                      </label>
+                      <InfoTip title="Contributor Edits">
+                        Allows verified IRL chat visitors you add in the Contributors section below
+                        to edit and refine artworks on this land.
+                      </InfoTip>
+                    </div>
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={frozen}
-                      onChange={(e) => setFrozen(e.target.checked)}
-                    />
-                    <span>
-                      <strong>❄️ Freeze Land</strong> — block all new sculptures from being placed on{' '}
-                      <code>{activeParcel.parcelId}</code>
-                    </span>
-                  </label>
+                    <div className="land-mgmt-toggle-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={frozen}
+                          onChange={(e) => setFrozen(e.target.checked)}
+                        />
+                        <span>❄️ Freeze Land</span>
+                      </label>
+                      <InfoTip title="Freeze Land">
+                        Blocks all new sculptures and 3D models from being placed on{' '}
+                        <code>{activeParcel.parcelId}</code>. Mobile visitors can still view
+                        existing art in AR.
+                      </InfoTip>
+                    </div>
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={allowAgentErase}
-                      onChange={(e) => setAllowAgentErase(e.target.checked)}
-                    />
-                    <span>
-                      Allow paired <strong>MCP Agent</strong> (with your authorization signature) to erase this land (<code>erase_land</code>)
-                    </span>
-                  </label>
+                    <div className="land-mgmt-toggle-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={allowAgentErase}
+                          onChange={(e) => setAllowAgentErase(e.target.checked)}
+                        />
+                        <span>Agent Erase</span>
+                      </label>
+                      <InfoTip title="Agent Erase Permission" align="right">
+                        Allows your paired MCP agent (with your EIP-191 signature or mobile
+                        approval) to run <code>erase_land</code> on this parcel.
+                      </InfoTip>
+                    </div>
+                  </div>
 
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 8,
-                      padding: '9px 11px',
-                      borderRadius: 10,
-                      background: 'rgba(0, 245, 212, 0.05)',
-                      border: '1px solid rgba(0, 245, 212, 0.22)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
-                        <XeroIcon emoji="🔐" size={13} /> Parcel Pin-Unlock &amp; Visual ORB Policy
-                      </strong>
+                  {/* Compact Pin-Unlock & ORB Security Sub-Panel */}
+                  <div className="land-mgmt-security-box">
+                    <div className="land-mgmt-section-head">
+                      <div className="land-mgmt-heading">
+                        <XeroIcon emoji="🔐" size={13} />
+                        <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                          Unlock Security
+                        </strong>
+                        <InfoTip title="Pin-Unlock & Visual ORB Security">
+                          Protect encrypted pinned notes on this parcel by requiring a hardware
+                          WebAuthn Passkey (FaceID / biometrics) and/or a live camera ORB visual
+                          landmark match on-site.
+                        </InfoTip>
+                      </div>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {activeParcel.landmarkAnchor ? (
-                          <span className="badge teal" style={{ fontSize: 10.5 }}>
-                            ORB Pack: {activeParcel.landmarkAnchor.featureCount} features
-                          </span>
-                        ) : (
-                          <span className="badge" style={{ fontSize: 10.5 }}>No ORB Pack Yet</span>
-                        )}
+                        <span className={`badge ${activeParcel.landmarkAnchor?.hasLandmark ? 'teal' : ''}`} style={{ fontSize: 10 }}>
+                          {activeParcel.landmarkAnchor?.hasLandmark
+                            ? `ORB: ${activeParcel.landmarkAnchor.featureCount} pts`
+                            : 'No ORB Pack'}
+                        </span>
                         {isWebAuthnSupported() && (
                           <button
                             type="button"
-                            className="btn"
-                            style={{ fontSize: 10.5, padding: '3px 8px' }}
+                            className="btn btn-xs"
                             disabled={busy !== ''}
                             onClick={handleRegisterPasskey}
                           >
-                            <XeroIcon emoji="🛡️" size={12} />{' '}
-                            {passkeys.length > 0 ? `Passkey Ready (${passkeys.length})` : 'Register Device Passkey'}
+                            <XeroIcon emoji="🛡️" size={11} />{' '}
+                            {passkeys.length > 0 ? `Passkeys (${passkeys.length})` : '+ Passkey'}
                           </button>
                         )}
                       </div>
                     </div>
+
                     {passkeys.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {passkeys.map((pk) => (
                           <span
                             key={pk.id}
                             className="badge"
-                            style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                            style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}
                           >
-                            <XeroIcon emoji="🛡️" size={11} />
+                            <XeroIcon emoji="🛡️" size={10} />
                             <span>{pk.deviceLabel || pk.id.slice(0, 8)}</span>
                             <button
                               type="button"
@@ -549,89 +580,95 @@ export default function LandManagementModal({
                         ))}
                       </div>
                     )}
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={requirePasskeyUnlock}
-                        onChange={(e) => setRequirePasskeyUnlock(e.target.checked)}
-                      />
-                      <span>Require Hardware <strong>WebAuthn Passkey</strong> (FaceID / Biometrics) on pinned unlocks</span>
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={requireOrbUnlock}
-                        onChange={(e) => setRequireOrbUnlock(e.target.checked)}
-                      />
-                      <span>
-                        Require live <strong>ORB Visual Landmark</strong> pose match (min inliers:
+
+                    <div className="land-mgmt-toggle-grid">
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={requirePasskeyUnlock}
+                            onChange={(e) => setRequirePasskeyUnlock(e.target.checked)}
+                          />
+                          <span>Passkey Unlock</span>
+                        </label>
+                        <InfoTip title="Hardware Passkey Unlock">
+                          Requires a registered WebAuthn Passkey (FaceID, TouchID, or security key)
+                          before unlocking encrypted pinned notes here.
+                        </InfoTip>
+                      </div>
+
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={requireOrbUnlock}
+                            onChange={(e) => setRequireOrbUnlock(e.target.checked)}
+                          />
+                          <span>ORB Visual Match</span>
+                        </label>
                         <input
                           type="number"
+                          aria-label="Minimum ORB inliers"
                           min={4}
                           max={64}
                           value={minOrbInliers}
                           onChange={(e) => setMinOrbInliers(Number(e.target.value || 8))}
-                          style={{ width: 52, marginLeft: 6, background: 'rgba(0,0,0,0.35)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '2px 5px' }}
+                          className="land-mgmt-inliers-input"
+                          title="Minimum ORB visual match inliers"
                         />
-                        )
-                      </span>
-                    </label>
+                        <InfoTip title="ORB Visual Landmark Match" align="right">
+                          Requires on-site camera visual pose matching against this parcel&apos;s
+                          ORB landmark pack (higher min inliers = stricter physical match).
+                        </InfoTip>
+                      </div>
+                    </div>
                   </div>
 
-                  <button type="submit" className="btn btn-primary" disabled={busy !== ''}>
-                    <XeroIcon emoji="✅" size={14} /> Save Land Settings &amp; Security Policy
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={busy !== ''}>
+                    <XeroIcon emoji="✅" size={13} /> Save Land Settings
                   </button>
                 </form>
 
-                {/* Contributor Accounts (Must have visited & chatted IRL on this parcel) */}
-                <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--accent-gold)' }}>
-                    <XeroIcon emoji="🤝" size={15} /> Contributor Accounts (IRL Chat Visitors Only)
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Only accounts that visited this parcel in real life and gained AR chat access / interacted on this land can be added as Contributors to modify sculptures.
+                {/* 2) Contributors */}
+                <div className="card land-mgmt-section">
+                  <div className="land-mgmt-section-head">
+                    <div className="land-mgmt-heading">
+                      <XeroIcon emoji="🤝" size={14} />
+                      <strong>
+                        Contributors ({activeParcel.contributors?.length || 0})
+                      </strong>
+                      <InfoTip title="How Contributors Work">
+                        Only accounts that physically visited this parcel and joined its AR chat can
+                        be added as Contributors to modify artworks here. Enter a visitor&apos;s
+                        email or 0x wallet, or click + Add next to eligible IRL visitors.
+                      </InfoTip>
+                    </div>
                   </div>
 
-                  {/* Quick-Add Eligible IRL Visitors */}
                   {activeParcel.eligibleVisitors?.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>
-                        Eligible IRL Chat Visitors Here:
-                      </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                       {activeParcel.eligibleVisitors.map((vis) => {
                         const alreadyAdded = activeParcel.contributors?.some(
                           (c) => c.contributorSub === vis.userId
                         );
                         return (
-                          <div
-                            key={vis.userId}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '6px 9px',
-                              borderRadius: 8,
-                              background: 'rgba(255,255,255,0.04)'
-                            }}
-                          >
+                          <div key={vis.userId} className="land-mgmt-row">
                             <div style={{ fontSize: 12 }}>
                               <strong>{vis.name}</strong>{' '}
-                              <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                                ({vis.email || vis.walletAddress.slice(0, 10)})
+                              <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                                {vis.email || vis.walletAddress.slice(0, 10)}
                               </span>
                             </div>
                             {alreadyAdded ? (
-                              <span className="badge teal">Contributor Active</span>
+                              <span className="badge teal" style={{ fontSize: 10 }}>Active</span>
                             ) : (
                               <button
                                 type="button"
-                                className="btn btn-primary"
-                                style={{ fontSize: 11, padding: '4px 9px' }}
+                                className="btn btn-xs btn-primary"
                                 disabled={busy !== ''}
                                 onClick={() => handleAddContributor({ contributorUserId: vis.userId })}
                               >
-                                + Add Contributor
+                                + Add
                               </button>
                             )}
                           </div>
@@ -640,21 +677,20 @@ export default function LandManagementModal({
                     </div>
                   ) : (
                     <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      No non-owner IRL chat visitors recorded on this parcel yet. Once a visitor scans and enters this parcel&apos;s AR chat in real life, they appear here automatically.
+                      No eligible IRL visitors yet.
                     </div>
                   )}
 
-                  {/* Add by Email or Wallet (verified server-side for IRL visit) */}
                   <div style={{ display: 'flex', gap: 6 }}>
                     <input
                       className="input"
                       value={manualContribInput}
                       onChange={(e) => setManualContribInput(e.target.value)}
-                      placeholder="Add IRL visitor by email or 0x wallet address..."
+                      placeholder="Visitor email or 0x wallet…"
                     />
                     <button
                       type="button"
-                      className="btn"
+                      className="btn btn-sm"
                       disabled={busy !== '' || !manualContribInput.trim()}
                       onClick={() => {
                         const val = manualContribInput.trim();
@@ -669,35 +705,19 @@ export default function LandManagementModal({
                     </button>
                   </div>
 
-                  {/* Active Contributors */}
                   {activeParcel.contributors?.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)' }}>
-                        Active Contributors ({activeParcel.contributors.length}):
-                      </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                       {activeParcel.contributors.map((c) => (
-                        <div
-                          key={c.contributorSub}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '6px 9px',
-                            borderRadius: 8,
-                            border: '1px solid rgba(0, 245, 212, 0.25)'
-                          }}
-                        >
+                        <div key={c.contributorSub} className="land-mgmt-row is-active">
                           <div style={{ fontSize: 12 }}>
                             <strong>{c.name}</strong> ·{' '}
-                            <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
                               {c.email || c.walletAddress}
                             </span>
                           </div>
                           <button
                             type="button"
-                            className="btn btn-danger"
-                            style={{ fontSize: 11, padding: '4px 8px' }}
+                            className="btn btn-xs btn-danger"
                             disabled={busy !== ''}
                             onClick={() => handleRemoveContributor(c.contributorSub)}
                           >
@@ -709,267 +729,265 @@ export default function LandManagementModal({
                   )}
                 </div>
 
-                {/* Sculptures & Non-Voxel 3D Models on Land */}
-                <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <div style={{ fontWeight: 700, fontSize: 13 }}>
-                      Items on {activeParcel.parcelId} ({activeParcel.sculptures?.length || 0})
+                {/* 3) 3D Items & Direct File Upload */}
+                <div className="card land-mgmt-section">
+                  <div className="land-mgmt-section-head">
+                    <div className="land-mgmt-heading">
+                      <XeroIcon emoji="🗿" size={14} />
+                      <strong>3D Items ({activeParcel.sculptures?.length || 0})</strong>
+                      <InfoTip title="3D Items, Uploads & Revisions">
+                        Add 3D items by URL or AI prompt with <strong>+ Add 3D Item</strong>, upload
+                        a local <code>.glb/.gltf/.obj/.stl/.ply</code> file (max 5 MB), hide or
+                        restore visitor pieces, or roll back immutable IPFS revisions.
+                      </InfoTip>
                     </div>
-                    {onOpenAddLandItem && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {onOpenAddLandItem && (
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          onClick={() => {
+                            onClose?.();
+                            onOpenAddLandItem(activeParcel);
+                          }}
+                        >
+                          + Add 3D Item
+                        </button>
+                      )}
                       <button
                         type="button"
-                        className="btn btn-xs btn-primary"
-                        onClick={() => {
-                          onClose?.();
-                          onOpenAddLandItem(activeParcel);
-                        }}
+                        className="btn btn-xs btn-outline"
+                        aria-expanded={showLocalUpload}
+                        onClick={() => setShowLocalUpload((v) => !v)}
                       >
-                        + Add 3D Item (Agent Prompt)
+                        📤 {showLocalUpload ? 'Hide Upload' : 'Upload File'}
                       </button>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                    Upload a non-voxel 3D file (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>,{' '}
-                    <code>.stl</code>, <code>.ply</code>, max 5 MB) directly or via paired MCP{' '}
-                    <code>load_3d_model_on_land</code>.
+                    </div>
                   </div>
 
-                  <form
-                    onSubmit={handleUpload3DModelSubmit}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 8,
-                      padding: 10,
-                      borderRadius: 8,
-                      background: 'rgba(0, 245, 212, 0.05)',
-                      border: '1px solid rgba(0, 245, 212, 0.22)'
-                    }}
-                  >
-                    <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
-                      <XeroIcon emoji="🗿" size={13} /> Upload Custom 3D Model (.GLB/.OBJ/.STL/.PLY)
-                    </strong>
-                    <input
-                      type="file"
-                      accept=".glb,.gltf,.obj,.stl,.ply"
-                      onChange={handleModelFileSelected}
-                      style={{ fontSize: 11.5 }}
-                    />
-                    {uploadFileName && (
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
-                        Loaded {uploadFileName} ({uploadFormat.toUpperCase()})
+                  {showLocalUpload && (
+                    <form onSubmit={handleUpload3DModelSubmit} className="land-mgmt-upload-box">
+                      <div className="land-mgmt-heading">
+                        <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                          Local 3D File (.GLB / .GLTF / .OBJ / .STL / .PLY)
+                        </strong>
+                        <InfoTip title="Local 3D Upload Specs">
+                          Uploads directly to IPFS (max 5 MB, up to 150,000 triangles and 8
+                          textures; Draco &amp; Meshopt supported). Use dx/dy/dz/yaw to fine-tune
+                          placement on your parcel.
+                        </InfoTip>
                       </div>
-                    )}
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       <input
-                        className="input"
-                        style={{ flex: '1 1 160px' }}
-                        maxLength={48}
-                        value={uploadTitle}
-                        onChange={(e) => setUploadTitle(e.target.value)}
-                        placeholder="Sculpture title"
+                        type="file"
+                        accept=".glb,.gltf,.obj,.stl,.ply"
+                        onChange={handleModelFileSelected}
+                        style={{ fontSize: 11.5 }}
                       />
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-                        <span>Scale</span>
-                        <input
-                          type="number"
+                      {uploadFileName && (
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+                          Loaded {uploadFileName} ({uploadFormat.toUpperCase()})
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <EmojiInput
                           className="input"
-                          style={{ width: 68 }}
-                          min={0.1}
-                          max={20}
-                          step={0.1}
-                          value={uploadScale}
-                          onChange={(e) => setUploadScale(Number(e.target.value || 1))}
+                          wrapperStyle={{ flex: '1 1 160px' }}
+                          maxLength={48}
+                          value={uploadTitle}
+                          onChange={(e) => setUploadTitle(e.target.value)}
+                          placeholder="Title (type : for emojis)"
                         />
-                      </label>
-                    </div>
-                    <input
-                      className="input"
-                      maxLength={240}
-                      value={uploadDesc}
-                      onChange={(e) => setUploadDesc(e.target.value)}
-                      placeholder="Short Limited Terms description (10-240 chars)"
-                    />
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, fontSize: 10.5 }}>
-                      <label>
-                        dx (m)
-                        <input
-                          type="number"
-                          step={0.1}
-                          className="input"
-                          value={anchorOffset.dx}
-                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }))}
-                        />
-                      </label>
-                      <label>
-                        dy (m)
-                        <input
-                          type="number"
-                          step={0.1}
-                          className="input"
-                          value={anchorOffset.dy}
-                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }))}
-                        />
-                      </label>
-                      <label>
-                        dz (m)
-                        <input
-                          type="number"
-                          step={0.1}
-                          className="input"
-                          value={anchorOffset.dz}
-                          onChange={(e) => setAnchorOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }))}
-                        />
-                      </label>
-                      <label>
-                        yaw (rad)
-                        <input
-                          type="number"
-                          step={0.1}
-                          className="input"
-                          value={anchorOffset.yaw}
-                          onChange={(e) => setAnchorOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }))}
-                        />
-                      </label>
-                    </div>
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      style={{ fontSize: 11.5 }}
-                      disabled={busy !== '' || !uploadBase64}
-                    >
-                      <XeroIcon emoji="📤" size={13} />{' '}
-                      {busy === 'upload' ? 'Pinning to IPFS...' : 'Place 3D Model on Land'}
-                    </button>
-                  </form>
-                  {(activeParcel.sculptures || []).map((sc) => {
-                    const revOpen = Boolean(expandedRevIds[sc.id]);
-                    return (
-                      <div
-                        key={sc.id}
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 6,
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          background: 'rgba(255,255,255,0.04)'
-                        }}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                          <span>Scale</span>
+                          <input
+                            type="number"
+                            className="input"
+                            style={{ width: 64 }}
+                            min={0.1}
+                            max={20}
+                            step={0.1}
+                            value={uploadScale}
+                            onChange={(e) => setUploadScale(Number(e.target.value || 1))}
+                          />
+                        </label>
+                      </div>
+                      <EmojiInput
+                        className="input"
+                        maxLength={240}
+                        value={uploadDesc}
+                        onChange={(e) => setUploadDesc(e.target.value)}
+                        placeholder="Short description (10–240 chars, type : for emojis)"
+                      />
+                      <div className="add-item-offset-row" style={{ marginTop: 0 }}>
+                        <label>
+                          <span>dx (m)</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            value={anchorOffset.dx}
+                            onChange={(e) => setAnchorOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                        <label>
+                          <span>dy (m)</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            value={anchorOffset.dy}
+                            onChange={(e) => setAnchorOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                        <label>
+                          <span>dz (m)</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            value={anchorOffset.dz}
+                            onChange={(e) => setAnchorOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                        <label>
+                          <span>yaw (rad)</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            value={anchorOffset.yaw}
+                            onChange={(e) => setAnchorOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="submit"
+                        className="btn btn-sm btn-primary"
+                        disabled={busy !== '' || !uploadBase64}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 600, fontSize: 12.5 }}>
-                              {sc.title}{' '}
-                              <span className="badge teal" style={{ fontSize: 10, marginLeft: 4 }}>
-                                v{sc.currentRev || 1}
-                              </span>
-                              {sc.hidden && (
-                                <span className="badge badge-error" style={{ fontSize: 10, marginLeft: 4 }}>
-                                  Hidden
+                        <XeroIcon emoji="📤" size={12} />{' '}
+                        {busy === 'upload' ? 'Uploading…' : 'Place 3D Model on Land'}
+                      </button>
+                    </form>
+                  )}
+
+                  {(activeParcel.sculptures || []).length === 0 ? (
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      No 3D items on this land yet.
+                    </div>
+                  ) : (
+                    (activeParcel.sculptures || []).map((sc) => {
+                      const revOpen = Boolean(expandedRevIds[sc.id]);
+                      return (
+                        <div key={sc.id} className="land-mgmt-item-card">
+                          <div className="land-mgmt-row" style={{ background: 'transparent', padding: 0 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 12.5 }}>
+                                {sc.title}{' '}
+                                <span className="badge teal" style={{ fontSize: 10, marginLeft: 4 }}>
+                                  v{sc.currentRev || 1}
                                 </span>
-                              )}
+                                {sc.hidden && (
+                                  <span className="badge badge-error" style={{ fontSize: 10, marginLeft: 4 }}>
+                                    Hidden
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                                {sc.modelType === 'custom-3d'
+                                  ? `.${String(sc.customModel?.format || 'glb').toUpperCase()}`
+                                  : `${sc.voxelCount} blocks`}{' '}
+                                · {sc.creatorName || 'Artist'}
+                                {sc.meshStats?.triangleCount > 0
+                                  ? ` · ${sc.meshStats.triangleCount.toLocaleString()} tris`
+                                  : ''}
+                              </div>
                             </div>
-                            <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                              {sc.modelType === 'custom-3d'
-                                ? `3D File (${String(sc.customModel?.format || 'glb').toUpperCase()})`
-                                : `${sc.voxelCount} blocks`}{' '}
-                              · by {sc.creatorName || 'Artist'} · {sc.id.slice(0, 8)}...
-                              {sc.meshStats?.triangleCount > 0 ? ` · ${sc.meshStats.triangleCount.toLocaleString()} tris` : ''}
-                            </div>
-                          </div>
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className={`btn ${sc.hidden ? 'btn-primary' : ''}`}
-                              style={{ fontSize: 11, padding: '4px 9px' }}
-                              disabled={busy !== ''}
-                              onClick={async () => {
-                                setBusy(`vis-${sc.id}`);
-                                setErrorMsg('');
-                                setNotice('');
-                                try {
-                                  await api.setSculptureVisibility(sc.id, {
-                                    hidden: !sc.hidden,
-                                    reason: sc.hidden ? '' : 'Hidden by Virtual Land owner'
-                                  });
-                                  await loadWorkspace();
-                                  onWorkspaceChanged?.();
-                                  setNotice(
-                                    sc.hidden
-                                      ? `Restored "${sc.title}" to public map & 3D view.`
-                                      : `Hidden "${sc.title}" from public map & AR feeds.`
-                                  );
-                                } catch (err) {
-                                  setErrorMsg(err.message || 'Could not toggle visibility');
-                                } finally {
-                                  setBusy('');
-                                }
-                              }}
-                            >
-                              {sc.hidden ? '👁️ Unhide' : '🙈 Hide'}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ fontSize: 11, padding: '4px 9px' }}
-                              onClick={() =>
-                                setExpandedRevIds((prev) => ({ ...prev, [sc.id]: !prev[sc.id] }))
-                              }
-                            >
-                              <XeroIcon emoji="📜" size={12} /> {revOpen ? 'Hide History' : 'Revisions'}
-                            </button>
-                            {onSelectSculpture && (
+                            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                               <button
                                 type="button"
-                                className="btn"
-                                style={{ fontSize: 11, padding: '4px 9px' }}
-                                onClick={() => {
-                                  onClose?.();
-                                  onSelectSculpture(sc);
+                                className={`btn btn-xs ${sc.hidden ? 'btn-primary' : ''}`}
+                                disabled={busy !== ''}
+                                onClick={async () => {
+                                  setBusy(`vis-${sc.id}`);
+                                  setErrorMsg('');
+                                  setNotice('');
+                                  try {
+                                    await api.setSculptureVisibility(sc.id, {
+                                      hidden: !sc.hidden,
+                                      reason: sc.hidden ? '' : 'Hidden by Virtual Land owner'
+                                    });
+                                    await loadWorkspace();
+                                    onWorkspaceChanged?.();
+                                    setNotice(
+                                      sc.hidden
+                                        ? `Restored "${sc.title}".`
+                                        : `Hidden "${sc.title}" from public view.`
+                                    );
+                                  } catch (err) {
+                                    setErrorMsg(err.message || 'Could not update visibility');
+                                  } finally {
+                                    setBusy('');
+                                  }
                                 }}
                               >
-                                <XeroIcon emoji="✏️" size={12} /> Inspect / Edit
+                                {sc.hidden ? '👁️ Unhide' : '🙈 Hide'}
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                className="btn btn-xs"
+                                onClick={() =>
+                                  setExpandedRevIds((prev) => ({ ...prev, [sc.id]: !prev[sc.id] }))
+                                }
+                              >
+                                📜 {revOpen ? 'Hide' : 'History'}
+                              </button>
+                              {onSelectSculpture && (
+                                <button
+                                  type="button"
+                                  className="btn btn-xs"
+                                  onClick={() => {
+                                    onClose?.();
+                                    onSelectSculpture(sc);
+                                  }}
+                                >
+                                  ✏️ Edit
+                                </button>
+                              )}
+                            </div>
                           </div>
+                          {revOpen && (
+                            <SculptureRevisionsPanel
+                              sculptureId={sc.id}
+                              currentRev={sc.currentRev || 1}
+                              lastErc4906TxHash={sc.lastErc4906TxHash || ''}
+                              canRollback
+                              onRolledBack={async (res) => {
+                                await loadWorkspace();
+                                onWorkspaceChanged?.();
+                                setNotice(
+                                  `Rolled back ${sc.title} to v${res?.restoredFromRev} (now v${res?.revNum}).`
+                                );
+                              }}
+                            />
+                          )}
                         </div>
-                        {revOpen && (
-                          <SculptureRevisionsPanel
-                            sculptureId={sc.id}
-                            currentRev={sc.currentRev || 1}
-                            lastErc4906TxHash={sc.lastErc4906TxHash || ''}
-                            canRollback
-                            onRolledBack={async (res) => {
-                              await loadWorkspace();
-                              onWorkspaceChanged?.();
-                              setNotice(
-                                `Rolled back ${sc.title} to v${res?.restoredFromRev} (now v${res?.revNum}) · ERC-4906 emitted.`
-                              );
-                            }}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
 
-                {/* Erase Land Section */}
+                {/* 4) Compact Erase Land Zone */}
                 <div
-                  className="card"
-                  style={{
-                    padding: 12,
-                    borderColor: 'rgba(255, 94, 126, 0.4)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8
-                  }}
+                  className="card land-mgmt-section"
+                  style={{ borderColor: 'rgba(255, 94, 126, 0.38)' }}
                 >
-                  <div style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--danger, #ff5e7e)' }}>
-                    <XeroIcon emoji="🗑️" size={14} /> Erase Existing Land ({activeParcel.parcelId})
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                    Removes all active sculptures, curations, and contributor access on{' '}
-                    <strong>{activeParcel.parcelId}</strong> from public feeds.
+                  <div className="land-mgmt-heading">
+                    <XeroIcon emoji="🗑️" size={14} />
+                    <strong style={{ fontSize: 12.5, color: 'var(--danger, #ff5e7e)' }}>
+                      Erase Land
+                    </strong>
+                    <InfoTip title="Erase Virtual Land">
+                      Removes your active sculptures, custom 3D models, curations, and contributor
+                      access on <code>{activeParcel.parcelId}</code> from public feeds. Type the
+                      exact parcel ID below to confirm.
+                    </InfoTip>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <input
@@ -980,7 +998,7 @@ export default function LandManagementModal({
                     />
                     <button
                       type="button"
-                      className="btn btn-danger"
+                      className="btn btn-sm btn-danger"
                       disabled={busy !== ''}
                       onClick={handleEraseLand}
                     >
@@ -989,17 +1007,6 @@ export default function LandManagementModal({
                   </div>
                 </div>
               </>
-            )}
-
-            {notice && (
-              <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>
-                {notice}
-              </div>
-            )}
-            {errorMsg && (
-              <div className="mono" style={{ fontSize: 12, color: 'var(--danger, #ff5e7e)' }}>
-                {errorMsg}
-              </div>
             )}
           </div>
         )}

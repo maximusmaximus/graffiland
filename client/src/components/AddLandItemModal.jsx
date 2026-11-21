@@ -3,6 +3,7 @@ import { buildLandAdd3DItemAgentPrompt } from '../../../shared/landSignatureMess
 import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -572,12 +573,12 @@ export default function AddLandItemModal({
         <div className="add-item-form-grid">
           <label className="land-name-field">
             <span>3D Item Title</span>
-            <input
+            <EmojiInput
               type="text"
               maxLength={48}
               value={itemTitle}
               onChange={(e) => setItemTitle(e.target.value)}
-              placeholder="e.g. Glowing Cyber Dragon"
+              placeholder="e.g. Glowing Cyber Dragon (type : for emojis)"
             />
           </label>
 
@@ -613,13 +614,13 @@ export default function AddLandItemModal({
 
         <label className="land-name-field" style={{ marginTop: 8 }}>
           <span>Description or AI Agent Instructions</span>
-          <textarea
+          <EmojiTextarea
             className="textarea"
             rows={2}
             maxLength={240}
             value={itemDescription}
             onChange={(e) => setItemDescription(e.target.value)}
-            placeholder="Describe the 3D sculpture, colors, scale, or edits to existing items on this land..."
+            placeholder="Describe the 3D sculpture, colors, scale, or edits (type : for emojis)..."
           />
         </label>
 

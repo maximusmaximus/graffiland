@@ -1,5 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 
+const tipCloseHandlers = new Map();
+
 /**
  * Compact clickable "i" button that toggles an inline tooltip popover on demand,
  * keeping primary UI copy crisp and scannable.
@@ -16,6 +18,7 @@ export default function InfoTip({
 
   useEffect(() => {
     if (!open) return undefined;
+    tipCloseHandlers.set(tipId, () => setOpen(false));
     const onPointerDown = (e) => {
       if (rootRef.current && !rootRef.current.contains(e.target)) {
         setOpen(false);
@@ -27,10 +30,11 @@ export default function InfoTip({
     document.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      tipCloseHandlers.delete(tipId);
       document.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [open, tipId]);
 
   return (
     <span
@@ -48,7 +52,13 @@ export default function InfoTip({
         title={title}
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((v) => !v);
+          const next = !open;
+          if (next) {
+            for (const [otherId, closeFn] of tipCloseHandlers.entries()) {
+              if (otherId !== tipId) closeFn();
+            }
+          }
+          setOpen(next);
         }}
       >
         i

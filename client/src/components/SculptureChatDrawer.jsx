@@ -17,6 +17,7 @@ import {
   wrapRoomKeyForRecipient,
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
+import { EmojiInput } from './EmojiField.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function SculptureChatDrawer({
@@ -673,8 +674,9 @@ export default function SculptureChatDrawer({
                   >
                     {editingPinId === pin.id ? (
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <input
+                        <EmojiInput
                           className="input"
+                          wrapperStyle={{ flex: 1, minWidth: 0 }}
                           value={editingPinText}
                           maxLength={500}
                           onChange={(e) => setEditingPinText(e.target.value)}
@@ -743,12 +745,13 @@ export default function SculptureChatDrawer({
 
             {entered?.isLandHolder && (
               <form onSubmit={handleAddPin} style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                <input
+                <EmojiInput
                   className="input"
+                  wrapperStyle={{ flex: 1, minWidth: 0 }}
                   value={pinInput}
                   maxLength={500}
                   onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Pin encrypted IPFS message for on-site visitors..."
+                  placeholder="Pin encrypted IPFS message (type : for emojis)..."
                   required
                 />
                 <button className="btn btn-primary" type="submit" disabled={pinBusy} style={{ fontSize: 11 }}>
@@ -880,12 +883,13 @@ export default function SculptureChatDrawer({
                 </div>
 
                 <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 6 }}>
-                  <input
+                  <EmojiInput
                     className="input"
+                    wrapperStyle={{ flex: 1, minWidth: 0 }}
                     value={msgInput}
                     maxLength={500}
                     onChange={(e) => setMsgInput(e.target.value)}
-                    placeholder="Send E2EE note for visitors in camera view..."
+                    placeholder="Send E2EE note (type : for emojis)..."
                     required
                   />
                   <button className="btn btn-primary" type="submit" disabled={sending}>
@@ -915,12 +919,12 @@ export default function SculptureChatDrawer({
                     </button>
                     {clueEditOpen && (
                       <form onSubmit={handleSaveClue} style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                        <input
+                        <EmojiInput
                           className="input"
                           maxLength={140}
                           value={newCluePrompt}
                           onChange={(e) => setNewCluePrompt(e.target.value)}
-                          placeholder="Question visible at this location (e.g. Color of bridge sign?)"
+                          placeholder="Question visible at this location (type : for emojis)"
                         />
                         {newCluePrompt.trim() && (
                           <input

@@ -5,6 +5,7 @@ import {
   copyToClipboard
 } from '../../utils/clipboard.js';
 import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
+import { EmojiInput, EmojiTextarea } from '../EmojiField.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function PublishSculptureModal({
@@ -215,13 +216,13 @@ export default function PublishSculptureModal({
                 <span>Title</span>
                 <span className="mono">{title.length}/{policy?.titleMax || 48}</span>
               </div>
-              <input
+              <EmojiInput
                 className="input"
                 required
                 maxLength={policy?.titleMax || 48}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Name your 3D street sculpture"
+                placeholder="Name your 3D street sculpture (type : for emojis)"
               />
             </div>
 
@@ -232,14 +233,14 @@ export default function PublishSculptureModal({
                   {description.length}/{policy?.descriptionMax || 240} chars · {wordCount}/{policy?.descriptionMaxWords || 45} words
                 </span>
               </div>
-              <textarea
+              <EmojiTextarea
                 className="textarea"
                 rows={3}
                 required
                 maxLength={policy?.descriptionMax || 240}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Short story or inspiration for this Virtual Land piece..."
+                placeholder="Short story or inspiration for this piece (type : for emojis)..."
               />
             </div>
 
@@ -248,7 +249,7 @@ export default function PublishSculptureModal({
                 <span>Optional On-Site Chat Clue (24/7 Solo Unlock)</span>
                 <span className="mono">E2EE · PBKDF2</span>
               </div>
-              <input
+              <EmojiInput
                 className="input"
                 maxLength={140}
                 value={cluePrompt}
