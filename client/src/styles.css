@@ -2412,9 +2412,11 @@ select {
 
 .info-tip-body {
   color: var(--text);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: block;
+}
+
+.info-tip-body > div + div {
+  margin-top: 4px;
 }
 
 .info-tip-body code {
