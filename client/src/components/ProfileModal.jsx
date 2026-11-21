@@ -2,9 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
 import {
   BIO_MAX_LEN,
+  PROFILE_HEADER_PRESETS,
   buildPublicProfileUrl,
+  findHeaderPreset,
+  formatUserNumber,
   normalizeUsername,
   validateBio,
+  validateProfileImage,
   validateUsername
 } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
@@ -16,7 +20,9 @@ import {
   formatSculptureAssetMeta,
   formatShortDate
 } from '../utils/landMapHelpers.js';
+import { prepareProfileImageFile } from '../utils/profileImageHelper.js';
 import { EmojiTextarea } from './EmojiField.jsx';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 function shortenAddress(addr) {
@@ -57,6 +63,12 @@ export default function ProfileModal({
 
   const [usernameInput, setUsernameInput] = useState('');
   const [bioInput, setBioInput] = useState('');
+  const [avatarInput, setAvatarInput] = useState('');
+  const [headerInput, setHeaderInput] = useState('');
+  const [avatarDirty, setAvatarDirty] = useState(false);
+  const [headerDirty, setHeaderDirty] = useState(false);
+  const [mediaBusy, setMediaBusy] = useState('');
+  const [mediaError, setMediaError] = useState('');
   const [availability, setAvailability] = useState({
     state: 'idle',
     username: '',
@@ -66,6 +78,9 @@ export default function ProfileModal({
   const [saveError, setSaveError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
+
+  const avatarFileInputRef = useRef(null);
+  const headerFileInputRef = useRef(null);
 
   const profile = data?.profile || null;
   const stats = data?.stats || {
@@ -111,6 +126,11 @@ export default function ProfileModal({
       setData(res);
       setUsernameInput(res?.profile?.username || '');
       setBioInput(res?.profile?.bio || '');
+      setAvatarInput(res?.profile?.avatarImage || '');
+      setHeaderInput(res?.profile?.headerImage || '');
+      setAvatarDirty(false);
+      setHeaderDirty(false);
+      setMediaError('');
       if (
         (res?.lands?.length || 0) === 0 &&
         (res?.sculptures?.length || 0) > 0
@@ -130,6 +150,8 @@ export default function ProfileModal({
 
   const localUsernameValidation = validateUsername(usernameInput);
   const localBioValidation = validateBio(bioInput);
+  const localAvatarValidation = validateProfileImage(avatarInput, { kind: 'avatar' });
+  const localHeaderValidation = validateProfileImage(headerInput, { kind: 'header' });
   const currentUsernameNorm = normalizeUsername(profile?.username || '');
 
   // Live username uniqueness check while editing
@@ -226,14 +248,41 @@ export default function ProfileModal({
 
   const canSaveEdit =
     !saving &&
+    !mediaBusy &&
     localUsernameValidation.ok &&
     localBioValidation.ok &&
+    (!avatarDirty || localAvatarValidation.ok) &&
+    (!headerDirty || localHeaderValidation.ok) &&
     availability.state === 'available' &&
     availability.username === localUsernameValidation.username;
+
+  async function handleImageUpload(e, kind) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setMediaBusy(kind);
+    setMediaError('');
+    setSaveError('');
+    try {
+      const dataUrl = await prepareProfileImageFile(file, kind);
+      if (kind === 'avatar') {
+        setAvatarInput(dataUrl);
+        setAvatarDirty(true);
+      } else {
+        setHeaderInput(dataUrl);
+        setHeaderDirty(true);
+      }
+    } catch (err) {
+      setMediaError(err?.message || 'Could not process selected image.');
+    } finally {
+      setMediaBusy('');
+    }
+  }
 
   async function handleSaveProfile(e) {
     e.preventDefault();
     setSaveError('');
+    setMediaError('');
     setSaveNotice('');
     if (!localUsernameValidation.ok) {
       setSaveError(localUsernameValidation.error);
@@ -243,21 +292,41 @@ export default function ProfileModal({
       setSaveError(localBioValidation.error);
       return;
     }
+    if (avatarDirty && !localAvatarValidation.ok) {
+      setSaveError(localAvatarValidation.error);
+      return;
+    }
+    if (headerDirty && !localHeaderValidation.ok) {
+      setSaveError(localHeaderValidation.error);
+      return;
+    }
     setSaving(true);
     try {
       const saver = saveProfileFn || ((payload) => api.updateProfile(payload));
-      const res = await saver({
+      /** @type {any} */
+      const payload = {
         username: localUsernameValidation.username,
         bio: localBioValidation.bio
-      });
+      };
+      if (avatarDirty) {
+        payload.avatarImage = localAvatarValidation.value;
+      }
+      if (headerDirty) {
+        payload.headerImage = localHeaderValidation.value;
+      }
+      const res = await saver(payload);
       if (res?.user) {
         onUserUpdate?.(res.user);
       }
       if (res?.profile) {
         setData(res);
+        setAvatarInput(res.profile.avatarImage || '');
+        setHeaderInput(res.profile.headerImage || '');
       } else {
         await loadProfile();
       }
+      setAvatarDirty(false);
+      setHeaderDirty(false);
       setEditing(false);
       setSaveNotice('Profile saved!');
       onShowHint?.(`Profile updated (@${localUsernameValidation.username})`);
@@ -314,10 +383,32 @@ export default function ProfileModal({
     return act.url || '';
   }
 
-  const monogram = String(profile?.username || profile?.displayName || '?')
+  const displayUsername = editing && localUsernameValidation.username
+    ? localUsernameValidation.username
+    : profile?.username || '';
+  const monogram = String(displayUsername || profile?.displayName || '?')
     .replace(/^@/, '')
     .slice(0, 2)
     .toUpperCase();
+
+  const liveAvatarSrc = editing && avatarDirty
+    ? localAvatarValidation.ok
+      ? localAvatarValidation.value
+      : ''
+    : profile?.avatarImage || profile?.picture || '';
+
+  const liveHeaderValue = editing && headerDirty
+    ? localHeaderValidation.ok
+      ? localHeaderValidation.value
+      : ''
+    : profile?.headerImage || '';
+
+  const headerPreset = liveHeaderValue.startsWith('preset:') || !liveHeaderValue
+    ? findHeaderPreset(liveHeaderValue)
+    : null;
+  const headerBgImageUrl = !headerPreset && liveHeaderValue ? liveHeaderValue : '';
+  const userNumberLabel =
+    profile?.userNumberLabel || formatUserNumber(profile?.userNumber || user?.userNumber || 0);
 
   return (
     <div
@@ -342,6 +433,11 @@ export default function ProfileModal({
                 onClick={() => {
                   setUsernameInput(profile?.username || '');
                   setBioInput(profile?.bio || '');
+                  setAvatarInput(profile?.avatarImage || '');
+                  setHeaderInput(profile?.headerImage || '');
+                  setAvatarDirty(false);
+                  setHeaderDirty(false);
+                  setMediaError('');
                   setSaveError('');
                   setEditing(true);
                 }}
@@ -366,119 +462,189 @@ export default function ProfileModal({
           </div>
         ) : (
           <div className="profile-modal-body">
-            {/* Identity Header */}
+            {/* Clean Public Profile Banner & Identity Card */}
             <div className="card profile-hero-card">
-              <div className="profile-hero-top">
-                <div className="profile-avatar">
-                  {profile.picture ? (
-                    <img src={profile.picture} alt={profile.displayName} />
-                  ) : (
-                    <span>{monogram}</span>
-                  )}
+              <div
+                className="profile-public-banner"
+                data-testid="public-profile-banner"
+                data-header-preset={headerPreset ? headerPreset.id : 'custom'}
+                style={headerPreset ? { background: headerPreset.background } : undefined}
+              >
+                {headerBgImageUrl && (
+                  <img
+                    className="profile-banner-bg-img"
+                    src={headerBgImageUrl}
+                    alt=""
+                    data-testid="profile-banner-bg-img"
+                  />
+                )}
+                <div className="profile-banner-grid-overlay" aria-hidden="true" />
+                <div className="profile-banner-scrim" aria-hidden="true" />
+
+                {/* Top Row: Role Badge + User Number Pill */}
+                <div className="profile-banner-top">
+                  <span className="profile-banner-role-pill">
+                    <XeroIcon emoji={profile.accountType === 'agent' ? '🤖' : '🎨'} size={11} />
+                    <span>{profile.accountType === 'agent' ? 'AI Steward' : 'Creator'}</span>
+                  </span>
+
+                  <div className="profile-banner-top-right">
+                    {userNumberLabel && (
+                      <span
+                        className="profile-user-number-pill mono"
+                        data-testid="profile-user-number"
+                        title={`GRAFFILAND Member ${userNumberLabel}`}
+                      >
+                        USER {userNumberLabel}
+                      </span>
+                    )}
+                    {isOwner && editing && (
+                      <button
+                        type="button"
+                        className="profile-banner-edit-chip"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => headerFileInputRef.current?.click()}
+                        title="Upload a custom profile header background"
+                      >
+                        <XeroIcon emoji="🖼️" size={11} />{' '}
+                        {mediaBusy === 'header' ? 'Optimizing…' : 'Header'}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="profile-identity-col">
-                  <div className="profile-name-row">
-                    <strong className="profile-display-name">{profile.displayName}</strong>
-                    <span className="badge teal" style={{ fontSize: 10 }}>
-                      <XeroIcon emoji={profile.accountType === 'agent' ? '🤖' : '🎨'} size={11} />{' '}
-                      {profile.accountType === 'agent' ? 'AI Steward' : 'Creator'}
-                    </span>
+                {/* Bottom Row: Profile Icon (Bio Image) + Username & Identity */}
+                <div className="profile-banner-bottom">
+                  <div className="profile-banner-avatar-wrap">
+                    <div className="profile-avatar profile-banner-avatar">
+                      {liveAvatarSrc ? (
+                        <img
+                          src={liveAvatarSrc}
+                          alt={profile.displayName}
+                          data-testid="profile-banner-avatar-img"
+                        />
+                      ) : (
+                        <span>{monogram}</span>
+                      )}
+                    </div>
+                    {isOwner && editing && (
+                      <button
+                        type="button"
+                        className="profile-avatar-edit-dot"
+                        aria-label="Upload bio image"
+                        title="Change bio image"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => avatarFileInputRef.current?.click()}
+                      >
+                        <XeroIcon emoji="📷" size={11} />
+                      </button>
+                    )}
                   </div>
 
-                  <div className="profile-handle-row">
-                    {profile.username && (
-                      <span className="profile-handle-tag" data-testid="profile-handle">
-                        @{profile.username}
-                      </span>
-                    )}
-                    {profile.walletAddress && (
-                      <span className="profile-meta-pill mono" title={profile.walletAddress}>
-                        {shortenAddress(profile.walletAddress)}
-                      </span>
-                    )}
-                    {profile.joinedAt && (
-                      <span className="profile-meta-pill">
-                        Joined {formatMonthYear(profile.joinedAt)}
-                      </span>
-                    )}
+                  <div className="profile-banner-identity">
+                    <div className="profile-banner-username-row">
+                      {displayUsername ? (
+                        <strong className="profile-banner-username" data-testid="profile-handle">
+                          @{displayUsername}
+                        </strong>
+                      ) : (
+                        <strong className="profile-banner-username">{profile.displayName}</strong>
+                      )}
+                    </div>
+                    <div className="profile-banner-sub-row">
+                      {displayUsername && profile.displayName && (
+                        <span className="profile-banner-display-name">{profile.displayName}</span>
+                      )}
+                      {profile.walletAddress && (
+                        <span className="profile-banner-meta-pill mono" title={profile.walletAddress}>
+                          {shortenAddress(profile.walletAddress)}
+                        </span>
+                      )}
+                      {profile.joinedAt && (
+                        <span className="profile-banner-meta-pill">
+                          Joined {formatMonthYear(profile.joinedAt)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Bio Display */}
-              {!editing && (
-                <div className="profile-bio-block" data-testid="profile-bio">
-                  {profile.bio ? (
-                    <p className="profile-bio-text">{profile.bio}</p>
-                  ) : isOwner ? (
-                    <p className="profile-bio-placeholder">
-                      No bio yet — tap <strong>Edit Profile</strong> to add your bio and share your
-                      work.
-                    </p>
-                  ) : (
-                    <p className="profile-bio-placeholder">No bio added yet.</p>
-                  )}
-                </div>
-              )}
+              <div className="profile-hero-content">
+                {/* Bio Display */}
+                {!editing && (
+                  <div className="profile-bio-block" data-testid="profile-bio">
+                    {profile.bio ? (
+                      <p className="profile-bio-text">{profile.bio}</p>
+                    ) : isOwner ? (
+                      <p className="profile-bio-placeholder">
+                        No bio yet — tap <strong>Edit Profile</strong> to add your bio, icon, and
+                        banner header.
+                      </p>
+                    ) : (
+                      <p className="profile-bio-placeholder">No bio added yet.</p>
+                    )}
+                  </div>
+                )}
 
-              {/* Share Public Profile Bar */}
-              <div className="profile-share-bar">
-                {publicProfileUrl && (
-                  <>
+                {/* Share Public Profile Bar */}
+                <div className="profile-share-bar">
+                  {publicProfileUrl && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-xs profile-public-link-btn"
+                        data-testid="copy-profile-link-btn"
+                        onClick={() => handleCopyUrl('profile', publicProfileUrl, 'public profile link')}
+                      >
+                        <XeroIcon emoji="🔗" size={12} />{' '}
+                        {copiedKey === 'profile' ? 'Copied Profile Link!' : 'Copy Public Profile Link'}
+                      </button>
+                      <a
+                        className="btn btn-xs"
+                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
+                          `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on GRAFFILAND!`
+                        )}&url=${encodeURIComponent(publicProfileUrl)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Share profile to X"
+                      >
+                        𝕏
+                      </a>
+                    </>
+                  )}
+                  {isOwner && onOpenWalletSettings && (
                     <button
                       type="button"
-                      className="btn btn-xs profile-public-link-btn"
-                      data-testid="copy-profile-link-btn"
-                      onClick={() => handleCopyUrl('profile', publicProfileUrl, 'public profile link')}
-                    >
-                      <XeroIcon emoji="🔗" size={12} />{' '}
-                      {copiedKey === 'profile' ? 'Copied Profile Link!' : 'Copy Public Profile Link'}
-                    </button>
-                    <a
                       className="btn btn-xs"
-                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                        `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on GRAFFILAND!`
-                      )}&url=${encodeURIComponent(publicProfileUrl)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Share profile to X"
+                      onClick={() => {
+                        onClose?.();
+                        onOpenWalletSettings();
+                      }}
                     >
-                      𝕏
-                    </a>
-                  </>
-                )}
-                {isOwner && onOpenWalletSettings && (
-                  <button
-                    type="button"
-                    className="btn btn-xs"
-                    onClick={() => {
-                      onClose?.();
-                      onOpenWalletSettings();
-                    }}
-                  >
-                    <XeroIcon emoji="💳" size={12} /> Wallet
-                  </button>
-                )}
-                {isOwner && onLogout && (
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-danger"
-                    onClick={() => {
-                      onClose?.();
-                      onLogout();
-                    }}
-                  >
-                    <XeroIcon emoji="🚪" size={12} /> Sign Out
-                  </button>
+                      <XeroIcon emoji="💳" size={12} /> Wallet
+                    </button>
+                  )}
+                  {isOwner && onLogout && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger"
+                      onClick={() => {
+                        onClose?.();
+                        onLogout();
+                      }}
+                    >
+                      <XeroIcon emoji="🚪" size={12} /> Sign Out
+                    </button>
+                  )}
+                </div>
+
+                {saveNotice && (
+                  <div className="profile-success-banner" role="status">
+                    <XeroIcon emoji="✅" size={13} /> {saveNotice}
+                  </div>
                 )}
               </div>
-
-              {saveNotice && (
-                <div className="profile-success-banner" role="status">
-                  <XeroIcon emoji="✅" size={13} /> {saveNotice}
-                </div>
-              )}
             </div>
 
             {/* Owner Edit Form */}
@@ -488,9 +654,183 @@ export default function ProfileModal({
                 data-testid="profile-edit-form"
                 onSubmit={handleSaveProfile}
               >
-                <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>
-                  <XeroIcon emoji="✏️" size={14} /> Edit Username &amp; Bio
+                <div className="profile-edit-section-head">
+                  <strong style={{ fontSize: 13.5 }}>
+                    <XeroIcon emoji="✏️" size={14} /> Customize Profile Banner, Bio Image &amp; Bio
+                  </strong>
+                  <InfoTip title="Profile Banner & Image Tips">
+                    Your public banner above updates live as you edit. Upload any PNG, JPEG, or WebP
+                    photo (auto-cropped to a crisp 256×256 icon or 960×320 widescreen banner), paste
+                    an HTTPS image URL, or pick a curated header background preset.
+                  </InfoTip>
                 </div>
+
+                {/* Hidden file inputs triggered by banner buttons & form controls */}
+                <input
+                  ref={avatarFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  data-testid="profile-avatar-file-input"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleImageUpload(e, 'avatar')}
+                />
+                <input
+                  ref={headerFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  data-testid="profile-header-file-input"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleImageUpload(e, 'header')}
+                />
+
+                {/* Bio Image (Profile Icon) Controls */}
+                <div className="profile-media-block">
+                  <div className="profile-media-head">
+                    <span className="field-label" style={{ marginBottom: 0 }}>
+                      Bio Image (Profile Icon)
+                    </span>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => avatarFileInputRef.current?.click()}
+                      >
+                        <XeroIcon emoji="📷" size={11} />{' '}
+                        {mediaBusy === 'avatar' ? 'Optimizing…' : 'Upload Photo'}
+                      </button>
+                      {(avatarInput || profile.avatarImage) && (
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          disabled={Boolean(mediaBusy)}
+                          onClick={() => {
+                            setAvatarInput('');
+                            setAvatarDirty(true);
+                            setMediaError('');
+                          }}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="url"
+                    className="input"
+                    aria-label="Bio image URL"
+                    placeholder="Or paste an https:// image URL…"
+                    value={avatarInput.startsWith('data:') ? '' : avatarInput}
+                    onChange={(e) => {
+                      setAvatarInput(e.target.value.trim());
+                      setAvatarDirty(true);
+                      setMediaError('');
+                    }}
+                  />
+                  {avatarInput.startsWith('data:') && (
+                    <div className="profile-media-hint mono">
+                      ✓ Custom bio image ready ({Math.round(avatarInput.length / 1024)} KB)
+                    </div>
+                  )}
+                  {avatarDirty && !localAvatarValidation.ok && (
+                    <div className="profile-media-err">{localAvatarValidation.error}</div>
+                  )}
+                </div>
+
+                {/* Profile Header (Banner Background) Controls */}
+                <div className="profile-media-block">
+                  <div className="profile-media-head">
+                    <span className="field-label" style={{ marginBottom: 0 }}>
+                      Profile Header Background
+                    </span>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => headerFileInputRef.current?.click()}
+                      >
+                        <XeroIcon emoji="🖼️" size={11} />{' '}
+                        {mediaBusy === 'header' ? 'Optimizing…' : 'Upload Header'}
+                      </button>
+                      {headerInput && (
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          disabled={Boolean(mediaBusy)}
+                          onClick={() => {
+                            setHeaderInput('');
+                            setHeaderDirty(true);
+                            setMediaError('');
+                          }}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Curated Background Theme Presets */}
+                  <div
+                    className="profile-header-presets"
+                    role="group"
+                    aria-label="Profile header background presets"
+                  >
+                    {PROFILE_HEADER_PRESETS.map((preset) => {
+                      const active =
+                        (headerInput || 'preset:cyber-grid').toLowerCase() === preset.token;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`profile-preset-swatch ${active ? 'is-active' : ''}`}
+                          style={{ background: preset.background }}
+                          aria-pressed={active}
+                          aria-label={`Header preset: ${preset.label}`}
+                          title={preset.label}
+                          onClick={() => {
+                            setHeaderInput(preset.token);
+                            setHeaderDirty(true);
+                            setMediaError('');
+                          }}
+                        >
+                          <span className="profile-preset-label">{preset.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <input
+                    type="url"
+                    className="input"
+                    aria-label="Profile header URL"
+                    placeholder="Or paste an https:// banner image URL…"
+                    value={
+                      headerInput.startsWith('data:') || headerInput.startsWith('preset:')
+                        ? ''
+                        : headerInput
+                    }
+                    onChange={(e) => {
+                      setHeaderInput(e.target.value.trim());
+                      setHeaderDirty(true);
+                      setMediaError('');
+                    }}
+                  />
+                  {headerInput.startsWith('data:') && (
+                    <div className="profile-media-hint mono">
+                      ✓ Custom header photo ready ({Math.round(headerInput.length / 1024)} KB)
+                    </div>
+                  )}
+                  {headerDirty && !localHeaderValidation.ok && (
+                    <div className="profile-media-err">{localHeaderValidation.error}</div>
+                  )}
+                </div>
+
+                {mediaError && (
+                  <div className="profile-error-banner" role="alert">
+                    <XeroIcon emoji="⚠️" size={14} /> {mediaError}
+                  </div>
+                )}
 
                 <div>
                   <label className="field-label" htmlFor="profile-edit-username">
@@ -563,6 +903,11 @@ export default function ProfileModal({
                     className="btn btn-sm"
                     disabled={saving}
                     onClick={() => {
+                      setAvatarInput(profile?.avatarImage || '');
+                      setHeaderInput(profile?.headerImage || '');
+                      setAvatarDirty(false);
+                      setHeaderDirty(false);
+                      setMediaError('');
                       setEditing(false);
                       setSaveError('');
                     }}

@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS users (
   bio TEXT NOT NULL DEFAULT '',
   username_updated_at TEXT NOT NULL DEFAULT '',
   picture TEXT DEFAULT '',
+  avatar_image TEXT NOT NULL DEFAULT '',
+  header_image TEXT NOT NULL DEFAULT '',
+  user_number INTEGER NOT NULL DEFAULT 0,
   wallet_address TEXT NOT NULL,
   encrypted_wallet_json TEXT NOT NULL,
   custom_payout_address TEXT DEFAULT '',
@@ -17,6 +20,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower
   ON users (LOWER(username))
   WHERE username != '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_number
+  ON users (user_number)
+  WHERE user_number > 0;
 
 CREATE TABLE IF NOT EXISTS sculptures (
   id TEXT PRIMARY KEY,

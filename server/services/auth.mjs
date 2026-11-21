@@ -51,29 +51,37 @@ export function upsertGoogleUser(profile) {
 
   const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(profile.sub);
   if (existing) {
+    let userNumber = Number(existing.user_number || 0);
+    if (userNumber <= 0) {
+      const maxRow = db.prepare('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users').get();
+      userNumber = Number(maxRow?.max_num || 0) + 1;
+    }
     db.prepare(
       `
       UPDATE users
-      SET email = ?, name = ?, picture = ?, is_admin = ?, last_login_at = ?
+      SET email = ?, name = ?, picture = ?, user_number = ?, is_admin = ?, last_login_at = ?
       WHERE id = ?
     `
-    ).run(profile.email, profile.name, profile.picture, isAdmin, now, profile.sub);
+    ).run(profile.email, profile.name, profile.picture, userNumber, isAdmin, now, profile.sub);
     return db.prepare('SELECT * FROM users WHERE id = ?').get(profile.sub);
   }
 
   const wallet = createEncryptedWallet();
+  const maxRow = db.prepare('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users').get();
+  const nextUserNumber = Number(maxRow?.max_num || 0) + 1;
   db.prepare(
     `
     INSERT INTO users (
-      id, email, name, picture, wallet_address, encrypted_wallet_json,
+      id, email, name, picture, user_number, wallet_address, encrypted_wallet_json,
       custom_payout_address, is_admin, created_at, last_login_at
-    ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
   `
   ).run(
     profile.sub,
     profile.email,
     profile.name,
     profile.picture,
+    nextUserNumber,
     wallet.address,
     wallet.encryptedWalletJson,
     isAdmin,
@@ -99,6 +107,9 @@ export function sanitizeUser(userRow) {
   if (!userRow) return null;
   const username = String(userRow.username || '').trim();
   const isAgent = String(userRow.id || '').startsWith('agent:');
+  const avatarImage = String(userRow.avatar_image || '');
+  const headerImage = String(userRow.header_image || '');
+  const userNumber = Number(userRow.user_number || 0);
   return {
     id: userRow.id,
     email: userRow.email,
@@ -106,7 +117,10 @@ export function sanitizeUser(userRow) {
     username,
     bio: String(userRow.bio || ''),
     needsUsernameOnboarding: !username && !isAgent,
-    picture: userRow.picture,
+    picture: avatarImage || userRow.picture || '',
+    avatarImage,
+    headerImage,
+    userNumber,
     walletAddress: userRow.wallet_address,
     customPayoutAddress: userRow.custom_payout_address || '',
     activeMintRecipient: userRow.custom_payout_address || userRow.wallet_address,

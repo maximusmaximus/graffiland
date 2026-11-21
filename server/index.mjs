@@ -404,7 +404,9 @@ export function createAppServer(serverOptions = {}) {
       const updated = await updateUserProfile(chatDb, {
         user: req.user,
         username: req.body?.username,
-        bio: req.body?.bio
+        bio: req.body?.bio,
+        avatarImage: req.body?.avatarImage,
+        headerImage: req.body?.headerImage
       });
       const origin = `${req.protocol}://${req.get('host')}`;
       const pub = await getPublicProfile(chatDb, {

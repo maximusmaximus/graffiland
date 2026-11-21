@@ -319,6 +319,9 @@ function sanitizeUser(row) {
   if (!row) return null;
   const username = String(row.username || '').trim();
   const isAgent = String(row.id || '').startsWith('agent:');
+  const avatarImage = String(row.avatar_image || '');
+  const headerImage = String(row.header_image || '');
+  const userNumber = Number(row.user_number || 0);
   return {
     id: row.id,
     email: row.email,
@@ -326,7 +329,10 @@ function sanitizeUser(row) {
     username,
     bio: String(row.bio || ''),
     needsUsernameOnboarding: !username && !isAgent,
-    picture: row.picture,
+    picture: avatarImage || row.picture || '',
+    avatarImage,
+    headerImage,
+    userNumber,
     walletAddress: row.wallet_address,
     customPayoutAddress: row.custom_payout_address || '',
     activeMintRecipient: row.custom_payout_address || row.wallet_address,
@@ -1095,25 +1101,33 @@ export default {
 
         let userRow = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(profile.sub).first();
         if (userRow) {
+          let userNumber = Number(userRow.user_number || 0);
+          if (userNumber <= 0) {
+            const maxRow = await env.DB.prepare('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users').first();
+            userNumber = Number(maxRow?.max_num || 0) + 1;
+          }
           await env.DB.prepare(
-            'UPDATE users SET email = ?, name = ?, picture = ?, is_admin = ?, last_login_at = ? WHERE id = ?'
+            'UPDATE users SET email = ?, name = ?, picture = ?, user_number = ?, is_admin = ?, last_login_at = ? WHERE id = ?'
           )
-            .bind(profile.email, profile.name, profile.picture, isAdmin, now, profile.sub)
+            .bind(profile.email, profile.name, profile.picture, userNumber, isAdmin, now, profile.sub)
             .run();
         } else {
           const wallet = ethers.Wallet.createRandom();
           const encryptedJson = await encryptWalletPrivateKey(wallet.privateKey, cfg.walletEncryptionKey);
+          const maxRow = await env.DB.prepare('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users').first();
+          const nextUserNumber = Number(maxRow?.max_num || 0) + 1;
           await env.DB.prepare(
             `INSERT INTO users (
-              id, email, name, picture, wallet_address, encrypted_wallet_json,
+              id, email, name, picture, user_number, wallet_address, encrypted_wallet_json,
               custom_payout_address, is_admin, created_at, last_login_at
-            ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`
           )
             .bind(
               profile.sub,
               profile.email,
               profile.name,
               profile.picture,
+              nextUserNumber,
               wallet.address,
               encryptedJson,
               isAdmin,
@@ -1176,7 +1190,9 @@ export default {
         const updated = await updateUserProfile(d1Adapter, {
           user,
           username: body?.username,
-          bio: body?.bio
+          bio: body?.bio,
+          avatarImage: body?.avatarImage,
+          headerImage: body?.headerImage
         });
         const pub = await getPublicProfile(d1Adapter, {
           identifier: updated.id,

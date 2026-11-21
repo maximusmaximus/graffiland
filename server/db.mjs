@@ -21,6 +21,9 @@ export function getDb() {
       bio TEXT NOT NULL DEFAULT '',
       username_updated_at TEXT NOT NULL DEFAULT '',
       picture TEXT DEFAULT '',
+      avatar_image TEXT NOT NULL DEFAULT '',
+      header_image TEXT NOT NULL DEFAULT '',
+      user_number INTEGER NOT NULL DEFAULT 0,
       wallet_address TEXT NOT NULL,
       encrypted_wallet_json TEXT NOT NULL,
       custom_payout_address TEXT DEFAULT '',
@@ -665,7 +668,10 @@ export function getDb() {
   for (const ddl of [
     "ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE users ADD COLUMN username_updated_at TEXT NOT NULL DEFAULT ''"
+    "ALTER TABLE users ADD COLUMN username_updated_at TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN avatar_image TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN header_image TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE users ADD COLUMN user_number INTEGER NOT NULL DEFAULT 0'
   ]) {
     try {
       db.exec(ddl);
@@ -675,8 +681,28 @@ export function getDb() {
   }
 
   try {
+    const unnumbered = db
+      .prepare('SELECT id FROM users WHERE COALESCE(user_number, 0) <= 0 ORDER BY created_at ASC, id ASC')
+      .all();
+    if (unnumbered.length > 0) {
+      const maxRow = db.prepare('SELECT COALESCE(MAX(user_number), 0) AS max_num FROM users').get();
+      let nextNum = Number(maxRow?.max_num || 0);
+      const updStmt = db.prepare('UPDATE users SET user_number = ? WHERE id = ?');
+      for (const row of unnumbered) {
+        nextNum += 1;
+        updStmt.run(nextNum, row.id);
+      }
+    }
+  } catch {
+    // Ignore backfill errors on empty/locked startup
+  }
+
+  try {
     db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username)) WHERE username != ''"
+    );
+    db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_number ON users (user_number) WHERE user_number > 0'
     );
   } catch {
     // Ignore if index already exists

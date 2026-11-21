@@ -1187,8 +1187,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     });
     assert.equal(await page.locator('[data-testid="profile-save-btn"]').isDisabled(), true);
 
-    await page.getByLabel('Username').fill('maya_cyber');
-    await page.getByLabel('Bio').fill('Neon sculptures & AR landmarks');
+    await page.getByLabel('Username', { exact: true }).fill('maya_cyber');
+    await page.getByLabel('Bio', { exact: true }).fill('Neon sculptures & AR landmarks');
+    // Customize bio image (upload real PNG) and profile header preset in Edit Profile
+    const tinyPngBuf = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
+    await page.getByTestId('profile-avatar-file-input').setInputFiles({
+      name: 'maya-icon.png',
+      mimeType: 'image/png',
+      buffer: tinyPngBuf
+    });
+    await page.getByRole('button', { name: /Header preset: Sunset Voxel/i }).click();
     await page.waitForSelector('[data-testid="profile-username-status"]:has-text("available")', {
       timeout: 5000
     });
@@ -1196,9 +1207,42 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="profile-handle"]:has-text("@maya_cyber")', {
       timeout: 10000
     });
+    assert.ok(
+      (await page.locator('[data-testid="profile-user-number"]').textContent()).includes('USER #')
+    );
+    assert.equal(
+      await page.locator('[data-testid="public-profile-banner"]').getAttribute('data-header-preset'),
+      'sunset-voxel'
+    );
+    assert.ok(
+      (await page.locator('[data-testid="profile-banner-avatar-img"]').getAttribute('src')).startsWith(
+        'data:image/'
+      )
+    );
     await page.waitForSelector('[data-testid="desktop-profile-btn"]:has-text("@maya_cyber")');
     assert.deepEqual(pageErrors, []);
     await context.close();
+
+    // Logged-out public visitor opens ?u=maya_cyber directly -> sees clean banner with user number, username, custom icon & header background
+    const mayaPubCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const mayaPubPage = await mayaPubCtx.newPage();
+    await mayaPubPage.goto(`${baseUrl}/?u=maya_cyber`, { waitUntil: 'networkidle' });
+    await mayaPubPage.waitForSelector('[data-testid="public-profile-banner"]', { timeout: 10000 });
+    assert.ok(
+      (await mayaPubPage.locator('[data-testid="profile-user-number"]').textContent()).includes(
+        'USER #'
+      )
+    );
+    assert.equal(
+      await mayaPubPage.locator('[data-testid="public-profile-banner"]').getAttribute('data-header-preset'),
+      'sunset-voxel'
+    );
+    assert.ok(
+      (
+        await mayaPubPage.locator('[data-testid="profile-banner-avatar-img"]').getAttribute('src')
+      ).startsWith('data:image/')
+    );
+    await mayaPubCtx.close();
 
     // Logged-out public visitor opens ?u=mobile_owner directly -> sees bio, public land links & actions
     const pubCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });

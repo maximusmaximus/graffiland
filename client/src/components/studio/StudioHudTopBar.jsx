@@ -104,9 +104,13 @@ export default function StudioHudTopBar({
             data-testid="mobile-profile-btn"
             onClick={onOpenProfile}
             aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
-            title="Open Profile, edit @username & bio, and copy public links"
+            title="Open Profile, edit @username, bio, icon & header banner"
           >
-            <XeroIcon emoji="👤" size={13} />
+            {user.picture ? (
+              <img className="nav-profile-avatar is-sm" src={user.picture} alt="" />
+            ) : (
+              <XeroIcon emoji="👤" size={13} />
+            )}
             <span className="mobile-profile-pill-label">
               {user.username ? `@${user.username}` : user.name}
             </span>
