@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../utils/api.js';
+import { describeCameraError, describeGeolocationError } from '../utils/permissionMessages.js';
 import { OrbLandmarkTracker } from '../utils/orbTracker.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
 import { ProofOfLocationTracker } from '../components/ProofOfLocation.js';
@@ -117,7 +118,7 @@ export function useProofOfLocation({
     } catch (err) {
       setCameraReady(false);
       cameraReadyRef.current = false;
-      setSensorBanner(`Camera access needed for 3D AR & Proof of Location (${err.message})`);
+      setSensorBanner(describeCameraError(err));
     }
   }, []);
 
@@ -247,7 +248,7 @@ export function useProofOfLocation({
         }
       },
       (err) => {
-        setSensorBanner(`GPS permission required for Virtual Land (${err.message})`);
+        setSensorBanner(describeGeolocationError(err));
       },
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
