@@ -399,6 +399,54 @@ function deriveSuggestedTitleFromUrl(rawUrl = '') {
  * Fetches and validates an external 3D model URL (https://, http://, or ipfs://) against
  * GRAFFILAND's supported formats (.glb, .gltf, .obj, .stl, .ply), size limit, and WebGL budgets.
  */
+/**
+ * Rejects loopback, private, link-local, CGNAT and cloud-metadata hosts so server-side model URL
+ * validation cannot be used to probe internal services (SSRF). Hostname-only check; deployments
+ * that resolve attacker-controlled DNS to private IPs should also enforce egress rules.
+ */
+export function isBlockedModelHost(rawHost) {
+  const host = String(rawHost || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
+  if (!host) return true;
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host === 'metadata.goog'
+  ) {
+    return true;
+  }
+  const v4 = host.match(/^(\d{1,4})\.(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/);
+  if (v4) {
+    // Reject octal-prefixed IPv4 octets (e.g. 0177.0.0.1) defensively even if called outside new URL().
+    if (v4.slice(1).some((part) => part.length > 1 && part.startsWith('0'))) return true;
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224
+    );
+  }
+  // Shorthand numeric IPv4 forms (e.g. 127.1, 127.0.1, 0x7f.1) are never legitimate public hosts.
+  if (/^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,2}$/.test(host)) return true;
+  if (host.includes(':')) {
+    if (host === '::' || host === '::1') return true;
+    if (/^(?:0{1,4}:){7}0{0,3}[01]$/.test(host) || /^0+::0*[01]?$/.test(host)) return true;
+    if (/^f[cd]/.test(host) || /^fe[89ab]/.test(host)) return true;
+    const mapped = host.match(/^(?:(?:0{1,4}:){5}|::)ffff:(.+)$/);
+    if (mapped) return mapped[1].includes('.') ? isBlockedModelHost(mapped[1]) : true;
+  }
+  return false;
+}
+
 export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 9000 } = {}) {
   const trimmed = String(rawUrl || '').trim();
   if (!trimmed) {
@@ -421,18 +469,32 @@ export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 
   } catch {
     return { valid: false, error: 'Malformed 3D model URL.' };
   }
-  const host = parsedUrl.hostname.toLowerCase();
-  if (
-    host === '169.254.169.254' ||
-    host === 'metadata.google.internal' ||
-    host === 'metadata.goog'
-  ) {
-    return { valid: false, error: 'Blocked internal metadata host.' };
+  // Local development / test fixtures serve models from 127.0.0.1; never set this in production.
+  const allowPrivate = globalThis.process?.env?.GRAFFILAND_ALLOW_PRIVATE_MODEL_HOSTS === '1';
+  if (!allowPrivate && isBlockedModelHost(parsedUrl.hostname)) {
+    return { valid: false, error: 'Model links must point to a public internet host.' };
   }
 
   let res;
   try {
-    res = await fetch(fetchUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    // Follow redirects manually so every hop is re-checked against the private-host blocklist.
+    let currentUrl = parsedUrl;
+    for (let hop = 0; ; hop++) {
+      res = await fetch(currentUrl.toString(), {
+        signal: AbortSignal.timeout(timeoutMs),
+        redirect: 'manual'
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers?.get?.('location') : null;
+      if (!location) break;
+      if (hop >= 3) return { valid: false, error: '3D model link redirects too many times.' };
+      currentUrl = new URL(location, currentUrl);
+      if (
+        !/^https?:$/.test(currentUrl.protocol) ||
+        (!allowPrivate && isBlockedModelHost(currentUrl.hostname))
+      ) {
+        return { valid: false, error: 'Model links must point to a public internet host.' };
+      }
+    }
   } catch {
     return { valid: false, error: `Could not reach 3D model URL (${trimmed}). Check that the link is public.` };
   }
