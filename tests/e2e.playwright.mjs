@@ -977,6 +977,63 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await hubPage.getByRole('button', { name: /Scan Desktop QR Code/i }).click();
     await hubPage.waitForSelector('[data-testid="desktop-qr-scanner"]');
     await hubPage.getByRole('button', { name: /Copy Agent Connector Prompt/i }).waitFor();
+
+    // Open Mobile Map Icon -> defaults to Nearest Lands with nested sculptures, expiration times & Google Maps links
+    await hubPage.locator('[data-testid="mobile-pair-hub-btn"]').click(); // close dropdown
+    await hubPage.locator('.floating-map-btn').click();
+    await hubPage.waitForSelector('[aria-label="Nearest Lands and Sculptures Map"]', { timeout: 10000 });
+    await hubPage.waitForSelector('[data-testid="mobile-land-card"]', { timeout: 10000 });
+
+    const landCards = hubPage.locator('[data-testid="mobile-land-card"]');
+    const landCardCount = await landCards.count();
+    assert.ok(landCardCount >= 2, `Expected >= 2 nearest land cards, got ${landCardCount}`);
+
+    // Verify Google Maps link exists on every rendered land card
+    const gmapsLinks = hubPage.locator('[data-testid="land-google-maps-link"]');
+    assert.equal(await gmapsLinks.count(), landCardCount);
+    const firstHref = await gmapsLinks.first().getAttribute('href');
+    assert.ok(firstHref && firstHref.startsWith('https://www.google.com/maps/dir/?api=1&destination='));
+
+    // Verify expiration badges render (both dormant countdown "left" and Permanent lands exist from seeded data)
+    const expTexts = await hubPage.locator('[data-testid="land-expiration-badge"]').allTextContents();
+    assert.ok(
+      expTexts.some((t) => /\bleft\b/i.test(t)),
+      `Expected a dormant land expiration countdown badge, got: ${JSON.stringify(expTexts)}`
+    );
+    assert.ok(
+      expTexts.some((t) => /Permanent/i.test(t)),
+      `Expected a permanent land badge, got: ${JSON.stringify(expTexts)}`
+    );
+
+    // Verify nested sculptures render under lands with metadata and tapping 3D opens SculptureModal above the map
+    const sculptureItems = hubPage.locator('[data-testid="land-sculpture-item"]');
+    assert.ok((await sculptureItems.count()) >= 1, 'Expected at least 1 nested sculpture under a land');
+    const firstScText = await sculptureItems.first().textContent();
+    assert.ok(/blocks|3D/i.test(firstScText || ''));
+
+    // Verify zero horizontal overflow on mobile 390px viewport and visible Leaflet map height
+    const mapMetrics = await hubPage.evaluate(() => ({
+      scrollWidth: globalThis.document.documentElement.scrollWidth,
+      leafletHeight:
+        globalThis.document.querySelector('.mobile-map-canvas .leaflet-container')?.clientHeight || 0
+    }));
+    assert.ok(
+      mapMetrics.scrollWidth <= 391,
+      `Expected mobile map scrollWidth <= 391, got ${mapMetrics.scrollWidth}`
+    );
+    assert.ok(
+      mapMetrics.leafletHeight >= 150,
+      `Expected visible mobile Leaflet map height >= 150px, got ${mapMetrics.leafletHeight}`
+    );
+
+    // Open a nested sculpture in 3D modal and verify modal sits cleanly above map overlay
+    await sculptureItems.first().getByRole('button', { name: /3D/i }).click();
+    await hubPage.waitForSelector('.modal-backdrop', { timeout: 10000 });
+    const scModalZ = await hubPage.evaluate(() =>
+      Number(globalThis.getComputedStyle(globalThis.document.querySelector('.modal-backdrop')).zIndex)
+    );
+    assert.ok(scModalZ >= 2000);
+
     assert.deepEqual(hubErrors, []);
     await hubCtx.close();
   });
