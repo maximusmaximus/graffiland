@@ -14,7 +14,11 @@ import {
   scaleFootprintToLimit,
   validateAndNormalizeLandVolume
 } from '../shared/landVolume.mjs';
-import { buildLandAcquisitionAgentPrompt } from '../shared/landSignatureMessage.mjs';
+import {
+  buildLandAcquisitionAgentPrompt,
+  buildLandAdd3DItemAgentPrompt
+} from '../shared/landSignatureMessage.mjs';
+import { buildSculptures3DGeoJson } from '../client/src/utils/sculpture3dGeoJson.js';
 
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-3d-land-'));
 process.env.GRAFFILAND_DB_PATH = path.join(testTmpDir, 'land3d.sqlite');
@@ -483,5 +487,250 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     const parcelBody = await parcelRes.json();
     assert.equal(parcelRes.status, 200);
     assert.ok(parcelBody.results.some((r) => r.parcelId === firstClaimedParcelId));
+  });
+
+  test('buildSculptures3DGeoJson converts voxel sculptures and custom 3D models into MapLibre 3D extrusions', () => {
+    const out = buildSculptures3DGeoJson(
+      [
+        {
+          id: 'sc-voxel-1',
+          title: 'Neon Tower',
+          parcelId: 'GLAND-9Q8YYK8Y',
+          lat: 37.7749,
+          lng: -122.4194,
+          modelType: 'voxel',
+          voxels: [
+            { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+            { x: 0, y: 0.05, z: 0, color: '#00f5d4', material: 'neon' },
+            { x: 0.05, y: 0, z: 0, color: '#ff3e7f', material: 'matte' }
+          ],
+          anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 15 }
+        },
+        {
+          id: 'sc-glb-2',
+          title: 'Cyber Statue',
+          parcelId: 'GLAND-9Q8YYK8Y',
+          lat: 37.775,
+          lng: -122.4193,
+          modelType: 'custom-3d',
+          customModel: { format: 'glb', scale: 1.2 },
+          voxels: []
+        },
+        {
+          id: 'sc-hidden-3',
+          title: 'Hidden Piece',
+          lat: 37.775,
+          lng: -122.4193,
+          hidden: true,
+          voxels: [{ x: 0, y: 0, z: 0, color: '#ffffff' }]
+        }
+      ],
+      'sc-voxel-1'
+    );
+    assert.equal(out.renderedCount, 2);
+    assert.ok(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-voxel-1' && f.properties.heightMeters > 0.5));
+    assert.ok(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-glb-2' && f.properties.heightMeters > 4));
+    assert.equal(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-hidden-3'), false);
+
+    const prompt = buildLandAdd3DItemAgentPrompt({
+      parcel: { parcelId: firstClaimedParcelId, volume: { widthMeters: 30, depthMeters: 20, heightMeters: 27, rotationDeg: 90 } },
+      itemFormat: 'glb',
+      itemTitle: 'Dragon Portal',
+      existingSculptures: [{ id: 'sc-voxel-1', title: 'Neon Tower', voxelCount: 3 }],
+      pairingCode: 'GLP-1234-5678-ABCD-EFGH'
+    });
+    assert.ok(prompt.includes('load_3d_model_on_land'));
+    assert.ok(prompt.includes('update_land_sculpture'));
+    assert.ok(prompt.includes('set_sculpture_visibility'));
+    assert.ok(prompt.includes('update_land_settings'));
+    assert.ok(prompt.includes('Dragon Portal'));
+  });
+
+  test('Land Owner can modify & hide/unhide another artist artwork on their land, and freeze/unfreeze land placements', async () => {
+    assert.ok(firstClaimedParcelId);
+
+    // 1) Newly minted empty parcel appears immediately in Owner A's /api/lands/mine workspace
+    const mineBefore = await fetch(`${baseUrl}/api/lands/mine`, {
+      headers: { Authorization: `Bearer ${humanToken}` }
+    }).then((r) => r.json());
+    assert.ok(
+      mineBefore.parcels.some((p) => p.parcelId === firstClaimedParcelId),
+      'Expected minted desktop land to appear in /api/lands/mine immediately'
+    );
+
+    // 2) Visitor B places an IRL artwork onto Owner A's land while it is open
+    const visitorPub = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${otherHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        title: 'Visitor Street Piece',
+        description: 'Colorful outdoor 3D voxel tag placed on someone else land parcel.',
+        termsAccepted: true,
+        deviceProfile: { isMobile: true },
+        location: { lat: 37.7749, lng: -122.4194, altitude: 14, accuracy: 8, heading: 40, timezone: 'America/Los_Angeles' },
+        proofOfLocation: {
+          cameraFrames: 8,
+          gyroSamples: 12,
+          opticalFlowCorrelation: 0.9,
+          horizonLuminance: 135,
+          visualDHash: 'ab12cd34ef567890',
+          ambientPalette: ['#00f5d4', '#ff3e7f'],
+          gpsSamples: [
+            { lat: 37.7749, lng: -122.4194, ts: Date.now() - 2500 },
+            { lat: 37.77491, lng: -122.41941, ts: Date.now() }
+          ]
+        },
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' },
+          { x: 0.05, y: 0.05, z: 0, color: '#ffd166', material: 'glass' }
+        ]
+      })
+    }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    assert.equal(visitorPub.status, 201, JSON.stringify(visitorPub.body));
+    const visitorSculptureId = visitorPub.body.sculpture.id;
+    assert.equal(visitorPub.body.sculpture.parcelId, firstClaimedParcelId);
+
+    // 3) Land Owner A modifies Visitor B's artwork placed on Owner A's land (title, description & anchorOffset)
+    const ownerEditRes = await fetch(`${baseUrl}/api/sculptures/${visitorSculptureId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        title: 'Curated Street Piece',
+        description: 'Repositioned and curated cleanly by the Virtual Land owner.',
+        anchorOffset: { dx: 1.5, dy: 0.5, dz: -1.0, yaw: 45 }
+      })
+    });
+    const ownerEditBody = await ownerEditRes.json();
+    assert.equal(ownerEditRes.status, 200, JSON.stringify(ownerEditBody));
+    assert.equal(ownerEditBody.editorRole, 'land-owner');
+    assert.equal(ownerEditBody.sculpture.title, 'Curated Street Piece');
+    assert.equal(ownerEditBody.sculpture.anchorOffset.dx, 1.5);
+    assert.equal(ownerEditBody.sculpture.anchorOffset.yaw, 45);
+
+    // 4) Land Owner A hides Visitor B's artwork -> disappears from public feed, stays manageable for owner, then unhides cleanly
+    const hideRes = await fetch(`${baseUrl}/api/sculptures/${visitorSculptureId}/visibility`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ hidden: true, reason: 'Temporary curation hold' })
+    });
+    const hideBody = await hideRes.json();
+    assert.equal(hideRes.status, 200, JSON.stringify(hideBody));
+    assert.equal(hideBody.hidden, true);
+
+    const publicAfterHide = await fetch(`${baseUrl}/api/sculptures`).then((r) => r.json());
+    assert.equal(publicAfterHide.sculptures.some((s) => s.id === visitorSculptureId), false);
+
+    const mineHidden = await fetch(`${baseUrl}/api/lands/mine`, {
+      headers: { Authorization: `Bearer ${humanToken}` }
+    }).then((r) => r.json());
+    const ownedParcel = mineHidden.parcels.find((p) => p.parcelId === firstClaimedParcelId);
+    assert.ok(ownedParcel.sculptures.some((s) => s.id === visitorSculptureId && s.hidden === true));
+
+    const unhideRes = await fetch(`${baseUrl}/api/sculptures/${visitorSculptureId}/visibility`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ hidden: false })
+    });
+    assert.equal(unhideRes.status, 200);
+    const publicAfterUnhide = await fetch(`${baseUrl}/api/sculptures`).then((r) => r.json());
+    assert.equal(publicAfterUnhide.sculptures.some((s) => s.id === visitorSculptureId), true);
+
+    // 5) Land Owner A freezes the land -> blocks both public mobile publishes AND direct land placements (403)
+    const freezeRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/settings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ frozen: true })
+    });
+    const freezeBody = await freezeRes.json();
+    assert.equal(freezeRes.status, 200, JSON.stringify(freezeBody));
+    assert.equal(freezeBody.settings.frozen, true);
+
+    const landsCheck = await fetch(`${baseUrl}/api/lands`).then((r) => r.json());
+    assert.equal(landsCheck.parcels.find((p) => p.parcelId === firstClaimedParcelId)?.frozen, true);
+
+    const blockedPublish = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${otherHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        title: 'Blocked While Frozen',
+        description: 'Attempting to place a sculpture on a frozen Virtual Land parcel.',
+        termsAccepted: true,
+        deviceProfile: { isMobile: true },
+        location: { lat: 37.7749, lng: -122.4194, altitude: 14, accuracy: 8, heading: 40, timezone: 'America/Los_Angeles' },
+        proofOfLocation: {
+          cameraFrames: 8,
+          gyroSamples: 12,
+          opticalFlowCorrelation: 0.9,
+          horizonLuminance: 135,
+          visualDHash: 'ab12cd34ef567890',
+          ambientPalette: ['#00f5d4'],
+          gpsSamples: [
+            { lat: 37.7749, lng: -122.4194, ts: Date.now() - 2500 },
+            { lat: 37.77491, lng: -122.41941, ts: Date.now() }
+          ]
+        },
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' }]
+      })
+    });
+    assert.equal(blockedPublish.status, 403);
+
+    const blockedDirectCreate = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/sculptures`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        title: 'Blocked Direct Item',
+        description: 'Cannot place directly while land is frozen.',
+        voxels: [{ x: 0, y: 0, z: 0, color: '#ffd166', material: 'neon' }]
+      })
+    });
+    assert.equal(blockedDirectCreate.status, 403);
+
+    // 6) Unfreezing restores normal placements cleanly
+    const unfreezeRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/settings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ frozen: false })
+    });
+    assert.equal(unfreezeRes.status, 200);
+    const allowedDirectCreate = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/sculptures`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        title: 'Unfrozen Sculpture OK',
+        description: 'Placed cleanly right after owner unfroze this Virtual Land.',
+        voxels: [{ x: 0, y: 0, z: 0, color: '#ffd166', material: 'neon' }]
+      })
+    });
+    assert.equal(allowedDirectCreate.status, 200);
   });
 });

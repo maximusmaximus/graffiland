@@ -12,7 +12,7 @@ import {
 import {
   McpServiceError,
   checkParcelOwnership,
-  checkSculptureOwnership,
+  checkSculptureOrLandOwnership,
   hashPayloadCanonical,
   normalizeParcelId,
   resolvePreferredOwnerWallet,
@@ -25,8 +25,10 @@ import {
   applyEraseLand,
   applyPublishOnBehalf,
   applyRollbackSculptureRevision,
+  applySetSculptureVisibility,
   applyUpdateParcel,
-  applyUpdateSculpture
+  applyUpdateSculpture,
+  updateLandSettings
 } from './landMutations.mjs';
 
 export function formatSignatureRequestRow(row) {
@@ -184,40 +186,61 @@ export async function executeValidatedSignatureRow(
       proofSeed: reqRow.id
     });
   } else if (reqRow.action === 'update_sculpture') {
-    const sculptureRow = await checkSculptureOwnership(db, {
+    const perm = await checkSculptureOrLandOwnership(db, {
       sculptureId: reqRow.sculpture_id,
       user: ownerUser,
-      signerAddress
+      signerAddress,
+      allowHidden: true
     });
     result = await applyUpdateSculpture(db, {
-      sculptureRow,
+      sculptureRow: perm.row,
       payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
       pinSculptureFn,
       emitMetadataUpdateFn: safeEmitMetadataUpdateFn,
       editorUser: ownerUser,
-      editorRole: 'mcp-agent'
+      editorRole: perm.role === 'land-owner' ? 'land-owner-agent' : 'mcp-agent'
     });
   } else if (reqRow.action === 'rollback_sculpture') {
-    const sculptureRow = await checkSculptureOwnership(db, {
+    const perm = await checkSculptureOrLandOwnership(db, {
       sculptureId: reqRow.sculpture_id,
       user: ownerUser,
-      signerAddress
+      signerAddress,
+      allowHidden: true
     });
     result = await applyRollbackSculptureRevision(db, {
-      sculptureRow,
+      sculptureRow: perm.row,
       revNum: payload.revNum,
       ownerUser,
       emitMetadataUpdateFn: safeEmitMetadataUpdateFn
     });
   } else if (reqRow.action === 'delete_sculpture') {
-    const sculptureRow = await checkSculptureOwnership(db, {
+    const perm = await checkSculptureOrLandOwnership(db, {
       sculptureId: reqRow.sculpture_id,
       user: ownerUser,
       signerAddress
     });
     result = await applyDeleteSculpture(db, {
-      sculptureRow,
+      sculptureRow: perm.row,
       ownerAddress: reqRow.owner_address
+    });
+  } else if (reqRow.action === 'set_sculpture_visibility') {
+    const perm = await checkSculptureOrLandOwnership(db, {
+      sculptureId: reqRow.sculpture_id,
+      user: ownerUser,
+      signerAddress,
+      allowHidden: true
+    });
+    result = await applySetSculptureVisibility(db, {
+      sculptureRow: perm.row,
+      actorAddress: reqRow.owner_address,
+      hidden: Boolean(payload.hidden),
+      reason: payload.reason || ''
+    });
+  } else if (reqRow.action === 'update_land_settings') {
+    result = await updateLandSettings(db, {
+      parcelId: reqRow.parcel_id,
+      user: ownerUser,
+      body: payload
     });
   } else if (reqRow.action === 'update_parcel') {
     const parcelCtx = await checkParcelOwnership(db, {

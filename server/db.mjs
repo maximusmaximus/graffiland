@@ -315,6 +315,7 @@ export function getDb() {
       owner_address TEXT NOT NULL,
       allow_agent_erase INTEGER NOT NULL DEFAULT 1,
       allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
+      freeze_placements INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -633,6 +634,12 @@ export function getDb() {
       updated_at TEXT NOT NULL
     );
   `);
+
+  try {
+    db.exec('ALTER TABLE land_settings ADD COLUMN freeze_placements INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists on upgraded SQLite DBs
+  }
 
   dbInstance = db;
   return dbInstance;

@@ -539,11 +539,24 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       state: 'detached'
     });
 
-    // Verify Desktop map starts immediately in Isometric mode (-45 deg, pitch 52 deg)
+    // Verify Desktop map starts immediately in Isometric mode (-45 deg, pitch 52 deg) and renders real 3D sculptures
     const stage = page.locator('.map3d-stage');
     assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
     assert.equal(Number(await stage.getAttribute('data-pitch')), 52);
     assert.equal(Number(await stage.getAttribute('data-bearing')), -45);
+    await page.waitForFunction(
+      () => Number(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-rendered-3d-sculptures') || 0) >= 1
+    );
+
+    // Click rendered 3D sculpture on Desktop map -> opens SculptureModal with ALL metadata (incl. expandable full JSON)
+    await page.locator('.map3d-sculpture-marker').first().click();
+    await page.waitForSelector('text=E2E Lighthouse Cube');
+    await page.getByRole('button', { name: /View All Metadata/i }).click();
+    await page.waitForSelector('[data-testid="sculpture-all-metadata"]');
+    const rawMetaText = await page.locator('[data-testid="sculpture-all-metadata"]').textContent();
+    assert.ok(rawMetaText.includes('proofHash') && rawMetaText.includes('parcelId') && rawMetaText.includes('voxelCount'));
+    await page.locator('.modal-backdrop').click({ position: { x: 10, y: 10 } });
+    await page.waitForSelector('.modal-backdrop', { state: 'detached' });
 
     // Dynamic live search: typing auto-opens dropdown without clicking Find; Enter jumps & drops a target pin
     const searchInput = page.getByLabel('Search locations, intersections, or businesses');
@@ -553,33 +566,31 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-search-pin', { timeout: 5000 });
     await page.waitForTimeout(350);
 
-    // Activate Draw Land directly from the map toolbar while in Isometric view
-    await page.locator('.map3d-toolbar').getByRole('button', { name: /Draw Land/i }).click();
-    await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
-    await page.waitForSelector('[data-testid="land-limits-card"]');
-    assert.equal(await stage.getAttribute('data-draw-mode'), 'on');
-
-    // Drag-draw a rectangle right on the Isometric map -> inherits 315° orientation, caps cleanly, & auto-exits drawMode!
+    // Hold down in 1 location on the map (~450ms) WITHOUT clicking Draw Land -> activates Hold-to-Draw Cube & drags out a 3D cube!
     const mapBox = await page.locator('.map-container').boundingBox();
     assert.ok(mapBox && mapBox.width > 200 && mapBox.height > 200);
     await page.mouse.move(mapBox.x + mapBox.width * 0.36, mapBox.y + mapBox.height * 0.42);
     await page.mouse.down();
-    await page.mouse.move(mapBox.x + mapBox.width * 0.62, mapBox.y + mapBox.height * 0.66, { steps: 8 });
+    await page.waitForSelector('.map3d-stage[data-hold-draw="active"]', { timeout: 4000 });
+    await page.mouse.move(mapBox.x + mapBox.width * 0.60, mapBox.y + mapBox.height * 0.64, { steps: 8 });
     await page.mouse.up();
 
     await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
+    await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
     assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
     assert.equal(await stage.getAttribute('data-draw-mode'), 'off');
     const drawnText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(drawnText.includes('315°'), `Expected drawn square to inherit 315° isometric orientation, got: ${drawnText}`);
     assert.ok(drawnText.includes('Ready'), `Expected drawn plot to be valid Ready, got: ${drawnText}`);
 
-    // Verify hover-to-select & on-map 3D CAD gizmo handles (corner ball scale, side bar stretch, vertical bar rotate, body move)
+    // Verify hover-to-select & on-map 3D CAD gizmo handles (corner ball scale, pronounced center up/down Z handle, side bar stretch, vertical bar rotate, body move)
     await page.waitForFunction(() => Boolean(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-active-gizmo')));
     const readGizmo = async () =>
       JSON.parse(await stage.getAttribute('data-active-gizmo'));
 
     let gizmo = await readGizmo();
+    assert.ok(Array.isArray(gizmo.heightHandle), 'Expected pronounced heightHandle coords in data-active-gizmo');
+
     // 1) Hover over drawn plot selects it & shows handle hint pill
     await page.mouse.move(mapBox.x + gizmo.center[0], mapBox.y + gizmo.center[1]);
     await page.waitForFunction(
@@ -587,6 +598,16 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       gizmo.id
     );
     await page.waitForSelector('.map3d-gizmo-pill');
+
+    // 1b) Pull the pronounced center up/down elevator orb UP -> Z height grows cleanly!
+    const zBeforePull = Number(await page.getByLabel('Z-Axis Scale').inputValue());
+    await page.mouse.move(mapBox.x + gizmo.heightHandle[0], mapBox.y + gizmo.heightHandle[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.heightHandle[0], mapBox.y + gizmo.heightHandle[1] - 48, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const zAfterPull = Number(await page.getByLabel('Z-Axis Scale').inputValue());
+    assert.ok(zAfterPull > zBeforePull, `Expected pulling center Z handle up to increase height (${zBeforePull} -> ${zAfterPull})`);
 
     // 2) Drag a corner ball outward to scale footprint smoothly
     const beforeCornerText = await page.locator('.land-draft-item').first().textContent();
@@ -720,6 +741,24 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
     const afterOwned = Number(await stage.getAttribute('data-owned-count'));
     assert.equal(afterOwned, initialOwned + 1);
+
+    // After minting: glowing "+" button appears on the minted land (on map AND in Owned Plots) -> opens Add 3D Item prompt & Freeze Land!
+    await page.waitForSelector('.map3d-owned-plus-btn', { timeout: 6000 });
+    await page.locator('.land-owned-plus-btn').first().click();
+    await page.waitForSelector('.add-item-modal-card');
+    await page.getByRole('radio', { name: /\.GLB 3D Model/i }).click();
+    const itemPromptVal = await page.getByLabel('Add 3D item agent prompt preview').inputValue();
+    assert.ok(itemPromptVal.includes('load_3d_model_on_land'));
+    assert.ok(itemPromptVal.includes('update_land_sculpture'));
+    assert.ok(itemPromptVal.includes('set_sculpture_visibility'));
+    assert.ok(itemPromptVal.includes('update_land_settings'));
+    await page.getByRole('button', { name: /Copy 3D Item Agent Prompt/i }).click();
+    await page.waitForSelector('text=/Copied 3D item agent prompt/i');
+
+    // Freeze the newly minted land directly from the modal -> button updates to Unfreeze Land
+    await page.locator('.add-item-modal-card').getByRole('button', { name: /Freeze Land/i }).click();
+    await page.locator('.add-item-modal-card').getByRole('button', { name: /Unfreeze Land/i }).waitFor();
+    await page.getByRole('button', { name: /Close add 3D item modal/i }).click();
 
     assert.deepEqual(pageErrors, []);
     await context.close();

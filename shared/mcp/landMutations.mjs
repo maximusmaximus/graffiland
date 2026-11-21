@@ -17,7 +17,7 @@ import {
   McpServiceError,
   checkParcelOwnership,
   checkSculptureEditPermission,
-  checkSculptureOwnership,
+  checkSculptureOrLandOwnership,
   fetchSculptureWithModelRow,
   normalizeParcelId,
   resolvePreferredOwnerWallet,
@@ -45,6 +45,7 @@ export async function listLandsWithCurations(db) {
   );
   const curations = await db.all('SELECT * FROM parcel_curations');
   const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
+  const settingRows = await db.all('SELECT * FROM land_settings').catch(() => []);
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
@@ -52,6 +53,7 @@ export async function listLandsWithCurations(db) {
   const questMap = new Map((questCounts || []).map((r) => [r.parcel_id, Number(r.cnt || 0)]));
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
+  const settingsMap = new Map((settingRows || []).map((s) => [s.parcel_id, s]));
 
   const allParcelIds = new Set([...scMap.keys(), ...lpMap.keys()]);
   const parcels = [];
@@ -147,6 +149,16 @@ export async function listLandsWithCurations(db) {
       curationNote: cur?.curation_note || '',
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
+      frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
+      settings: {
+        allowAgentErase: settingsMap.has(parcelId)
+          ? Boolean(settingsMap.get(parcelId).allow_agent_erase)
+          : true,
+        allowContributorEdits: settingsMap.has(parcelId)
+          ? Boolean(settingsMap.get(parcelId).allow_contributor_edits)
+          : true,
+        frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements)
+      },
       latestAt: sc?.latest_at || lp?.updated_at || st?.updated_at || ''
     });
   }
@@ -236,6 +248,7 @@ export async function getLandSettingsInternal(db, parcelId) {
     parcelId: cleanId,
     allowAgentErase: row ? Boolean(row.allow_agent_erase) : true,
     allowContributorEdits: row ? Boolean(row.allow_contributor_edits) : true,
+    frozen: row ? Boolean(row.freeze_placements) : false,
     updatedAt: row?.updated_at || ''
   };
 }
@@ -290,6 +303,7 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
 
 export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const wallets = new Set(resolveUserWalletAddresses(ownerUser));
+  const ownerId = ownerUser?.id ? String(ownerUser.id) : '';
   const allRows = await db.all(
     `SELECT s.*,
       m.model_format AS custom_model_format,
@@ -307,23 +321,53 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       a.yaw AS anchor_yaw,
       a.current_rev AS current_rev,
       a.last_erc4906_tx_hash AS last_erc4906_tx_hash,
-      a.mesh_stats_json AS mesh_stats_json
+      a.mesh_stats_json AS mesh_stats_json,
+      COALESCE(l.layer_role, 'artist_work') AS layer_role,
+      COALESCE(l.quest_id, '') AS layer_quest_id,
+      COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
+      COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
-     WHERE s.hidden = 0
+     LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
      ORDER BY s.created_at DESC`
   );
-  const ownedSculptures = (allRows || []).filter((r) =>
-    wallets.has(String(r.recipient_address || '').toLowerCase())
+  const ownedSculptures = (allRows || []).filter(
+    (r) => !r.hidden && wallets.has(String(r.recipient_address || '').toLowerCase())
   );
   const ownedParcelSet = new Set(ownedSculptures.map((s) => s.parcel_id));
+
+  // Include minted 3D parcels & stewarded parcels even before any sculpture is placed on them
+  const lpRows = await db.all('SELECT * FROM land_parcels').catch(() => []);
+  const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
+  for (const lp of lpRows || []) {
+    if (
+      (ownerId && lp.first_claimant_sub === ownerId) ||
+      wallets.has(String(lp.first_claimant_address || '').toLowerCase()) ||
+      wallets.has(String(lp.latest_claimant_address || '').toLowerCase())
+    ) {
+      ownedParcelSet.add(lp.parcel_id);
+    }
+  }
+  const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
+  for (const st of stewardRows || []) {
+    if (
+      (ownerId && st.steward_sub === ownerId) ||
+      wallets.has(String(st.steward_address || '').toLowerCase())
+    ) {
+      ownedParcelSet.add(st.parcel_id);
+    }
+  }
+
   const curations = await db.all('SELECT * FROM parcel_curations');
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
+  const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
+  const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
 
   const parcels = [];
   for (const pid of ownedParcelSet) {
     const onLand = (allRows || []).filter((s) => s.parcel_id === pid);
+    const lp = lpMap.get(pid);
     const cur = curationMap.get(pid);
     const settings = await getLandSettingsInternal(db, pid);
     const contribRows = await db.all(
@@ -339,14 +383,50 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       'SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, updated_at FROM parcel_landmark_anchors WHERE parcel_id = ?',
       [pid]
     );
+    const geohash = onLand[0]?.geohash || lp?.geohash || pid.replace(/^GLAND-/, '').toLowerCase();
+    const bounds = geohash ? decodeGeohashBounds(geohash) : null;
+    const vr = volumeMap.get(pid);
+    let parsedCorners = [];
+    if (vr?.corners_json) {
+      try {
+        parsedCorners = JSON.parse(vr.corners_json);
+      } catch {
+        parsedCorners = [];
+      }
+    }
+    const volume = vr
+      ? {
+          parcelId: pid,
+          geohash,
+          centerLat: Number(vr.center_lat),
+          centerLng: Number(vr.center_lng),
+          widthMeters: Number(vr.width_meters),
+          depthMeters: Number(vr.depth_meters),
+          heightMeters: Number(vr.height_meters),
+          zScale: Number(vr.z_scale),
+          rotationDeg: Number(vr.rotation_deg),
+          baseAltitudeM: Number(vr.base_altitude_m || 0),
+          footprintAreaSqM: Number(vr.footprint_area_sqm),
+          volumeCubicM: Number(vr.volume_cubic_m),
+          corners: parsedCorners
+        }
+      : bounds
+      ? buildDefaultVolumeFromBounds(bounds, pid, geohash)
+      : null;
+
+    const visibleCount = onLand.filter((r) => !r.hidden).length;
     parcels.push({
       parcelId: pid,
-      geohash: onLand[0]?.geohash || '',
-      bounds: onLand[0]?.geohash ? decodeGeohashBounds(onLand[0].geohash) : null,
+      geohash,
+      bounds,
+      volume,
+      centerLat: volume?.centerLat ?? bounds?.center?.[0] ?? null,
+      centerLng: volume?.centerLng ?? bounds?.center?.[1] ?? null,
       customName: cur?.custom_name || '',
       curationNote: cur?.curation_note || '',
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
+      frozen: Boolean(settings.frozen),
       settings,
       securityPolicy,
       landmarkAnchor: landmarkAnchor
@@ -361,8 +441,15 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
         : { hasLandmark: false, keyframeCount: 0, featureCount: 0 },
       contributors: (contribRows || []).map(formatContributorRow),
       eligibleVisitors,
-      sculptureCount: onLand.length,
-      sculptures: onLand.map((r) => serializeSculptureRow(r, { includeVoxels: true }))
+      sculptureCount: visibleCount,
+      hiddenSculptureCount: onLand.length - visibleCount,
+      sculptures: onLand.map((r) =>
+        serializeSculptureRow(r, {
+          includeVoxels: true,
+          viewerIsLandOwner: true,
+          parcelFrozen: settings.frozen
+        })
+      )
     });
   }
 
@@ -648,6 +735,13 @@ export async function applyCreateSculptureOnLand(
     layerRole = ''
   }
 ) {
+  const landSettings = await getLandSettingsInternal(db, parcelCtx.parcelId);
+  if (landSettings.frozen) {
+    throw new McpServiceError(
+      `Virtual Land ${parcelCtx.parcelId} is frozen — no new sculptures can be placed until you unfreeze it in Land Settings.`,
+      403
+    );
+  }
   const modelExtract = extractCustomModelInput(payload);
   if (modelExtract.error) {
     throw new McpServiceError(modelExtract.error, 400);
@@ -921,6 +1015,40 @@ export async function applyCreateSculptureOnLand(
   };
 }
 
+export async function applySetSculptureVisibility(
+  db,
+  { sculptureRow, actorAddress, hidden = true, reason = '' }
+) {
+  const now = new Date().toISOString();
+  const hideFlag = hidden ? 1 : 0;
+  const cleanReason = hideFlag
+    ? String(reason || '').trim().slice(0, 160) || 'Hidden by Virtual Land owner'
+    : '';
+  await db.run(
+    `UPDATE sculptures SET hidden = ?, hidden_reason = ?, hidden_by = ? WHERE id = ?`,
+    [hideFlag, cleanReason, hideFlag ? String(actorAddress || '') : '', sculptureRow.id]
+  );
+  const remaining = await db.get(
+    'SELECT COUNT(*) AS cnt FROM sculptures WHERE parcel_id = ? AND hidden = 0',
+    [sculptureRow.parcel_id]
+  );
+  await db.run(
+    'UPDATE land_parcels SET sculpture_count = ?, updated_at = ? WHERE parcel_id = ?',
+    [Number(remaining?.cnt || 0), now, sculptureRow.parcel_id]
+  );
+  const refreshed = await fetchSculptureWithModelRow(db, sculptureRow.id);
+  const settings = await getLandSettingsInternal(db, sculptureRow.parcel_id);
+  return {
+    sculpture: serializeSculptureRow(refreshed, {
+      includeVoxels: true,
+      viewerIsLandOwner: true,
+      parcelFrozen: settings.frozen
+    }),
+    hidden: Boolean(hideFlag),
+    parcelId: sculptureRow.parcel_id
+  };
+}
+
 export async function applyDeleteSculpture(db, { sculptureRow, ownerAddress }) {
   const now = new Date().toISOString();
   await db.run(
@@ -983,6 +1111,7 @@ export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '',
     await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
+    await db.run('DELETE FROM land_steward_state WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
     await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
   } else {
     await db.run(
@@ -1066,6 +1195,13 @@ export async function applyPublishOnBehalf(
   { ownerUser, ownerAddress, payload, pinSculptureFn, mintSculptureFn, proofSignature = '' }
 ) {
   const locBundle = payload.locationBundle;
+  const landSettings = await getLandSettingsInternal(db, locBundle.parcelId);
+  if (landSettings.frozen) {
+    throw new McpServiceError(
+      `Virtual Land ${locBundle.parcelId} is frozen — no new sculptures can be placed here.`,
+      403
+    );
+  }
   const sculptureId = globalThis.crypto.randomUUID();
   const ipfsResult = await pinSculptureFn({
     sculptureId,
@@ -1367,12 +1503,30 @@ export async function directOwnerRollbackRevision(
   { sculptureId, revNum, user, emitMetadataUpdateFn = null }
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
-  const row = await checkSculptureOwnership(db, { sculptureId, user });
+  const perm = await checkSculptureOrLandOwnership(db, { sculptureId, user, allowHidden: true });
   return applyRollbackSculptureRevision(db, {
-    sculptureRow: row,
+    sculptureRow: perm.row,
     revNum,
     ownerUser: user,
     emitMetadataUpdateFn
+  });
+}
+
+export async function directOwnerSetSculptureVisibility(
+  db,
+  { sculptureId, user, hidden, reason = '' }
+) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const perm = await checkSculptureOrLandOwnership(db, {
+    sculptureId,
+    user,
+    allowHidden: true
+  });
+  return applySetSculptureVisibility(db, {
+    sculptureRow: perm.row,
+    actorAddress: resolvePreferredOwnerWallet(user) || perm.ownerAddress,
+    hidden: Boolean(hidden),
+    reason
   });
 }
 
@@ -1391,18 +1545,26 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
     body?.allowContributorEdits !== undefined
       ? Boolean(body.allowContributorEdits)
       : current.allowContributorEdits;
+  const frozenInput =
+    body?.frozen !== undefined
+      ? body.frozen
+      : body?.freezePlacements !== undefined
+      ? body.freezePlacements
+      : body?.freeze_placements;
+  const frozen = frozenInput !== undefined ? Boolean(frozenInput) : current.frozen;
   const now = new Date().toISOString();
   const ownerAddress = resolvePreferredOwnerWallet(user);
 
   await db.run(
     `INSERT INTO land_settings (
-      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       owner_sub = excluded.owner_sub,
       owner_address = excluded.owner_address,
       allow_agent_erase = excluded.allow_agent_erase,
       allow_contributor_edits = excluded.allow_contributor_edits,
+      freeze_placements = excluded.freeze_placements,
       updated_at = excluded.updated_at`,
     [
       parcelCtx.parcelId,
@@ -1410,6 +1572,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       ownerAddress,
       allowAgentErase ? 1 : 0,
       allowContributorEdits ? 1 : 0,
+      frozen ? 1 : 0,
       now
     ]
   );
@@ -1568,10 +1731,10 @@ export async function directOwnerCreateSculptureOnLand(
 
 export async function directOwnerDeleteSculpture(db, { sculptureId, user }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
-  const row = await checkSculptureOwnership(db, { sculptureId, user });
+  const perm = await checkSculptureOrLandOwnership(db, { sculptureId, user });
   return applyDeleteSculpture(db, {
-    sculptureRow: row,
-    ownerAddress: resolvePreferredOwnerWallet(user)
+    sculptureRow: perm.row,
+    ownerAddress: resolvePreferredOwnerWallet(user) || perm.ownerAddress
   });
 }
 

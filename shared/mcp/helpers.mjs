@@ -70,9 +70,67 @@ export function validateEditableTitleAndDescription({ title, description }) {
   return { title: cleanTitle, description: cleanDesc };
 }
 
-export async function checkSculptureOwnership(db, { sculptureId, user = null, signerAddress = '' }) {
+export async function isUserLandOwner(db, { parcelId, user = null, signerAddress = '' }) {
+  const cleanParcelId = normalizeParcelId(parcelId);
+  if (!cleanParcelId) return false;
+
+  const allowed = new Set(resolveUserWalletAddresses(user));
+  if (signerAddress && ethers.isAddress(signerAddress)) {
+    allowed.add(ethers.getAddress(signerAddress).toLowerCase());
+  }
+  const userId = user?.id ? String(user.id) : '';
+  if (!userId && allowed.size === 0) return false;
+
+  const stewardRow = await db
+    .get('SELECT steward_sub, steward_address FROM land_steward_state WHERE parcel_id = ?', [
+      cleanParcelId
+    ])
+    .catch(() => null);
+  if (stewardRow) {
+    if (userId && stewardRow.steward_sub === userId) return true;
+    if (stewardRow.steward_address && allowed.has(String(stewardRow.steward_address).toLowerCase())) {
+      return true;
+    }
+  }
+
+  const parcelRow = await db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [cleanParcelId]);
+  if (parcelRow) {
+    if (userId && parcelRow.first_claimant_sub === userId) return true;
+    if (
+      parcelRow.first_claimant_address &&
+      allowed.has(String(parcelRow.first_claimant_address).toLowerCase())
+    ) {
+      return true;
+    }
+  }
+
+  const firstVisible = await db.get(
+    'SELECT recipient_address, creator_sub FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+    [cleanParcelId]
+  );
+  if (firstVisible) {
+    if (
+      firstVisible.recipient_address &&
+      allowed.has(String(firstVisible.recipient_address).toLowerCase())
+    ) {
+      return true;
+    }
+  } else if (
+    parcelRow?.latest_claimant_address &&
+    allowed.has(String(parcelRow.latest_claimant_address).toLowerCase())
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export async function checkSculptureOwnership(
+  db,
+  { sculptureId, user = null, signerAddress = '', allowHidden = false }
+) {
   const row = await db.get('SELECT * FROM sculptures WHERE id = ?', [String(sculptureId || '')]);
-  if (!row || row.hidden) {
+  if (!row || (!allowHidden && row.hidden)) {
     throw new McpServiceError('Sculpture not found.', 404);
   }
   const allowed = new Set(resolveUserWalletAddresses(user));
@@ -87,6 +145,37 @@ export async function checkSculptureOwnership(db, { sculptureId, user = null, si
     );
   }
   return row;
+}
+
+export async function checkSculptureOrLandOwnership(
+  db,
+  { sculptureId, user = null, signerAddress = '', allowHidden = false }
+) {
+  const row = await db.get('SELECT * FROM sculptures WHERE id = ?', [String(sculptureId || '')]);
+  if (!row || (!allowHidden && row.hidden)) {
+    throw new McpServiceError('Sculpture not found.', 404);
+  }
+  const allowed = new Set(resolveUserWalletAddresses(user));
+  if (signerAddress && ethers.isAddress(signerAddress)) {
+    allowed.add(ethers.getAddress(signerAddress).toLowerCase());
+  }
+  const currentOwner = String(row.recipient_address || '').toLowerCase();
+  if (currentOwner && allowed.has(currentOwner)) {
+    return { row, role: 'owner', ownerAddress: row.recipient_address };
+  }
+  const isAutonomousAgent =
+    user?.actorType === 'agent' || String(user?.id || '').startsWith('agent:');
+  if (!isAutonomousAgent && (await isUserLandOwner(db, { parcelId: row.parcel_id, user, signerAddress }))) {
+    return {
+      row,
+      role: 'land-owner',
+      ownerAddress: resolvePreferredOwnerWallet(user) || signerAddress || row.recipient_address
+    };
+  }
+  throw new McpServiceError(
+    `Only the sculpture owner (${row.recipient_address}) or the human Virtual Land owner (${row.parcel_id}) can manage this sculpture.`,
+    403
+  );
 }
 
 export async function checkParcelOwnership(db, { parcelId, user = null, signerAddress = '' }) {
@@ -115,13 +204,13 @@ export async function checkParcelOwnership(db, { parcelId, user = null, signerAd
   const ownsVisibleSculpture = (visibleRows || []).some((s) =>
     allowed.has(String(s.recipient_address || '').toLowerCase())
   );
-  const ownsParcelFallback =
-    visibleRows.length === 0 &&
-    parcelRow &&
-    (allowed.has(String(parcelRow.latest_claimant_address || '').toLowerCase()) ||
-      (user?.id && parcelRow.first_claimant_sub === user.id));
+  const ownsParcelDirect = await isUserLandOwner(db, {
+    parcelId: cleanParcelId,
+    user,
+    signerAddress
+  });
 
-  if (!ownsVisibleSculpture && !ownsParcelFallback) {
+  if (!ownsVisibleSculpture && !ownsParcelDirect) {
     throw new McpServiceError(
       `You do not hold property ownership on Virtual Land ${cleanParcelId}.`,
       403
@@ -170,10 +259,10 @@ export async function isUserParcelContributor(db, { parcelId, user }) {
 
 export async function checkSculptureEditPermission(
   db,
-  { sculptureId, user = null, signerAddress = '' }
+  { sculptureId, user = null, signerAddress = '', allowHidden = false }
 ) {
   const row = await db.get('SELECT * FROM sculptures WHERE id = ?', [String(sculptureId || '')]);
-  if (!row || row.hidden) {
+  if (!row || (!allowHidden && row.hidden)) {
     throw new McpServiceError('Sculpture not found.', 404);
   }
   const allowed = new Set(resolveUserWalletAddresses(user));
@@ -183,6 +272,15 @@ export async function checkSculptureEditPermission(
   const currentOwner = String(row.recipient_address || '').toLowerCase();
   if (currentOwner && allowed.has(currentOwner)) {
     return { row, role: 'owner', ownerAddress: row.recipient_address };
+  }
+  const isAutonomousAgent =
+    user?.actorType === 'agent' || String(user?.id || '').startsWith('agent:');
+  if (!isAutonomousAgent && (await isUserLandOwner(db, { parcelId: row.parcel_id, user, signerAddress }))) {
+    return {
+      row,
+      role: 'land-owner',
+      ownerAddress: resolvePreferredOwnerWallet(user) || signerAddress || row.recipient_address
+    };
   }
   if (user && (await isUserParcelContributor(db, { parcelId: row.parcel_id, user }))) {
     const layer = await db.get('SELECT layer_role FROM sculpture_layers WHERE sculpture_id = ?', [row.id]);
@@ -195,7 +293,7 @@ export async function checkSculptureEditPermission(
     return { row, role: 'contributor', ownerAddress: row.recipient_address };
   }
   throw new McpServiceError(
-    `Only the property owner or an authorized IRL Contributor on ${row.parcel_id} can modify this sculpture.`,
+    `Only the property owner, Virtual Land holder, or an authorized IRL Contributor on ${row.parcel_id} can modify this sculpture.`,
     403
   );
 }

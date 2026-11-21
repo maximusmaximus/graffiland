@@ -19,8 +19,12 @@ import {
   computePrismScreenGeometry,
   pointInPolygon2D
 } from '../utils/map3dProjection.js';
+import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
+
+const HOLD_TO_DRAW_MS = 380;
+const HEIGHT_HANDLE_LIFT_PX = 26;
 
 if (typeof maplibregl.setWorkerUrl === 'function' && maplibreWorkerUrl) {
   maplibregl.setWorkerUrl(maplibreWorkerUrl);
@@ -290,26 +294,100 @@ function drawGlowingPrism(
       drawCornerBall(top[i], isCornerActive, 5.5);
     }
 
-    // 4) Top Center Z-Height Pill Handle
+    // 4) Pronounced Center Z-Axis Up/Down Elevator Handle (vertical stem + glowing ↕ orb)
     if (topCenter?.visible) {
       const isHActive = activeHandle === 'height';
+      const baseCenter = {
+        x: (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4,
+        y: (bottom[0].y + bottom[1].y + bottom[2].y + bottom[3].y) / 4
+      };
+      const liftY = topCenter.y - HEIGHT_HANDLE_LIFT_PX;
+      const hColor = isHActive ? '#ffd166' : '#00f5d4';
+
       ctx.save();
+      // Dashed vertical center guide from floor center to roof center
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = isHActive ? 'rgba(255, 209, 102, 0.72)' : 'rgba(0, 245, 212, 0.52)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(baseCenter.x, baseCenter.y);
+      ctx.lineTo(topCenter.x, topCenter.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Base anchor dot on top face center
+      ctx.beginPath();
+      ctx.arc(topCenter.x, topCenter.y, 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = hColor;
+      ctx.shadowColor = hColor;
+      ctx.shadowBlur = 10;
+      ctx.fill();
+
+      // Solid glowing elevator stem from topCenter up to lift handle
       ctx.strokeStyle = 'rgba(4, 10, 20, 0.9)';
-      ctx.lineWidth = 8;
+      ctx.lineWidth = 7;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(topCenter.x - 10, topCenter.y);
-      ctx.lineTo(topCenter.x + 10, topCenter.y);
+      ctx.moveTo(topCenter.x, topCenter.y);
+      ctx.lineTo(topCenter.x, liftY);
       ctx.stroke();
 
-      ctx.strokeStyle = isHActive ? '#ffd166' : '#00f5d4';
-      ctx.shadowColor = isHActive ? '#ffd166' : '#00f5d4';
-      ctx.shadowBlur = isHActive ? 16 : 8;
-      ctx.lineWidth = 4.2;
+      ctx.strokeStyle = hColor;
+      ctx.shadowColor = hColor;
+      ctx.shadowBlur = isHActive ? 18 : 11;
+      ctx.lineWidth = 3.6;
       ctx.beginPath();
-      ctx.moveTo(topCenter.x - 10, topCenter.y);
-      ctx.lineTo(topCenter.x + 10, topCenter.y);
+      ctx.moveTo(topCenter.x, topCenter.y);
+      ctx.lineTo(topCenter.x, liftY);
       ctx.stroke();
+
+      // Pronounced circular up/down pull orb with bright ▲ / ▼ arrows
+      const orbR = isHActive ? 15 : 13;
+      ctx.beginPath();
+      ctx.arc(topCenter.x, liftY, orbR + 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(4, 10, 20, 0.94)';
+      ctx.shadowBlur = 0;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(topCenter.x, liftY, orbR, 0, Math.PI * 2);
+      ctx.fillStyle = isHActive ? 'rgba(255, 209, 102, 0.28)' : 'rgba(0, 245, 212, 0.24)';
+      ctx.strokeStyle = hColor;
+      ctx.lineWidth = isHActive ? 2.8 : 2.2;
+      ctx.shadowColor = hColor;
+      ctx.shadowBlur = isHActive ? 20 : 12;
+      ctx.fill();
+      ctx.stroke();
+
+      // Up & down vertical arrow chevrons inside the orb
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#ffffff';
+      ctx.fillStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Center vertical bar
+      ctx.beginPath();
+      ctx.moveTo(topCenter.x, liftY - 6.5);
+      ctx.lineTo(topCenter.x, liftY + 6.5);
+      ctx.stroke();
+
+      // Up triangle ▲
+      ctx.beginPath();
+      ctx.moveTo(topCenter.x, liftY - 9.5);
+      ctx.lineTo(topCenter.x - 4.2, liftY - 4.2);
+      ctx.lineTo(topCenter.x + 4.2, liftY - 4.2);
+      ctx.closePath();
+      ctx.fill();
+
+      // Down triangle ▼
+      ctx.beginPath();
+      ctx.moveTo(topCenter.x, liftY + 9.5);
+      ctx.lineTo(topCenter.x - 4.2, liftY + 4.2);
+      ctx.lineTo(topCenter.x + 4.2, liftY + 4.2);
+      ctx.closePath();
+      ctx.fill();
       ctx.restore();
     }
   } else {
@@ -334,7 +412,9 @@ function drawGlowingPrism(
     const boxW = textW + padX * 2;
     const boxH = 19;
     const bx = topCenter.x - boxW / 2;
-    const by = topCenter.y - boxH - 11;
+    const by = showGizmo
+      ? topCenter.y - HEIGHT_HANDLE_LIFT_PX - boxH - 19
+      : topCenter.y - boxH - 11;
     ctx.fillStyle = 'rgba(6, 10, 20, 0.9)';
     ctx.strokeStyle = outerColor;
     ctx.lineWidth = 1;
@@ -358,6 +438,7 @@ export default function MapView3D({
   sculptures = [],
   parcels = [],
   draftParcels = [],
+  ownedParcelIds = [],
   selectedDraftId = '',
   drawMode = false,
   viewMode = 'isometric',
@@ -372,6 +453,7 @@ export default function MapView3D({
   onAddDraftRectangle = null,
   onSelectDraft = null,
   onUpdateDraft = null,
+  onAdd3DItemForParcel = null,
   onViewModeChange = null,
   onToggleDrawMode = null,
   onDismissAuto3dHint = null
@@ -382,6 +464,7 @@ export default function MapView3D({
   const searchBoxRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
+  const ownedMarkersRef = useRef([]);
   const searchPinMarkerRef = useRef(null);
   const styleReadyRef = useRef(false);
   const fallbackAppliedRef = useRef(false);
@@ -395,11 +478,13 @@ export default function MapView3D({
   const [showBuildings, setShowBuildings] = useState(true);
   const [showTerrain, setShowTerrain] = useState(false);
 
-  // Interactive hover & gizmo cursor state
+  // Interactive hover, hold-to-draw, & gizmo cursor state
   const [hoveredDraftId, setHoveredDraftId] = useState('');
   const [activeHandle, setActiveHandle] = useState('');
   const [gizmoCursor, setGizmoCursor] = useState('');
   const [gizmoHint, setGizmoHint] = useState('');
+  const [holdDrawActive, setHoldDrawActive] = useState(false);
+  const [rendered3dSculptureCount, setRendered3dSculptureCount] = useState(0);
 
   // Dynamic Location Search state (intersections, businesses, landmarks, addresses, coords, parcels)
   const [searchQuery, setSearchQuery] = useState('');
@@ -412,6 +497,8 @@ export default function MapView3D({
   const skipNextAutoSearchRef = useRef(false);
 
   // Latest props kept in refs for synchronous MapLibre event handlers & 60fps Canvas2D rendering
+  const sculpturesRef = useRef(sculptures);
+  const selectedSculptureIdRef = useRef(selectedSculptureId);
   const parcelsRef = useRef(parcels);
   const draftsRef = useRef(draftParcels);
   const selectedDraftIdRef = useRef(selectedDraftId);
@@ -420,9 +507,11 @@ export default function MapView3D({
   const drawModeRef = useRef(drawMode);
   const showBuildingsRef = useRef(showBuildings);
   const showTerrainRef = useRef(showTerrain);
+  const onSelectSculptureRef = useRef(onSelectSculpture);
   const onSelectDraftRef = useRef(onSelectDraft);
   const onAddDraftRef = useRef(onAddDraftRectangle);
   const onUpdateDraftRef = useRef(onUpdateDraft);
+  const onAdd3DItemForParcelRef = useRef(onAdd3DItemForParcel);
   const onViewportChangeRef = useRef(onViewportChange);
   const onViewModeChangeRef = useRef(onViewModeChange);
   const initialViewRef = useRef(initialView);
@@ -438,9 +527,17 @@ export default function MapView3D({
   const dragStartRef = useRef(null);
   const dragPreviewRef = useRef(null);
   const hoverDrawPreviewRef = useRef(null);
+  const holdDrawRef = useRef(null);
+  const pendingSculptureClickRef = useRef(null);
   const gizmoDragRef = useRef(null);
   const jumpToSearchResultRef = useRef(null);
 
+  useEffect(() => {
+    sculpturesRef.current = sculptures;
+  }, [sculptures]);
+  useEffect(() => {
+    selectedSculptureIdRef.current = selectedSculptureId;
+  }, [selectedSculptureId]);
   useEffect(() => {
     parcelsRef.current = parcels;
   }, [parcels]);
@@ -466,6 +563,9 @@ export default function MapView3D({
     showTerrainRef.current = showTerrain;
   }, [showTerrain]);
   useEffect(() => {
+    onSelectSculptureRef.current = onSelectSculpture;
+  }, [onSelectSculpture]);
+  useEffect(() => {
     onSelectDraftRef.current = onSelectDraft;
   }, [onSelectDraft]);
   useEffect(() => {
@@ -474,6 +574,9 @@ export default function MapView3D({
   useEffect(() => {
     onUpdateDraftRef.current = onUpdateDraft;
   }, [onUpdateDraft]);
+  useEffect(() => {
+    onAdd3DItemForParcelRef.current = onAdd3DItemForParcel;
+  }, [onAdd3DItemForParcel]);
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
   }, [onViewportChange]);
@@ -503,7 +606,7 @@ export default function MapView3D({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    // 1) Existing owned parcels -> glowing Amber/Gold (or Magenta for dormant quests)
+    // 1) Existing owned parcels -> glowing Amber/Gold (Icy Blue when frozen, Magenta for dormant quests)
     for (const p of parcelsRef.current || []) {
       const vol =
         p?.volume ||
@@ -512,12 +615,13 @@ export default function MapView3D({
       const geom = computePrismScreenGeometry(map, maplibregl, vol);
       if (!geom) continue;
       const isDormant = p?.stewardStatus === 'dormant';
+      const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
       drawGlowingPrism(ctx, geom, {
-        outerColor: isDormant ? '#ff3e7f' : '#ffb703',
-        innerColor: isDormant ? '#ffc2dc' : '#fff3c4',
+        outerColor: isFrozen ? '#7dd3fc' : isDormant ? '#ff3e7f' : '#ffb703',
+        innerColor: isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#fff3c4',
         lineWidth: 1.8,
         glowBlur: 10,
-        label: ''
+        label: isFrozen ? `❄️ ${p.customName || p.parcelId}` : ''
       });
     }
 
@@ -565,6 +669,10 @@ export default function MapView3D({
           vbar0: [Math.round(vbar0Mid.x), Math.round(vbar0Mid.y)],
           vbar1: [Math.round(vbar1Mid.x), Math.round(vbar1Mid.y)],
           topCenter: [Math.round(geom.topCenter.x), Math.round(geom.topCenter.y)],
+          heightHandle: [
+            Math.round(geom.topCenter.x),
+            Math.round(geom.topCenter.y - HEIGHT_HANDLE_LIFT_PX)
+          ],
           center: [Math.round(baseCenter.x), Math.round(baseCenter.y)]
         };
       }
@@ -606,6 +714,36 @@ export default function MapView3D({
         });
       }
     }
+    // 4) Hold-to-draw charge progress ring (when user holds down on 1 map location)
+    const hold = holdDrawRef.current;
+    if (hold && !hold.activated) {
+      const elapsed = performance.now() - hold.startedAt;
+      if (elapsed >= 80) {
+        const progress = Math.max(0, Math.min(1, (elapsed - 80) / (HOLD_TO_DRAW_MS - 80)));
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(hold.startPx, hold.startPy, 18, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0, 245, 212, 0.25)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(
+          hold.startPx,
+          hold.startPy,
+          18,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * progress
+        );
+        ctx.strokeStyle = '#00f5d4';
+        ctx.shadowColor = '#00f5d4';
+        ctx.shadowBlur = 14;
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
   }, []);
 
   const syncGeoJsonSources = useCallback(() => {
@@ -618,6 +756,11 @@ export default function MapView3D({
     const draftFeatures = (draftsRef.current || []).map((d) =>
       draftToFeature(d, d.id === selectedDraftIdRef.current)
     );
+    const sc3d = buildSculptures3DGeoJson(
+      sculpturesRef.current || [],
+      selectedSculptureIdRef.current || ''
+    );
+    setRendered3dSculptureCount(sc3d.renderedCount);
 
     const ownedSrc = map.getSource('owned-lands');
     if (ownedSrc && typeof ownedSrc.setData === 'function') {
@@ -626,6 +769,10 @@ export default function MapView3D({
     const draftSrc = map.getSource('draft-lands');
     if (draftSrc && typeof draftSrc.setData === 'function') {
       draftSrc.setData({ type: 'FeatureCollection', features: draftFeatures });
+    }
+    const sculpturesSrc = map.getSource('sculptures-3d');
+    if (sculpturesSrc && typeof sculpturesSrc.setData === 'function') {
+      sculpturesSrc.setData(sc3d.geojson);
     }
     drawWireframes();
   }, [drawWireframes]);
@@ -688,6 +835,24 @@ export default function MapView3D({
             'fill-extrusion-height': ['get', 'heightMeters'],
             'fill-extrusion-base': ['get', 'baseAltitudeM'],
             'fill-extrusion-opacity': 0.28
+          }
+        });
+      }
+
+      if (!map.getSource('sculptures-3d')) {
+        map.addSource('sculptures-3d', { type: 'geojson', data: EMPTY_FC });
+      }
+      if (!map.getLayer('sculptures-3d-extrusion')) {
+        map.addLayer({
+          id: 'sculptures-3d-extrusion',
+          type: 'fill-extrusion',
+          source: 'sculptures-3d',
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-height': ['get', 'heightMeters'],
+            'fill-extrusion-base': ['get', 'baseMeters'],
+            'fill-extrusion-opacity': 0.94,
+            'fill-extrusion-vertical-gradient': true
           }
         });
       }
@@ -834,6 +999,13 @@ export default function MapView3D({
       map.off('zoomstart', onDragStart);
       for (const mk of markersRef.current) mk.remove();
       markersRef.current = [];
+      for (const mk of ownedMarkersRef.current) mk.remove();
+      ownedMarkersRef.current = [];
+      if (holdDrawRef.current) {
+        clearTimeout(holdDrawRef.current.timerId);
+        cancelAnimationFrame(holdDrawRef.current.rafId);
+        holdDrawRef.current = null;
+      }
       searchPinMarkerRef.current?.remove();
       searchPinMarkerRef.current = null;
       map.remove();
@@ -842,10 +1014,19 @@ export default function MapView3D({
     };
   }, [drawWireframes, ensureCustomLayers]);
 
-  // Sync GeoJSON 3D prisms & wireframes whenever drafts/parcels/selection/hover change
+  // Sync GeoJSON 3D prisms, 3D sculptures & wireframes whenever data/selection/hover change
   useEffect(() => {
     syncGeoJsonSources();
-  }, [parcels, draftParcels, selectedDraftId, hoveredDraftId, activeHandle, syncGeoJsonSources]);
+  }, [
+    sculptures,
+    selectedSculptureId,
+    parcels,
+    draftParcels,
+    selectedDraftId,
+    hoveredDraftId,
+    activeHandle,
+    syncGeoJsonSources
+  ]);
 
   // Apply building extrusion toggle
   useEffect(() => {
@@ -960,8 +1141,10 @@ export default function MapView3D({
       const emojiEntry = xeroemoji.get(iconEmoji);
       const el = document.createElement('button');
       el.type = 'button';
-      el.className = `map3d-sculpture-marker ${isSelected ? 'is-selected' : ''}`;
-      el.title = sc.title;
+      el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''}`;
+      el.dataset.sculptureId = sc.id;
+      el.setAttribute('aria-label', `Inspect 3D artwork: ${sc.title || sc.id}`);
+      el.title = `${sc.title} · Click for 3D & full metadata`;
       if (emojiEntry?.svgUrl) {
         const img = document.createElement('img');
         img.src = emojiEntry.svgUrl;
@@ -1024,6 +1207,59 @@ export default function MapView3D({
       markersRef.current = [];
     };
   }, [sculptures, userLocation, selectedSculptureId, config, onSelectSculpture]);
+
+  // Render glowing "+" action button right on each minted parcel owned by the signed-in user
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+
+    for (const mk of ownedMarkersRef.current) mk.remove();
+    ownedMarkersRef.current = [];
+
+    const ownedSet = new Set((ownedParcelIds || []).map((id) => String(id).toUpperCase()));
+    if (ownedSet.size === 0) return undefined;
+
+    for (const p of parcels || []) {
+      const pid = String(p?.parcelId || '').toUpperCase();
+      if (!pid || !ownedSet.has(pid)) continue;
+      const lat = Number(p?.volume?.centerLat ?? p?.centerLat ?? p?.bounds?.center?.[0]);
+      const lng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'map3d-owned-action-pin map3d-ui-stop';
+
+      const plusBtn = document.createElement('button');
+      plusBtn.type = 'button';
+      plusBtn.className = `map3d-owned-plus-btn map3d-ui-stop ${p?.frozen ? 'is-frozen' : ''}`;
+      plusBtn.dataset.parcelId = pid;
+      plusBtn.setAttribute('aria-label', `Add 3D item to ${pid}`);
+      plusBtn.title = p?.frozen
+        ? `${pid} is Frozen — click + to copy agent prompt or unfreeze`
+        : `Add a 3D item to minted land ${pid} (Copy Agent Prompt)`;
+      plusBtn.textContent = p?.frozen ? '+ ❄️' : '+';
+      plusBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      plusBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        onAdd3DItemForParcelRef.current?.(p);
+      });
+
+      const badge = document.createElement('span');
+      badge.className = 'map3d-owned-plus-tag';
+      badge.textContent = p.customName || pid;
+
+      wrap.append(plusBtn, badge);
+      const mk = new maplibregl.Marker({ element: wrap, anchor: 'center' })
+        .setLngLat([lng, lat])
+        .addTo(map);
+      ownedMarkersRef.current.push(mk);
+    }
+
+    return () => {
+      for (const mk of ownedMarkersRef.current) mk.remove();
+      ownedMarkersRef.current = [];
+    };
+  }, [parcels, ownedParcelIds]);
 
   // Close search dropdown on outside click
   useEffect(() => {
@@ -1162,7 +1398,24 @@ export default function MapView3D({
         }
       }
 
-      // 2) Vertical Corner Bars -> hold & move to rotate the box
+      // 2) Pronounced Center Z-Axis Up/Down Elevator Handle (orb + vertical stem above topCenter)
+      if (geom.topCenter?.visible) {
+        const liftPt = { x: geom.topCenter.x, y: geom.topCenter.y - HEIGHT_HANDLE_LIFT_PX };
+        const dOrb = Math.hypot(px - liftPt.x, py - liftPt.y);
+        const stemSeg = distPointToSegment(px, py, geom.topCenter, liftPt);
+        if (dOrb <= 20 || stemSeg.dist <= 11) {
+          return {
+            type: 'height',
+            index: 0,
+            draft: d,
+            handleKey: 'height',
+            cursor: 'ns-resize',
+            hint: `Pull up / down to adjust height (${Math.round(d.heightMeters)}m)`
+          };
+        }
+      }
+
+      // 3) Vertical Corner Bars -> hold & move to rotate the box
       for (let i = 0; i < 4; i++) {
         const seg = distPointToSegment(px, py, geom.bottom[i], geom.top[i]);
         if (seg.dist <= 11 && seg.t >= 0.14 && seg.t <= 0.86) {
@@ -1177,7 +1430,7 @@ export default function MapView3D({
         }
       }
 
-      // 3) Side Segment Bars (bottom & top edges) -> move single segment
+      // 4) Side Segment Bars (bottom & top edges) -> move single segment
       for (let i = 0; i < 4; i++) {
         const next = (i + 1) % 4;
         const segBot = distPointToSegment(px, py, geom.bottom[i], geom.bottom[next]);
@@ -1195,18 +1448,6 @@ export default function MapView3D({
             hint: 'Drag side bar to stretch edge'
           };
         }
-      }
-
-      // 4) Top Center Z-Height Pill -> scale Z axis height
-      if (geom.topCenter?.visible && Math.hypot(px - geom.topCenter.x, py - geom.topCenter.y) <= 13) {
-        return {
-          type: 'height',
-          index: 0,
-          draft: d,
-          handleKey: 'height',
-          cursor: 'ns-resize',
-          hint: `Drag top bar to change height (${Math.round(d.heightMeters)}m)`
-        };
       }
 
       // 5) Interior Body -> select & move entire property
@@ -1236,6 +1477,28 @@ export default function MapView3D({
     return null;
   }
 
+  function querySculpture3DAtScreenPt(px, py) {
+    const map = mapRef.current;
+    if (!map || !styleReadyRef.current || !map.getLayer('sculptures-3d-extrusion')) return null;
+    try {
+      const hits = map.queryRenderedFeatures([px, py], { layers: ['sculptures-3d-extrusion'] });
+      const scId = hits?.[0]?.properties?.sculptureId;
+      if (!scId) return null;
+      return (sculpturesRef.current || []).find((s) => s.id === scId) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function cancelPendingHoldDraw() {
+    const h = holdDrawRef.current;
+    if (!h) return;
+    if (h.timerId) clearTimeout(h.timerId);
+    if (h.rafId) cancelAnimationFrame(h.rafId);
+    holdDrawRef.current = null;
+    setHoldDrawActive(false);
+  }
+
   function handleOverlayPointerDown(e) {
     if (e.button !== 0 || !mapRef.current || !mapHostRef.current) return;
     if (e.target.closest('.map3d-ui-stop')) return;
@@ -1247,6 +1510,8 @@ export default function MapView3D({
     // Priority 1: Grab any existing unminted land or its gizmo handles (prevents drawing duplicate boxes on top!)
     const hit = hitTestGizmoAtScreenPt(px, py);
     if (hit) {
+      cancelPendingHoldDraw();
+      pendingSculptureClickRef.current = null;
       const ll = mapRef.current.unproject([px, py]);
       if (!ll) return;
       if (selectedDraftIdRef.current !== hit.draft.id) {
@@ -1280,23 +1545,109 @@ export default function MapView3D({
       return;
     }
 
-    // Priority 2: Draw new land rectangle only when explicitly in drawMode on empty map space
-    if (!drawModeRef.current) return;
+    // Priority 2: Draw new land rectangle immediately when explicit Draw Land mode is active
     const ll = mapRef.current.unproject([px, py]);
     if (!ll) return;
-    dragStartRef.current = { x: px, y: py, lng: ll.lng, lat: ll.lat };
-    dragPreviewRef.current = null;
+    if (drawModeRef.current) {
+      cancelPendingHoldDraw();
+      pendingSculptureClickRef.current = null;
+      dragStartRef.current = { x: px, y: py, lng: ll.lng, lat: ll.lat, fromHold: false };
+      dragPreviewRef.current = null;
+      return;
+    }
+
+    // Priority 3: Check if user clicked a rendered 3D sculpture on the map
+    const scHit = querySculpture3DAtScreenPt(px, py);
+    if (scHit) {
+      cancelPendingHoldDraw();
+      pendingSculptureClickRef.current = { sculpture: scHit, x: px, y: py };
+      return;
+    }
+
+    // Priority 4: Hold down in 1 spot on the map (~380ms without dragging) -> start drawing a 3D cube!
+    cancelPendingHoldDraw();
+    pendingSculptureClickRef.current = null;
+    const holdState = {
+      startPx: px,
+      startPy: py,
+      lat: ll.lat,
+      lng: ll.lng,
+      startedAt: performance.now(),
+      activated: false,
+      timerId: null,
+      rafId: 0
+    };
+    const tickCharge = () => {
+      if (holdDrawRef.current !== holdState || holdState.activated) return;
+      drawWireframes();
+      holdState.rafId = requestAnimationFrame(tickCharge);
+    };
+    holdState.rafId = requestAnimationFrame(tickCharge);
+    holdState.timerId = setTimeout(() => {
+      if (holdDrawRef.current !== holdState || holdState.activated) return;
+      holdState.activated = true;
+      cancelAnimationFrame(holdState.rafId);
+      const map = mapRef.current;
+      if (!map) return;
+      map.dragPan.disable();
+      const camBearing = normalizeRotationDeg(map.getBearing());
+      dragStartRef.current = {
+        x: holdState.startPx,
+        y: holdState.startPy,
+        lng: holdState.lng,
+        lat: holdState.lat,
+        fromHold: true
+      };
+      dragPreviewRef.current = {
+        centerLat: Number(holdState.lat.toFixed(7)),
+        centerLng: Number(holdState.lng.toFixed(7)),
+        widthMeters: LAND_VOLUME_LIMITS.defaultWidthMeters,
+        depthMeters: LAND_VOLUME_LIMITS.defaultDepthMeters,
+        heightMeters: LAND_VOLUME_LIMITS.defaultHeightMeters,
+        rotationDeg: camBearing,
+        hitLimit: false
+      };
+      setHoldDrawActive(true);
+      setGizmoCursor('crosshair');
+      setGizmoHint('Drawing 3D cube — drag to size, release to place');
+      drawWireframes();
+    }, HOLD_TO_DRAW_MS);
+    holdDrawRef.current = holdState;
   }
 
   function handleOverlayPointerMove(e) {
     if (!mapRef.current || !mapHostRef.current) return;
-    if (!gizmoDragRef.current && !dragStartRef.current && e.target.closest('.map3d-ui-stop')) {
+    if (!gizmoDragRef.current && !dragStartRef.current && !holdDrawRef.current && e.target.closest('.map3d-ui-stop')) {
       return;
     }
 
     const rect = mapHostRef.current.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
+
+    // Cancel pending 3D sculpture click if pointer dragged away
+    if (pendingSculptureClickRef.current) {
+      if (
+        Math.hypot(
+          px - pendingSculptureClickRef.current.x,
+          py - pendingSculptureClickRef.current.y
+        ) >= 6
+      ) {
+        pendingSculptureClickRef.current = null;
+      }
+    }
+
+    // Cancel unactivated hold-to-draw if user starts dragging/panning map normally
+    if (holdDrawRef.current && !holdDrawRef.current.activated) {
+      if (
+        Math.hypot(px - holdDrawRef.current.startPx, py - holdDrawRef.current.startPy) >= 6
+      ) {
+        cancelPendingHoldDraw();
+        drawWireframes();
+      } else {
+        return;
+      }
+    }
 
     // Active gizmo handle manipulation
     if (gizmoDragRef.current) {
@@ -1345,7 +1696,7 @@ export default function MapView3D({
           depthMeters: g.startDraft.depthMeters,
           limits: LAND_VOLUME_LIMITS
         });
-        const deltaMeters = (g.startPy - py) * 0.55;
+        const deltaMeters = (g.startPy - py) * 0.65;
         const nextHeight = Number(
           Math.max(
             LAND_VOLUME_LIMITS.minHeightMeters,
@@ -1354,18 +1705,20 @@ export default function MapView3D({
         );
         const nextZScale = Number((nextHeight / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3));
         onUpdateDraftRef.current?.(g.draft.id, { heightMeters: nextHeight, zScale: nextZScale });
-        setGizmoHint(`Height ${nextHeight}m`);
+        setGizmoHint(`Z Height: ${nextHeight}m (max ${Math.round(maxHInfo.heightMeters)}m)`);
       }
       drawWireframes();
       return;
     }
 
-    // Active drag-to-draw new land box
-    if (drawModeRef.current && dragStartRef.current) {
+    // Active drag-to-draw new land cube (either from toolbar Draw Mode OR hold-to-draw!)
+    if ((drawModeRef.current || dragStartRef.current?.fromHold) && dragStartRef.current) {
       const dx = px - dragStartRef.current.x;
       const dy = py - dragStartRef.current.y;
       if (Math.hypot(dx, dy) < 6) {
-        dragPreviewRef.current = null;
+        if (!dragStartRef.current.fromHold) {
+          dragPreviewRef.current = null;
+        }
         drawWireframes();
         return;
       }
@@ -1418,9 +1771,19 @@ export default function MapView3D({
           };
           drawWireframes();
         }
-      } else if (hoverDrawPreviewRef.current) {
-        hoverDrawPreviewRef.current = null;
-        drawWireframes();
+      } else {
+        if (hoverDrawPreviewRef.current) {
+          hoverDrawPreviewRef.current = null;
+          drawWireframes();
+        }
+        const hoveredSc = querySculpture3DAtScreenPt(px, py);
+        if (hoveredSc) {
+          setGizmoCursor('pointer');
+          setGizmoHint(`🧊 ${hoveredSc.title} · Click for 3D & metadata`);
+        } else if (gizmoCursor === 'pointer') {
+          setGizmoCursor('');
+          setGizmoHint('');
+        }
       }
     }
   }
@@ -1437,10 +1800,37 @@ export default function MapView3D({
       return;
     }
 
-    if (!drawModeRef.current || !dragStartRef.current || !mapRef.current || !mapHostRef.current) return;
+    // Complete direct click on a 3D sculpture mesh -> open full metadata modal
+    if (pendingSculptureClickRef.current) {
+      const targetSc = pendingSculptureClickRef.current.sculpture;
+      pendingSculptureClickRef.current = null;
+      if (targetSc) {
+        onSelectSculptureRef.current?.(targetSc);
+      }
+      return;
+    }
+
+    const wasHoldActivated = Boolean(holdDrawRef.current?.activated);
+    cancelPendingHoldDraw();
+
+    if (
+      (!drawModeRef.current && !wasHoldActivated && !dragStartRef.current?.fromHold) ||
+      !dragStartRef.current ||
+      !mapRef.current ||
+      !mapHostRef.current
+    ) {
+      drawWireframes();
+      return;
+    }
+
     const start = dragStartRef.current;
     dragStartRef.current = null;
     dragPreviewRef.current = null;
+    if (start.fromHold && !drawModeRef.current) {
+      mapRef.current.dragPan.enable();
+    }
+    setGizmoCursor('');
+    setGizmoHint('');
 
     const rect = mapHostRef.current.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -1557,8 +1947,10 @@ export default function MapView3D({
       data-pitch={Math.round(pitchDeg)}
       data-bearing={Math.round(bearingDeg)}
       data-draw-mode={drawMode ? 'on' : 'off'}
+      data-hold-draw={holdDrawActive ? 'active' : 'idle'}
       data-draft-count={draftParcels.length}
       data-owned-count={parcels.length}
+      data-rendered-3d-sculptures={rendered3dSculptureCount}
       data-selected-draft-id={selectedDraftId || ''}
       data-hovered-draft-id={hoveredDraftId || ''}
       data-active-handle={activeHandle || ''}
@@ -1608,11 +2000,11 @@ export default function MapView3D({
             </button>
           )}
           <InfoTip title="3D Map & Land Handles">
-            Click <strong>Draw Land</strong> and drag to place a 3D parcel aligned with your map
-            angle. Hover any plot to select it: drag <strong>corner balls</strong> to scale, drag{' '}
-            <strong>side bars</strong> to stretch an edge, hold &amp; drag{' '}
-            <strong>vertical gold bars</strong> to rotate, or drag the <strong>center</strong> to
-            move.
+            <strong>Hold down</strong> in one spot on the map (or click <strong>Draw Land</strong>)
+            and drag to draw a 3D cube. Drag <strong>corner balls</strong> to scale,{' '}
+            <strong>side bars</strong> to stretch an edge, <strong>vertical gold bars</strong> to
+            rotate, the <strong>center ↕ orb</strong> to pull height up/down, or click any{' '}
+            <strong>3D sculpture</strong> to view all metadata.
           </InfoTip>
         </div>
 

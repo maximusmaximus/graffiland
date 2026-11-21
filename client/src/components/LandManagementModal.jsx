@@ -9,6 +9,7 @@ export default function LandManagementModal({
   user,
   initialParcelId = '',
   onSelectSculpture,
+  onOpenAddLandItem = null,
   onWorkspaceChanged,
   onClose
 }) {
@@ -23,6 +24,7 @@ export default function LandManagementModal({
   const [curationNote, setCurationNote] = useState('');
   const [allowAgentErase, setAllowAgentErase] = useState(true);
   const [allowContributorEdits, setAllowContributorEdits] = useState(true);
+  const [frozen, setFrozen] = useState(false);
   const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
   const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
   const [minOrbInliers, setMinOrbInliers] = useState(8);
@@ -60,6 +62,7 @@ export default function LandManagementModal({
         setCurationNote(picked.curationNote || '');
         setAllowAgentErase(picked.settings?.allowAgentErase !== false);
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
+        setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
         setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
         setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
         setMinOrbInliers(Number(picked.securityPolicy?.minOrbInliers || 8));
@@ -88,6 +91,7 @@ export default function LandManagementModal({
     setCurationNote(p.curationNote || '');
     setAllowAgentErase(p.settings?.allowAgentErase !== false);
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
+    setFrozen(Boolean(p.settings?.frozen || p.frozen));
     setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
     setRequireOrbUnlock(Boolean(p.securityPolicy?.requireOrbUnlock));
     setMinOrbInliers(Number(p.securityPolicy?.minOrbInliers || 8));
@@ -210,7 +214,8 @@ export default function LandManagementModal({
       });
       await api.updateLandSettings(activeParcel.parcelId, {
         allowAgentErase,
-        allowContributorEdits
+        allowContributorEdits,
+        frozen
       });
       await api.updateLandSecurityPolicy(activeParcel.parcelId, {
         requirePasskeyUnlock,
@@ -418,6 +423,18 @@ export default function LandManagementModal({
                     />
                     <span>
                       Allow added <strong>Contributors</strong> (verified IRL visitors who chatted here) to modify sculptures on this land
+                    </span>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={frozen}
+                      onChange={(e) => setFrozen(e.target.checked)}
+                    />
+                    <span>
+                      <strong>❄️ Freeze Land</strong> — block all new sculptures from being placed on{' '}
+                      <code>{activeParcel.parcelId}</code>
                     </span>
                   </label>
 
@@ -661,8 +678,22 @@ export default function LandManagementModal({
 
                 {/* Sculptures & Non-Voxel 3D Models on Land */}
                 <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>
-                    Items on {activeParcel.parcelId} ({activeParcel.sculptures?.length || 0})
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      Items on {activeParcel.parcelId} ({activeParcel.sculptures?.length || 0})
+                    </div>
+                    {onOpenAddLandItem && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        onClick={() => {
+                          onClose?.();
+                          onOpenAddLandItem(activeParcel);
+                        }}
+                      >
+                        + Add 3D Item (Agent Prompt)
+                      </button>
+                    )}
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
                     Upload a non-voxel 3D file (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>,{' '}
@@ -799,16 +830,51 @@ export default function LandManagementModal({
                               <span className="badge teal" style={{ fontSize: 10, marginLeft: 4 }}>
                                 v{sc.currentRev || 1}
                               </span>
+                              {sc.hidden && (
+                                <span className="badge badge-error" style={{ fontSize: 10, marginLeft: 4 }}>
+                                  Hidden
+                                </span>
+                              )}
                             </div>
                             <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
                               {sc.modelType === 'custom-3d'
                                 ? `3D File (${String(sc.customModel?.format || 'glb').toUpperCase()})`
                                 : `${sc.voxelCount} blocks`}{' '}
-                              · {sc.id.slice(0, 8)}...
+                              · by {sc.creatorName || 'Artist'} · {sc.id.slice(0, 8)}...
                               {sc.meshStats?.triangleCount > 0 ? ` · ${sc.meshStats.triangleCount.toLocaleString()} tris` : ''}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className={`btn ${sc.hidden ? 'btn-primary' : ''}`}
+                              style={{ fontSize: 11, padding: '4px 9px' }}
+                              disabled={busy !== ''}
+                              onClick={async () => {
+                                setBusy(`vis-${sc.id}`);
+                                setErrorMsg('');
+                                setNotice('');
+                                try {
+                                  await api.setSculptureVisibility(sc.id, {
+                                    hidden: !sc.hidden,
+                                    reason: sc.hidden ? '' : 'Hidden by Virtual Land owner'
+                                  });
+                                  await loadWorkspace();
+                                  onWorkspaceChanged?.();
+                                  setNotice(
+                                    sc.hidden
+                                      ? `Restored "${sc.title}" to public map & 3D view.`
+                                      : `Hidden "${sc.title}" from public map & AR feeds.`
+                                  );
+                                } catch (err) {
+                                  setErrorMsg(err.message || 'Could not toggle visibility');
+                                } finally {
+                                  setBusy('');
+                                }
+                              }}
+                            >
+                              {sc.hidden ? '👁️ Unhide' : '🙈 Hide'}
+                            </button>
                             <button
                               type="button"
                               className="btn"

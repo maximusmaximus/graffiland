@@ -347,3 +347,122 @@ export function buildLandAcquisitionAgentPrompt({
       : [])
   ].join('\n');
 }
+
+/**
+ * Generates a ready-to-paste AI Agent prompt for a minted Virtual Land parcel so the owner
+ * can ask any agent to create, upload, modify, reposition, or hide any platform-supported 3D item
+ * (voxel sculptures or .glb / .gltf / .obj / .stl / .ply models) and manage land freeze settings.
+ * @param {any} [opts]
+ */
+export function buildLandAdd3DItemAgentPrompt({
+  parcel = /** @type {any} */ ({}),
+  itemFormat = 'voxel',
+  itemTitle = 'Custom 3D Sculpture',
+  itemDescription = '',
+  stylePreset = 'custom',
+  modelUrl = '',
+  anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 },
+  existingSculptures = [],
+  apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev',
+  pairingCode = '<YOUR_GLP_PAIRING_CODE>',
+  ownerAddress = '<YOUR_WALLET_ADDRESS>'
+} = {}) {
+  const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
+  const parcelId = String(parcel?.parcelId || 'GLAND-UNKNOWN').toUpperCase();
+  const vol = parcel?.volume || {};
+  const lat = Number(vol.centerLat ?? parcel?.centerLat ?? parcel?.bounds?.center?.[0] ?? 0);
+  const lng = Number(vol.centerLng ?? parcel?.centerLng ?? parcel?.bounds?.center?.[1] ?? 0);
+  const w = Number(vol.widthMeters ?? LAND_VOLUME_LIMITS.defaultWidthMeters);
+  const d = Number(vol.depthMeters ?? LAND_VOLUME_LIMITS.defaultDepthMeters);
+  const h = Number(vol.heightMeters ?? LAND_VOLUME_LIMITS.defaultHeightMeters);
+  const rot = Number(vol.rotationDeg ?? 0);
+  const fmt = String(itemFormat || 'voxel').toLowerCase();
+  const isMesh = ['glb', 'gltf', 'obj', 'stl', 'ply'].includes(fmt);
+  const cleanTitle = String(itemTitle || 'Custom 3D Sculpture').trim().slice(0, 48);
+  const cleanDesc =
+    String(itemDescription || '').trim().slice(0, 240) ||
+    `Place a ${isMesh ? `.${fmt.toUpperCase()} 3D model` : '4x voxel sculpture'} titled "${cleanTitle}" on Virtual Land ${parcelId}.`;
+
+  const offset = {
+    dx: Number(anchorOffset?.dx || 0),
+    dy: Number(anchorOffset?.dy || 0),
+    dz: Number(anchorOffset?.dz || 0),
+    yaw: Number(anchorOffset?.yaw || 0)
+  };
+
+  const existingLines =
+    Array.isArray(existingSculptures) && existingSculptures.length > 0
+      ? [
+          '',
+          `## Existing Artworks Currently on ${parcelId} (Modifiable / Hideable by Land Owner)`,
+          ...existingSculptures.slice(0, 12).map(
+            (sc) =>
+              `- \`${sc.id}\` — "${sc.title}" (${sc.modelType === 'custom-3d' ? `.${sc.customModel?.format || 'glb'}` : `${sc.voxelCount || 0} voxels`}${sc.hidden ? ' · HIDDEN' : ''})`
+          )
+        ]
+      : [];
+
+  const toolCallJson = isMesh
+    ? {
+        name: 'load_3d_model_on_land',
+        arguments: {
+          parcelId,
+          title: cleanTitle,
+          description: cleanDesc,
+          modelFormat: fmt,
+          ...(modelUrl ? { modelUrl } : { modelBase64: '<BASE64_ENCODED_3D_MODEL_BYTES>' }),
+          modelScale: 1,
+          anchorOffset: offset
+        }
+      }
+    : {
+        name: 'put_sculpture_on_land',
+        arguments: {
+          parcelId,
+          title: cleanTitle,
+          description: cleanDesc,
+          voxels: [
+            { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon', scale: 1 },
+            { x: 0, y: 0.05, z: 0, color: '#ffd166', material: 'neon', scale: 1 },
+            { x: 0, y: 0.1, z: 0, color: '#ff3e7f', material: 'glass', scale: 1 }
+          ],
+          anchorOffset: offset
+        }
+      };
+
+  return [
+    `# GRAFFILAND — Add or Modify 3D Item on Minted Land (${parcelId})`,
+    '',
+    `API Base URL: ${base}`,
+    `Target Minted Land: ${parcelId}${parcel?.customName ? ` ("${parcel.customName}")` : ''}`,
+    `Center GPS: ${lat}, ${lng}`,
+    `3D Land Bounds: ${w}m wide × ${d}m deep × ${h}m tall (Rotation ${rot}° · Status: ${parcel?.frozen ? 'FROZEN — unfreeze first' : 'OPEN'})`,
+    `Owner Wallet: ${ownerAddress}`,
+    `Pairing Code (MCP): ${pairingCode}`,
+    '',
+    '## Requested 3D Item',
+    `- Format: ${isMesh ? `.${fmt.toUpperCase()} 3D Model` : `3D Voxel Sculpture (${stylePreset} style · 0.05m 4x grid, up to 4,096 blocks, matte/neon/glass)`}`,
+    `- Title: ${cleanTitle}`,
+    `- Instructions: ${cleanDesc}`,
+    `- Anchor Offset: dx=${offset.dx}m, dy=${offset.dy}m, dz=${offset.dz}m, yaw=${offset.yaw}°`,
+    ...(modelUrl ? [`- Model URL: ${modelUrl}`] : []),
+    '- Supported Platform Formats: 3D Voxels (JSON), `.glb`, `.gltf`, `.obj`, `.stl`, `.ply` (max 150,000 triangles, 8 textures, 4 MB, Draco/Meshopt supported).',
+    ...existingLines,
+    '',
+    '## Step 1 — Connect to GRAFFILAND MCP',
+    `POST ${base}/api/mcp/pairings/connect`,
+    `JSON: { "pairingCode": "${pairingCode}", "agentName": "land-builder-agent", "agentAddress": "${ownerAddress}" }`,
+    `Then send MCP JSON-RPC calls to POST ${base}/api/mcp with header \`X-Graffiland-Pairing-Code: ${pairingCode}\`.`,
+    '',
+    '## Step 2 — Place the New 3D Item on This Land',
+    '```json',
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: toolCallJson }, null, 2),
+    '```',
+    '',
+    '## Step 3 — Modify, Hide/Restore Artworks, or Freeze Land (Full Land Owner Controls)',
+    `- Inspect all artworks (including hidden): call \`get_land\` with \`{ "parcelId": "${parcelId}", "includeHidden": true }\`.`,
+    '- Modify ANY artwork placed on this land (yours or visitors): call `update_land_sculpture` with `{ "sculptureId", "title?", "description?", "voxels?", "modelFormat?", "modelBase64?"/"modelUrl?", "anchorOffset?": { "dx", "dy", "dz", "yaw" } }`.',
+    '- Hide or restore an artwork on this land: call `set_sculpture_visibility` with `{ "sculptureId", "hidden": true | false, "reason": "Curated by land owner" }`.',
+    `- Freeze or unfreeze land (blocks all new placements when frozen): call \`update_land_settings\` with \`{ "parcelId": "${parcelId}", "frozen": true | false }\`.`
+  ].join('\n');
+}

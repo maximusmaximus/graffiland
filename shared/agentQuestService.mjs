@@ -757,6 +757,15 @@ export async function batchBuildLand(
   }
 ) {
   const parcelCtx = await checkParcelOwnership(db, { parcelId, user: agentUser });
+  const landSettingsRow = await db
+    .get('SELECT freeze_placements FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId])
+    .catch(() => null);
+  if (landSettingsRow && Number(landSettingsRow.freeze_placements) === 1) {
+    throw new McpServiceError(
+      `Virtual Land ${parcelCtx.parcelId} is frozen — unfreeze it in Land Settings before placing new items.`,
+      403
+    );
+  }
   const ownerAddress = resolvePreferredOwnerWallet(agentUser);
   if (!Array.isArray(items) || items.length === 0 || items.length > 10) {
     throw new McpServiceError('Provide between 1 and 10 items in batch_build_land.', 400);

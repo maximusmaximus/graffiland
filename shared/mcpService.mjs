@@ -15,7 +15,9 @@ import {
   McpServiceError,
   checkParcelOwnership,
   checkSculptureEditPermission,
+  checkSculptureOrLandOwnership,
   checkSculptureOwnership,
+  isUserLandOwner,
   isUserParcelContributor,
   normalizeParcelId,
   resolvePreferredOwnerWallet,
@@ -37,6 +39,7 @@ import {
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
+  directOwnerSetSculptureVisibility,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   getLandSettingsInternal,
@@ -64,6 +67,7 @@ export {
   addLandContributor,
   checkParcelOwnership,
   checkSculptureEditPermission,
+  checkSculptureOrLandOwnership,
   checkSculptureOwnership,
   connectMcpPairing,
   createMcpPairing,
@@ -72,11 +76,14 @@ export {
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
+  directOwnerSetSculptureVisibility,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  getLandSettingsInternal,
   getMyLandsWorkspace,
   getSignatureRequest,
+  isUserLandOwner,
   isUserParcelContributor,
   listLandContributorsAndEligible,
   listLandsWithCurations,
@@ -167,6 +174,8 @@ export async function handleMcpJsonRpc(
       toolResult = await listOwnerLandsAndSculptures(db, ownerUser);
     } else if (toolName === 'get_land') {
       const parcelId = normalizeParcelId(args.parcelId);
+      const isOwner = await isUserLandOwner(db, { parcelId, user: ownerUser });
+      const showHidden = Boolean(args.includeHidden && isOwner);
       const rows = await db.all(
         `SELECT s.*,
           m.model_format AS custom_model_format, m.mime_type AS custom_model_mime,
@@ -185,7 +194,7 @@ export async function handleMcpJsonRpc(
          LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
          LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
          LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
-         WHERE s.parcel_id = ? AND s.hidden = 0
+         WHERE s.parcel_id = ? ${showHidden ? '' : 'AND s.hidden = 0'}
          ORDER BY s.created_at ASC`,
         [parcelId]
       );
@@ -202,7 +211,13 @@ export async function handleMcpJsonRpc(
               lastSignedTxHash: cur.last_signed_tx_hash
             }
           : null,
-        sculptures: (rows || []).map((r) => serializeSculptureRow(r, { includeVoxels: true }))
+        sculptures: (rows || []).map((r) =>
+          serializeSculptureRow(r, {
+            includeVoxels: true,
+            viewerIsLandOwner: isOwner,
+            parcelFrozen: settings.frozen
+          })
+        )
       };
     } else if (toolName === 'put_sculpture_on_land' || toolName === 'load_3d_model_on_land') {
       const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
@@ -233,7 +248,12 @@ export async function handleMcpJsonRpc(
         : {};
 
       if (toolName === 'load_3d_model_on_land' && args.sculptureId) {
-        const scRow = await checkSculptureOwnership(db, { sculptureId: args.sculptureId, user: ownerUser });
+        const perm = await checkSculptureOrLandOwnership(db, {
+          sculptureId: args.sculptureId,
+          user: ownerUser,
+          allowHidden: true
+        });
+        const scRow = perm.row;
         if (scRow.parcel_id !== parcelCtx.parcelId) {
           throw new McpServiceError('Sculpture does not belong to target parcelId.', 400);
         }
@@ -318,7 +338,12 @@ export async function handleMcpJsonRpc(
         });
       }
     } else if (toolName === 'update_land_sculpture') {
-      const scRow = await checkSculptureOwnership(db, { sculptureId: args.sculptureId, user: ownerUser });
+      const perm = await checkSculptureOrLandOwnership(db, {
+        sculptureId: args.sculptureId,
+        user: ownerUser,
+        allowHidden: true
+      });
+      const scRow = perm.row;
       const checkedMeta = validateEditableTitleAndDescription({
         title: args.title !== undefined ? args.title : scRow.title,
         description: args.description !== undefined ? args.description : scRow.description
@@ -389,7 +414,11 @@ export async function handleMcpJsonRpc(
         notifyMobileFn
       });
     } else if (toolName === 'delete_land_sculpture') {
-      const scRow = await checkSculptureOwnership(db, { sculptureId: args.sculptureId, user: ownerUser });
+      const perm = await checkSculptureOrLandOwnership(db, {
+        sculptureId: args.sculptureId,
+        user: ownerUser
+      });
+      const scRow = perm.row;
       toolResult = await handlePairedLandMutationViaMcp(db, {
         pairing,
         ownerUser,
@@ -404,8 +433,61 @@ export async function handleMcpJsonRpc(
         mintSculptureFn,
         notifyMobileFn
       });
+    } else if (toolName === 'set_sculpture_visibility') {
+      const perm = await checkSculptureOrLandOwnership(db, {
+        sculptureId: args.sculptureId,
+        user: ownerUser,
+        allowHidden: true
+      });
+      const scRow = perm.row;
+      toolResult = await handlePairedLandMutationViaMcp(db, {
+        pairing,
+        ownerUser,
+        action: 'set_sculpture_visibility',
+        parcelId: scRow.parcel_id,
+        sculptureId: scRow.id,
+        payload: {
+          sculptureId: scRow.id,
+          hidden: Boolean(args.hidden),
+          reason: String(args.reason || '').slice(0, 160)
+        },
+        signature: args.signature || '',
+        auth: args.auth || null,
+        txHash: args.txHash || '',
+        pinSculptureFn,
+        mintSculptureFn,
+        notifyMobileFn
+      });
+    } else if (toolName === 'update_land_settings') {
+      const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
+      toolResult = await handlePairedLandMutationViaMcp(db, {
+        pairing,
+        ownerUser,
+        action: 'update_land_settings',
+        parcelId: parcelCtx.parcelId,
+        payload: {
+          ...(args.frozen !== undefined ? { frozen: Boolean(args.frozen) } : {}),
+          ...(args.allowContributorEdits !== undefined
+            ? { allowContributorEdits: Boolean(args.allowContributorEdits) }
+            : {}),
+          ...(args.allowAgentErase !== undefined
+            ? { allowAgentErase: Boolean(args.allowAgentErase) }
+            : {})
+        },
+        signature: args.signature || '',
+        auth: args.auth || null,
+        txHash: args.txHash || '',
+        pinSculptureFn,
+        mintSculptureFn,
+        notifyMobileFn
+      });
     } else if (toolName === 'rollback_sculpture_revision') {
-      const scRow = await checkSculptureOwnership(db, { sculptureId: args.sculptureId, user: ownerUser });
+      const perm = await checkSculptureOrLandOwnership(db, {
+        sculptureId: args.sculptureId,
+        user: ownerUser,
+        allowHidden: true
+      });
+      const scRow = perm.row;
       toolResult = await handlePairedLandMutationViaMcp(db, {
         pairing,
         ownerUser,

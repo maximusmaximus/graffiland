@@ -83,12 +83,15 @@ import {
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
+  directOwnerSetSculptureVisibility,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  getLandSettingsInternal,
   getMyLandsWorkspace,
   getSignatureRequest,
   handleMcpJsonRpc,
+  isUserLandOwner,
   isUserParcelContributor,
   listLandContributorsAndEligible,
   listLandsWithCurations,
@@ -1806,6 +1809,24 @@ export default {
       }
     }
 
+    const ownerVisMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/visibility$/);
+    if (ownerVisMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await directOwnerSetSculptureVisibility(d1Adapter, {
+          sculptureId: decodeURIComponent(ownerVisMatch[1]),
+          user,
+          hidden: Boolean(body?.hidden),
+          reason: body?.reason || ''
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Visibility update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
     const editMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/edit$/);
     if (editMatch && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
@@ -2009,6 +2030,17 @@ export default {
               proofOfLocation: locationBundle
             },
             422,
+            request
+          );
+        }
+
+        const targetLandSettings = await getLandSettingsInternal(d1Adapter, locationBundle.parcelId);
+        if (targetLandSettings.frozen) {
+          return jsonResponse(
+            {
+              error: `Virtual Land ${locationBundle.parcelId} is frozen by its owner — no new sculptures can be placed here.`
+            },
+            403,
             request
           );
         }
@@ -2593,20 +2625,34 @@ export default {
         .first();
       if (!row) return jsonResponse({ error: 'Sculpture not found' }, 404, request);
       const caller = await getAuthUser(request, env, cfg);
-      if (row.hidden && !caller?.is_admin) {
+      const viewerIsLandOwner = caller
+        ? await isUserLandOwner(d1Adapter, { parcelId: row.parcel_id, user: caller })
+        : false;
+      const callerWallets = caller
+        ? [caller.wallet_address, caller.custom_payout_address]
+            .filter(Boolean)
+            .map((a) => String(a).toLowerCase())
+        : [];
+      const viewerIsSculptureOwner = Boolean(
+        row.recipient_address && callerWallets.includes(String(row.recipient_address).toLowerCase())
+      );
+      if (row.hidden && !caller?.is_admin && !viewerIsLandOwner && !viewerIsSculptureOwner) {
         return jsonResponse({ error: 'Sculpture not available' }, 404, request);
       }
       const transfers = await listSculptureTransfers(chatDb, id);
       const viewerCanContribute = caller
         ? await isUserParcelContributor(d1Adapter, { parcelId: row.parcel_id, user: caller })
         : false;
+      const landSettings = await getLandSettingsInternal(d1Adapter, row.parcel_id);
       return jsonResponse(
         {
           sculpture: serializeSculptureRow(row, {
             includeAdminFields: Boolean(caller?.is_admin),
             includeVoxels: true,
             transfers,
-            viewerCanContribute
+            viewerCanContribute,
+            viewerIsLandOwner,
+            parcelFrozen: landSettings.frozen
           })
         },
         200,
