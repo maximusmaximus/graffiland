@@ -14,6 +14,7 @@ import {
   buildShareToXUrl,
   copyToClipboard
 } from '../utils/clipboard.js';
+import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
 import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
@@ -129,6 +130,7 @@ export default function DesktopHub({
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
   const [landManageOpen, setLandManageOpen] = useState(false);
   const [landManageParcelId, setLandManageParcelId] = useState('');
+  const [addItemParcelId, setAddItemParcelId] = useState('');
   const [myLands, setMyLands] = useState({ parcelCount: 0, parcels: [] });
   const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -169,7 +171,7 @@ export default function DesktopHub({
   const refreshData = useCallback(async () => {
     try {
       const [sRes, pRes, qRes, mRes, lRes] = await Promise.all([
-        api.listSculptures({ includeVoxels: false }),
+        api.listSculptures({ includeVoxels: true }),
         api.listParcels(),
         api.getNearbyQuests().catch(() => ({ quests: [] })),
         api.listMarketplaceListings().catch(() => ({ listings: [] })),
@@ -484,12 +486,40 @@ export default function DesktopHub({
       }
     }
     for (const mp of myLands?.parcels || []) {
-      if (mp?.parcelId && !byPid.has(mp.parcelId)) {
-        byPid.set(mp.parcelId, mp);
+      if (mp?.parcelId) {
+        const prev = byPid.get(mp.parcelId) || {};
+        byPid.set(mp.parcelId, {
+          ...prev,
+          ...mp,
+          volume: mp.volume || prev.volume,
+          frozen: Boolean(mp.frozen ?? mp.settings?.frozen ?? prev.frozen)
+        });
       }
     }
     return Array.from(byPid.values());
   }, [parcels, myLands, user?.id]);
+
+  const ownedParcelIds = useMemo(
+    () => ownedUserParcels.map((p) => p.parcelId).filter(Boolean),
+    [ownedUserParcels]
+  );
+
+  const activeAddItemParcel = useMemo(() => {
+    if (!addItemParcelId) return null;
+    const pid = String(addItemParcelId).toUpperCase();
+    return (
+      ownedUserParcels.find((p) => p.parcelId === pid) ||
+      parcels.find((p) => p.parcelId === pid) ||
+      null
+    );
+  }, [addItemParcelId, ownedUserParcels, parcels]);
+
+  const activeAddItemSculptures = useMemo(() => {
+    if (!activeAddItemParcel) return [];
+    const fromMine = activeAddItemParcel.sculptures || [];
+    if (fromMine.length > 0) return fromMine;
+    return (sculptures || []).filter((s) => s.parcelId === activeAddItemParcel.parcelId);
+  }, [activeAddItemParcel, sculptures]);
 
   const handleAddDraftRectangle = useCallback((rect) => {
     const currentCount = draftCountRef.current;
@@ -747,6 +777,43 @@ export default function DesktopHub({
     }
   }, [user?.id, refreshData, refreshMyLands]);
 
+  const handleToggleFreezeParcel = useCallback(async (parcelId, nextFrozen) => {
+    if (!parcelId || !user?.id) return;
+    setMintBusy(true);
+    try {
+      await api.updateLandSettings(parcelId, { frozen: Boolean(nextFrozen) });
+      setLandStatus({
+        text: nextFrozen
+          ? `Frozen ${parcelId} — no new sculptures can be placed here.`
+          : `Unfrozen ${parcelId} — new sculptures are allowed again.`
+      });
+      await Promise.all([refreshData(), refreshMyLands()]);
+    } catch (err) {
+      setLandStatus({ text: err?.message || 'Could not update freeze setting.', isError: true });
+      throw err;
+    } finally {
+      setMintBusy(false);
+    }
+  }, [user?.id, refreshData, refreshMyLands]);
+
+  const handleToggleSculptureVisibility = useCallback(async (sculptureId, nextHidden) => {
+    if (!sculptureId || !user?.id) return;
+    await api.setSculptureVisibility(sculptureId, {
+      hidden: Boolean(nextHidden),
+      reason: nextHidden ? 'Hidden by Virtual Land owner' : ''
+    });
+    await Promise.all([refreshData(), refreshMyLands()]);
+  }, [user?.id, refreshData, refreshMyLands]);
+
+  const handleOpenAddLandItem = useCallback((parcelOrId) => {
+    const pid =
+      typeof parcelOrId === 'string'
+        ? parcelOrId
+        : parcelOrId?.parcelId || '';
+    if (!pid) return;
+    setAddItemParcelId(String(pid).toUpperCase());
+  }, []);
+
   useEffect(() => {
     if (!welcomeRequest?.type) return;
     if (welcomeRequest.type === 'agent') {
@@ -864,6 +931,7 @@ export default function DesktopHub({
               sculptures={displayedSculptures}
               parcels={parcels}
               draftParcels={draftParcels}
+              ownedParcelIds={ownedParcelIds}
               selectedDraftId={selectedDraftId}
               drawMode={drawMode}
               viewMode={viewMode}
@@ -881,6 +949,7 @@ export default function DesktopHub({
                 setSidebarTab('land');
               }}
               onUpdateDraft={handleUpdateDraft}
+              onAdd3DItemForParcel={handleOpenAddLandItem}
               onViewModeChange={(nextMode) => setViewMode(nextMode)}
               onToggleDrawMode={() => {
                 const next = !drawMode;
@@ -1021,6 +1090,12 @@ export default function DesktopHub({
                 onMintDraft={handleMintDraft}
                 onMintAll={handleMintAll}
                 onUpdateOwnedVolume={handleUpdateOwnedVolume}
+                onOpenAddLandItem={handleOpenAddLandItem}
+                onToggleFreezeParcel={handleToggleFreezeParcel}
+                onOpenLandManagement={(pid) => {
+                  setLandManageParcelId(pid || '');
+                  setLandManageOpen(true);
+                }}
                 mintBusy={mintBusy}
                 landStatus={landStatus}
                 cameraBearingDeg={
@@ -1433,6 +1508,7 @@ export default function DesktopHub({
             setLandManageParcelId(pid || '');
             setLandManageOpen(true);
           }}
+          onOpenAddLandItem={(pid) => handleOpenAddLandItem(pid)}
           onClose={() => {
             setSelected(null);
             refreshData();
@@ -1441,11 +1517,30 @@ export default function DesktopHub({
         />
       )}
 
+      {activeAddItemParcel && (
+        <AddLandItemModal
+          parcel={activeAddItemParcel}
+          existingSculptures={activeAddItemSculptures}
+          user={user}
+          mcpState={mcpState}
+          onMcpStateChange={setMcpState}
+          onToggleFreeze={handleToggleFreezeParcel}
+          onToggleSculptureVisibility={handleToggleSculptureVisibility}
+          onSelectSculpture={(sc) => openSculpture(sc)}
+          onOpenLandManagement={(pid) => {
+            setLandManageParcelId(pid || '');
+            setLandManageOpen(true);
+          }}
+          onClose={() => setAddItemParcelId('')}
+        />
+      )}
+
       {landManageOpen && user && (
         <LandManagementModal
           user={user}
           initialParcelId={landManageParcelId}
           onSelectSculpture={(sc) => openSculpture(sc)}
+          onOpenAddLandItem={(p) => handleOpenAddLandItem(p)}
           onWorkspaceChanged={() => {
             refreshData();
             refreshMyLands();

@@ -145,6 +145,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload)
     }),
+  setSculptureVisibility: (id, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(id)}/visibility`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   deleteSculpture: (id) =>
     request(`/api/sculptures/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   updateLandParcel: (parcelId, payload) =>

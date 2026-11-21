@@ -108,12 +108,15 @@ import {
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
+  directOwnerSetSculptureVisibility,
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  getLandSettingsInternal,
   getMyLandsWorkspace,
   getSignatureRequest,
   handleMcpJsonRpc,
+  isUserLandOwner,
   isUserParcelContributor,
   listLandContributorsAndEligible,
   listLandsWithCurations,
@@ -423,19 +426,33 @@ export function createAppServer(serverOptions = {}) {
     const row = db.prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ?`).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
-    if (row.hidden && !caller?.is_admin) {
+    const viewerIsLandOwner = caller
+      ? await isUserLandOwner(chatDb, { parcelId: row.parcel_id, user: caller })
+      : false;
+    const callerWallets = caller
+      ? [caller.wallet_address, caller.custom_payout_address]
+          .filter(Boolean)
+          .map((a) => String(a).toLowerCase())
+      : [];
+    const viewerIsSculptureOwner = Boolean(
+      row.recipient_address && callerWallets.includes(String(row.recipient_address).toLowerCase())
+    );
+    if (row.hidden && !caller?.is_admin && !viewerIsLandOwner && !viewerIsSculptureOwner) {
       return res.status(404).json({ error: 'Sculpture not available' });
     }
     const transfers = await listSculptureTransfers(chatDb, req.params.id);
     const viewerCanContribute = caller
       ? await isUserParcelContributor(chatDb, { parcelId: row.parcel_id, user: caller })
       : false;
+    const landSettings = await getLandSettingsInternal(chatDb, row.parcel_id);
     res.json({
       sculpture: serializeSculptureRow(row, {
         includeAdminFields: Boolean(caller?.is_admin),
         includeVoxels: true,
         transfers,
-        viewerCanContribute
+        viewerCanContribute,
+        viewerIsLandOwner,
+        parcelFrozen: landSettings.frozen
       })
     });
   });
@@ -1126,6 +1143,19 @@ export function createAppServer(serverOptions = {}) {
     )
   );
 
+  app.post(
+    '/api/sculptures/:id/visibility',
+    requireAuth,
+    handleChatRoute((req) =>
+      directOwnerSetSculptureVisibility(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        hidden: Boolean(req.body?.hidden),
+        reason: req.body?.reason || ''
+      })
+    )
+  );
+
   app.delete(
     '/api/sculptures/:id',
     requireAuth,
@@ -1451,6 +1481,13 @@ export function createAppServer(serverOptions = {}) {
         return res.status(422).json({
           error: `Proof of Location check failed (score ${locationBundle.score}/100). Enable GPS, live camera, and move your phone gently while sculpting.`,
           proofOfLocation: locationBundle
+        });
+      }
+
+      const targetLandSettings = await getLandSettingsInternal(chatDb, locationBundle.parcelId);
+      if (targetLandSettings.frozen) {
+        return res.status(403).json({
+          error: `Virtual Land ${locationBundle.parcelId} is frozen by its owner — no new sculptures can be placed here.`
         });
       }
 

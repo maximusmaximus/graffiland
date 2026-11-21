@@ -585,4 +585,71 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.deepEqual(minted, [p1.parcelId]);
     cleanup();
   });
+
+  test('AddLandItemModal supports all 3D formats, generates copyable agent prompt, toggles freeze & hides artworks', async () => {
+    const { default: AddLandItemModal } = await loadJsxModule(
+      'client/src/components/AddLandItemModal.jsx'
+    );
+    const copied = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      value: {
+        writeText: async (text) => {
+          copied.push(text);
+        }
+      },
+      configurable: true
+    });
+
+    const freezeCalls = [];
+    const visCalls = [];
+    const view = RTL.render(
+      React.createElement(AddLandItemModal, {
+        parcel: {
+          parcelId: 'GLAND-9Q8YYK8Y',
+          customName: 'Civic Plaza',
+          frozen: false,
+          volume: { centerLat: 37.7749, centerLng: -122.4194, widthMeters: 24, depthMeters: 18, heightMeters: 22, rotationDeg: 315 }
+        },
+        existingSculptures: [
+          { id: 'sc-1', title: 'Visitor Beacon', voxelCount: 12, creatorName: 'Alex', hidden: false }
+        ],
+        user: { id: 'u1', walletAddress: '0x1234567890abcdef1234567890abcdef12345678' },
+        mcpState: { activePairing: { code: 'GLP-1111-2222-3333-4444' } },
+        onToggleFreeze: async (pid, next) => freezeCalls.push({ pid, next }),
+        onToggleSculptureVisibility: async (sid, next) => visCalls.push({ sid, next }),
+        onClose: () => {}
+      })
+    );
+
+    assert.ok(view.getByText(/Add 3D Item to Civic Plaza/i));
+    RTL.fireEvent.click(view.getByRole('radio', { name: /\.GLB 3D Model/i }));
+    RTL.fireEvent.change(view.getByPlaceholderText(/Glowing Cyber Dragon/i), {
+      target: { value: 'Neon Dragon Arch' }
+    });
+
+    const promptPreview = view.getByLabelText('Add 3D item agent prompt preview');
+    assert.ok(promptPreview.value.includes('load_3d_model_on_land'));
+    assert.ok(promptPreview.value.includes('Neon Dragon Arch'));
+    assert.ok(promptPreview.value.includes('GLP-1111-2222-3333-4444'));
+    assert.ok(promptPreview.value.includes('update_land_sculpture'));
+    assert.ok(promptPreview.value.includes('set_sculpture_visibility'));
+    assert.ok(promptPreview.value.includes('update_land_settings'));
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Copy 3D Item Agent Prompt/i }));
+    });
+    assert.equal(copied.length, 1);
+    assert.ok(copied[0].includes('Neon Dragon Arch'));
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Freeze Land/i }));
+    });
+    assert.deepEqual(freezeCalls, [{ pid: 'GLAND-9Q8YYK8Y', next: true }]);
+
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Hide/i }));
+    });
+    assert.deepEqual(visCalls, [{ sid: 'sc-1', next: true }]);
+    cleanup();
+  });
 });

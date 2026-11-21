@@ -61,6 +61,7 @@ export default function SculptureModal({
   onSculptureUpdated,
   onModifyInCanvas = null,
   onOpenLandManagement = null,
+  onOpenAddLandItem = null,
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
@@ -75,6 +76,15 @@ export default function SculptureModal({
   const [listingError, setListingError] = useState('');
   const [editTitle, setEditTitle] = useState(initialSculpture?.title || '');
   const [editDesc, setEditDesc] = useState(initialSculpture?.description || '');
+  const [editOffset, setEditOffset] = useState({
+    dx: Number(initialSculpture?.anchorOffset?.dx || 0),
+    dy: Number(initialSculpture?.anchorOffset?.dy || 0),
+    dz: Number(initialSculpture?.anchorOffset?.dz || 0),
+    yaw: Number(initialSculpture?.anchorOffset?.yaw || 0)
+  });
+  const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
+  const [showAllMetadata, setShowAllMetadata] = useState(false);
+  const [metadataCopied, setMetadataCopied] = useState(false);
   const [landCustomName, setLandCustomName] = useState('');
   const [landCurationNote, setLandCurationNote] = useState('');
   const [propBusy, setPropBusy] = useState('');
@@ -91,6 +101,14 @@ export default function SculptureModal({
     setSculpture(initialSculpture);
     setEditTitle(initialSculpture?.title || '');
     setEditDesc(initialSculpture?.description || '');
+    setEditOffset({
+      dx: Number(initialSculpture?.anchorOffset?.dx || 0),
+      dy: Number(initialSculpture?.anchorOffset?.dy || 0),
+      dz: Number(initialSculpture?.anchorOffset?.dz || 0),
+      yaw: Number(initialSculpture?.anchorOffset?.yaw || 0)
+    });
+    setParcelFrozen(Boolean(initialSculpture?.parcelFrozen));
+    setMetadataCopied(false);
     setNftNotice('');
     setNftError('');
     setPropNotice('');
@@ -107,6 +125,15 @@ export default function SculptureModal({
       .then((res) => {
         if (!cancelled && res?.sculpture) {
           setSculpture(res.sculpture);
+          setEditTitle(res.sculpture.title || '');
+          setEditDesc(res.sculpture.description || '');
+          setEditOffset({
+            dx: Number(res.sculpture.anchorOffset?.dx || 0),
+            dy: Number(res.sculpture.anchorOffset?.dy || 0),
+            dz: Number(res.sculpture.anchorOffset?.dz || 0),
+            yaw: Number(res.sculpture.anchorOffset?.yaw || 0)
+          });
+          setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
           if (res.sculpture.pinSummary) {
             setPinBatchInfo(res.sculpture.pinSummary);
           }
@@ -183,8 +210,10 @@ export default function SculptureModal({
     .filter(Boolean)
     .map((a) => a.toLowerCase());
   const isPropertyOwner = Boolean(ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()));
-  const isContributor = !isPropertyOwner && Boolean(sculpture?.viewerCanContribute);
-  const canModifySculpture = isPropertyOwner || isContributor;
+  const isLandOwner = Boolean(sculpture?.viewerIsLandOwner);
+  const canModerateLand = isPropertyOwner || isLandOwner;
+  const isContributor = !canModerateLand && Boolean(sculpture?.viewerCanContribute);
+  const canModifySculpture = canModerateLand || isContributor;
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
       ownerAddr &&
@@ -264,15 +293,70 @@ export default function SculptureModal({
     try {
       const res = await api.updateSculpture(sculpture.id, {
         title: editTitle,
-        description: editDesc
+        description: editDesc,
+        anchorOffset: {
+          dx: Number(editOffset.dx || 0),
+          dy: Number(editOffset.dy || 0),
+          dz: Number(editOffset.dz || 0),
+          yaw: Number(editOffset.yaw || 0)
+        }
       });
       if (res?.sculpture) {
         setSculpture((prev) => ({ ...prev, ...res.sculpture }));
         onSculptureUpdated?.({ ...sculpture, ...res.sculpture });
-        setPropNotice('Sculpture metadata & IPFS bundle updated.');
+        setPropNotice('Sculpture metadata, position & IPFS bundle updated.');
       }
     } catch (err) {
       setPropError(err.message || 'Update failed');
+    } finally {
+      setPropBusy('');
+    }
+  }
+
+  async function handleToggleSculptureVisibility() {
+    setPropBusy('visibility');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const nextHidden = !sculpture.hidden;
+      const res = await api.setSculptureVisibility(sculpture.id, {
+        hidden: nextHidden,
+        reason: nextHidden ? 'Hidden by Virtual Land owner' : ''
+      });
+      if (res?.sculpture) {
+        setSculpture((prev) => ({ ...prev, ...res.sculpture }));
+        onSculptureUpdated?.({ ...sculpture, ...res.sculpture });
+      }
+      setPropNotice(
+        nextHidden
+          ? 'Artwork hidden from public map, gallery, and AR feeds.'
+          : 'Artwork restored to public map, gallery, and AR feeds.'
+      );
+    } catch (err) {
+      setPropError(err.message || 'Could not update artwork visibility.');
+    } finally {
+      setPropBusy('');
+    }
+  }
+
+  async function handleToggleFreezeLand() {
+    setPropBusy('freeze');
+    setPropNotice('');
+    setPropError('');
+    try {
+      const nextFrozen = !parcelFrozen;
+      const res = await api.updateLandSettings(sculpture.parcelId, { frozen: nextFrozen });
+      const actualFrozen = Boolean(res?.settings?.frozen ?? nextFrozen);
+      setParcelFrozen(actualFrozen);
+      setSculpture((prev) => ({ ...prev, parcelFrozen: actualFrozen }));
+      onSculptureUpdated?.({ ...sculpture, parcelFrozen: actualFrozen });
+      setPropNotice(
+        actualFrozen
+          ? `Frozen ${sculpture.parcelId} — no new sculptures can be placed on this land.`
+          : `Unfrozen ${sculpture.parcelId} — new sculptures are allowed again.`
+      );
+    } catch (err) {
+      setPropError(err.message || 'Could not update land freeze setting.');
     } finally {
       setPropBusy('');
     }
@@ -624,6 +708,15 @@ export default function SculptureModal({
               <XeroIcon emoji="📌" size={12} /> Offset ({sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m)
             </span>
           ) : null}
+          {sculpture.hidden && (
+            <span className="badge badge-error">🙈 Hidden from Public Feeds</span>
+          )}
+          {parcelFrozen && (
+            <span className="badge badge-error">❄️ Land Frozen</span>
+          )}
+          {isLandOwner && !isPropertyOwner && (
+            <span className="badge gold">🏠 Land Owner Control</span>
+          )}
           {isContributor && (
             <span className="badge gold">
               <XeroIcon emoji="🤝" size={13} /> Contributor Edit Access
@@ -866,6 +959,14 @@ export default function SculptureModal({
           />
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn"
+              aria-expanded={showAllMetadata}
+              onClick={() => setShowAllMetadata((v) => !v)}
+            >
+              <XeroIcon emoji="🧾" size={15} /> {showAllMetadata ? 'Hide All Metadata' : 'View All Metadata'}
+            </button>
             <a
               className="btn"
               href={glbUrl}
@@ -905,6 +1006,58 @@ export default function SculptureModal({
               </a>
             )}
           </div>
+
+          {showAllMetadata && (
+            <div className="sculpture-raw-meta-wrap" data-testid="sculpture-all-metadata">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <strong style={{ fontSize: 12, color: 'var(--accent)' }}>Complete Artwork Metadata (JSON)</strong>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={async () => {
+                    const metaClean = { ...sculpture };
+                    delete metaClean.voxels;
+                    delete metaClean.previewDataUrl;
+                    const ok = await copyToClipboard(JSON.stringify(metaClean, null, 2));
+                    setMetadataCopied(ok);
+                  }}
+                >
+                  {metadataCopied ? '✅ Copied JSON' : '📋 Copy Metadata JSON'}
+                </button>
+              </div>
+              <pre className="desktop-prompt-preview mono" style={{ maxHeight: 220 }}>
+                {JSON.stringify(
+                  {
+                    id: sculpture.id,
+                    title: sculpture.title,
+                    description: sculpture.description,
+                    creatorName: sculpture.creatorName,
+                    ownerAddress: ownerAddr,
+                    parcelId: sculpture.parcelId,
+                    geohash: sculpture.geohash,
+                    coordinates: { lat: sculpture.lat, lng: sculpture.lng, altitude: sculpture.altitude },
+                    elevation,
+                    modelType: sculpture.modelType,
+                    voxelCount: sculpture.voxelCount,
+                    customModel: sculpture.customModel || null,
+                    meshStats: sculpture.meshStats || null,
+                    anchorOffset: sculpture.anchorOffset || { dx: 0, dy: 0, dz: 0, yaw: 0 },
+                    layerRole: sculpture.layerRole,
+                    currentRev: sculpture.currentRev || 1,
+                    hidden: Boolean(sculpture.hidden),
+                    parcelFrozen: Boolean(parcelFrozen),
+                    polScore: sculpture.polScore,
+                    proofHash: sculpture.proofHash,
+                    ipfs: sculpture.ipfs,
+                    chain: sculpture.chain,
+                    createdAt: sculpture.createdAt
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </div>
+          )}
 
           <div
             style={{
@@ -1058,13 +1211,26 @@ export default function SculptureModal({
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji={isPropertyOwner ? '🏠' : '🤝'} size={18} />{' '}
-                {isPropertyOwner
-                  ? `Property & Land Controls (${sculpture.parcelId})`
+                <XeroIcon emoji={canModerateLand ? '🏠' : '🤝'} size={18} />{' '}
+                {canModerateLand
+                  ? `Property & Land Owner Controls (${sculpture.parcelId})`
                   : `Contributor Sculpture Modification (${sculpture.parcelId})`}
               </span>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {onOpenLandManagement && isPropertyOwner && (
+                {onOpenAddLandItem && canModerateLand && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ fontSize: 12, padding: '6px 10px' }}
+                    onClick={() => {
+                      onClose?.();
+                      onOpenAddLandItem(sculpture.parcelId);
+                    }}
+                  >
+                    + Add 3D Item (Agent Prompt)
+                  </button>
+                )}
+                {onOpenLandManagement && canModerateLand && (
                   <button
                     type="button"
                     className="btn"
@@ -1077,10 +1243,10 @@ export default function SculptureModal({
                     <XeroIcon emoji="🗺️" size={14} /> Land Management
                   </button>
                 )}
-                {isPropertyOwner && (
+                {canModerateLand && (
                   <button
                     type="button"
-                    className="btn btn-primary"
+                    className="btn"
                     style={{ fontSize: 12, padding: '6px 10px' }}
                     disabled={propBusy !== ''}
                     onClick={handleCopyOwnerPrompt}
@@ -1094,7 +1260,7 @@ export default function SculptureModal({
 
             <form onSubmit={handleSaveSculptureEdit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
-                {isPropertyOwner ? 'Edit Sculpture on Your Land' : 'Modify Sculpture as Verified Contributor'}
+                {canModerateLand ? 'Modify Artwork Placed on Your Land' : 'Modify Sculpture as Verified Contributor'}
               </div>
               <input
                 className="input"
@@ -1111,6 +1277,44 @@ export default function SculptureModal({
                 onChange={(e) => setEditDesc(e.target.value)}
                 placeholder="Description"
               />
+              <div className="add-item-offset-row">
+                <label>
+                  <span>dx (m)</span>
+                  <input
+                    type="number"
+                    step="0.2"
+                    value={editOffset.dx}
+                    onChange={(e) => setEditOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }))}
+                  />
+                </label>
+                <label>
+                  <span>dy (m)</span>
+                  <input
+                    type="number"
+                    step="0.2"
+                    value={editOffset.dy}
+                    onChange={(e) => setEditOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }))}
+                  />
+                </label>
+                <label>
+                  <span>dz (m)</span>
+                  <input
+                    type="number"
+                    step="0.2"
+                    value={editOffset.dz}
+                    onChange={(e) => setEditOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }))}
+                  />
+                </label>
+                <label>
+                  <span>yaw (°)</span>
+                  <input
+                    type="number"
+                    step="15"
+                    value={editOffset.yaw}
+                    onChange={(e) => setEditOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }))}
+                  />
+                </label>
+              </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button type="submit" className="btn btn-primary" disabled={propBusy !== ''}>
                   <XeroIcon emoji="✏️" size={14} /> Save Sculpture Changes
@@ -1128,7 +1332,27 @@ export default function SculptureModal({
                     <XeroIcon emoji="🖌️" size={14} /> Modify 3D Blocks on AR Canvas
                   </button>
                 )}
-                {isPropertyOwner && (
+                {canModerateLand && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={propBusy !== ''}
+                    onClick={handleToggleSculptureVisibility}
+                  >
+                    {sculpture.hidden ? '👁️ Unhide Artwork' : '🙈 Hide Artwork'}
+                  </button>
+                )}
+                {canModerateLand && (
+                  <button
+                    type="button"
+                    className={`btn ${parcelFrozen ? 'btn-primary' : ''}`}
+                    disabled={propBusy !== ''}
+                    onClick={handleToggleFreezeLand}
+                  >
+                    {parcelFrozen ? '🔓 Unfreeze Land' : '❄️ Freeze Land'}
+                  </button>
+                )}
+                {canModerateLand && (
                   <button
                     type="button"
                     className="btn btn-danger"
@@ -1141,7 +1365,7 @@ export default function SculptureModal({
               </div>
             </form>
 
-            {isPropertyOwner && (
+            {canModerateLand && (
               <>
                 <form
               onSubmit={handleSaveLandCuration}

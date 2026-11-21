@@ -64,6 +64,9 @@ export function DesktopLandBuilderPanel({
   onMintDraft,
   onMintAll,
   onUpdateOwnedVolume,
+  onOpenAddLandItem = null,
+  onToggleFreezeParcel = null,
+  onOpenLandManagement = null,
   mintBusy = false,
   landStatus = '',
   cameraBearingDeg = 315,
@@ -390,20 +393,39 @@ export function DesktopLandBuilderPanel({
         <div className="land-owned-strip">
           <div className="land-section-header">
             <strong>Your Owned Plots ({ownedParcels.length})</strong>
+            <InfoTip title="Add 3D Items & Manage Minted Land" align="right">
+              Click <strong>+</strong> next to any minted land to copy an AI agent prompt for adding
+              a custom 3D item (voxels or .glb/.gltf/.obj/.stl/.ply), modifying artworks, or freezing
+              placements.
+            </InfoTip>
           </div>
           <div className="land-owned-pills">
             {ownedParcels.slice(0, 8).map((parcel) => {
               const ownedKey = `owned:${parcel.parcelId}`;
               const isSelected = selectedDraftId === ownedKey;
+              const isFrozen = Boolean(parcel.frozen || parcel.settings?.frozen);
               return (
-                <button
-                  key={parcel.parcelId}
-                  type="button"
-                  className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() => onSelectDraft?.(ownedKey)}
-                >
-                  {parcel.customName || parcel.parcelId}
-                </button>
+                <div key={parcel.parcelId} className="land-owned-pill-group">
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-outline'}`}
+                    onClick={() => onSelectDraft?.(ownedKey)}
+                  >
+                    {isFrozen ? '❄️ ' : ''}
+                    {parcel.customName || parcel.parcelId}
+                  </button>
+                  {onOpenAddLandItem && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary land-owned-plus-btn"
+                      aria-label={`Add 3D item to ${parcel.parcelId}`}
+                      title={`Add 3D item to ${parcel.parcelId} (Copy Agent Prompt)`}
+                      onClick={() => onOpenAddLandItem(parcel)}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -639,22 +661,59 @@ export function DesktopLandBuilderPanel({
                 {mintBusy ? 'Minting…' : 'Mint This Land'}
               </button>
             ) : (
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={Boolean(mintBusy)}
-                onClick={() => onUpdateOwnedVolume?.(activeOwned.parcelId, {
-                  centerLat: activeVolume.centerLat,
-                  centerLng: activeVolume.centerLng,
-                  widthMeters: activeWidth,
-                  depthMeters: activeDepth,
-                  heightMeters: activeHeight,
-                  zScale: activeZScale,
-                  rotationDeg: activeRotation
-                })}
-              >
-                {mintBusy ? 'Saving…' : 'Save 3D Volume'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={Boolean(mintBusy)}
+                  onClick={() => onUpdateOwnedVolume?.(activeOwned.parcelId, {
+                    centerLat: activeVolume.centerLat,
+                    centerLng: activeVolume.centerLng,
+                    widthMeters: activeWidth,
+                    depthMeters: activeDepth,
+                    heightMeters: activeHeight,
+                    zScale: activeZScale,
+                    rotationDeg: activeRotation
+                  })}
+                >
+                  {mintBusy ? 'Saving…' : 'Save 3D Volume'}
+                </button>
+                {onOpenAddLandItem && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={() => onOpenAddLandItem(activeOwned)}
+                  >
+                    + Add 3D Item (Prompt)
+                  </button>
+                )}
+                {onToggleFreezeParcel && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    disabled={Boolean(mintBusy)}
+                    onClick={() =>
+                      onToggleFreezeParcel(
+                        activeOwned.parcelId,
+                        !(activeOwned.frozen || activeOwned.settings?.frozen)
+                      )
+                    }
+                  >
+                    {activeOwned.frozen || activeOwned.settings?.frozen
+                      ? '🔓 Unfreeze Land'
+                      : '❄️ Freeze Land'}
+                  </button>
+                )}
+                {onOpenLandManagement && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => onOpenLandManagement(activeOwned.parcelId)}
+                  >
+                    ⚙️ Manage
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

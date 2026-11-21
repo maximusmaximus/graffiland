@@ -129,7 +129,7 @@ export const MCP_TOOLS = [
   },
   {
     name: 'delete_land_sculpture',
-    description: 'Remove an owned sculpture from the user Virtual Land parcel.',
+    description: 'Remove a sculpture from the user Virtual Land parcel.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,6 +137,37 @@ export const MCP_TOOLS = [
         signature: { type: 'string' }
       },
       required: ['sculptureId']
+    }
+  },
+  {
+    name: 'set_sculpture_visibility',
+    description:
+      'Hide or restore (unhide) any artwork or sculpture placed on an owned Virtual Land parcel from public maps, gallery, and AR feeds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sculptureId: { type: 'string' },
+        hidden: { type: 'boolean' },
+        reason: { type: 'string' },
+        signature: { type: 'string' }
+      },
+      required: ['sculptureId', 'hidden']
+    }
+  },
+  {
+    name: 'update_land_settings',
+    description:
+      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks any new sculptures from being placed there), allowContributorEdits, and allowAgentErase.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        frozen: { type: 'boolean' },
+        allowContributorEdits: { type: 'boolean' },
+        allowAgentErase: { type: 'boolean' },
+        signature: { type: 'string' }
+      },
+      required: ['parcelId']
     }
   },
   {

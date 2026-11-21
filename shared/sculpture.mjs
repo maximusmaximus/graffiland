@@ -94,7 +94,14 @@ export function computeVerticalBounds(voxels = []) {
 
 export function serializeSculptureRow(
   row,
-  { includeAdminFields = false, includeVoxels = true, transfers = undefined, viewerCanContribute = undefined } = {}
+  {
+    includeAdminFields = false,
+    includeVoxels = true,
+    transfers = undefined,
+    viewerCanContribute = undefined,
+    viewerIsLandOwner = undefined,
+    parcelFrozen = undefined
+  } = {}
 ) {
   const pol = JSON.parse(row.pol_json || '{}');
   const elevation = pol.elevation || {
@@ -228,7 +235,7 @@ export function serializeSculptureRow(
           }
         }
       : {}),
-    ...(includeAdminFields
+    ...(includeAdminFields || Boolean(row.hidden)
       ? {
           hiddenReason: row.hidden_reason || '',
           hiddenBy: row.hidden_by || ''
@@ -237,6 +244,10 @@ export function serializeSculptureRow(
     ...(viewerCanContribute !== undefined
       ? { viewerCanContribute: Boolean(viewerCanContribute) }
       : {}),
+    ...(viewerIsLandOwner !== undefined
+      ? { viewerIsLandOwner: Boolean(viewerIsLandOwner) }
+      : {}),
+    ...(parcelFrozen !== undefined ? { parcelFrozen: Boolean(parcelFrozen) } : {}),
     termsAcceptedVersion: row.terms_accepted_version,
     createdAt: row.created_at
   };
