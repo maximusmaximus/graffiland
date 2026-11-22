@@ -28,6 +28,7 @@ import {
   PairDesktopMcpModal,
   SavedDraftsModal
 } from './studio/AgentPairModals.jsx';
+import ARLandInspectorPanel from './studio/ARLandInspectorPanel.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
 import MobileMapSheet from './studio/MobileMapSheet.jsx';
@@ -89,16 +90,19 @@ export default function MobileStudio({
   const [tutorialOpen, setTutorialOpen] = useState(
     () => !loadBoolPreference(TUTORIAL_SEEN_KEY, false)
   );
-  useEffect(() => {
-    if (skipTutorialSignal > 0) {
+  const [handledSkipSignal, setHandledSkipSignal] = useState(skipTutorialSignal);
+  if (skipTutorialSignal !== handledSkipSignal) {
+    setHandledSkipSignal(skipTutorialSignal);
+    if (skipTutorialSignal > 0 && tutorialOpen) {
       setTutorialOpen(false);
     }
-  }, [skipTutorialSignal]);
+  }
   const [quickSculpt, setQuickSculpt] = useState(
     () => loadBoolPreference(QUICK_SCULPT_KEY, false)
   );
   const [arSelectHint, setArSelectHint] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
+  const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const hintTimerRef = useRef(null);
 
   // Metadata & Publish Form State
@@ -163,6 +167,8 @@ export default function MobileStudio({
   const openPublishCaller = useRef((...a) => openPublishSheetRef.current?.(...a));
   const arTargetedIdRef = useRef('');
   const setArTargetedSculptureBridgeRef = useRef(null);
+  const onTapArLandBridgeRef = useRef(null);
+  const isInteractingWithLandRef = useRef(false);
 
   const brush = useVoxelBrush({
     config,
@@ -190,11 +196,15 @@ export default function MobileStudio({
     setArTargetedSculpture: (v) => setArTargetedSculptureBridgeRef.current?.(v),
     arPinPreview: arPinPreviewRef.current,
     openCameraSelectedChat: (...args) => openCameraSelectedChatRef.current?.(...args),
+    onTapArLand: (...args) => onTapArLandBridgeRef.current?.(...args),
+    isInteractingWithLandRef,
     openAgentHandoffRef: openAgentCaller,
     openPublishSheetRef: openPublishCaller
   });
 
   const ar = useARPreview({
+    user,
+    ownedParcelIds: ownedParcelIdsState,
     mode: brush.mode,
     location: pol.location,
     locationRef: pol.locationRef,
@@ -212,19 +222,61 @@ export default function MobileStudio({
     showTemporaryHint
   });
 
+  const isInteractingWithLand = Boolean(ar.activeArLand);
+  isInteractingWithLandRef.current = isInteractingWithLand;
+
   setArTargetedSculptureBridgeRef.current = ar.setArTargetedSculpture;
   arTargetedIdRef.current = ar.arTargetedIdRef.current;
 
+  const handleInspectArLand = useCallback(
+    (land) => {
+      if (!land?.parcelId) {
+        ar.setArSelectedLandId('');
+        return;
+      }
+      brush.stopBrushPainting();
+      setDockOpen(false);
+      ar.setArSelectedLandId(land.parcelId);
+    },
+    [ar, brush]
+  );
+
+  onTapArLandBridgeRef.current = (tappedLand) => {
+    if (!tappedLand?.parcelId) {
+      ar.setArSelectedLandId('');
+      return;
+    }
+    handleInspectArLand(tappedLand);
+  };
+
+  useEffect(() => {
+    if (!isInteractingWithLand) return undefined;
+    const onKeyDown = (ev) => {
+      if (ev.key === 'Escape') {
+        ar.setArSelectedLandId('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [ar, isInteractingWithLand]);
+
   onLocationUpdateBridgeRef.current = async (loc, refined) => {
-    const res = await api.listSculptures({
-      lat: loc.lat,
-      lng: loc.lng,
-      radiusMeters: 300,
-      includeVoxels: false
-    });
+    const [res, pRes] = await Promise.all([
+      api.listSculptures({
+        lat: loc.lat,
+        lng: loc.lng,
+        radiusMeters: 300,
+        includeVoxels: false
+      }),
+      api.listParcels().catch(() => ({ parcels: [] }))
+    ]);
+    if (Array.isArray(pRes?.parcels)) {
+      ar.setNearbyParcels(pRes.parcels);
+    }
     await ar.hydrateNearbyList(res.sculptures || [], refined);
   };
 
+  const parcelsLoadedOnceRef = useRef(false);
   useEffect(() => {
     const loc = pol.location;
     if (!loc || !Number.isFinite(Number(loc.lat)) || !Number.isFinite(Number(loc.lng))) return;
@@ -237,10 +289,23 @@ export default function MobileStudio({
         setActiveQuest(firstQuest);
       })
       .catch(() => {});
+    if (!parcelsLoadedOnceRef.current) {
+      parcelsLoadedOnceRef.current = true;
+      api
+        .listParcels()
+        .then((pRes) => {
+          if (!cancelled && Array.isArray(pRes?.parcels)) {
+            ar.setNearbyParcels(pRes.parcels);
+          }
+        })
+        .catch(() => {
+          parcelsLoadedOnceRef.current = false;
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [pol.location]);
+  }, [ar, pol.location]);
 
   const handleSnapToPlinthSlot = useCallback(
     (slot) => {
@@ -388,6 +453,32 @@ export default function MobileStudio({
     captureSculptureSnapshot,
     showTemporaryHint
   });
+
+  useEffect(() => {
+    const ids = (lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean);
+    setOwnedParcelIdsState(ids);
+  }, [lands.myLands]);
+
+  const handleRenameLandSynced = useCallback(
+    async (land, nextCustomName) => {
+      const res = await api.updateLandParcel(land.parcelId, {
+        customName: nextCustomName
+      });
+      const savedName =
+        res?.parcel?.customName !== undefined ? res.parcel.customName : nextCustomName;
+      const patch = (prev) =>
+        (prev || []).map((p) =>
+          p.parcelId === land.parcelId
+            ? { ...p, customName: savedName, slug: res?.parcel?.slug || p.slug }
+            : p
+        );
+      ar.setMapParcels(patch);
+      ar.setNearbyParcels(patch);
+      lands.refreshMyLands();
+      ar.loadPublicMapData();
+    },
+    [ar, lands]
+  );
 
   const openPublishSheet = useCallback(
     ({ skipVoxelCheck = false } = {}) => {
@@ -597,6 +688,12 @@ export default function MobileStudio({
       }
 
       resetFormAfterPublish(res);
+      api
+        .listParcels()
+        .then((pRes) => {
+          if (Array.isArray(pRes?.parcels)) ar.setNearbyParcels(pRes.parcels);
+        })
+        .catch(() => {});
     } catch (err) {
       setPublishError(err.message || 'Publish failed');
     } finally {
@@ -699,6 +796,9 @@ export default function MobileStudio({
         locationRef={pol.locationRef}
         arTargetedIdRef={ar.arTargetedIdRef}
         setArTargetedSculpture={ar.setArTargetedSculpture}
+        arSelectedLandIdRef={ar.arSelectedLandIdRef}
+        isInteractingWithLand={isInteractingWithLand}
+        isInteractingWithLandRef={isInteractingWithLandRef}
         mode={brush.mode}
         modeRef={brush.modeRef}
         toolRef={brush.toolRef}
@@ -813,80 +913,136 @@ export default function MobileStudio({
           activeQuest={activeQuest}
           selectedPlinthSlot={selectedPlinthSlot}
           onSnapToPlinthSlot={handleSnapToPlinthSlot}
+          isInteractingWithLand={isInteractingWithLand}
+          nearbyCameraLand={ar.primaryCameraLand}
+          nearbyCameraLandCount={ar.immediateCameraLands.length}
+          onInspectArLand={handleInspectArLand}
+          onExitArLand={() => ar.setArSelectedLandId('')}
         />
 
-        <ToolCarouselBar
-          quickSculpt={quickSculpt}
-          activeKeyTool={brush.activeKeyTool}
-          toolAvailability={brush.toolAvailability}
-          canTouch={canTouch}
-          swipeDragPx={brush.swipeDragPx}
-          isDraggingKey={brush.isDraggingKey}
-          painting={brush.painting}
-          mode={brush.mode}
-          dockOpen={dockOpen}
-          voxelsLength={brush.voxels.length}
-          artTransform={brush.artTransform}
-          onSetArtTransform={brush.setArtTransform}
-          onToggleTransformLock={brush.toggleTransformLock}
-          onStepKeyTool={brush.stepKeyTool}
-          onKeyPointerDown={brush.handleKeyPointerDown}
-          onKeyPointerMove={brush.handleKeyPointerMove}
-          onKeyPointerUp={brush.handleKeyPointerUp}
-          onKeyPointerCancel={brush.handleKeyPointerCancel}
-        />
+        {!isInteractingWithLand && (
+          <ToolCarouselBar
+            quickSculpt={quickSculpt}
+            activeKeyTool={brush.activeKeyTool}
+            toolAvailability={brush.toolAvailability}
+            canTouch={canTouch}
+            swipeDragPx={brush.swipeDragPx}
+            isDraggingKey={brush.isDraggingKey}
+            painting={brush.painting}
+            mode={brush.mode}
+            dockOpen={dockOpen}
+            voxelsLength={brush.voxels.length}
+            artTransform={brush.artTransform}
+            onSetArtTransform={brush.setArtTransform}
+            onToggleTransformLock={brush.toggleTransformLock}
+            onStepKeyTool={brush.stepKeyTool}
+            onKeyPointerDown={brush.handleKeyPointerDown}
+            onKeyPointerMove={brush.handleKeyPointerMove}
+            onKeyPointerUp={brush.handleKeyPointerUp}
+            onKeyPointerCancel={brush.handleKeyPointerCancel}
+          />
+        )}
 
-        <SceneCoverageWidget
-          sceneScan={pol.sceneScan}
-          orbStatus={pol.orbStatus}
-          scanBoxCollapsed={pol.scanBoxCollapsed}
-          onToggleCollapse={() => pol.setScanBoxCollapsed((v) => !v)}
-          dockOpen={dockOpen}
-          mode={brush.mode}
-          onRefreshOrbRescan={ar.handleRefreshOrbRescan}
-        />
+        {!isInteractingWithLand && (
+          <SceneCoverageWidget
+            sceneScan={pol.sceneScan}
+            orbStatus={pol.orbStatus}
+            scanBoxCollapsed={pol.scanBoxCollapsed}
+            onToggleCollapse={() => pol.setScanBoxCollapsed((v) => !v)}
+            dockOpen={dockOpen}
+            mode={brush.mode}
+            onRefreshOrbRescan={ar.handleRefreshOrbRescan}
+          />
+        )}
 
-        <StudioDockDrawer
-          quickSculpt={quickSculpt}
-          dockOpen={dockOpen}
-          onToggleDock={() => setDockOpen((v) => !v)}
-          paletteOpen={brush.paletteOpen}
-          onTogglePalette={() => brush.setPaletteOpen((p) => !p)}
-          mode={brush.mode}
-          modeRef={brush.modeRef}
-          tool={brush.tool}
-          setMode={brush.setMode}
-          setTool={brush.setTool}
-          color={brush.color}
-          setColor={brush.setColor}
-          material={brush.material}
-          setMaterial={brush.setMaterial}
-          reachMeters={brush.reachMeters}
-          setReachMeters={brush.setReachMeters}
-          occlusionEnabled={brush.occlusionEnabled}
-          setOcclusionEnabled={brush.setOcclusionEnabled}
-          draftsOpen={drafts.draftsOpen}
-          activeDraftId={drafts.activeDraftId}
-          draftStatusText={drafts.draftStatusText}
-          pairedCode={pairing.pairedCode}
-          agentOpen={drafts.agentOpen}
-          agentSessionCode={drafts.agentSession?.code}
-          toolAvailability={brush.toolAvailability}
-          ensureToolUsable={brush.ensureToolUsable}
-          getDockHoldHandlers={brush.getDockHoldHandlers}
-          commitTransformAndExit={brush.commitTransformAndExit}
-          onClearCanvas={brush.clearCanvas}
-          onToggleTransformLock={brush.toggleTransformLock}
-          onUndo={brush.handleUndo}
-          onRecenterAim={pol.recenterAim}
-          onOpenDraftsSheet={drafts.openDraftsSheet}
-          onOpenPairModal={() => pairing.setPairOpen(true)}
-          onOpenAgentHandoff={drafts.openAgentHandoff}
-          onOpenPublishSheet={openPublishSheet}
-        />
+        {!isInteractingWithLand && (
+          <StudioDockDrawer
+            quickSculpt={quickSculpt}
+            dockOpen={dockOpen}
+            onToggleDock={() => setDockOpen((v) => !v)}
+            paletteOpen={brush.paletteOpen}
+            onTogglePalette={() => brush.setPaletteOpen((p) => !p)}
+            mode={brush.mode}
+            modeRef={brush.modeRef}
+            tool={brush.tool}
+            setMode={brush.setMode}
+            setTool={brush.setTool}
+            color={brush.color}
+            setColor={brush.setColor}
+            material={brush.material}
+            setMaterial={brush.setMaterial}
+            reachMeters={brush.reachMeters}
+            setReachMeters={brush.setReachMeters}
+            occlusionEnabled={brush.occlusionEnabled}
+            setOcclusionEnabled={brush.setOcclusionEnabled}
+            draftsOpen={drafts.draftsOpen}
+            activeDraftId={drafts.activeDraftId}
+            draftStatusText={drafts.draftStatusText}
+            pairedCode={pairing.pairedCode}
+            agentOpen={drafts.agentOpen}
+            agentSessionCode={drafts.agentSession?.code}
+            toolAvailability={brush.toolAvailability}
+            ensureToolUsable={brush.ensureToolUsable}
+            getDockHoldHandlers={brush.getDockHoldHandlers}
+            commitTransformAndExit={brush.commitTransformAndExit}
+            onClearCanvas={brush.clearCanvas}
+            onToggleTransformLock={brush.toggleTransformLock}
+            onUndo={brush.handleUndo}
+            onRecenterAim={pol.recenterAim}
+            onOpenDraftsSheet={drafts.openDraftsSheet}
+            onOpenPairModal={() => pairing.setPairOpen(true)}
+            onOpenAgentHandoff={drafts.openAgentHandoff}
+            onOpenPublishSheet={openPublishSheet}
+          />
+        )}
+
+        {isInteractingWithLand && (
+          <ARLandInspectorPanel
+            land={ar.activeArLand}
+            nearbyLands={
+              ar.immediateCameraLands.length > 0
+                ? ar.immediateCameraLands
+                : ar.visibleCameraLands
+            }
+            onSelectNearbyLand={(nextLand) => {
+              if (nextLand?.parcelId) ar.setArSelectedLandId(nextLand.parcelId);
+            }}
+            onDrawHere={(targetLand) => {
+              ar.setArSelectedLandId('');
+              brush.setMode('draw');
+              showTemporaryHint(
+                `Drawing on ${targetLand.displayName} — hold Brush to sculpt in 3D AR!`
+              );
+            }}
+            onOpen3DMap={(targetLand) => {
+              ar.setArSelectedLandId('');
+              ar.openAreaMap({
+                initialDimensionMode: '3d',
+                focusParcelId: targetLand.parcelId
+              });
+            }}
+            onManageLand={(pid) => {
+              ar.setArSelectedLandId('');
+              lands.setLandManageParcelId(pid || '');
+              lands.setLandManageOpen(true);
+            }}
+            onRenameLand={handleRenameLandSynced}
+            onOpenProfile={(handle) => {
+              if (handle) setProfileHandle(handle);
+            }}
+            onInspectSculpture={(sc) => {
+              ar.setMapSelectedSculpture(sc);
+            }}
+            onOpenSculptureChat={(sc, distM) => {
+              chat.openCameraSelectedChat(sc, distM, chat.arPinPreview);
+            }}
+            onShowHint={showTemporaryHint}
+            onClose={() => ar.setArSelectedLandId('')}
+          />
+        )}
       </div>
 
-      {brush.mode === 'preview' && (
+      {brush.mode === 'preview' && !isInteractingWithLand && (
         <div
           style={{
             position: 'fixed',
@@ -1098,6 +1254,7 @@ export default function MobileStudio({
           mapSelectedSculpture={ar.mapSelectedSculpture}
           selectedParcelId={ar.mapSelectedParcelId}
           focusParcelTick={ar.mapFocusParcelTick}
+          initialDimensionMode={ar.mapInitialDimensionMode}
           onSelectParcel={ar.focusMapParcel}
           onSelectSculpture={ar.setMapSelectedSculpture}
           onOpenProfile={(handle) => {
@@ -1108,22 +1265,7 @@ export default function MobileStudio({
             lands.setLandManageParcelId(pid || '');
             lands.setLandManageOpen(true);
           }}
-          onRenameLand={async (land, nextCustomName) => {
-            const res = await api.updateLandParcel(land.parcelId, {
-              customName: nextCustomName
-            });
-            const savedName =
-              res?.parcel?.customName !== undefined ? res.parcel.customName : nextCustomName;
-            ar.setMapParcels((prev) =>
-              (prev || []).map((p) =>
-                p.parcelId === land.parcelId
-                  ? { ...p, customName: savedName, slug: res?.parcel?.slug || p.slug }
-                  : p
-              )
-            );
-            lands.refreshMyLands();
-            ar.loadPublicMapData();
-          }}
+          onRenameLand={handleRenameLandSynced}
           onShowHint={showTemporaryHint}
           onClose={() => ar.setMapOpen(false)}
         />

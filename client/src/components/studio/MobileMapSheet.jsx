@@ -32,6 +32,7 @@ export default function MobileMapSheet({
   mapSelectedSculpture = null,
   selectedParcelId = '',
   focusParcelTick = 0,
+  initialDimensionMode = '2d',
   onSelectParcel,
   onSelectSculpture,
   onOpenProfile = null,
@@ -42,7 +43,9 @@ export default function MobileMapSheet({
   nowMsOverride = null
 }) {
   const [mapHeightMode, setMapHeightMode] = useState('compact'); // 'compact' | 'fullscreen'
-  const [mapDimensionMode, setMapDimensionMode] = useState('2d'); // '2d' | '3d'
+  const [mapDimensionMode, setMapDimensionMode] = useState(() =>
+    initialDimensionMode === '3d' ? '3d' : '2d'
+  ); // '2d' | '3d'
   const [localFocusTick, setLocalFocusTick] = useState(0);
   const [collapsedLandIds, setCollapsedLandIds] = useState({});
   const [nowMs, setNowMs] = useState(() => (nowMsOverride ?? Date.now()));

@@ -70,7 +70,12 @@ export default function StudioHudTopBar({
   onOpenAreaMap,
   activeQuest = null,
   selectedPlinthSlot = null,
-  onSnapToPlinthSlot = null
+  onSnapToPlinthSlot = null,
+  isInteractingWithLand = false,
+  nearbyCameraLand = null,
+  nearbyCameraLandCount = 0,
+  onInspectArLand = null,
+  onExitArLand = null
 }) {
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
@@ -95,9 +100,20 @@ export default function StudioHudTopBar({
 
   return (
     <>
-      {/* Top-Left Mobile Account / Sign-In & Telemetry Stack */}
+      {/* Top-Left Mobile Account / Sign-In & Telemetry Stack (minimal Back pill when inspecting land) */}
       <div className="mobile-top-hud-left hud-interactive">
-        {user ? (
+        {isInteractingWithLand ? (
+          <button
+            type="button"
+            className="top-mini-pill ar-land-exit-pill"
+            data-testid="ar-land-exit-top-btn"
+            onClick={onExitArLand}
+            aria-label="Back to camera drawing"
+          >
+            <span aria-hidden="true">←</span>
+            <span>Back to Draw</span>
+          </button>
+        ) : user ? (
           <button
             type="button"
             className="top-mini-pill mobile-profile-pill"
@@ -129,7 +145,7 @@ export default function StudioHudTopBar({
           </button>
         )}
 
-        {dockOpen && (
+        {!isInteractingWithLand && dockOpen && (
           <div className="pol-pill">
             <XeroIcon emoji={location ? '📍' : '⏳'} size={13} />
             <span>
@@ -158,7 +174,8 @@ export default function StudioHudTopBar({
         )}
       </div>
 
-      {/* Top-Right Mobile Controls & Pair/Approvals Hub */}
+      {/* Top-Right Mobile Controls & Pair/Approvals Hub (temporarily hidden while interacting with land) */}
+      {!isInteractingWithLand && (
       <div className="mobile-top-hud-right hud-interactive">
         <div className="mobile-top-hud-row">
           <button
@@ -288,10 +305,47 @@ export default function StudioHudTopBar({
           onRefreshSignatures={onRefreshSignatures}
         />
       </div>
+      )}
 
       {/* Unified Non-Overlapping Vertical HUD Status & Alert Stack */}
       <div className={`mobile-hud-stack ${dockOpen ? 'has-pol' : ''}`}>
-        {editingSculpture && (
+        {!isInteractingWithLand &&
+          nearbyCameraLand &&
+          (mode === 'draw' || mode === 'preview') &&
+          onInspectArLand && (
+            <button
+              type="button"
+              className={`ar-nearby-land-pill hud-interactive ${
+                nearbyCameraLand.isInside ? 'is-inside' : ''
+              }`}
+              data-testid="ar-nearby-land-pill"
+              data-parcel-id={nearbyCameraLand.parcelId}
+              onClick={() => onInspectArLand(nearbyCameraLand)}
+              aria-label={`Inspect nearby land ${nearbyCameraLand.displayName}`}
+            >
+              <span className="ar-nearby-land-pill-main">
+                <XeroIcon emoji={nearbyCameraLand.isInside ? '✨' : '📍'} size={13} />
+                <span className="ar-nearby-land-pill-label">
+                  {nearbyCameraLand.isInside ? 'On Land: ' : 'Near: '}
+                  <strong>{nearbyCameraLand.displayName}</strong>
+                </span>
+                {!nearbyCameraLand.isInside && nearbyCameraLand.edgeDistanceMeters !== undefined && (
+                  <span className="ar-nearby-land-pill-dist mono">
+                    {nearbyCameraLand.edgeDistanceMeters}m
+                  </span>
+                )}
+                {nearbyCameraLand.isOwned && (
+                  <span className="ar-nearby-land-pill-own">👑</span>
+                )}
+              </span>
+              <span className="ar-nearby-land-pill-cta">
+                {nearbyCameraLandCount > 1 ? `+${nearbyCameraLandCount - 1} · ` : ''}
+                Details ▸
+              </span>
+            </button>
+          )}
+
+        {!isInteractingWithLand && editingSculpture && (
           <div
             className="mobile-hud-banner hud-interactive"
             style={{
@@ -325,7 +379,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {mode === 'draw' && !quickSculpt && (
+        {!isInteractingWithLand && mode === 'draw' && !quickSculpt && (
           <div className="surface-pill hud-interactive">
             {surfaceAnchor ? (
               <>
@@ -378,7 +432,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {mode === 'draw' && activeQuest && !quickSculpt && (
+        {!isInteractingWithLand && mode === 'draw' && activeQuest && !quickSculpt && (
           <div
             className="surface-pill hud-interactive"
             style={{
@@ -408,7 +462,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {showRedSensorError && (
+        {!isInteractingWithLand && showRedSensorError && (
           <div
             className="mobile-hud-banner hud-interactive is-error"
             data-testid="mobile-error-banner"
@@ -444,7 +498,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {showCameraFallbackBanner && (
+        {!isInteractingWithLand && showCameraFallbackBanner && (
           <div
             className="mobile-hud-banner hud-interactive is-warn"
             role="status"
@@ -530,7 +584,7 @@ export default function StudioHudTopBar({
         )}
       </div>
 
-      {needsGyroTap && (
+      {!isInteractingWithLand && needsGyroTap && (
         <button
           className="btn btn-primary"
           style={{
@@ -546,7 +600,7 @@ export default function StudioHudTopBar({
         </button>
       )}
 
-      {mode === 'preview' && arTargetedSculpture && (() => {
+      {!isInteractingWithLand && mode === 'preview' && arTargetedSculpture && (() => {
         const targetSc = arTargetedSculpture.sculpture;
         const activePin = arPinPreview?.sculptureId === targetSc.id ? arPinPreview : null;
         return (
@@ -632,16 +686,18 @@ export default function StudioHudTopBar({
         );
       })()}
 
-      <button
-        type="button"
-        className={`floating-map-btn hud-interactive ${mapOpen ? 'active' : ''}`}
-        onClick={onOpenAreaMap}
-        aria-label="Open Nearest Lands Map"
-        title="Nearest Lands, Sculptures & Google Maps Directions"
-      >
-        <XeroIcon emoji="🗺️" size={22} />
-        {nearbyCount > 0 && <span className="floating-map-badge">{nearbyCount}</span>}
-      </button>
+      {!isInteractingWithLand && (
+        <button
+          type="button"
+          className={`floating-map-btn hud-interactive ${mapOpen ? 'active' : ''}`}
+          onClick={onOpenAreaMap}
+          aria-label="Open Nearest Lands Map"
+          title="Nearest Lands, Sculptures & Google Maps Directions"
+        >
+          <XeroIcon emoji="🗺️" size={22} />
+          {nearbyCount > 0 && <span className="floating-map-badge">{nearbyCount}</span>}
+        </button>
+      )}
     </>
   );
 }

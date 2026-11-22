@@ -12,6 +12,12 @@ import {
   groupNearestLandsWithSculptures,
   isLandOwnedByUser
 } from '../client/src/utils/landMapHelpers.js';
+import {
+  computeArLandPrismLocalGeometry,
+  computeParcelEdgeDistanceMeters,
+  findNearbyCameraLands,
+  isPointInsideParcelFootprint
+} from '../client/src/utils/arLandHelpers.js';
 
 describe('Mobile Nearest Lands Map Helpers', () => {
   test('buildGoogleMapsLandUrl builds valid directions URLs and rejects invalid coordinates', () => {
@@ -293,5 +299,82 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(isLandOwnedByUser(landBySub, { user }), true);
     assert.equal(isLandOwnedByUser(landByWallet, { user }), true);
     assert.equal(isLandOwnedByUser(otherLand, { user, ownedParcelIds: ['GLAND-MINE1'] }), false);
+  });
+
+  test('arLandHelpers detects inside/near lands from camera GPS and projects 3D AR land prism vertices', () => {
+    const userLoc = { lat: 39.738873, lng: -121.847904 };
+    const insideLand = {
+      parcelId: 'GLAND-INSIDE',
+      customName: 'Magnolia Lot',
+      ownerSub: 'google:owner-1',
+      stewardStatus: 'awakened',
+      volume: {
+        centerLat: 39.738873,
+        centerLng: -121.847904,
+        widthMeters: 2.82,
+        depthMeters: 2.94,
+        heightMeters: 1.92,
+        corners: [
+          [-121.8479205, 39.7388862],
+          [-121.8478875, 39.7388862],
+          [-121.8478875, 39.7388598],
+          [-121.8479205, 39.7388598]
+        ]
+      }
+    };
+    const nearLand = {
+      parcelId: 'GLAND-NEAR20',
+      customName: 'Corner Plaza',
+      ownerSub: 'google:other',
+      stewardStatus: 'awakened',
+      volume: {
+        centerLat: 39.73905,
+        centerLng: -121.847904,
+        widthMeters: 10,
+        depthMeters: 10,
+        heightMeters: 12
+      }
+    };
+    const farLand = {
+      parcelId: 'GLAND-FARAWAY',
+      customName: 'Distant Peak',
+      centerLat: 37.7749,
+      centerLng: -122.4194,
+      stewardStatus: 'awakened'
+    };
+
+    assert.equal(isPointInsideParcelFootprint(userLoc.lat, userLoc.lng, insideLand.volume), true);
+    assert.equal(computeParcelEdgeDistanceMeters(userLoc.lat, userLoc.lng, insideLand.volume), 0);
+
+    const result = findNearbyCameraLands({
+      parcels: [farLand, nearLand, insideLand],
+      sculptures: [
+        { id: 'sc-1', parcelId: 'GLAND-INSIDE', title: 'Magnolia', lat: 39.738873, lng: -121.847904 }
+      ],
+      location: userLoc,
+      user: { id: 'google:owner-1' },
+      ownedParcelIds: ['GLAND-INSIDE']
+    });
+
+    assert.equal(result.visibleLands.length, 2, 'Distant land (>120m) is excluded from camera view');
+    assert.equal(result.primaryLand?.parcelId, 'GLAND-INSIDE');
+    assert.equal(result.primaryLand?.isInside, true);
+    assert.equal(result.primaryLand?.isOwned, true);
+    assert.equal(result.primaryLand?.sculptures.length, 1);
+    assert.equal(result.immediateLands.length, 2);
+    assert.equal(result.immediateLands[1].parcelId, 'GLAND-NEAR20');
+    assert.equal(result.immediateLands[1].isInside, false);
+    assert.equal(result.immediateLands[1].isNear, true);
+
+    const prism = computeArLandPrismLocalGeometry({
+      location: userLoc,
+      volume: result.primaryLand.volume,
+      baseY: -1.15
+    });
+    assert.ok(prism);
+    assert.equal(prism.bottomCorners.length, 4);
+    assert.equal(prism.topCorners.length, 4);
+    assert.equal(prism.baseY, -1.15);
+    assert.equal(prism.topY, Number((-1.15 + 1.92).toFixed(3)));
   });
 });

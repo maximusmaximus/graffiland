@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
+import {
+  computeArLandPrismLocalGeometry,
+  findNearbyCameraLands
+} from '../utils/arLandHelpers.js';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { groupNearestLandsWithSculptures } from '../utils/landMapHelpers.js';
 import {
@@ -11,11 +15,13 @@ import {
 } from '../components/VoxelEngine3D.js';
 
 /**
- * Manages nearby AR sculptures rendering (InstancedMesh + distance LOD + custom 3D models +
- * parcel perimeters), live ORB relocalization with smooth heading yaw correction,
- * and the mobile Public Area Map drawer.
+ * Manages nearby AR sculptures & 3D holographic land volumes rendering (in BOTH draw and
+ * preview camera modes), tap-to-inspect AR land interaction state, live ORB relocalization
+ * with smooth heading yaw correction, and the mobile Public Area Map drawer.
  */
 export function useARPreview({
+  user = null,
+  ownedParcelIds = [],
   mode,
   location,
   locationRef,
@@ -34,12 +40,16 @@ export function useARPreview({
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arTargetedIdRef = useRef('');
+  const arSelectedLandIdRef = useRef('');
   const orbHeadingCorrectionRadRef = useRef(0);
 
   const [nearbySculptures, setNearbySculptures] = useState([]);
+  const [nearbyParcels, setNearbyParcels] = useState([]);
   const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
+  const [arSelectedLandId, setArSelectedLandIdState] = useState('');
 
   const [mapOpen, setMapOpen] = useState(false);
+  const [mapInitialDimensionMode, setMapInitialDimensionMode] = useState('2d');
   const [areaFilterMode, setAreaFilterMode] = useState('nearby');
   const [mapSculptures, setMapSculptures] = useState([]);
   const [mapParcels, setMapParcels] = useState([]);
@@ -47,6 +57,12 @@ export function useARPreview({
   const [mapSelectedSculpture, setMapSelectedSculpture] = useState(null);
   const [mapSelectedParcelId, setMapSelectedParcelId] = useState('');
   const [mapFocusParcelTick, setMapFocusParcelTick] = useState(0);
+
+  const setArSelectedLandId = useCallback((nextId) => {
+    const clean = String(nextId || '').trim();
+    arSelectedLandIdRef.current = clean;
+    setArSelectedLandIdState(clean);
+  }, []);
 
   const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
     const mergedInitial = (lightList || []).map((sc) => {
@@ -99,14 +115,48 @@ export function useARPreview({
     }
   }, []);
 
-  // Build nearby sculptures + parcel borders with InstancedMesh & distance LOD (>25m)
+  // Merge nearbyParcels with mapParcels so live camera AR always sees fresh parcel metadata & volumes
+  const mergedCameraParcels = useMemo(() => {
+    const byId = new Map();
+    for (const p of mapParcels || []) {
+      if (p?.parcelId) byId.set(p.parcelId, p);
+    }
+    for (const p of nearbyParcels || []) {
+      if (p?.parcelId) byId.set(p.parcelId, { ...(byId.get(p.parcelId) || {}), ...p });
+    }
+    return Array.from(byId.values());
+  }, [mapParcels, nearbyParcels]);
+
+  const cameraLands = useMemo(
+    () =>
+      findNearbyCameraLands({
+        parcels: mergedCameraParcels,
+        sculptures: nearbySculptures,
+        location,
+        user,
+        ownedParcelIds,
+        maxDistanceMeters: 120,
+        nearThresholdMeters: 45
+      }),
+    [location, mergedCameraParcels, nearbySculptures, ownedParcelIds, user]
+  );
+
+  const activeArLand = useMemo(() => {
+    if (!arSelectedLandId) return null;
+    return (
+      cameraLands.visibleLands.find((l) => l.parcelId === arSelectedLandId) ||
+      null
+    );
+  }, [arSelectedLandId, cameraLands.visibleLands]);
+
+  // Build nearby sculptures + glowing interactive 3D land volume prisms in BOTH draw and preview modes
   useEffect(() => {
     const group = nearbyGroupRef.current;
     if (!group) return undefined;
     disposeObject3D(group);
     while (group.children.length > 0) group.remove(group.children[0]);
 
-    if (mode !== 'preview' || !location) return undefined;
+    if ((mode !== 'draw' && mode !== 'preview') || !location) return undefined;
 
     const viewerElev =
       location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
@@ -114,7 +164,13 @@ export function useARPreview({
         : null;
     let cancelled = false;
 
+    const landByParcelId = new Map();
+    for (const land of cameraLands.visibleLands) {
+      if (land?.parcelId) landByParcelId.set(land.parcelId, land);
+    }
+
     for (const sc of nearbySculptures) {
+      const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const dist = Math.hypot(offset.east, offset.north);
       const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
@@ -122,7 +178,10 @@ export function useARPreview({
         ? new THREE.Group()
         : buildVoxelGroup(sc.voxels || [], { simplifyLod: dist > 25 });
       sub.traverse((obj) => {
-        if (obj.isMesh) obj.userData.sculpture = sc;
+        if (obj.isMesh) {
+          obj.userData.sculpture = sc;
+          if (parentLand) obj.userData.parcel = parentLand;
+        }
       });
 
       const bounds = new THREE.Box3().setFromObject(sub);
@@ -145,6 +204,7 @@ export function useARPreview({
       );
       hitProxy.position.copy(boxCenter);
       hitProxy.userData.sculpture = sc;
+      if (parentLand) hitProxy.userData.parcel = parentLand;
       sub.add(hitProxy);
 
       if (isCustom3d) {
@@ -192,7 +252,7 @@ export function useARPreview({
       const baseGlowRingMat = new THREE.MeshBasicMaterial({
         color: 0x00f5d4,
         transparent: true,
-        opacity: 0.65,
+        opacity: mode === 'draw' ? 0.42 : 0.65,
         side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending,
         depthWrite: false
@@ -203,13 +263,13 @@ export function useARPreview({
       );
       baseGlowRing.rotation.x = -Math.PI / 2;
       baseGlowRing.position.y = baseY + 0.018;
-      baseGlowRing.userData = { sculpture: sc, clickableBase: true };
+      baseGlowRing.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
       sub.add(baseGlowRing);
 
       const baseHaloMat = new THREE.MeshBasicMaterial({
         color: 0x00f5d4,
         transparent: true,
-        opacity: 0.18,
+        opacity: mode === 'draw' ? 0.12 : 0.18,
         side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending,
         depthWrite: false
@@ -220,12 +280,13 @@ export function useARPreview({
       );
       baseGlowHalo.rotation.x = -Math.PI / 2;
       baseGlowHalo.position.y = baseY + 0.01;
-      baseGlowHalo.userData = { sculpture: sc, clickableBase: true };
+      baseGlowHalo.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
       sub.add(baseGlowHalo);
 
       sub.userData = {
         sculptureId: sc.id,
         sculpture: sc,
+        parcel: parentLand,
         baseRingMat: baseGlowRingMat,
         baseHaloMat,
         baseGlowRing
@@ -246,48 +307,114 @@ export function useARPreview({
       group.add(sub);
     }
 
-    const renderedParcels = new Set();
-    for (const sc of nearbySculptures) {
-      if (!sc.parcelId || renderedParcels.has(sc.parcelId) || !sc.parcelBounds?.sw || !sc.parcelBounds?.ne) {
-        continue;
-      }
-      renderedParcels.add(sc.parcelId);
-      const [swLat, swLng] = sc.parcelBounds.sw;
-      const [neLat, neLng] = sc.parcelBounds.ne;
-      const insideParcel =
-        location.lat >= swLat && location.lat <= neLat && location.lng >= swLng && location.lng <= neLng;
-      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.11;
-      const corners = [
-        [swLat, swLng],
-        [swLat, neLng],
-        [neLat, neLng],
-        [neLat, swLng]
-      ].map(([cLat, cLng]) => {
-        const off = latLngOffsetMeters(location.lat, location.lng, cLat, cLng);
-        const cd = Math.hypot(off.east, off.north);
-        const cf = cd > 55 ? 55 / cd : 1;
-        return new THREE.Vector3(off.east * cf, baseY, -off.north * cf);
+    // Render interactive 3D Holographic Virtual Land Volume Prisms for every visible nearby land
+    for (const land of cameraLands.visibleLands) {
+      const prism = computeArLandPrismLocalGeometry({
+        location,
+        volume: land.volume,
+        baseY: -1.15,
+        maxClampDistM: 55
       });
-      const borderGeo = new THREE.BufferGeometry().setFromPoints(corners);
+      if (!prism) continue;
+
+      const isSelected = Boolean(arSelectedLandId && arSelectedLandId === land.parcelId);
+      const isDormant = String(land.stewardStatus || '').toLowerCase() === 'dormant';
+      const baseHex = isSelected || land.isInside
+        ? 0xffd166
+        : land.isFrozen
+        ? 0x7dd3fc
+        : isDormant
+        ? 0xff6b35
+        : 0x00f5d4;
+
+      const landGroup = new THREE.Group();
+      const bPts = prism.bottomCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+      const tPts = prism.topCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+
+      // 1) Glowing ground perimeter loop
+      const borderGeo = new THREE.BufferGeometry().setFromPoints(bPts);
       const borderMat = new THREE.LineBasicMaterial({
-        color: insideParcel ? 0xffd166 : 0x00f5d4,
+        color: baseHex,
         transparent: true,
-        opacity: insideParcel ? 0.92 : 0.56
+        opacity: isSelected ? 0.98 : land.isInside ? 0.88 : 0.62
       });
       const perimeterLoop = new THREE.LineLoop(borderGeo, borderMat);
-      perimeterLoop.userData = {
+      perimeterLoop.userData = { parcel: land, isArLandHit: true };
+      landGroup.add(perimeterLoop);
+
+      // 2) Vertical corner pillars + glowing roof wireframe
+      const edgePoints = [];
+      for (let i = 0; i < 4; i++) {
+        edgePoints.push(bPts[i], tPts[i]);
+        edgePoints.push(tPts[i], tPts[(i + 1) % 4]);
+      }
+      const wireGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
+      const wireMat = new THREE.LineBasicMaterial({
+        color: baseHex,
+        transparent: true,
+        opacity: isSelected ? 0.92 : land.isInside ? 0.72 : 0.44
+      });
+      const wireSegments = new THREE.LineSegments(wireGeo, wireMat);
+      wireSegments.userData = { parcel: land, isArLandHit: true };
+      landGroup.add(wireSegments);
+
+      // 3) Subtle translucent holographic ground pad + 4 interactive glass boundary walls
+      const wallPositions = [];
+      // Floor quad (2 triangles)
+      wallPositions.push(
+        bPts[0].x, bPts[0].y + 0.01, bPts[0].z,
+        bPts[1].x, bPts[1].y + 0.01, bPts[1].z,
+        bPts[2].x, bPts[2].y + 0.01, bPts[2].z,
+        bPts[0].x, bPts[0].y + 0.01, bPts[0].z,
+        bPts[2].x, bPts[2].y + 0.01, bPts[2].z,
+        bPts[3].x, bPts[3].y + 0.01, bPts[3].z
+      );
+      // 4 side walls
+      for (let i = 0; i < 4; i++) {
+        const next = (i + 1) % 4;
+        const a = bPts[i];
+        const b = bPts[next];
+        const c = tPts[next];
+        const d = tPts[i];
+        wallPositions.push(
+          a.x, a.y, a.z,
+          b.x, b.y, b.z,
+          c.x, c.y, c.z,
+          a.x, a.y, a.z,
+          c.x, c.y, c.z,
+          d.x, d.y, d.z
+        );
+      }
+      const wallGeo = new THREE.BufferGeometry();
+      wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wallPositions, 3));
+      wallGeo.computeVertexNormals();
+      const wallMat = new THREE.MeshBasicMaterial({
+        color: baseHex,
+        transparent: true,
+        opacity: isSelected ? 0.16 : land.isInside ? 0.08 : 0.055,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+      wallMesh.userData = { parcel: land, isArLandHit: true };
+      landGroup.add(wallMesh);
+
+      landGroup.userData = {
         isParcelPerimeter: true,
-        insideParcel,
-        parcelId: sc.parcelId,
-        perimeterMat: borderMat
+        insideParcel: land.isInside,
+        parcelId: land.parcelId,
+        parcel: land,
+        perimeterMat: borderMat,
+        wireMat,
+        wallMat
       };
-      group.add(perimeterLoop);
+      group.add(landGroup);
     }
 
     return () => {
       cancelled = true;
     };
-  }, [mode, location, nearbySculptures, nearbyGroupRef]);
+  }, [mode, location, nearbySculptures, cameraLands.visibleLands, arSelectedLandId, nearbyGroupRef]);
 
   // Live ORB visual landmark relocalization loop in AR Preview
   useEffect(() => {
@@ -416,6 +543,7 @@ export function useARPreview({
       ]);
       setMapSculptures(sRes.sculptures || []);
       setMapParcels(pRes.parcels || []);
+      setNearbyParcels(pRes.parcels || []);
     } catch {
       // keep existing items
     } finally {
@@ -423,15 +551,25 @@ export function useARPreview({
     }
   }, []);
 
-  const openAreaMap = useCallback(() => {
-    stopBrushPainting();
-    if (modeRef.current === 'transform') {
-      commitTransformAndExit('draw');
-    }
-    setAreaFilterMode('nearby');
-    setMapOpen(true);
-    loadPublicMapData();
-  }, [commitTransformAndExit, loadPublicMapData, modeRef, stopBrushPainting]);
+  const openAreaMap = useCallback(
+    (opts = {}) => {
+      const initialMode = opts?.initialDimensionMode === '3d' ? '3d' : '2d';
+      const targetParcelId = String(opts?.focusParcelId || '').trim();
+      stopBrushPainting();
+      if (modeRef.current === 'transform') {
+        commitTransformAndExit('draw');
+      }
+      setMapInitialDimensionMode(initialMode);
+      if (targetParcelId) {
+        setMapSelectedParcelId(targetParcelId);
+        setMapFocusParcelTick((n) => n + 1);
+      }
+      setAreaFilterMode('nearby');
+      setMapOpen(true);
+      loadPublicMapData();
+    },
+    [commitTransformAndExit, loadPublicMapData, modeRef, stopBrushPainting]
+  );
 
   const focusMapParcel = useCallback((parcelId) => {
     const pid = String(parcelId || '');
@@ -478,13 +616,23 @@ export function useARPreview({
   return {
     nearbySculptures,
     setNearbySculptures,
+    nearbyParcels,
+    setNearbyParcels,
     hydratedSculptureMapRef,
     hydrateNearbyList,
+    visibleCameraLands: cameraLands.visibleLands,
+    immediateCameraLands: cameraLands.immediateLands,
+    primaryCameraLand: cameraLands.primaryLand,
+    arSelectedLandId,
+    arSelectedLandIdRef,
+    setArSelectedLandId,
+    activeArLand,
     arTargetedSculpture,
     setArTargetedSculpture,
     arTargetedIdRef,
     mapOpen,
     setMapOpen,
+    mapInitialDimensionMode,
     areaFilterMode,
     setAreaFilterMode,
     mapSculptures,

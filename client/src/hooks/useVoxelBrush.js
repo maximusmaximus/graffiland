@@ -90,6 +90,8 @@ export function useVoxelBrush({
   setArTargetedSculpture,
   arPinPreview,
   openCameraSelectedChat,
+  onTapArLand = null,
+  isInteractingWithLandRef = null,
   openAgentHandoffRef,
   openPublishSheetRef
 }) {
@@ -1426,6 +1428,35 @@ export function useVoxelBrush({
 
       if (modeRef.current === 'draw') {
         if (!paintingRef.current && !keyGestureRef.current.active) {
+          // Check if the user tapped a visible nearby 3D land volume or its sculpture first
+          const host = canvasHostRef.current;
+          const cam = cameraRef.current;
+          const nearbyGroup = nearbyGroupRef.current;
+          if (host && cam && nearbyGroup && nearbyGroup.children.length > 0 && onTapArLand) {
+            const rect = host.getBoundingClientRect();
+            const ndc = new THREE.Vector2(
+              ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+              -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+            );
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(ndc, cam);
+            const hits = raycaster.intersectObjects(nearbyGroup.children, true);
+            const hitLandObj = hits.find(
+              (h) => h.object?.userData?.parcel || h.object?.userData?.isArLandHit
+            );
+            if (hitLandObj?.object?.userData?.parcel) {
+              onTapArLand(
+                hitLandObj.object.userData.parcel,
+                hitLandObj.object.userData.sculpture || null
+              );
+              return;
+            }
+          }
+          // If already interacting with a land and user taps empty sky, exit interaction smoothly
+          if (isInteractingWithLandRef?.current && onTapArLand) {
+            onTapArLand(null, null);
+            return;
+          }
           selectSurfaceAtScreenPoint(e.clientX, e.clientY);
         }
         return;
@@ -1454,6 +1485,15 @@ export function useVoxelBrush({
         const d = loc ? haversineMeters(loc.lat, loc.lng, hitSc.lat, hitSc.lng) : hitWithSculpture.distance;
         setArTargetedSculpture({ sculpture: hitSc, distanceM: d });
         openCameraSelectedChat(hitSc, hitWithSculpture.distance, arPinPreview);
+        return;
+      }
+      const hitLandOnly = hits.find(
+        (h) => h.object?.userData?.parcel || h.object?.userData?.isArLandHit
+      );
+      if (hitLandOnly?.object?.userData?.parcel && onTapArLand) {
+        onTapArLand(hitLandOnly.object.userData.parcel, null);
+      } else if (isInteractingWithLandRef?.current && onTapArLand) {
+        onTapArLand(null, null);
       }
     },
     [
@@ -1461,8 +1501,10 @@ export function useVoxelBrush({
       arTargetedIdRef,
       cameraRef,
       canvasHostRef,
+      isInteractingWithLandRef,
       locationRef,
       nearbyGroupRef,
+      onTapArLand,
       openCameraSelectedChat,
       selectSurfaceAtScreenPoint,
       setArTargetedSculpture

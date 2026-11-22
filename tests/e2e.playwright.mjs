@@ -1069,6 +1069,39 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     // Open Mobile Map Icon -> defaults to Nearest Lands with nested sculptures, expiration times & Google Maps links
     await hubPage.locator('[data-testid="mobile-pair-hub-btn"]').click(); // close dropdown
+
+    // First verify live AR Camera Land Interaction right from the initial drawing camera view:
+    // Because the mobile user is standing right at their seeded land, the On/Near Land pill appears on camera,
+    // tapping it opens the full AR Land Inspector and temporarily hides non-useful HUD buttons!
+    await hubPage.waitForSelector('[data-testid="ar-nearby-land-pill"]', { timeout: 10000 });
+    await hubPage.getByTestId('ar-nearby-land-pill').click();
+    await hubPage.waitForSelector('[data-testid="ar-land-inspector"]', { timeout: 10000 });
+    await hubPage.getByTestId('ar-land-exit-top-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const arInspectState = await hubPage.evaluate(() => ({
+      scrollWidth: globalThis.document.documentElement.scrollWidth,
+      pairBtnCount: globalThis.document.querySelectorAll('[data-testid="mobile-pair-hub-btn"]').length,
+      carouselCount: globalThis.document.querySelectorAll('.key-carousel').length,
+      dockToggleCount: globalThis.document.querySelectorAll('.floating-tools-toggle').length,
+      scanBoxCount: globalThis.document.querySelectorAll('.scene-scan-box').length,
+      mapBtnCount: globalThis.document.querySelectorAll('.floating-map-btn').length,
+      reticleCount: globalThis.document.querySelectorAll('.reticle').length
+    }));
+    assert.ok(
+      arInspectState.scrollWidth <= 391,
+      `Expected AR land inspector scrollWidth <= 391, got ${arInspectState.scrollWidth}`
+    );
+    assert.equal(arInspectState.pairBtnCount, 0, 'Pair button should hide while interacting with land');
+    assert.equal(arInspectState.carouselCount, 0, 'Bottom tool carousel should hide while interacting with land');
+    assert.equal(arInspectState.dockToggleCount, 0, 'Tools drawer toggle should hide while interacting with land');
+    assert.equal(arInspectState.scanBoxCount, 0, 'Scene scan widget should hide while interacting with land');
+    assert.equal(arInspectState.mapBtnCount, 0, 'Floating map button should hide while interacting with land');
+    assert.equal(arInspectState.reticleCount, 0, 'Drawing reticle should hide while interacting with land');
+
+    // Exit land interaction via Back to Draw -> all drawing buttons immediately restore
+    await hubPage.getByTestId('ar-land-exit-top-btn').click();
+    await hubPage.locator('.floating-map-btn').waitFor({ state: 'visible', timeout: 5000 });
+    await hubPage.locator('.key-carousel').waitFor({ state: 'visible', timeout: 5000 });
+
     await hubPage.locator('.floating-map-btn').click();
     await hubPage.waitForSelector('[aria-label="Nearest Lands and Sculptures Map"]', { timeout: 10000 });
     await hubPage.waitForSelector('[data-testid="mobile-land-card"]', { timeout: 10000 });

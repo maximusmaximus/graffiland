@@ -50,6 +50,9 @@ function ARViewportCanvasInner({
   locationRef,
   arTargetedIdRef,
   setArTargetedSculpture,
+  arSelectedLandIdRef = null,
+  isInteractingWithLand = false,
+  isInteractingWithLandRef = null,
   mode,
   modeRef,
   toolRef,
@@ -291,7 +294,8 @@ function ARViewportCanvasInner({
         camera.quaternion.setFromEuler(euler);
       }
 
-      const showCursor = modeRef.current === 'draw';
+      const interactingLand = Boolean(isInteractingWithLandRef?.current);
+      const showCursor = modeRef.current === 'draw' && !interactingLand;
       ghost.visible = showCursor;
       let latestTarget = null;
 
@@ -363,7 +367,9 @@ function ARViewportCanvasInner({
       let originZ = null;
       let originRequired = false;
 
-      if (anchor) {
+      if (interactingLand) {
+        surfaceMarker.visible = false;
+      } else if (anchor) {
         originX = anchor.x;
         originY = anchor.y;
         originZ = anchor.z;
@@ -527,20 +533,47 @@ function ARViewportCanvasInner({
         }
       }
 
-      if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
+      if (
+        (modeRef.current === 'draw' || modeRef.current === 'preview') &&
+        nearbyGroupRef.current?.children.length
+      ) {
         const activeId = arTargetedIdRef.current;
+        const selectedLandId = arSelectedLandIdRef?.current || '';
         for (const sub of nearbyGroupRef.current.children) {
           const ud = sub.userData;
           if (ud?.isParcelPerimeter && ud.perimeterMat) {
-            const pPulse = 0.5 + 0.5 * Math.sin(now * 0.005);
-            ud.perimeterMat.opacity = ud.insideParcel ? 0.68 + pPulse * 0.28 : 0.42 + pPulse * 0.22;
+            const isSelLand = Boolean(selectedLandId && ud.parcelId === selectedLandId);
+            const pPulse = 0.5 + 0.5 * Math.sin(now * (isSelLand ? 0.0075 : 0.0045));
+            ud.perimeterMat.opacity = isSelLand
+              ? 0.8 + pPulse * 0.2
+              : ud.insideParcel
+              ? 0.68 + pPulse * 0.28
+              : 0.44 + pPulse * 0.22;
+            if (ud.wireMat) {
+              ud.wireMat.opacity = isSelLand
+                ? 0.72 + pPulse * 0.24
+                : ud.insideParcel
+                ? 0.52 + pPulse * 0.24
+                : 0.3 + pPulse * 0.18;
+            }
+            if (ud.wallMat) {
+              ud.wallMat.opacity = isSelLand
+                ? 0.13 + pPulse * 0.08
+                : ud.insideParcel
+                ? 0.06 + pPulse * 0.04
+                : 0.04 + pPulse * 0.025;
+            }
             continue;
           }
           if (!ud?.baseRingMat) continue;
           const isTargeted = activeId && ud.sculptureId === activeId;
           const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
           ud.baseRingMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
-          ud.baseRingMat.opacity = isTargeted ? 0.72 + pulse * 0.25 : 0.46 + pulse * 0.3;
+          ud.baseRingMat.opacity = isTargeted
+            ? 0.72 + pulse * 0.25
+            : modeRef.current === 'draw'
+            ? 0.28 + pulse * 0.18
+            : 0.46 + pulse * 0.3;
           if (ud.baseHaloMat) {
             ud.baseHaloMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
             ud.baseHaloMat.opacity = isTargeted ? 0.22 + pulse * 0.14 : 0.1 + pulse * 0.1;
@@ -627,6 +660,7 @@ function ARViewportCanvasInner({
   }, [
     applyVoxelAction,
     applyVoxelBatch,
+    arSelectedLandIdRef,
     arTargetedIdRef,
     cameraRef,
     canvasHostRef,
@@ -643,6 +677,7 @@ function ARViewportCanvasInner({
     ghostMeshRef,
     gridHelperRef,
     hemiLightRef,
+    isInteractingWithLandRef,
     lastPaintPosRef,
     lastScanUiRef,
     lastStackAtRef,
@@ -703,7 +738,7 @@ function ARViewportCanvasInner({
         onPointerCancel={onCanvasPointerCancel}
       />
       <canvas ref={occlusionCanvasRef} className="occlusion-overlay" />
-      {mode === 'draw' && <div className="reticle" />}
+      {mode === 'draw' && !isInteractingWithLand && <div className="reticle" />}
       {contextLost && (
         <div className="scene-error-fallback" role="status">
           <div className="scene-error-card card">
