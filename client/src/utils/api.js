@@ -25,7 +25,7 @@ async function request(url, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {})
   };
-  const res = await fetch(resolveApiUrl(url), { ...options, headers });
+  const res = await fetch(resolveApiUrl(url), { cache: 'no-store', ...options, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     /** @type {any} */

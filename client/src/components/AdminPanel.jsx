@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -184,7 +185,15 @@ export default function AdminPanel({ user, config, onModerationChange, onSelectS
                       {item.title}
                     </button>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      {item.parcelId} · {item.lat}, {item.lng}
+                      {resolveLandDisplayName(
+                        {
+                          customName: item.parcelName || item.landDisplayName || '',
+                          firstSculptureTitle: item.title || '',
+                          placeName: item.placeName || ''
+                        },
+                        { defaultName: 'Virtual Land' }
+                      )}{' '}
+                      · {item.lat}, {item.lng}
                     </div>
                   </td>
                   <td>

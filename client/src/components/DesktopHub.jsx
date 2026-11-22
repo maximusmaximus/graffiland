@@ -7,6 +7,7 @@ import {
   footprintsOverlap,
   normalizeRotationDeg,
   parseParcelParamFromLocation,
+  resolveLandDisplayName,
   validateAndNormalizeLandVolume
 } from '../../../shared/landVolume.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
@@ -71,6 +72,10 @@ function summarizeSculptureSnapshot(sc) {
     lng: sc.lng,
     altitude: sc.altitude,
     parcelId: sc.parcelId,
+    parcelName: sc.parcelName || '',
+    landDisplayName: sc.landDisplayName || '',
+    modelType: sc.modelType || 'voxel',
+    customModel: sc.customModel || null,
     parcelBounds: sc.parcelBounds,
     voxelCount: sc.voxelCount,
     voxels: Array.isArray(sc.voxels) ? sc.voxels.slice(0, 4096) : [],
@@ -564,6 +569,38 @@ export default function DesktopHub({
     [ownedUserParcels]
   );
 
+  // Live latest owner-set land name lookup so renaming a land updates every badge, list & toast immediately
+  const landNameByParcelId = useMemo(() => {
+    const map = new Map();
+    for (const list of [parcels, ownedUserParcels, recentlyMintedParcels]) {
+      for (const p of list || []) {
+        const pid = String(p?.parcelId || '').toUpperCase();
+        if (!pid) continue;
+        const resolved = resolveLandDisplayName(p, { defaultName: '' });
+        if (resolved) map.set(pid, resolved);
+      }
+    }
+    return map;
+  }, [parcels, ownedUserParcels, recentlyMintedParcels]);
+
+  const getLiveLandName = useCallback(
+    (parcelOrItem, fallback = 'Virtual Land') => {
+      if (!parcelOrItem) return fallback;
+      const pid =
+        typeof parcelOrItem === 'string'
+          ? parcelOrItem.toUpperCase()
+          : String(parcelOrItem.parcelId || '').toUpperCase();
+      if (pid && landNameByParcelId.has(pid)) {
+        return landNameByParcelId.get(pid);
+      }
+      if (typeof parcelOrItem === 'object') {
+        return resolveLandDisplayName(parcelOrItem, { defaultName: fallback });
+      }
+      return fallback;
+    },
+    [landNameByParcelId]
+  );
+
   const activeAddItemParcel = useMemo(() => {
     if (!addItemParcelId) return null;
     const pid = String(addItemParcelId).toUpperCase();
@@ -759,7 +796,7 @@ export default function DesktopHub({
       });
       const mintedParcelRecord = {
         parcelId: res.parcelId,
-        customName: res.customName || draft.customName?.trim() || res.parcelId,
+        customName: res.customName || draft.customName?.trim() || 'Virtual Land',
         description: draft.description?.trim() || '',
         volume: res.volume || {
           centerLat: draft.centerLat,
@@ -839,7 +876,7 @@ export default function DesktopHub({
         mintedIds.push(res.parcelId);
         mintedRecords.push({
           parcelId: res.parcelId,
-          customName: res.customName || draft.customName?.trim() || res.parcelId,
+          customName: res.customName || draft.customName?.trim() || 'Virtual Land',
           description: draft.description?.trim() || '',
           volume: res.volume || {
             centerLat: draft.centerLat,
@@ -905,24 +942,25 @@ export default function DesktopHub({
     setLandStatus('');
     try {
       await api.updateLandVolume(parcelId, nextVolume);
-      setLandStatus({ text: `Saved updated 3D bounds for ${parcelId}.` });
+      setLandStatus({ text: `Saved updated 3D bounds for "${getLiveLandName(parcelId)}".` });
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
       setLandStatus({ text: err?.message || 'Could not update 3D volume.', isError: true });
     } finally {
       setMintBusy(false);
     }
-  }, [user?.id, refreshData, refreshMyLands]);
+  }, [user?.id, refreshData, refreshMyLands, getLiveLandName]);
 
   const handleToggleFreezeParcel = useCallback(async (parcelId, nextFrozen) => {
     if (!parcelId || !user?.id) return;
     setMintBusy(true);
     try {
       await api.updateLandSettings(parcelId, { frozen: Boolean(nextFrozen) });
+      const landName = getLiveLandName(parcelId);
       setLandStatus({
         text: nextFrozen
-          ? `Frozen ${parcelId} — no new sculptures can be placed here.`
-          : `Unfrozen ${parcelId} — new sculptures are allowed again.`
+          ? `Frozen "${landName}" — no new sculptures can be placed here.`
+          : `Unfrozen "${landName}" — new sculptures are allowed again.`
       });
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
@@ -931,7 +969,7 @@ export default function DesktopHub({
     } finally {
       setMintBusy(false);
     }
-  }, [user?.id, refreshData, refreshMyLands]);
+  }, [user?.id, refreshData, refreshMyLands, getLiveLandName]);
 
   const handleToggleSculptureVisibility = useCallback(async (sculptureId, nextHidden) => {
     if (!sculptureId || !user?.id) return;
@@ -954,10 +992,10 @@ export default function DesktopHub({
     const ok = await copyToClipboard(shareUrl);
     setLandStatus({
       text: ok
-        ? `Copied share link for ${parcel.customName || parcel.parcelId}: ${shareUrl}`
+        ? `Copied share link for "${getLiveLandName(parcel)}": ${shareUrl}`
         : shareUrl
     });
-  }, []);
+  }, [getLiveLandName]);
 
   const handleSaveOwnedTitle = useCallback(
     async (parcelId, { customName, description }) => {
@@ -966,10 +1004,14 @@ export default function DesktopHub({
         description,
         curationNote: description
       });
-      setLandStatus({ text: `Saved title for ${parcelId}${customName ? ` ("${customName}")` : ''}.` });
+      setLandStatus({
+        text: customName
+          ? `Renamed land to "${customName}".`
+          : `Saved details for "${getLiveLandName(parcelId)}".`
+      });
       await Promise.all([refreshData(), refreshMyLands()]);
     },
-    [refreshData, refreshMyLands]
+    [refreshData, refreshMyLands, getLiveLandName]
   );
 
   const handleOpenAddLandItem = useCallback((parcelOrId) => {
@@ -1113,10 +1155,7 @@ export default function DesktopHub({
           <div className="desktop-visited-parcel-bar" role="region" aria-label="Shared parcel visit overview">
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <strong>{visitedParcel.parcel.customName || visitedParcel.parcel.parcelId}</strong>
-                <span className="badge gold mono" style={{ fontSize: 10 }}>
-                  {visitedParcel.parcel.parcelId}
-                </span>
+                <strong>{getLiveLandName(visitedParcel.parcel)}</strong>
                 <span className={`badge ${visitedParcel.parcel.frozen ? 'badge-error' : 'teal'}`} style={{ fontSize: 10 }}>
                   {visitedParcel.parcel.frozen ? '❄️ Frozen' : '✅ Open Land'}
                 </span>
@@ -1300,7 +1339,7 @@ export default function DesktopHub({
                     <XeroIcon emoji="🕒" size={12} /> Last Viewed: {lastSculpture.title}
                   </strong>
                   <span className="badge gold" style={{ fontSize: 10 }}>
-                    {lastSculpture.parcelId}
+                    {getLiveLandName(lastSculpture)}
                   </span>
                 </div>
                 <span style={{ fontSize: 11, color: 'var(--muted)' }}>
@@ -1378,7 +1417,7 @@ export default function DesktopHub({
                           {q.prompt}
                         </div>
                         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
-                          <span className="badge gold" style={{ fontSize: 10 }}>{q.parcelId}</span>
+                          <span className="badge gold" style={{ fontSize: 10 }}>{getLiveLandName(q)}</span>
                           <span className="badge" style={{ fontSize: 10 }}>🤖 {q.stewardName}</span>
                           {q.bountyEth > 0 && (
                             <span className="badge teal" style={{ fontSize: 10 }}>
@@ -1426,7 +1465,7 @@ export default function DesktopHub({
                         <span className="badge teal" style={{ fontSize: 11 }}>{lst.priceEth} ETH</span>
                       </div>
                       <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
-                        {lst.parcelId} · Seller: {lst.sellerName}
+                        {getLiveLandName(lst)} · Seller: {lst.sellerName}
                       </div>
                       {lst.splits && (
                         <div className="mono" style={{ fontSize: 10, color: 'var(--accent-gold)', marginTop: 4 }}>
@@ -1567,7 +1606,7 @@ export default function DesktopHub({
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
                       <strong style={{ fontSize: 13 }}>{sc.title}</strong>
-                      <span className="badge gold" style={{ fontSize: 10 }}>{sc.parcelId}</span>
+                      <span className="badge gold" style={{ fontSize: 10 }}>{getLiveLandName(sc)}</span>
                     </div>
                     {sc.description && (
                       <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left' }}>
@@ -1597,6 +1636,7 @@ export default function DesktopHub({
                           style={{ padding: '2px 7px', fontSize: 10.5 }}
                           href={buildShareToXUrl({
                             title: sc.title,
+                            landName: getLiveLandName(sc),
                             parcelId: sc.parcelId,
                             sculptureId: sc.id
                           })}
@@ -1637,10 +1677,13 @@ export default function DesktopHub({
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                         <span className="badge" style={{ fontSize: 10 }}>
-                          {sc.parcelId}
+                          {getLiveLandName(sc)}
                         </span>
                         <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                          {sc.voxelCount || sc.voxels?.length || 0} blocks · PoL {sc.polScore}
+                          {sc.modelType === 'custom-3d'
+                            ? `${String(sc.customModel?.format || '3D').toUpperCase()} Model`
+                            : `${sc.voxelCount || sc.voxels?.length || 0} blocks`}{' '}
+                          · PoL {sc.polScore}
                         </span>
                       </div>
                     </button>

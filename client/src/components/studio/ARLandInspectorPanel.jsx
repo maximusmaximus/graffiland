@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { buildParcelShareUrl } from '../../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../../shared/landVolume.mjs';
 import { api } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import {
@@ -46,8 +49,11 @@ export default function ARLandInspectorPanel({
 
   if (!land) return null;
 
-  const displayName =
-    localDisplayName || String(land.customName || '').trim() || land.displayName || land.parcelId;
+  const displayName = resolveLandDisplayName({
+    customName: localDisplayName || String(land.customName || '').trim(),
+    displayName: land.displayName || '',
+    firstSculptureTitle: land.sculptures?.[0]?.title || ''
+  });
   const exp = land.expiration || {
     state: 'permanent',
     urgent: false,
@@ -113,7 +119,7 @@ export default function ARLandInspectorPanel({
       setLocalDisplayName(nextName);
       setIsRenaming(false);
       onShowHint?.(
-        nextName ? `Renamed land to "${nextName}"!` : `Reset name for ${land.parcelId}`
+        nextName ? `Renamed land to "${nextName}"!` : 'Updated land name'
       );
     } catch (err) {
       setRenameError(err?.message || 'Could not rename land');
@@ -284,14 +290,13 @@ export default function ARLandInspectorPanel({
           </div>
         )}
 
-        <div className="ar-land-subline mono">
-          <span>{land.parcelId}</span>
-          {land.centerLat !== null && land.centerLng !== null && (
+        {land.centerLat !== null && land.centerLng !== null && (
+          <div className="ar-land-subline mono">
             <span>
-              · {Number(land.centerLat).toFixed(4)}, {Number(land.centerLng).toFixed(4)}
+              {Number(land.centerLat).toFixed(4)}, {Number(land.centerLng).toFixed(4)}
             </span>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {land.description && <p className="ar-land-desc">{land.description}</p>}

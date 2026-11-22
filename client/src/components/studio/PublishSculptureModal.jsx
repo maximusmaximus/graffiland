@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import {
   buildSculptureShareUrl,
   buildShareToXUrl,
@@ -73,7 +74,19 @@ export default function PublishSculptureModal({
             </div>
             <div className="card" style={{ fontSize: 12 }}>
               <div><strong>Title:</strong> {mintReceipt.sculpture.title}</div>
-              <div><strong>Virtual Land:</strong> <span className="mono">{mintReceipt.sculpture.parcelId}</span></div>
+              <div>
+                <strong>Virtual Land:</strong>{' '}
+                <span>
+                  {resolveLandDisplayName(
+                    {
+                      customName: mintReceipt.sculpture.parcelName || '',
+                      displayName: mintReceipt.sculpture.landDisplayName || '',
+                      firstSculptureTitle: mintReceipt.sculpture.title || ''
+                    },
+                    { defaultName: 'Virtual Land' }
+                  )}
+                </span>
+              </div>
               <div><strong>Token ID:</strong> <span className="mono">#{mintReceipt.mint.tokenId}</span></div>
               <div><strong>Resale Fee:</strong> 5% (ERC-2981)</div>
               <div style={{ wordBreak: 'break-all' }}>

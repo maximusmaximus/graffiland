@@ -5,6 +5,7 @@ import {
   buildDefaultVolumeFromBounds,
   buildParcelShareUrl,
   footprintsOverlap,
+  resolveLandDisplayName,
   slugifyLandTitle,
   validateAndNormalizeLandVolume,
   validateLandTitle
@@ -17,6 +18,7 @@ import {
 import {
   McpServiceError,
   checkParcelOwnership,
+  getLatestParcelDisplayName,
   normalizeParcelId,
   resolvePreferredOwnerWallet
 } from './mcp/helpers.mjs';
@@ -54,6 +56,7 @@ function serializeQuestRow(row, stewardRow = null, curationRow = null, parcelRow
     id: row.id,
     parcelId: row.parcel_id,
     parcelName: curationRow?.custom_name || '',
+    landDisplayName: resolveLandDisplayName({ customName: curationRow?.custom_name || '' }),
     stewardSub: row.steward_sub,
     stewardName: stewardRow?.steward_name || 'AI Steward',
     stewardType: stewardRow?.steward_type || 'agent',
@@ -196,6 +199,7 @@ export async function scoutLands(
       stewardName: r.steward_name || '',
       stewardType: r.steward_type || (String(r.first_claimant_sub || '').startsWith('agent:') ? 'agent' : 'human'),
       customName: r.custom_name || '',
+      displayName: resolveLandDisplayName({ customName: r.custom_name || '' }),
       curationNote: r.curation_note || '',
       sculptureCount: Number(r.sculpture_count || 0),
       humanContributorCount: Number(r.human_contributor_count || 0),
@@ -345,10 +349,11 @@ async function assertNoFootprintOverlap(db, targetVol, claimantSub) {
       );
     }
     if (otherVol && footprintsOverlap(targetVol, otherVol)) {
+      const otherLabel = await getLatestParcelDisplayName(db, row.parcel_id);
       throw new McpServiceError(
-        `Selected 3D land footprint overlaps existing Virtual Land ${row.parcel_id}.`,
+        `Selected 3D land footprint overlaps existing Virtual Land "${otherLabel}".`,
         409,
-        { conflictingParcelId: row.parcel_id }
+        { conflictingParcelId: row.parcel_id, conflictingLandName: otherLabel }
       );
     }
   }
@@ -493,8 +498,9 @@ export async function claimDormantLand(
         limits: LAND_VOLUME_LIMITS
       };
     }
+    const existingLabel = await getLatestParcelDisplayName(db, cleanParcelId);
     throw new McpServiceError(
-      `Virtual Land ${cleanParcelId} is already claimed by ${existingSteward.steward_name || 'another steward'}.`,
+      `Virtual Land "${existingLabel}" is already claimed by ${existingSteward.steward_name || 'another steward'}.`,
       409
     );
   }
@@ -509,7 +515,8 @@ export async function claimDormantLand(
       existingParcel.first_claimant_sub &&
       existingParcel.first_claimant_sub !== agentUser.id
     ) {
-      throw new McpServiceError(`Virtual Land ${cleanParcelId} is already held by another claimant.`, 409);
+      const existingLabel = await getLatestParcelDisplayName(db, cleanParcelId);
+      throw new McpServiceError(`Virtual Land "${existingLabel}" is already held by another claimant.`, 409);
     }
   }
 
@@ -873,8 +880,9 @@ export async function batchBuildLand(
     .get('SELECT freeze_placements FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId])
     .catch(() => null);
   if (landSettingsRow && Number(landSettingsRow.freeze_placements) === 1) {
+    const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
     throw new McpServiceError(
-      `Virtual Land ${parcelCtx.parcelId} is frozen — unfreeze it in Land Settings before placing new items.`,
+      `Virtual Land "${landLabel}" is frozen — unfreeze it in Land Settings before placing new items.`,
       403
     );
   }
@@ -1361,6 +1369,7 @@ export async function getLandTelemetry(db, parcelId) {
   return {
     parcelId: cleanParcel,
     customName: curation?.custom_name || '',
+    displayName: resolveLandDisplayName({ customName: curation?.custom_name || '' }),
     curationNote: curation?.curation_note || '',
     steward: steward
       ? {

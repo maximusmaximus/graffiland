@@ -201,8 +201,16 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(farUser.displayedLands[0].parcelId, 'GLAND-MID');
   });
 
-  test('computeClosestLandsPerimeterFit frames all perimeter corners of the closest lands cluster and formatSimpleLandLabel stays concise', () => {
-    assert.equal(formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: '' }, 0), '#1 9R1652PV');
+  test('computeClosestLandsPerimeterFit frames all perimeter corners of the closest lands cluster and formatSimpleLandLabel never leaks internal parcel IDs', () => {
+    assert.equal(formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: '' }, 0), '#1 Unnamed Land');
+    assert.equal(
+      formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: 'GLAND-9R1652PV' }, 0),
+      '#1 Unnamed Land'
+    );
+    assert.equal(
+      formatSimpleLandLabel({ parcelId: 'GLAND-9R16561P', customName: '', firstSculptureTitle: 'Magnolia' }, 0),
+      '#1 Magnolia Land'
+    );
     assert.equal(
       formatSimpleLandLabel({ parcelId: 'GLAND-9R1652PV', customName: 'Civic Neon Plaza' }, 1),
       '#2 Civic Neon Plaza'

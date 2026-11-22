@@ -231,6 +231,7 @@ function jsonResponse(data, status = 200, request) {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
       ...corsHeaders(request)
     }
   });

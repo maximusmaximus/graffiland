@@ -4,6 +4,7 @@ import {
   buildPropertyOwnerPrompt,
   buildStdioMcpSnippet
 } from '../../../../shared/landSignatureMessage.mjs';
+import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
@@ -52,7 +53,10 @@ function fallbackSummary(item) {
     item?.summaryDescription ||
     item?.payload?.description ||
     item?.payload?.reason ||
-    `Execute ${String(item?.action || 'action').replace(/_/g, ' ')} on ${item?.parcelId || 'your land'}.`;
+    `Execute ${String(item?.action || 'action').replace(/_/g, ' ')} on ${resolveLandDisplayName(
+      { customName: item?.parcelName || item?.landDisplayName || '' },
+      { defaultName: 'your land' }
+    )}.`;
   return { title, desc };
 }
 
@@ -337,7 +341,12 @@ export default function MobilePairApprovalDropdown({
                     <div className="mobile-approval-meta">
                       <span>🤖 {item.agentName || 'MCP Agent'}</span>
                       <span>·</span>
-                      <span className="mono">{item.parcelId}</span>
+                      <span>
+                        {resolveLandDisplayName(
+                          { customName: item.parcelName || item.landDisplayName || '' },
+                          { defaultName: 'Virtual Land' }
+                        )}
+                      </span>
                     </div>
 
                     <p className="mobile-approval-desc">{desc}</p>
@@ -610,7 +619,12 @@ export default function MobilePairApprovalDropdown({
                     <div className="mobile-approval-meta">
                       <span>🤖 {item.agentName || item.requestedBy || 'Agent'}</span>
                       <span>·</span>
-                      <span className="mono">{item.parcelId}</span>
+                      <span>
+                        {resolveLandDisplayName(
+                          { customName: item.parcelName || item.landDisplayName || '' },
+                          { defaultName: 'Virtual Land' }
+                        )}
+                      </span>
                       {item.signedBy && (
                         <>
                           <span>·</span>

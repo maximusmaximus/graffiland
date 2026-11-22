@@ -4,6 +4,7 @@ import {
   buildParcelShareUrl,
   computeMaxHeightForFootprint,
   normalizeRotationDeg,
+  resolveLandDisplayName,
   scaleFootprintToLimit,
   validateLandTitle
 } from '../../../shared/landVolume.mjs';
@@ -55,7 +56,7 @@ function normalizeDeg(value) {
 }
 
 function formatLocationCopyLine(parcel, origin, pathname) {
-  const title = parcel.customName || parcel.parcelId;
+  const title = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
   const vol = parcel.volume || parcel;
   const lat = Number(vol?.centerLat ?? parcel.centerLat ?? parcel.lat);
   const lng = Number(vol?.centerLng ?? parcel.centerLng ?? parcel.lng);
@@ -377,7 +378,7 @@ export function DesktopLandBuilderPanel({
         depthMeters: Number(vol?.depthMeters || limits.defaultDepthMeters),
         heightMeters: Number(vol?.heightMeters || limits.defaultHeightMeters),
         rotationDeg: Number(vol?.rotationDeg || 0),
-        customName: parcel.customName || parcel.parcelId,
+        customName: resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' }),
         shareUrl: buildParcelShareUrl({
           origin,
           pathname,
@@ -422,14 +423,16 @@ export function DesktopLandBuilderPanel({
       compact: true
     });
     const ok = await copyTextSafe(shareUrl);
-    flashCopy(ok ? `Copied link for "${parcel.customName || parcel.parcelId}"` : shareUrl);
+    const label = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+    flashCopy(ok ? `Copied link for "${label}"` : shareUrl);
   };
 
   const handleCopyMintedParcelLocation = async (parcel) => {
     if (!parcel?.parcelId) return;
     const text = formatLocationCopyLine(parcel, origin, pathname);
     const ok = await copyTextSafe(text);
-    flashCopy(ok ? `Copied location for "${parcel.customName || parcel.parcelId}"` : text);
+    const label = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+    flashCopy(ok ? `Copied location for "${label}"` : text);
   };
 
   const handleCopyAllMintedLocations = async () => {
@@ -571,7 +574,7 @@ export function DesktopLandBuilderPanel({
                     className="btn btn-xs btn-outline"
                     onClick={() => onSelectDraft?.(`owned:${p.parcelId}`)}
                   >
-                    🏗️ {p.displayName || p.customName || p.parcelId}
+                    🏗️ {resolveLandDisplayName(p, { defaultName: 'Virtual Land' })}
                   </button>
                 ))}
               </div>
@@ -1180,7 +1183,7 @@ export function DesktopLandBuilderPanel({
               const ownedKey = `owned:${parcel.parcelId}`;
               const isSelected = selectedDraftId === ownedKey;
               const isFrozen = Boolean(parcel.frozen || parcel.settings?.frozen);
-              const displayTitle = parcel.customName || parcel.parcelId;
+              const displayTitle = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
               return (
                 <div
                   key={parcel.parcelId}

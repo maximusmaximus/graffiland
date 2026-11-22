@@ -3,7 +3,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { resolveApiUrl } from '../utils/api.js';
-import { loadCustomModelObject } from '../utils/customModelLoader.js';
+import {
+  enforceCrispTexturesAndShading,
+  loadCustomModelObject
+} from '../utils/customModelLoader.js';
 import { buildVoxelGroup, computeCenteredBounds, VOXEL_STEP } from './VoxelEngine3D.js';
 
 export default function SculptureViewer3D({
@@ -22,6 +25,7 @@ export default function SculptureViewer3D({
   const gridRef = useRef(null);
   const shadowGroundRef = useRef(null);
   const keyLightRef = useRef(null);
+  const maxAnisotropyRef = useRef(8);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -36,10 +40,12 @@ export default function SculptureViewer3D({
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
     renderer.setSize(host.clientWidth, height);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
+    maxAnisotropyRef.current = renderer.capabilities?.getMaxAnisotropy?.() || 8;
     host.appendChild(renderer.domElement);
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -170,9 +176,12 @@ export default function SculptureViewer3D({
 
     if (sculpture?.customModel?.format) {
       let cancelled = false;
-      loadCustomModelObject(sculpture, resolveApiUrl)
+      loadCustomModelObject(sculpture, resolveApiUrl, {
+        maxAnisotropy: maxAnisotropyRef.current
+      })
         .then((loaded) => {
           if (cancelled || !loaded || !groupRef.current) return;
+          enforceCrispTexturesAndShading(loaded.object3d, maxAnisotropyRef.current);
           while (groupRef.current.children.length > 0) {
             groupRef.current.remove(groupRef.current.children[0]);
           }

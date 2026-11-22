@@ -1,3 +1,5 @@
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+
 export const LOCAL_DRAFT_KEY = 'graffiland_studio_draft_v1';
 export const TUTORIAL_SEEN_KEY = 'graffiland_studio_tutorial_v1';
 export const QUICK_SCULPT_KEY = 'graffiland_quick_sculpt_v1';
@@ -84,8 +86,17 @@ export function buildSculptureShareUrl(sculptureId) {
   return url.toString();
 }
 
-export function buildShareToXUrl({ title = '3D Sculpture', parcelId = '', sculptureId = '' } = {}) {
+export function buildShareToXUrl({
+  title = '3D Sculpture',
+  landName = '',
+  parcelName = '',
+  sculptureId = ''
+} = {}) {
   const shareUrl = buildSculptureShareUrl(sculptureId);
-  const text = `Check out "${title}" anchored on Virtual Land ${parcelId || 'GRAFFILAND'} in 3D AR!`;
+  const resolvedLand = resolveLandDisplayName(
+    { customName: landName || parcelName || '' },
+    { defaultName: 'GRAFFILAND' }
+  );
+  const text = `Check out "${title}" anchored on "${resolvedLand}" in 3D AR on GRAFFILAND!`;
   return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`;
 }

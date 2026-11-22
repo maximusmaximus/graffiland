@@ -12,9 +12,10 @@ import {
   computeOrientedFootprintLngLat,
   normalizeRotationDeg,
   resizeDraftFromEdge,
+  resolveLandDisplayName,
   scaleDraftFromCorner
 } from '../../../shared/landVolume.mjs';
-import { api } from '../utils/api.js';
+import { api, resolveApiUrl } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
@@ -30,6 +31,7 @@ import {
   drawFloatingLandLabel,
   getPrismLabelAnchor
 } from '../utils/map3dLabelOverlay.js';
+import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -471,6 +473,8 @@ export default function MapView3D({
   const [gizmoHint, setGizmoHint] = useState('');
   const [holdDrawActive, setHoldDrawActive] = useState(false);
   const [rendered3dSculptureCount, setRendered3dSculptureCount] = useState(0);
+  const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
+  const threeLayerRef = useRef(null);
 
   // Dynamic Location Search state (intersections, businesses, landmarks, addresses, coords, parcels)
   const [searchQuery, setSearchQuery] = useState('');
@@ -854,6 +858,13 @@ export default function MapView3D({
     if (sculpturesSrc && typeof sculpturesSrc.setData === 'function') {
       sculpturesSrc.setData(sc3d.geojson);
     }
+    if (threeLayerRef.current && typeof threeLayerRef.current.setData === 'function') {
+      threeLayerRef.current.setData({
+        sculptures: sculpturesRef.current || [],
+        parcels: parcelsRef.current || [],
+        selectedSculptureId: selectedSculptureIdRef.current || ''
+      });
+    }
     drawWireframes();
   }, [drawWireframes]);
 
@@ -897,7 +908,7 @@ export default function MapView3D({
             'fill-extrusion-color': ['get', 'color'],
             'fill-extrusion-height': ['get', 'heightMeters'],
             'fill-extrusion-base': ['get', 'baseAltitudeM'],
-            'fill-extrusion-opacity': 0.28
+            'fill-extrusion-opacity': 0.08
           }
         });
       }
@@ -914,9 +925,31 @@ export default function MapView3D({
             'fill-extrusion-color': ['get', 'color'],
             'fill-extrusion-height': ['get', 'heightMeters'],
             'fill-extrusion-base': ['get', 'baseAltitudeM'],
-            'fill-extrusion-opacity': 0.28
+            'fill-extrusion-opacity': 0.24
           }
         });
+      }
+
+      // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms so sculptures shine through cleanly
+      let threeMounted = Boolean(map.getLayer('sculptures-three-3d'));
+      if (!threeMounted) {
+        try {
+          const threeLayer = createSculptureThreeLayer({
+            id: 'sculptures-three-3d',
+            maplibregl,
+            resolveUrlFn: resolveApiUrl,
+            onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+          });
+          threeLayerRef.current = threeLayer;
+          map.addLayer(
+            threeLayer,
+            map.getLayer('owned-lands-extrusion') ? 'owned-lands-extrusion' : undefined
+          );
+          threeMounted = Boolean(map.getLayer('sculptures-three-3d'));
+        } catch {
+          threeLayerRef.current = null;
+          threeMounted = false;
+        }
       }
 
       if (!map.getSource('sculptures-3d')) {
@@ -931,7 +964,8 @@ export default function MapView3D({
             'fill-extrusion-color': ['get', 'color'],
             'fill-extrusion-height': ['get', 'heightMeters'],
             'fill-extrusion-base': ['get', 'baseMeters'],
-            'fill-extrusion-opacity': 0.94,
+            // Keep subtle invisible hit-proxy for click picking when real Three.js layer is active
+            'fill-extrusion-opacity': threeMounted ? 0.001 : 0.94,
             'fill-extrusion-vertical-gradient': true
           }
         });
@@ -1259,13 +1293,29 @@ export default function MapView3D({
       }
 
       const chainLinks = getSculptureChainLinks(sc, config);
+      const liveParcel = (parcelsRef.current || []).find(
+        (p) => String(p?.parcelId || '').toUpperCase() === String(sc.parcelId || '').toUpperCase()
+      );
+      const landLabel = resolveLandDisplayName(
+        {
+          customName: liveParcel?.customName || sc.parcelName || '',
+          displayName: liveParcel?.displayName || sc.landDisplayName || '',
+          firstSculptureTitle: sc.title || '',
+          placeName: sc.placeName || ''
+        },
+        { defaultName: 'Virtual Land' }
+      );
+      const assetMeta =
+        sc.modelType === 'custom-3d'
+          ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D Model`
+          : `${sc.voxelCount || sc.voxels?.length || 0} blocks`;
       const popupEl = document.createElement('div');
       popupEl.style.cssText = 'font-size:12px;line-height:1.4;color:#0f172a;min-width:170px;';
       const titleEl = document.createElement('strong');
       titleEl.textContent = sc.title;
       const metaEl = document.createElement('div');
       metaEl.style.color = '#475569';
-      metaEl.textContent = `${sc.parcelId} · ${sc.voxelCount || sc.voxels?.length || 0} blocks`;
+      metaEl.textContent = `${landLabel} · ${assetMeta}`;
       popupEl.append(titleEl, metaEl);
       if (chainLinks.txUrl) {
         const txLink = document.createElement('a');
@@ -1304,7 +1354,7 @@ export default function MapView3D({
       for (const mk of markersRef.current) mk.remove();
       markersRef.current = [];
     };
-  }, [sculptures, userLocation, selectedSculptureId, config, onSelectSculpture]);
+  }, [sculptures, parcels, userLocation, selectedSculptureId, config, onSelectSculpture]);
 
   // Render floating action & label pins strictly above wireframes (+, Title, Copy Share Link for owned; Copy Link for public)
   useEffect(() => {
@@ -1329,6 +1379,7 @@ export default function MapView3D({
       const lng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
+      const landName = resolveLandDisplayName(p, { defaultName: 'Virtual Land' });
       const wrap = document.createElement('div');
       wrap.className = 'map3d-owned-action-pin map3d-ui-stop';
 
@@ -1340,10 +1391,10 @@ export default function MapView3D({
         plusBtn.type = 'button';
         plusBtn.className = `map3d-owned-plus-btn map3d-ui-stop ${p?.frozen ? 'is-frozen' : ''}`;
         plusBtn.dataset.parcelId = pid;
-        plusBtn.setAttribute('aria-label', `Add 3D item to ${pid}`);
+        plusBtn.setAttribute('aria-label', `Add 3D item to ${landName}`);
         plusBtn.title = p?.frozen
-          ? `${pid} is Frozen — click + to unfreeze or view agent prompt`
-          : `Add a 3D item to minted land ${pid} (Model Link or Agent Prompt)`;
+          ? `${landName} is Frozen — click + to unfreeze or view agent prompt`
+          : `Add a 3D item to ${landName} (Model Link or Agent Prompt)`;
         plusBtn.textContent = p?.frozen ? '+ ❄️' : '+';
         plusBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
         plusBtn.addEventListener('click', (ev) => {
@@ -1356,8 +1407,8 @@ export default function MapView3D({
         titleBtn.type = 'button';
         titleBtn.className = 'map3d-owned-mini-btn map3d-ui-stop';
         titleBtn.dataset.parcelId = pid;
-        titleBtn.setAttribute('aria-label', `Title land ${pid}`);
-        titleBtn.title = `Title or describe ${p.customName || pid}`;
+        titleBtn.setAttribute('aria-label', `Title land ${landName}`);
+        titleBtn.title = `Title or describe ${landName}`;
         titleBtn.textContent = '✎';
         titleBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
         titleBtn.addEventListener('click', (ev) => {
@@ -1371,8 +1422,8 @@ export default function MapView3D({
       shareBtn.type = 'button';
       shareBtn.className = `map3d-owned-mini-btn map3d-parcel-share-btn map3d-ui-stop ${isOwned ? '' : 'is-public'}`;
       shareBtn.dataset.parcelId = pid;
-      shareBtn.setAttribute('aria-label', `Copy share link for minted land ${pid}`);
-      shareBtn.title = `Copy shareable visit link for ${p.customName || pid}`;
+      shareBtn.setAttribute('aria-label', `Copy share link for ${landName}`);
+      shareBtn.title = `Copy shareable visit link for ${landName}`;
       shareBtn.textContent = '🔗';
       shareBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       shareBtn.addEventListener('click', async (ev) => {
@@ -1401,7 +1452,7 @@ export default function MapView3D({
       badge.dataset.testid = 'map3d-land-label';
       badge.dataset.parcelId = pid;
       badge.textContent = formatSimpleLandLabel(p);
-      badge.title = p.customName ? `${p.customName} (${pid})` : pid;
+      badge.title = landName;
 
       wrap.append(btnRow, badge);
       wrap.style.display = 'none';
@@ -1518,7 +1569,7 @@ export default function MapView3D({
     dot.className = 'map3d-search-pin-dot';
     const tag = document.createElement('span');
     tag.className = 'map3d-search-pin-label';
-    tag.textContent = item.label || item.parcelId || 'Found';
+    tag.textContent = item.label || 'Found';
     pinEl.append(dot, tag);
     searchPinMarkerRef.current = new maplibregl.Marker({ element: pinEl, anchor: 'bottom' })
       .setLngLat([Number(item.lng), Number(item.lat)])
@@ -2130,6 +2181,7 @@ export default function MapView3D({
       data-draft-count={draftParcels.length}
       data-owned-count={parcels.length}
       data-rendered-3d-sculptures={rendered3dSculptureCount}
+      data-three-3d-models={loadedThree3dCount}
       data-selected-draft-id={selectedDraftId || ''}
       data-hovered-draft-id={hoveredDraftId || ''}
       data-active-handle={activeHandle || ''}
@@ -2295,7 +2347,7 @@ export default function MapView3D({
             <input
               type="text"
               className="input map3d-search-input"
-              placeholder="Search intersections, businesses, or GLAND-..."
+              placeholder="Search intersections, businesses, or land names…"
               aria-label="Search locations, intersections, or businesses"
               autoComplete="off"
               value={searchQuery}
@@ -2354,7 +2406,7 @@ export default function MapView3D({
                       </div>
                     </div>
                     <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                      {item.subtitle} · {item.parcelId}
+                      {item.subtitle}
                     </span>
                   </button>
                 );

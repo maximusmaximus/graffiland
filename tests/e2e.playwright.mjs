@@ -947,7 +947,14 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok((await landDescInput.inputValue()).includes('🎨'));
 
     await page.getByRole('button', { name: /Save Land Settings/i }).click();
-    await page.waitForSelector('text=/Saved settings for GLAND-/i');
+    await page.waitForSelector('text=/Saved settings for "Market Gallery 🔥"/i');
+    // Confirm the Land Management modal and isometric preview never display raw GLAND- internal IDs
+    const mgmtVisibleText = await page.locator('.land-mgmt-modal').innerText();
+    assert.equal(
+      /GLAND-[0-9A-Z]{6,10}/i.test(mgmtVisibleText),
+      false,
+      `Expected Land Management UI to use owner land names instead of internal GLAND IDs, got:\n${mgmtVisibleText}`
+    );
     await page.getByRole('button', { name: /Close land management/i }).click();
     assert.deepEqual(pageErrors, []);
     await context.close();

@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { parseParcelParamFromLocation } from '../../../shared/landVolume.mjs';
+import {
+  parseParcelParamFromLocation,
+  resolveLandDisplayName
+} from '../../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
 import {
@@ -1229,7 +1232,7 @@ export default function MobileStudio({
             }
             brush.setMode('preview');
             showTemporaryHint(
-              `Viewing ${visitedParcel?.customName || visitedParcel?.parcelId} in AR!`
+              `Viewing ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })} in AR!`
             );
           }}
           onMakeArt={(visitedParcel) => {
@@ -1237,7 +1240,7 @@ export default function MobileStudio({
             setTutorialOpen(false);
             brush.setMode('draw');
             showTemporaryHint(
-              `Ready to sculpt on ${visitedParcel?.customName || visitedParcel?.parcelId}!`
+              `Ready to sculpt on ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
             );
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}

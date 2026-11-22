@@ -185,7 +185,7 @@ export default function InfoTermsModal({
                     <InfoTip title="Map Camera & Search">
                       Desktop starts in Isometric 3D with real OpenFreeMap buildings. Search any
                       street intersection (e.g., <em>Market &amp; 5th</em>), nearby business,
-                      address, coordinates, or <code>GLAND-...</code> parcel. Switch between 2D,
+                      address, coordinates, or named Virtual Land. Switch between 2D,
                       3D, and Isometric anytime, tilt (0°–65°), rotate (±15°), or toggle Terrain.
                     </InfoTip>
                   </div>

@@ -2,7 +2,10 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
-import { buildParcelShareUrl } from '../../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../../shared/landVolume.mjs';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import { formatLandDimensions } from '../../utils/landMapHelpers.js';
 import XeroIcon from '../XeroIcon.jsx';
@@ -161,7 +164,7 @@ export default function MobileParcelVisitView({
       fillColor: isFrozen ? '#38bdf8' : '#ffd166',
       fillOpacity: 1
     })
-      .bindTooltip(parcel?.customName || parcel?.parcelId || 'Virtual Land')
+      .bindTooltip(resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' }))
       .addTo(layer);
 
     // Sculptures on this property
@@ -233,7 +236,15 @@ export default function MobileParcelVisitView({
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <h1 className="mobile-parcel-title">
-              {loading ? 'Loading Land…' : parcel?.customName || parcel?.parcelId || 'Virtual Land'}
+              {loading
+                ? 'Loading Land…'
+                : resolveLandDisplayName(
+                    {
+                      ...parcel,
+                      firstSculptureTitle: sculptures?.[0]?.title || ''
+                    },
+                    { defaultName: 'Virtual Land' }
+                  )}
             </h1>
             {parcel && (
               <span className={`badge ${isFrozen ? 'badge-error' : 'teal'}`} style={{ fontSize: 10 }}>
@@ -241,10 +252,9 @@ export default function MobileParcelVisitView({
               </span>
             )}
           </div>
-          {parcel && (
+          {parcel && formatLandDimensions(parcel) && (
             <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-              {parcel.parcelId}
-              {formatLandDimensions(parcel) ? ` · ${formatLandDimensions(parcel)}` : ''}
+              {formatLandDimensions(parcel)}
             </div>
           )}
         </div>
@@ -340,7 +350,9 @@ export default function MobileParcelVisitView({
                   </button>
                 </div>
                 <div className="mobile-parcel-map-pill mono">
-                  {hasCenter ? `${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}` : parcel.parcelId}
+                  {hasCenter
+                    ? `${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}`
+                    : resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' })}
                 </div>
               </>
             )}

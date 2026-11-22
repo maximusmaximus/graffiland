@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import React, { useEffect, useRef } from 'react';
 import xeroemoji from 'xeroemoji';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   computeClosestLandsPerimeterFit,
@@ -284,7 +285,7 @@ export default function MapView({
         ? ` · 🎨 ${p.openQuestCount} Quest(s)`
         : '';
       const stewardTag = p.stewardType === 'agent' ? ' · 🤖 AI Steward' : '';
-      const landTitle = p.customName ? `${p.customName} (${p.parcelId})` : `Virtual Land ${p.parcelId}`;
+      const landTitle = resolveLandDisplayName(p, { defaultName: 'Virtual Land' });
       const scCount = parcelSculptures.length || p.sculptureCount || 0;
       shape.bindTooltip(
         `${landTitle} (${scCount} sculpture${scCount === 1 ? '' : 's'}${questTag}${stewardTag})`
@@ -341,8 +342,18 @@ export default function MapView({
       const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : 'n/a';
       const marker = L.marker([Number(sc.lat), Number(sc.lng)], { icon: customIcon });
       marker.on('click', () => onSelectSculpture?.(sc));
+      const parentParcel = sc.parcelId ? parcelMap.get(sc.parcelId) : null;
+      const scLandName = resolveLandDisplayName(
+        {
+          customName: parentParcel?.customName || sc.parcelName || '',
+          displayName: parentParcel?.displayName || sc.landDisplayName || '',
+          firstSculptureTitle: sc.title || '',
+          placeName: sc.placeName || ''
+        },
+        { defaultName: 'Virtual Land' }
+      );
       marker.bindTooltip(
-        `${sc.title} · Land ${sc.parcelId} · ${chainLinks.isSimulated ? 'Pre-chain' : `Tx ${txShort}`}`
+        `${sc.title} · ${scLandName} · ${chainLinks.isSimulated ? 'Pre-chain' : `Tx ${txShort}`}`
       );
       marker.addTo(layer);
     }

@@ -4,6 +4,7 @@ import {
   buildPropertyOwnerPrompt,
   buildStdioMcpSnippet
 } from '../../../../shared/landSignatureMessage.mjs';
+import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
@@ -284,7 +285,11 @@ export function AgentHandoffModal({
                 </span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                Parcel <span className="mono">{agentSession.parcelId}</span> · 4x (0.05m/block) · 10000×10000×10000 limit
+                {resolveLandDisplayName(
+                  { customName: agentSession.parcelName || agentSession.landDisplayName || '' },
+                  { defaultName: 'Virtual Land' }
+                )}{' '}
+                · 4x (0.05m/block) · 10000×10000×10000 limit
               </div>
               {agentSession.endpoints?.spec && (
                 <div style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>
@@ -466,9 +471,13 @@ export function SavedDraftsModal({
                       <span className="badge teal">
                         <XeroIcon emoji="🧱" size={11} /> {d.voxelCount} blocks
                       </span>
-                      {d.parcelId && (
+                      {(d.parcelName || d.landDisplayName) && (
                         <span className="badge">
-                          <XeroIcon emoji="📍" size={11} /> {d.parcelId}
+                          <XeroIcon emoji="📍" size={11} />{' '}
+                          {resolveLandDisplayName(
+                            { customName: d.parcelName || d.landDisplayName || '' },
+                            { defaultName: 'Virtual Land' }
+                          )}
                         </span>
                       )}
                       <span className="mono" style={{ fontSize: 10, color: 'var(--muted)', alignSelf: 'center' }}>

@@ -1,7 +1,7 @@
 import { VOXEL_STEP } from '../../../shared/constants.mjs';
 
 const METERS_PER_DEG_LAT = 111320;
-const MAX_COLUMNS_PER_SCULPTURE = 180;
+const MAX_COLUMNS_PER_SCULPTURE = 4096;
 
 function metersPerDegLngAtLat(lat) {
   return METERS_PER_DEG_LAT * Math.max(0.08, Math.cos((Number(lat) * Math.PI) / 180));

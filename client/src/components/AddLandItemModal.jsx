@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { buildLandAdd3DItemAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
-import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
@@ -287,12 +290,13 @@ export default function AddLandItemModal({
       if (!validated) return;
 
       const resolvedFormat = validated.format || (itemFormat !== 'voxel' ? itemFormat : 'glb');
+      const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
       const finalTitle =
         itemTitle.trim() || validated.suggestedTitle || `3D ${resolvedFormat.toUpperCase()} Artwork`;
       const finalDescription =
         itemDescription.trim().length >= 10
           ? itemDescription.trim()
-          : `Validated .${resolvedFormat.toUpperCase()} 3D model placed on Virtual Land ${parcel.parcelId}.`;
+          : `Validated .${resolvedFormat.toUpperCase()} 3D model placed on "${landDisplayName}".`;
 
       const res = await api.createSculptureOnLand(parcel.parcelId, {
         title: finalTitle,
@@ -310,7 +314,7 @@ export default function AddLandItemModal({
 
       setStatusIsError(false);
       setStatusMsg(
-        `Uploaded "${res?.sculpture?.title || finalTitle}" (.${resolvedFormat.toUpperCase()}) onto ${parcel.parcelId}!`
+        `Uploaded "${res?.sculpture?.title || finalTitle}" (.${resolvedFormat.toUpperCase()}) onto "${landDisplayName}"!`
       );
       setModelUrl('');
       setItemTitle('');
@@ -374,9 +378,10 @@ export default function AddLandItemModal({
         ownerAddress
       });
       const ok = await copyToClipboard(finalPrompt);
+      const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
       setStatusMsg(
         ok
-          ? `Copied 3D item agent prompt for ${parcel.parcelId}! Paste into your AI agent.`
+          ? `Copied 3D item agent prompt for "${landDisplayName}"! Paste into your AI agent.`
           : 'Prompt ready below — select & copy.'
       );
     } finally {
@@ -391,10 +396,11 @@ export default function AddLandItemModal({
     setStatusIsError(false);
     try {
       await onToggleFreeze(parcel.parcelId, !isFrozen);
+      const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
       setStatusMsg(
         !isFrozen
-          ? `Frozen ${parcel.parcelId} — no new sculptures can be placed here.`
-          : `Unfrozen ${parcel.parcelId} — new sculptures are allowed again.`
+          ? `Frozen "${landDisplayName}" — no new sculptures can be placed here.`
+          : `Unfrozen "${landDisplayName}" — new sculptures are allowed again.`
       );
     } catch (err) {
       setStatusIsError(true);
@@ -404,6 +410,8 @@ export default function AddLandItemModal({
     }
   }
 
+  const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -411,13 +419,13 @@ export default function AddLandItemModal({
         style={{ maxWidth: 720 }}
         role="dialog"
         aria-modal="true"
-        aria-label={`Add 3D item to ${parcel.parcelId}`}
+        aria-label={`Add 3D item to ${landDisplayName}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
           <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="add-item-plus-badge">+</span>
-            <span>Add 3D Item to {parcel.customName || parcel.parcelId}</span>
+            <span>Add 3D Item to {landDisplayName}</span>
             <InfoTip title="Direct 3D Link Upload & Agent Placement">
               Preview supported 3D formats below, paste a direct model URL (.glb/.gltf/.obj/.stl/.ply)
               to validate and upload right away, or copy a ready-to-paste prompt for your AI agent.
@@ -435,7 +443,7 @@ export default function AddLandItemModal({
 
         <div className="add-item-meta-strip mono">
           <span>
-            <strong>{parcel.parcelId}</strong>
+            <strong>{landDisplayName}</strong>
             {parcel.volume
               ? ` · ${Math.round(parcel.volume.widthMeters)}×${Math.round(parcel.volume.depthMeters)}×${Math.round(parcel.volume.heightMeters)}m`
               : ''}
@@ -444,7 +452,7 @@ export default function AddLandItemModal({
             <button
               type="button"
               className="btn btn-xs"
-              aria-label={`Copy share link for ${parcel.parcelId}`}
+              aria-label={`Copy share link for ${landDisplayName}`}
               title="Copy shareable visit link for this minted parcel"
               onClick={handleCopyShareLink}
             >

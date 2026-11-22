@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import {
   computeRoomPossessionProof,
@@ -623,7 +624,15 @@ export default function SculptureChatDrawer({
                 <XeroIcon emoji="👁️" size={12} /> {distLabel}
               </span>
               <span className="badge gold">
-                <XeroIcon emoji="📍" size={12} /> {sculpture.parcelId}
+                <XeroIcon emoji="📍" size={12} />{' '}
+                {resolveLandDisplayName(
+                  {
+                    customName: sculpture.parcelName || sculpture.landDisplayName || '',
+                    firstSculptureTitle: sculpture.title || '',
+                    placeName: sculpture.placeName || ''
+                  },
+                  { defaultName: 'Virtual Land' }
+                )}
               </span>
             </div>
           </div>
@@ -704,7 +713,15 @@ export default function SculptureChatDrawer({
                         <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{pin.text}</div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, fontSize: 10, color: 'var(--muted)' }}>
                           <span>
-                            {pin.authorName} · Encrypted on IPFS for {sculpture.parcelId}
+                            {pin.authorName} · Encrypted on IPFS for{' '}
+                            {resolveLandDisplayName(
+                              {
+                                customName: sculpture.parcelName || sculpture.landDisplayName || '',
+                                firstSculptureTitle: sculpture.title || '',
+                                placeName: sculpture.placeName || ''
+                              },
+                              { defaultName: 'this land' }
+                            )}
                           </span>
                           {entered?.isLandHolder && (
                             <span style={{ display: 'flex', gap: 4 }}>

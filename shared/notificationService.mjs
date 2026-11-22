@@ -1,4 +1,5 @@
 import { LAND_VOLUME_LIMITS, STEWARD_DEFAULTS } from './constants.mjs';
+import { resolveLandDisplayName } from './landVolume.mjs';
 import { normalizeParcelId } from './mcp/helpers.mjs';
 
 export const NOTIFICATION_CATEGORIES = [
@@ -177,7 +178,7 @@ export async function getUserMintCapacityStatus(db, userSub) {
   const unbuiltParcels = (unbuiltRows || []).map((r) => ({
     parcelId: r.parcel_id,
     customName: r.custom_name || '',
-    displayName: r.custom_name || r.parcel_id,
+    displayName: resolveLandDisplayName({ customName: r.custom_name || '' }),
     claimedAt: r.claimed_at || '',
     centerLat: Number.isFinite(Number(r.center_lat)) ? Number(r.center_lat) : null,
     centerLng: Number.isFinite(Number(r.center_lng)) ? Number(r.center_lng) : null
@@ -308,7 +309,7 @@ async function syncExpiringLandNotifications(db, userSub) {
       1,
       Math.round((new Date(row.lease_expires_at).getTime() - nowMs) / (60 * 60 * 1000))
     );
-    const label = row.custom_name || row.parcel_id;
+    const label = resolveLandDisplayName({ customName: row.custom_name || '' });
     await createNotification(db, {
       userSub: cleanSub,
       category: 'land_expiring',
@@ -429,7 +430,19 @@ async function resolveParcelOwnerInfo(db, parcelId) {
     .catch(() => null);
 
   const ownerSub = steward?.steward_sub || curation?.owner_sub || parcel?.first_claimant_sub || '';
-  const landTitle = curation?.custom_name || cleanParcel;
+  const firstSc = !curation?.custom_name
+    ? await db
+        .get(
+          'SELECT title, place_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+          [cleanParcel]
+        )
+        .catch(() => null)
+    : null;
+  const landTitle = resolveLandDisplayName({
+    customName: curation?.custom_name || '',
+    firstSculptureTitle: firstSc?.title || '',
+    placeName: firstSc?.place_name || ''
+  });
   return {
     parcelId: cleanParcel,
     ownerSub,
@@ -535,7 +548,7 @@ export async function notifyFreeLimitReached(
   { userSub, usedSlots, maxSlots, unbuiltParcels = [] }
 ) {
   const names = unbuiltParcels
-    .map((p) => p.displayName || p.customName || p.parcelId)
+    .map((p) => resolveLandDisplayName(p))
     .filter(Boolean)
     .slice(0, 3);
   const landListText = names.length > 0 ? ` (${names.join(', ')})` : '';

@@ -180,7 +180,7 @@ export default function MobileMapSheet({
       setEditingParcelId('');
       setRenameDraft('');
       onShowHint?.(
-        nextName ? `Renamed land to "${nextName}"!` : `Reset name for ${land.parcelId}`
+        nextName ? `Renamed land to "${nextName}"!` : 'Updated land name'
       );
     } catch (err) {
       setRenameError(err?.message || 'Could not rename land');
@@ -306,8 +306,8 @@ export default function MobileMapSheet({
           <div className="mobile-map-fullscreen-dock-info">
             <strong className="mobile-map-fullscreen-dock-title">{focusedLand.displayName}</strong>
             <span className="mobile-map-fullscreen-dock-meta mono">
-              {focusedLand.dimensionsLabel || focusedLand.parcelId}
-              {` · ${focusedLand.sculptures.length} art`}
+              {focusedLand.dimensionsLabel ? `${focusedLand.dimensionsLabel} · ` : ''}
+              {`${focusedLand.sculptures.length} art`}
             </span>
           </div>
           <div className="mobile-map-fullscreen-dock-actions">
@@ -480,9 +480,6 @@ export default function MobileMapSheet({
                         </div>
                       )}
                       <div className="mobile-land-id-row">
-                        {land.customName && (
-                          <span className="mobile-land-parcel-id">{land.parcelId}</span>
-                        )}
                         {land.centerLat !== null && land.centerLng !== null && (
                           <span className="mobile-land-coords">
                             {land.centerLat.toFixed(4)}, {land.centerLng.toFixed(4)}

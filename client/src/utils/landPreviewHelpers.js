@@ -4,7 +4,8 @@ import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
   buildDefaultVolumeFromBounds,
   computeOrientedFootprintLngLat,
-  normalizeRotationDeg
+  normalizeRotationDeg,
+  resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
 import {
   buildGoogleMapsLandUrl,
@@ -432,7 +433,7 @@ export function buildParcelGeoSummary(
       );
       nearestOwnedLand = {
         parcelId: other.parcelId,
-        name: other.customName || other.parcelId,
+        name: resolveLandDisplayName(other),
         distanceMeters: distM,
         distanceLabel: formatDistanceMeters(distM),
         cardinal: dir.label

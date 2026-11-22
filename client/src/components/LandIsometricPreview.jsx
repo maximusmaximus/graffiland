@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../utils/api.js';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import { api, resolveApiUrl } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import {
   buildParcelGeoSummary,
@@ -11,6 +12,7 @@ import {
 import { hasWebGLSupport, loadMapLibre } from '../utils/loadMapLibre.js';
 import { computePrismScreenGeometry } from '../utils/map3dProjection.js';
 import { drawFloatingLandLabel } from '../utils/map3dLabelOverlay.js';
+import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import InfoTip from './InfoTip.jsx';
@@ -49,8 +51,10 @@ const FALLBACK_DARK_STYLE = {
   ]
 };
 
-// Cache reverse-geocoded place summaries across parcel switches in the session
+// Cache reverse-geocoded place summaries & hydrated sculpture voxels across parcel switches
 const reverseGeoCache = new Map();
+const previewSculptureCache = new Map();
+const previewSculptureInFlight = new Set();
 
 function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
@@ -291,6 +295,9 @@ export default function LandIsometricPreview({
   const [placeContext, setPlaceContext] = useState(null);
   const [placeLoading, setPlaceLoading] = useState(false);
   const [coordsCopied, setCoordsCopied] = useState(false);
+  const [hydrationVersion, setHydrationVersion] = useState(0);
+  const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
+  const threeLayerRef = useRef(null);
   const [stageSize, setStageSize] = useState({ width: 600, height: 260 });
 
   const volume = useMemo(() => resolveParcelVolume(parcel), [parcel]);
@@ -325,10 +332,82 @@ export default function LandIsometricPreview({
   const viewModeRef = useRef(viewMode);
   const bearingOffsetRef = useRef(bearingOffset);
 
-  const effectiveDisplayName =
-    String(displayNameOverride || parcel?.customName || '').trim() || parcel?.parcelId || '';
+  const effectiveDisplayName = resolveLandDisplayName({
+    customName: displayNameOverride || parcel?.customName || '',
+    displayName: parcel?.displayName || '',
+    firstSculptureTitle: parcel?.sculptures?.[0]?.title || '',
+    placeName: parcel?.sculptures?.[0]?.placeName || ''
+  });
   const effectiveFrozen =
     frozenOverride !== null ? Boolean(frozenOverride) : Boolean(parcel?.frozen || parcel?.settings?.frozen);
+
+  const hydratedPreviewSculptures = useMemo(() => {
+    const raw = [];
+    const seen = new Set();
+    for (const sc of parcel?.sculptures || []) {
+      if (sc?.id && !seen.has(sc.id)) {
+        seen.add(sc.id);
+        raw.push(sc);
+      }
+    }
+    for (const entry of otherParcelEntries || []) {
+      for (const sc of entry?.parcel?.sculptures || []) {
+        if (sc?.id && !seen.has(sc.id)) {
+          seen.add(sc.id);
+          raw.push(sc);
+        }
+      }
+    }
+    return raw.map((sc) => {
+      if (sc.modelType === 'custom-3d' || (Array.isArray(sc.voxels) && sc.voxels.length > 0)) {
+        return sc;
+      }
+      const cached = previewSculptureCache.get(sc.id);
+      return cached ? { ...sc, ...cached } : sc;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherParcelEntries, parcel?.sculptures, hydrationVersion]);
+
+  const hydratedPreviewSculpturesRef = useRef(hydratedPreviewSculptures);
+  useEffect(() => {
+    hydratedPreviewSculpturesRef.current = hydratedPreviewSculptures;
+  }, [hydratedPreviewSculptures]);
+
+  // Hydrate full voxel / custom-3D payloads for any sculptures lacking full geometry
+  useEffect(() => {
+    const targets = hydratedPreviewSculptures
+      .filter(
+        (sc) =>
+          sc &&
+          sc.id &&
+          !sc.hidden &&
+          sc.modelType !== 'custom-3d' &&
+          (!Array.isArray(sc.voxels) || sc.voxels.length === 0) &&
+          !previewSculptureCache.has(sc.id) &&
+          !previewSculptureInFlight.has(sc.id)
+      )
+      .slice(0, 8);
+    if (targets.length === 0) return undefined;
+    let cancelled = false;
+    for (const sc of targets) {
+      previewSculptureInFlight.add(sc.id);
+      api
+        .getSculpture(sc.id)
+        .then((res) => {
+          if (res?.sculpture) {
+            previewSculptureCache.set(sc.id, res.sculpture);
+            if (!cancelled) setHydrationVersion((v) => v + 1);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          previewSculptureInFlight.delete(sc.id);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [hydratedPreviewSculptures]);
 
   useEffect(() => {
     parcelRef.current = parcel;
@@ -433,7 +512,7 @@ export default function LandIsometricPreview({
         geom,
         outerColor,
         innerColor,
-        label: entry.parcel?.customName || entry.parcel?.parcelId || '',
+        label: resolveLandDisplayName(entry.parcel, { defaultName: 'Virtual Land' }),
         liftPx: 18,
         minY: 10
       });
@@ -445,7 +524,7 @@ export default function LandIsometricPreview({
       const geom = computePrismScreenGeometry(map, maplibregl, curVol);
       if (geom) {
         const isFrozenNow = isFrozenRef.current;
-        const shortName = displayNameRef.current || curVol.parcelId;
+        const shortName = displayNameRef.current || 'Virtual Land';
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
         const heightTag = `${Math.round(curVol.heightMeters)}m`;
         const outerColor = isFrozenNow ? '#7dd3fc' : '#00f5d4';
@@ -491,10 +570,15 @@ export default function LandIsometricPreview({
     const otherFeats = (otherEntriesRef.current || [])
       .map((entry) => volumeToFeature(entry.parcel, entry.volume, { isSelected: false }))
       .filter(Boolean);
+    const previewParcelsWithVolumes = [
+      ...(curVol ? [{ ...curParcel, volume: curVol }] : []),
+      ...(otherEntriesRef.current || []).map((entry) => ({ ...entry.parcel, volume: entry.volume }))
+    ];
+    const previewSculptures = hydratedPreviewSculpturesRef.current || curParcel?.sculptures || [];
     const sc3d = buildSculptures3DGeoJson(
-      curParcel?.sculptures || [],
+      previewSculptures,
       '',
-      curVol ? [{ ...curParcel, volume: curVol }] : []
+      previewParcelsWithVolumes
     );
 
     const selSrc = map.getSource('preview-selected-land');
@@ -508,6 +592,13 @@ export default function LandIsometricPreview({
     const scSrc = map.getSource('preview-sculptures-3d');
     if (scSrc && typeof scSrc.setData === 'function') {
       scSrc.setData(sc3d.geojson);
+    }
+    if (threeLayerRef.current && typeof threeLayerRef.current.setData === 'function') {
+      threeLayerRef.current.setData({
+        sculptures: previewSculptures,
+        parcels: previewParcelsWithVolumes,
+        selectedSculptureId: ''
+      });
     }
 
     drawWireframes();
@@ -615,7 +706,7 @@ export default function LandIsometricPreview({
               'fill-extrusion-color': ['get', 'color'],
               'fill-extrusion-height': ['get', 'heightMeters'],
               'fill-extrusion-base': ['get', 'baseAltitudeM'],
-              'fill-extrusion-opacity': 0.24
+              'fill-extrusion-opacity': 0.14
             }
           });
         }
@@ -632,9 +723,35 @@ export default function LandIsometricPreview({
               'fill-extrusion-color': ['get', 'color'],
               'fill-extrusion-height': ['get', 'heightMeters'],
               'fill-extrusion-base': ['get', 'baseAltitudeM'],
-              'fill-extrusion-opacity': 0.3
+              'fill-extrusion-opacity': 0.08
             }
           });
+        }
+
+        // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms
+        let threeMounted = Boolean(map.getLayer('preview-sculptures-three-3d'));
+        if (!threeMounted && maplibreRef.current) {
+          try {
+            const threeLayer = createSculptureThreeLayer({
+              id: 'preview-sculptures-three-3d',
+              maplibregl: maplibreRef.current,
+              resolveUrlFn: resolveApiUrl,
+              onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+            });
+            threeLayerRef.current = threeLayer;
+            map.addLayer(
+              threeLayer,
+              map.getLayer('preview-other-lands-extrusion')
+                ? 'preview-other-lands-extrusion'
+                : map.getLayer('preview-selected-land-extrusion')
+                ? 'preview-selected-land-extrusion'
+                : undefined
+            );
+            threeMounted = Boolean(map.getLayer('preview-sculptures-three-3d'));
+          } catch {
+            threeLayerRef.current = null;
+            threeMounted = false;
+          }
         }
 
         if (!map.getSource('preview-sculptures-3d')) {
@@ -649,7 +766,7 @@ export default function LandIsometricPreview({
               'fill-extrusion-color': ['get', 'color'],
               'fill-extrusion-height': ['get', 'heightMeters'],
               'fill-extrusion-base': ['get', 'baseMeters'],
-              'fill-extrusion-opacity': 0.94,
+              'fill-extrusion-opacity': threeMounted ? 0.001 : 0.94,
               'fill-extrusion-vertical-gradient': true
             }
           });
@@ -774,10 +891,10 @@ export default function LandIsometricPreview({
     };
   }, [drawWireframes, setUserMovedCamera, syncMapData, webglAvailable]);
 
-  // Whenever the selected parcel, display overrides, sculptures, or other lands update, sync GeoJSON
+  // Whenever the selected parcel, display overrides, hydrated sculptures, or other lands update, sync layers
   useEffect(() => {
     syncMapData();
-  }, [parcel, effectiveDisplayName, effectiveFrozen, otherParcelEntries, syncMapData]);
+  }, [parcel, effectiveDisplayName, effectiveFrozen, otherParcelEntries, hydratedPreviewSculptures, syncMapData]);
 
   useEffect(() => {
     if (!volume) return;
@@ -852,6 +969,7 @@ export default function LandIsometricPreview({
       className="card land-preview-card"
       data-testid="land-mgmt-iso-preview"
       data-parcel-id={parcel.parcelId}
+      data-three-3d-models={loadedThree3dCount}
       data-view-mode={viewMode}
       aria-label={`Isometric map preview for ${displayName}`}
     >
@@ -1020,10 +1138,12 @@ export default function LandIsometricPreview({
             {geoSummary.distanceFromUserLabel ||
               (geoSummary.nearestOwnedLand
                 ? `${geoSummary.nearestOwnedLand.distanceLabel} ${geoSummary.nearestOwnedLand.cardinal} of ${geoSummary.nearestOwnedLand.name}`
-                : `Grid ${geoSummary.geohash || parcel.parcelId}`)}
+                : geoSummary.geohash
+                ? `Grid ${geoSummary.geohash}`
+                : 'Global Coordinate Lock')}
           </span>
           <span className="land-preview-fact-sub mono">
-            {geoSummary.geohash ? `Geohash ${geoSummary.geohash}` : parcel.parcelId}
+            {geoSummary.geohash ? `Geohash ${geoSummary.geohash}` : 'Anchored 3D Plot'}
           </span>
         </div>
       </div>

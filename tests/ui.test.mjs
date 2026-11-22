@@ -805,7 +805,8 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.change(view.getByLabelText('Land Description'), {
       target: { value: 'Outdoor 3D sculpture garden open to everyone.' }
     });
-    assert.ok(view.getByText(/slug=golden-gate-plaza/i));
+    assert.ok(view.getByText(/\/golden-gate-plaza/i));
+    assert.equal(view.queryByText(/GLAND-9Q8YYK8Y/i), null);
 
     await RTL.act(async () => {
       RTL.fireEvent.click(view.getByRole('button', { name: /Save & Mint Land/i }));
@@ -2640,5 +2641,138 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(picked.material, 'neon');
     assert.equal(picked.reach, 2.4);
     cleanup();
+  });
+
+  test('MobileMapSheet and ProfileModal always render the owner latest land name and never expose internal GLAND codes', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const { default: ProfileModal } = await loadJsxModule(
+      'client/src/components/ProfileModal.jsx'
+    );
+
+    const sheetView = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user: { id: 'u-bigdog', name: 'BigDog', username: 'bigdog' },
+        ownedParcelIds: ['GLAND-9R16561P'],
+        location: { lat: 39.7388, lng: -121.8478 },
+        areaFilterMode: 'nearby',
+        mapParcels: [
+          {
+            parcelId: 'GLAND-9R16561P',
+            customName: 'Twin Palms',
+            centerLat: 39.7388,
+            centerLng: -121.8478,
+            ownerSub: 'u-bigdog',
+            stewardUsername: 'bigdog',
+            stewardStatus: 'awakened',
+            sculptureCount: 1,
+            volume: { widthMeters: 14, depthMeters: 14, heightMeters: 18, footprintAreaSqM: 196 }
+          },
+          {
+            parcelId: 'GLAND-9R1652RD',
+            customName: 'DRUGDEN',
+            centerLat: 39.7283,
+            centerLng: -121.8388,
+            ownerSub: 'u-bigdog',
+            stewardUsername: 'bigdog',
+            stewardStatus: 'awakened',
+            sculptureCount: 1,
+            volume: { widthMeters: 67.7, depthMeters: 73.7, heightMeters: 100.2, footprintAreaSqM: 4989 }
+          }
+        ],
+        displayedMapSculptures: [
+          {
+            id: 'sc-magnolia',
+            title: 'Magnolia',
+            parcelId: 'GLAND-9R16561P',
+            parcelName: 'Twin Palms',
+            landDisplayName: 'Twin Palms',
+            lat: 39.73887,
+            lng: -121.8479,
+            voxelCount: 268,
+            polScore: 97
+          }
+        ],
+        onClose: () => {}
+      })
+    );
+
+    assert.ok(sheetView.getByText('Twin Palms'));
+    assert.ok(sheetView.getByText('DRUGDEN'));
+    assert.equal(sheetView.queryByText(/GLAND-9R16561P/i), null);
+    assert.equal(sheetView.queryByText(/GLAND-9R1652RD/i), null);
+    assert.equal(sheetView.queryByText(/9R16561P/i), null);
+    cleanup();
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('/api/profiles/')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            profile: {
+              id: 'u-bigdog',
+              userNumber: 7,
+              userNumberLabel: '#0007',
+              username: 'bigdog',
+              displayName: 'BigDog',
+              bio: 'Sculpting in 3D AR',
+              picture: '',
+              avatarImage: '',
+              headerImage: '',
+              accountType: 'human',
+              stats: { landsCount: 1, sculpturesCount: 1, totalBlocks: 268, xp: 100 }
+            },
+            lands: [
+              {
+                parcelId: 'GLAND-9R16561P',
+                customName: 'Twin Palms',
+                displayName: 'Twin Palms',
+                sculptureCount: 1,
+                stewardStatus: 'awakened'
+              }
+            ],
+            sculptures: [
+              {
+                id: 'sc-magnolia',
+                title: 'Magnolia',
+                parcelId: 'GLAND-9R16561P',
+                parcelName: 'Twin Palms',
+                landDisplayName: 'Twin Palms',
+                voxelCount: 268,
+                createdAt: '2026-11-21T00:00:00Z'
+              }
+            ],
+            actions: []
+          })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    try {
+      const profView = RTL.render(
+        React.createElement(ProfileModal, {
+          handle: 'bigdog',
+          currentUser: null,
+          onClose: () => {}
+        })
+      );
+      await RTL.waitFor(() => {
+        assert.ok(profView.getByText('Twin Palms'));
+      });
+      assert.equal(profView.queryByText(/GLAND-9R16561P/i), null);
+
+      RTL.fireEvent.click(profView.getByRole('tab', { name: /Sculptures/i }));
+      await RTL.waitFor(() => {
+        assert.ok(profView.getByText('Magnolia'));
+      });
+      assert.ok(profView.getByText(/Twin Palms/i));
+      assert.equal(profView.queryByText(/GLAND-9R16561P/i), null);
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
   });
 });

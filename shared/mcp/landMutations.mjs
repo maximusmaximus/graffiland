@@ -6,6 +6,7 @@ import {
   buildObjectFittedLandVolume,
   buildParcelShareUrl,
   computeOrientedFootprintLngLat,
+  resolveLandDisplayName,
   slugifyLandTitle,
   validateLandTitle
 } from '../landVolume.mjs';
@@ -29,6 +30,7 @@ import {
   checkSculptureEditPermission,
   checkSculptureOrLandOwnership,
   fetchSculptureWithModelRow,
+  getLatestParcelDisplayName,
   normalizeParcelId,
   resolvePreferredOwnerWallet,
   resolveUserWalletAddresses,
@@ -80,7 +82,7 @@ export async function listLandsWithCurations(db) {
     const bounds = decodeGeohashBounds(geohash);
     const first = sc
       ? await db.get(
-          'SELECT recipient_address, creator_name, creator_sub FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+          'SELECT recipient_address, creator_name, creator_sub, title, place_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
           [parcelId]
         )
       : null;
@@ -182,6 +184,11 @@ export async function listLandsWithCurations(db) {
       agentRoyaltiesEth: Number(st?.agent_royalties_eth || 0),
       humanRoyaltiesEth: Number(st?.human_royalties_eth || 0),
       customName: cur?.custom_name || '',
+      displayName: resolveLandDisplayName({
+        customName: cur?.custom_name || '',
+        firstSculptureTitle: first?.title || '',
+        placeName: first?.place_name || ''
+      }),
       description: cur?.curation_note || '',
       curationNote: cur?.curation_note || '',
       slug: slugifyLandTitle(cur?.custom_name || '') || parcelId.toLowerCase(),
@@ -331,6 +338,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const ownerId = ownerUser?.id ? String(ownerUser.id) : '';
   const allRows = await db.all(
     `SELECT s.*,
+      COALESCE(pc.custom_name, '') AS parcel_custom_name,
       m.model_format AS custom_model_format,
       m.mime_type AS custom_model_mime,
       m.source_type AS custom_model_source_type,
@@ -352,6 +360,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
       COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
@@ -476,6 +485,11 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       leaseExpiresAt: st?.lease_expires_at || '',
       awakenedAt: st?.awakened_at || '',
       customName: cur?.custom_name || '',
+      displayName: resolveLandDisplayName({
+        customName: cur?.custom_name || '',
+        firstSculptureTitle: visibleOnLand[0]?.title || onLand[0]?.title || '',
+        placeName: visibleOnLand[0]?.place_name || onLand[0]?.place_name || ''
+      }),
       description: cur?.curation_note || '',
       curationNote: cur?.curation_note || '',
       slug: slugifyLandTitle(cur?.custom_name || '') || pid.toLowerCase(),
@@ -793,8 +807,9 @@ export async function applyCreateSculptureOnLand(
 ) {
   const landSettings = await getLandSettingsInternal(db, parcelCtx.parcelId);
   if (landSettings.frozen) {
+    const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
     throw new McpServiceError(
-      `Virtual Land ${parcelCtx.parcelId} is frozen — no new sculptures can be placed until you unfreeze it in Land Settings.`,
+      `Virtual Land "${landLabel}" is frozen — no new sculptures can be placed until you unfreeze it in Land Settings.`,
       403
     );
   }
@@ -1145,8 +1160,9 @@ export async function applyDeleteSculpture(db, { sculptureRow, ownerAddress }) {
 export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '', viaAgent = false }) {
   const settings = await getLandSettingsInternal(db, parcelCtx.parcelId);
   if (viaAgent && !settings.allowAgentErase) {
+    const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
     throw new McpServiceError(
-      `Agent land erasure is disabled by the holder of Virtual Land ${parcelCtx.parcelId}. Enable Allow Agent Erase in Land Management first.`,
+      `Agent land erasure is disabled by the holder of Virtual Land "${landLabel}". Enable Allow Agent Erase in Land Management first.`,
       403
     );
   }
@@ -1283,11 +1299,17 @@ export async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress
 
   const row = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [parcelCtx.parcelId]);
   const slug = slugifyLandTitle(row.custom_name || '') || parcelCtx.parcelId.toLowerCase();
+  const displayName = resolveLandDisplayName({
+    customName: row.custom_name || '',
+    firstSculptureTitle: parcelCtx.visibleRows?.[0]?.title || '',
+    placeName: parcelCtx.visibleRows?.[0]?.place_name || ''
+  });
   return {
     parcel: {
       parcelId: parcelCtx.parcelId,
       geohash: parcelCtx.geohash,
       customName: row.custom_name,
+      displayName,
       description: row.curation_note,
       curationNote: row.curation_note,
       slug,
@@ -1325,6 +1347,7 @@ export async function getPublicParcelDetail(
 
   const scRows = await db.all(
     `SELECT s.*,
+      COALESCE(pc.custom_name, '') AS parcel_custom_name,
       m.model_format AS custom_model_format, m.mime_type AS custom_model_mime,
       m.source_type AS custom_model_source_type, m.model_url AS custom_model_url,
       m.model_cid AS custom_model_cid, m.model_uri AS custom_model_uri,
@@ -1338,6 +1361,7 @@ export async function getPublicParcelDetail(
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
       COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
@@ -1400,8 +1424,9 @@ export async function applyPublishOnBehalf(
   const locBundle = payload.locationBundle;
   const landSettings = await getLandSettingsInternal(db, locBundle.parcelId);
   if (landSettings.frozen) {
+    const landLabel = await getLatestParcelDisplayName(db, locBundle.parcelId);
     throw new McpServiceError(
-      `Virtual Land ${locBundle.parcelId} is frozen — no new sculptures can be placed here.`,
+      `Virtual Land "${landLabel}" is frozen — no new sculptures can be placed here.`,
       403
     );
   }
@@ -1555,7 +1580,7 @@ export async function applyPublishOnBehalf(
     await consumeDraftOnPublish(db, { draftId: payload.draftId, user: ownerUser });
   }
 
-  const saved = await db.get('SELECT * FROM sculptures WHERE id = ?', [sculptureId]);
+  const saved = await fetchSculptureWithModelRow(db, sculptureId);
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
     mint: mintResult,
@@ -1881,8 +1906,9 @@ export async function addLandContributor(db, { parcelId, user, body }) {
     ownerSub: user.id
   });
   if (!eligibleVisitors.some((v) => v.userId === candidate.id)) {
+    const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
     throw new McpServiceError(
-      `Only accounts that visited Virtual Land ${parcelCtx.parcelId} in person and can chat on this land can be added as Contributors.`,
+      `Only accounts that visited Virtual Land "${landLabel}" in person and can chat on this land can be added as Contributors.`,
       403
     );
   }

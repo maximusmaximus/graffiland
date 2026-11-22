@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
-import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../shared/landVolume.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
@@ -179,12 +182,16 @@ export default function LandManagementModal({
     setBusy('upload');
     setNotice('');
     setErrorMsg('');
+    const activeLandLabel = resolveLandDisplayName(
+      { ...activeParcel, customName: customName || activeParcel.customName },
+      { defaultName: 'Virtual Land' }
+    );
     try {
       const res = await api.createSculptureOnLand(activeParcel.parcelId, {
         title: uploadTitle.trim() || uploadFileName || '3D Model Sculpture',
         description:
           uploadDesc.trim() ||
-          `Custom ${uploadFormat.toUpperCase()} 3D model placed on Virtual Land ${activeParcel.parcelId}.`,
+          `Custom ${uploadFormat.toUpperCase()} 3D model placed on "${activeLandLabel}".`,
         modelFormat: uploadFormat,
         modelBase64: uploadBase64,
         modelScale: Number(uploadScale || 1),
@@ -203,7 +210,7 @@ export default function LandManagementModal({
       await loadWorkspace();
       onWorkspaceChanged?.();
       setNotice(
-        `Uploaded "${res?.sculpture?.title || '3D Model'}" (${uploadFormat.toUpperCase()}) onto ${activeParcel.parcelId}.`
+        `Uploaded "${res?.sculpture?.title || '3D Model'}" (${uploadFormat.toUpperCase()}) onto "${activeLandLabel}".`
       );
     } catch (err) {
       setErrorMsg(err.message || 'Could not upload 3D model');
@@ -236,7 +243,11 @@ export default function LandManagementModal({
       });
       await loadWorkspace();
       onWorkspaceChanged?.();
-      setNotice(`Saved settings for ${activeParcel.parcelId}.`);
+      const savedLabel = resolveLandDisplayName(
+        { ...activeParcel, customName: customName || activeParcel.customName },
+        { defaultName: 'Virtual Land' }
+      );
+      setNotice(`Saved settings for "${savedLabel}".`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not update land settings');
     } finally {
@@ -273,7 +284,11 @@ export default function LandManagementModal({
       await api.removeLandContributor(activeParcel.parcelId, contributorSub);
       await loadWorkspace();
       onWorkspaceChanged?.();
-      setNotice(`Removed contributor from ${activeParcel.parcelId}.`);
+      const activeLandLabel = resolveLandDisplayName(
+        { ...activeParcel, customName: customName || activeParcel.customName },
+        { defaultName: 'Virtual Land' }
+      );
+      setNotice(`Removed contributor from "${activeLandLabel}".`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not remove contributor');
     } finally {
@@ -304,7 +319,11 @@ export default function LandManagementModal({
       });
       await copyToClipboard(promptText);
       setPromptCopied(true);
-      setNotice(`Copied MCP Agent Prompt for ${activeParcel.parcelId} (${code}).`);
+      const activeLandLabel = resolveLandDisplayName(
+        { ...activeParcel, customName: customName || activeParcel.customName },
+        { defaultName: 'Virtual Land' }
+      );
+      setNotice(`Copied MCP Agent Prompt for "${activeLandLabel}" (${code}).`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not copy MCP prompt');
     } finally {
@@ -314,8 +333,17 @@ export default function LandManagementModal({
 
   async function handleEraseLand() {
     if (!activeParcel) return;
-    if (eraseConfirmInput.trim().toUpperCase() !== activeParcel.parcelId) {
-      setErrorMsg(`Type "${activeParcel.parcelId}" to confirm erasing.`);
+    const activeLandLabel = resolveLandDisplayName(
+      { ...activeParcel, customName: customName || activeParcel.customName },
+      { defaultName: 'Virtual Land' }
+    );
+    const typed = eraseConfirmInput.trim();
+    const matchesConfirm =
+      typed.toLowerCase() === activeLandLabel.toLowerCase() ||
+      typed.toUpperCase() === 'ERASE' ||
+      typed.toUpperCase() === activeParcel.parcelId;
+    if (!matchesConfirm) {
+      setErrorMsg(`Type "${activeLandLabel}" (or ERASE) to confirm erasing.`);
       return;
     }
     setBusy('erase');
@@ -329,7 +357,7 @@ export default function LandManagementModal({
       await loadWorkspace();
       onWorkspaceChanged?.();
       setNotice(
-        `Erased ${res.parcelId} (${res.erasedSculptureCount} item(s) removed).`
+        `Erased "${activeLandLabel}" (${res.erasedSculptureCount} item(s) removed).`
       );
     } catch (err) {
       setErrorMsg(err.message || 'Could not erase land');
@@ -387,7 +415,7 @@ export default function LandManagementModal({
                       onClick={() => selectParcel(p)}
                     >
                       <XeroIcon emoji={p.frozen || p.settings?.frozen ? '❄️' : '📍'} size={13} />{' '}
-                      <span>{p.customName || p.parcelId}</span>
+                      <span>{resolveLandDisplayName(p, { defaultName: 'Virtual Land' })}</span>
                       <span className="land-mgmt-tab-count">· {p.sculptureCount}</span>
                     </button>
                   );
@@ -469,8 +497,12 @@ export default function LandManagementModal({
                 >
                   <div className="land-mgmt-section-head">
                     <div className="land-mgmt-heading">
-                      <strong>Land Details</strong>
-                      <code className="land-mgmt-pid">{activeParcel.parcelId}</code>
+                      <strong>
+                        {resolveLandDisplayName(
+                          { ...activeParcel, customName: customName || activeParcel.customName },
+                          { defaultName: 'Land Details' }
+                        )}
+                      </strong>
                       <InfoTip title="Land Name, Description & MCP">
                         Set a public name and description for this parcel (type <code>:</code> like{' '}
                         <code>:fire:</code> to insert emojis). Your name also creates a friendly
@@ -481,7 +513,10 @@ export default function LandManagementModal({
                       <button
                         type="button"
                         className="btn btn-xs"
-                        aria-label={`Copy share link for ${activeParcel.parcelId}`}
+                        aria-label={`Copy share link for ${resolveLandDisplayName(
+                          { ...activeParcel, customName: customName || activeParcel.customName },
+                          { defaultName: 'Virtual Land' }
+                        )}`}
                         onClick={async () => {
                           const shareUrl = buildParcelShareUrl({
                             origin: window.location.origin,
@@ -562,8 +597,13 @@ export default function LandManagementModal({
                       </label>
                       <InfoTip title="Freeze Land">
                         Blocks all new sculptures and 3D models from being placed on{' '}
-                        <code>{activeParcel.parcelId}</code>. Mobile visitors can still view
-                        existing art in AR.
+                        <strong>
+                          {resolveLandDisplayName(
+                            { ...activeParcel, customName: customName || activeParcel.customName },
+                            { defaultName: 'this land' }
+                          )}
+                        </strong>
+                        . Mobile visitors can still view existing art in AR.
                       </InfoTip>
                     </div>
 
@@ -1052,8 +1092,14 @@ export default function LandManagementModal({
                     </strong>
                     <InfoTip title="Erase Virtual Land">
                       Removes your active sculptures, custom 3D models, curations, and contributor
-                      access on <code>{activeParcel.parcelId}</code> from public feeds. Type the
-                      exact parcel ID below to confirm.
+                      access on{' '}
+                      <strong>
+                        {resolveLandDisplayName(
+                          { ...activeParcel, customName: customName || activeParcel.customName },
+                          { defaultName: 'this land' }
+                        )}
+                      </strong>{' '}
+                      from public feeds. Type the land name or ERASE below to confirm.
                     </InfoTip>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -1061,7 +1107,10 @@ export default function LandManagementModal({
                       className="input"
                       value={eraseConfirmInput}
                       onChange={(e) => setEraseConfirmInput(e.target.value)}
-                      placeholder={`Type ${activeParcel.parcelId} to confirm`}
+                      placeholder={`Type "${resolveLandDisplayName(
+                        { ...activeParcel, customName: customName || activeParcel.customName },
+                        { defaultName: 'ERASE' }
+                      )}" to confirm`}
                     />
                     <button
                       type="button"

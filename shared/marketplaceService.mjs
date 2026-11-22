@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { STEWARD_DEFAULTS, TRANSACTION_FEES } from './constants.mjs';
+import { resolveLandDisplayName } from './landVolume.mjs';
 import { McpServiceError, checkSculptureOwnership, resolvePreferredOwnerWallet } from './mcp/helpers.mjs';
 import { notifyLandMarketplaceSale } from './notificationService.mjs';
 
@@ -291,12 +292,14 @@ export async function listMarketplaceItems(db, { status = 'active', parcelId = '
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await db.all(
     `SELECT ml.*, s.title AS sculpture_title, s.description AS sculpture_description,
-            s.preview_data_url AS preview_data_url, s.token_id AS token_id,
+            s.preview_data_url AS preview_data_url, s.token_id AS token_id, s.place_name AS place_name,
+            COALESCE(pc.custom_name, '') AS parcel_custom_name,
             COALESCE(l.layer_role, 'artist_work') AS layer_role,
             st.steward_name, st.steward_type, st.steward_address,
             st.human_contributor_count
      FROM marketplace_listings ml
      JOIN sculptures s ON s.id = ml.sculpture_id
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = ml.parcel_id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
      LEFT JOIN land_steward_state st ON st.parcel_id = ml.parcel_id
      ${where}
@@ -312,6 +315,12 @@ export async function listMarketplaceItems(db, { status = 'active', parcelId = '
       preview_data_url: r.preview_data_url,
       token_id: r.token_id,
       layer_role: r.layer_role
+    }),
+    parcelName: String(r.parcel_custom_name || '').trim(),
+    landDisplayName: resolveLandDisplayName({
+      customName: r.parcel_custom_name || '',
+      firstSculptureTitle: r.sculpture_title || '',
+      placeName: r.place_name || ''
     }),
     stewardName: r.steward_name || 'Parcel Steward',
     stewardType: r.steward_type || 'human',

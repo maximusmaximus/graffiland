@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import NotificationCenter from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobilePairApprovalDropdown from './MobilePairApprovalDropdown.jsx';
@@ -627,7 +628,15 @@ export default function StudioHudTopBar({
               <div style={{ minWidth: 0 }}>
                 <div className="ar-select-title">{targetSc.title}</div>
                 <div className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                  {Math.round(arTargetedSculpture.distanceM)}m away · {targetSc.parcelId}
+                  {Math.round(arTargetedSculpture.distanceM)}m away ·{' '}
+                  {resolveLandDisplayName(
+                    {
+                      customName: targetSc.parcelName || '',
+                      displayName: targetSc.landDisplayName || '',
+                      firstSculptureTitle: targetSc.title || ''
+                    },
+                    { defaultName: 'Virtual Land' }
+                  )}
                 </div>
               </div>
               <button
