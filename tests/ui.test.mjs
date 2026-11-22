@@ -846,7 +846,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
-    assert.ok(farView.getByText('Sunset Neon Courtyard'));
+    assert.ok(farView.getAllByText('Sunset Neon Courtyard').length >= 2);
     assert.ok(farView.getByText(/Sculpture park overlooking Market St/i));
     assert.ok(farView.getByRole('link', { name: /Get Directions/i }));
     assert.equal(farView.queryByRole('button', { name: /View in AR/i }), null);
@@ -2211,7 +2211,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(selectedParcels.includes('GLAND-SECOND02'));
     cleanup();
 
-    // 5) MobileParcelVisitView also supports 2D <-> 3D isometric + full-screen toggle cleanly
+    // 5) MobileParcelVisitView auto-opens in 3D isometric mode and supports full-screen + 2D <-> 3D toggle cleanly
     const visitView = RTL.render(
       React.createElement(MobileParcelVisitView, {
         parcel: parcels[0],
@@ -2220,14 +2220,15 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
-    assert.ok(visitView.getByTestId('mobile-map-3d-toggle-btn'));
-    RTL.fireEvent.click(visitView.getByTestId('mobile-map-3d-toggle-btn'));
     assert.ok(visitView.getByTestId('mobile-iso-3d-map'));
+    assert.ok(visitView.getByTestId('mobile-map-2d-toggle-btn'));
     RTL.fireEvent.click(visitView.getByTestId('mobile-map-fullscreen-btn'));
     assert.ok(visitView.getByTestId('mobile-map-2d-toggle-btn'));
     RTL.fireEvent.click(visitView.getByTestId('mobile-map-2d-toggle-btn'));
     assert.equal(visitView.queryByTestId('mobile-iso-3d-map'), null);
     assert.ok(visitView.getByTestId('mobile-map-3d-toggle-btn'));
+    RTL.fireEvent.click(visitView.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.ok(visitView.getByTestId('mobile-iso-3d-map'));
     cleanup();
   });
 
@@ -2770,6 +2771,217 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       });
       assert.ok(profView.getByText(/Twin Palms/i));
       assert.equal(profView.queryByText(/GLAND-9R16561P/i), null);
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('PlotVisitView auto-opens in isometric mode with clickable land & side artwork labels, expandable details, and logged-in management', async () => {
+    const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
+    const parcel = {
+      parcelId: 'GLAND-9R1652RD',
+      customName: 'DRUGDEN',
+      displayName: 'DRUGDEN',
+      description: 'Isometric art plaza',
+      ownerSub: 'google:owner-42',
+      stewardUsername: 'bigdog',
+      stewardType: 'human',
+      stewardStatus: 'awakened',
+      frozen: false,
+      centerLat: 39.7388,
+      centerLng: -121.8479,
+      volume: {
+        centerLat: 39.7388,
+        centerLng: -121.8479,
+        widthMeters: 14,
+        depthMeters: 14,
+        heightMeters: 18
+      }
+    };
+    const sculptures = [
+      {
+        id: 'sc-tree-1',
+        parcelId: 'GLAND-9R1652RD',
+        title: 'Christmas Tree',
+        description: 'Custom holiday GLB sculpture',
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', sizeBytes: 120000 },
+        creatorSub: 'google:owner-42',
+        creatorName: '@bigdog',
+        lat: 39.73881,
+        lng: -121.84792,
+        polScore: 98,
+        createdAt: '2026-11-21T00:00:00Z'
+      },
+      {
+        id: 'sc-mag-2',
+        parcelId: 'GLAND-9R1652RD',
+        title: 'Magnolia',
+        description: 'Voxel garden bloom',
+        voxelCount: 268,
+        creatorSub: 'google:artist-9',
+        creatorName: '@maya',
+        lat: 39.73879,
+        lng: -121.84788,
+        polScore: 95,
+        createdAt: '2026-11-21T00:00:00Z'
+      }
+    ];
+
+    // 1) Logged-out desktop visitor: auto isometric mode, floating land + side artwork labels, expandable details, no management controls
+    const guestView = RTL.render(
+      React.createElement(PlotVisitView, {
+        variant: 'desktop',
+        parcel,
+        sculptures,
+        user: null,
+        onRequestLogin: () => {},
+        onSelectSculpture: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.ok(guestView.getByTestId('desktop-plot-visit-view'));
+    assert.ok(guestView.getByTestId('mobile-iso-3d-map'));
+    assert.equal(guestView.getByTestId('mobile-iso-3d-map').getAttribute('data-map-mode'), '3d');
+    assert.ok(guestView.getByTestId('plot-land-label'));
+    const artworkCallouts = guestView.getAllByTestId('plot-artwork-label');
+    assert.equal(artworkCallouts.length, 2);
+    assert.equal(guestView.queryByText(/GLAND-9R1652RD/i), null);
+    assert.ok(guestView.getByTestId('plot-signin-btn'));
+    assert.equal(guestView.queryByTestId('plot-land-management'), null);
+    assert.ok(guestView.getByTestId('plot-land-details'));
+
+    // Click side artwork label -> expands that artwork's details below
+    RTL.fireEvent.click(artworkCallouts[0]);
+    assert.ok(guestView.getByTestId('plot-artwork-details'));
+    assert.equal(guestView.queryByTestId('plot-artwork-management'), null);
+
+    // Click floating Land Label -> switches cleanly back to Land details
+    RTL.fireEvent.click(guestView.getByTestId('plot-land-label'));
+    assert.ok(guestView.getByTestId('plot-land-details'));
+
+    // Collapse and re-expand details drawer cleanly
+    RTL.fireEvent.click(guestView.getByTestId('plot-details-toggle'));
+    assert.equal(guestView.queryByTestId('plot-land-details'), null);
+    RTL.fireEvent.click(guestView.getByTestId('plot-details-toggle'));
+    assert.ok(guestView.getByTestId('plot-land-details'));
+    cleanup();
+
+    // 2) Logged-in land owner: sees Land Management + Artwork Management and can rename, freeze, edit, hide, and remove inline
+    const origFetch = globalThis.fetch;
+    const apiCalls = [];
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      apiCalls.push({ url: u, method: opts.method || 'GET', body: opts.body });
+      if (u.includes('/api/lands/GLAND-9R1652RD/update')) {
+        const body = JSON.parse(opts.body || '{}');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            parcel: { ...parcel, customName: body.customName, displayName: body.customName, description: body.description }
+          })
+        };
+      }
+      if (u.includes('/api/lands/GLAND-9R1652RD/settings')) {
+        const body = JSON.parse(opts.body || '{}');
+        return { ok: true, status: 200, json: async () => ({ settings: { frozen: Boolean(body.frozen) } }) };
+      }
+      if (u.includes('/api/sculptures/sc-tree-1/visibility')) {
+        const body = JSON.parse(opts.body || '{}');
+        return { ok: true, status: 200, json: async () => ({ sculpture: { ...sculptures[0], hidden: Boolean(body.hidden) } }) };
+      }
+      if (u.includes('/api/sculptures/sc-tree-1') && opts.method === 'PUT') {
+        const body = JSON.parse(opts.body || '{}');
+        return { ok: true, status: 200, json: async () => ({ sculpture: { ...sculptures[0], title: body.title, description: body.description } }) };
+      }
+      if (u.includes('/api/sculptures/sc-tree-1') && opts.method === 'DELETE') {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+
+    try {
+      const updates = [];
+      const ownerView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures,
+          user: { id: 'google:owner-42', username: 'bigdog' },
+          ownedParcelIds: ['GLAND-9R1652RD'],
+          onOpenManageLand: () => {},
+          onOpenAddLandItem: () => {},
+          onSelectSculpture: () => {},
+          onPlotUpdated: (payload) => updates.push(payload),
+          onClose: () => {}
+        })
+      );
+
+      assert.ok(ownerView.getByTestId('plot-owner-badge'));
+      assert.ok(ownerView.getByTestId('plot-land-management'));
+
+      // Rename land inline -> floating land label updates immediately
+      RTL.fireEvent.click(ownerView.getByTestId('plot-land-edit-btn'));
+      RTL.fireEvent.change(ownerView.getByLabelText('Edit land name'), {
+        target: { value: 'Golden Plaza' }
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(ownerView.getByTestId('plot-land-save-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(ownerView.getByTestId('plot-land-label').textContent.includes('Golden Plaza'));
+      });
+
+      // Freeze land inline
+      await RTL.act(async () => {
+        RTL.fireEvent.click(ownerView.getByTestId('plot-land-freeze-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(ownerView.getByText(/Unfreeze Land/i));
+      });
+
+      // Select artwork via side label -> Artwork Management appears -> Edit title, Hide, and Remove
+      const treeLabel = ownerView
+        .getAllByTestId('plot-artwork-label')
+        .find((el) => el.getAttribute('data-sculpture-id') === 'sc-tree-1');
+      assert.ok(treeLabel);
+      RTL.fireEvent.click(treeLabel);
+      assert.ok(ownerView.getByTestId('plot-artwork-management'));
+
+      RTL.fireEvent.click(ownerView.getByTestId('plot-artwork-edit-btn'));
+      RTL.fireEvent.change(ownerView.getByLabelText('Edit artwork title'), {
+        target: { value: 'Winter Pine' }
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(ownerView.getByTestId('plot-artwork-save-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(ownerView.getByTestId('plot-artwork-details').textContent.includes('Winter Pine'));
+      });
+
+      await RTL.act(async () => {
+        RTL.fireEvent.click(ownerView.getByTestId('plot-artwork-visibility-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(ownerView.getByText(/Unhide Artwork/i));
+      });
+
+      RTL.fireEvent.click(ownerView.getByTestId('plot-artwork-remove-btn'));
+      await RTL.act(async () => {
+        RTL.fireEvent.click(ownerView.getByTestId('plot-artwork-confirm-remove-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(ownerView.getByTestId('plot-land-details'));
+      });
+
+      assert.ok(apiCalls.some((c) => c.url.includes('/update')));
+      assert.ok(apiCalls.some((c) => c.url.includes('/settings')));
+      assert.ok(apiCalls.some((c) => c.method === 'PUT' && c.url.includes('/sc-tree-1')));
+      assert.ok(apiCalls.some((c) => c.url.includes('/visibility')));
+      assert.ok(apiCalls.some((c) => c.method === 'DELETE' && c.url.includes('/sc-tree-1')));
+      assert.ok(updates.length >= 5);
     } finally {
       globalThis.fetch = origFetch;
       cleanup();

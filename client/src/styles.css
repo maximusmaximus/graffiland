@@ -3604,6 +3604,380 @@ select {
   color: var(--accent);
 }
 
+.mobile-parcel-art-chip.is-selected {
+  border-color: rgba(255, 209, 102, 0.85);
+  background: rgba(255, 209, 102, 0.14);
+  box-shadow: 0 0 12px rgba(255, 209, 102, 0.24);
+}
+
+/* ================= Unified Isometric Plot Link Showcase ================= */
+.plot-visit-shell.is-desktop {
+  background: radial-gradient(circle at 50% 0%, rgba(0, 245, 212, 0.09), #070b14 56%);
+}
+
+.plot-visit-header {
+  flex-shrink: 0;
+}
+
+.plot-visit-subhead {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.plot-visit-stage {
+  height: 46dvh;
+  min-height: 240px;
+  max-height: 410px;
+  transition: height 180ms ease;
+}
+
+.plot-visit-shell.is-desktop .plot-visit-stage {
+  height: 52dvh;
+  min-height: 330px;
+  max-height: 520px;
+}
+
+.plot-visit-stage.is-expanded-view:not(.is-fullscreen) {
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
+}
+
+/* Interactive Floating Land Label + Side Artwork Callouts Layer inside Isometric Viewport */
+.plot-iso-callout-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 550;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.plot-iso-land-label-btn {
+  position: absolute;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(76%, 320px);
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(0, 245, 212, 0.78);
+  background: rgba(6, 11, 23, 0.9);
+  backdrop-filter: blur(10px);
+  color: #eafffc;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52), 0 0 14px rgba(0, 245, 212, 0.24);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.plot-iso-land-label-btn > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plot-iso-land-label-btn:hover {
+  border-color: #ffffff;
+  background: rgba(10, 18, 36, 0.96);
+}
+
+.plot-iso-land-label-btn.is-selected {
+  border-color: #ffd166;
+  background: rgba(24, 19, 8, 0.94);
+  color: #fff8e1;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 209, 102, 0.42);
+}
+
+.plot-iso-land-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #00f5d4;
+  box-shadow: 0 0 8px #00f5d4;
+  flex-shrink: 0;
+}
+
+.plot-iso-land-label-btn.is-selected .plot-iso-land-dot {
+  background: #ffd166;
+  box-shadow: 0 0 8px #ffd166;
+}
+
+.plot-iso-land-dims {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(203, 245, 238, 0.8);
+  padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  flex-shrink: 0;
+}
+
+.plot-iso-artwork-callout {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 9px;
+  border-radius: 10px;
+  border: 1.25px solid rgba(0, 245, 212, 0.55);
+  background: rgba(7, 12, 24, 0.9);
+  backdrop-filter: blur(10px);
+  color: #eef6ff;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 245, 212, 0.16);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.plot-iso-artwork-callout.is-left {
+  border-right: 3px solid #00f5d4;
+}
+
+.plot-iso-artwork-callout.is-right {
+  border-left: 3px solid #00f5d4;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.plot-iso-artwork-callout:hover {
+  border-color: #ffffff;
+  background: rgba(12, 20, 38, 0.96);
+  transform: translateY(-1px);
+}
+
+.plot-iso-artwork-callout.is-selected {
+  border-color: #ffd166;
+  background: rgba(26, 20, 8, 0.95);
+  color: #fff8e1;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.56), 0 0 16px rgba(255, 209, 102, 0.42);
+}
+
+.plot-iso-artwork-callout.is-left.is-selected {
+  border-right-color: #ffd166;
+}
+
+.plot-iso-artwork-callout.is-right.is-selected {
+  border-left-color: #ffd166;
+}
+
+.plot-iso-callout-title {
+  display: block;
+  width: 100%;
+  font-size: 11.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plot-iso-callout-meta {
+  display: block;
+  width: 100%;
+  font-size: 9.5px;
+  color: #93e9dc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plot-iso-artwork-callout.is-selected .plot-iso-callout-meta {
+  color: #ffd166;
+}
+
+/* Expandable Plot Details & Management Drawer Below the Isometric Stage */
+.plot-visit-drawer-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(10, 15, 28, 0.98), rgba(7, 11, 20, 0.99));
+}
+
+.plot-visit-shell.is-desktop .plot-visit-drawer-wrap {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.plot-visit-stage.is-expanded-view + .plot-visit-drawer-wrap {
+  flex: 0 0 auto;
+}
+
+.plot-visit-selector-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(11, 17, 32, 0.92);
+  flex-shrink: 0;
+}
+
+.plot-visit-selector-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-bottom: 1px;
+}
+
+.plot-selector-pill {
+  flex: 0 0 auto;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 210px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dbe7f8;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.plot-selector-pill > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plot-selector-pill:hover {
+  border-color: rgba(0, 245, 212, 0.5);
+  color: #ffffff;
+}
+
+.plot-selector-pill.is-active {
+  border-color: #ffd166;
+  background: rgba(255, 209, 102, 0.16);
+  color: #fff8e1;
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.22);
+}
+
+.plot-selector-pill.is-hidden-art {
+  opacity: 0.78;
+  border-style: dashed;
+}
+
+.plot-details-toggle-btn {
+  flex-shrink: 0;
+}
+
+.plot-visit-body {
+  gap: 12px;
+}
+
+.plot-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.plot-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plot-detail-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.plot-detail-meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.plot-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plot-mgmt-section {
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255, 209, 102, 0.08), rgba(0, 245, 212, 0.05));
+  border: 1px solid rgba(255, 209, 102, 0.34);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plot-mgmt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plot-mgmt-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #fff3c4;
+}
+
+.plot-mgmt-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.plot-inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plot-inline-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .plot-iso-land-label-btn {
+    font-size: 11px;
+    padding: 4px 9px;
+  }
+
+  .plot-iso-land-dims {
+    display: none;
+  }
+
+  .plot-iso-artwork-callout {
+    padding: 4px 7px;
+  }
+
+  .plot-iso-callout-title {
+    font-size: 10.5px;
+  }
+}
+
 /* Cleaned-up Land Management Sections & Compact Controls */
 .land-mgmt-modal {
   max-width: 740px;

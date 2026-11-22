@@ -18,6 +18,10 @@ import {
   findNearbyCameraLands,
   isPointInsideParcelFootprint
 } from '../client/src/utils/arLandHelpers.js';
+import {
+  computeFloatingLandLabelBox,
+  computeSideArtworkCallouts
+} from '../client/src/utils/map3dLabelOverlay.js';
 
 describe('Mobile Nearest Lands Map Helpers', () => {
   test('buildGoogleMapsLandUrl builds valid directions URLs and rejects invalid coordinates', () => {
@@ -384,5 +388,84 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(prism.topCorners.length, 4);
     assert.equal(prism.baseY, -1.15);
     assert.equal(prism.topY, Number((-1.15 + 1.92).toFixed(3)));
+  });
+
+  test('computeFloatingLandLabelBox and computeSideArtworkCallouts lay out floating land label and non-overlapping left/right artwork pointers', () => {
+    const landBox = computeFloatingLandLabelBox(
+      {
+        bottom: [
+          { x: 340, y: 245 },
+          { x: 460, y: 245 },
+          { x: 460, y: 285 },
+          { x: 340, y: 285 }
+        ],
+        top: [
+          { x: 340, y: 140 },
+          { x: 460, y: 140 },
+          { x: 460, y: 180 },
+          { x: 340, y: 180 }
+        ]
+      },
+      { viewportWidth: 800, liftPx: 20, minY: 48, pillHeight: 28, approxWidth: 160 }
+    );
+    assert.ok(landBox);
+    assert.equal(landBox.centerX, 400);
+    assert.ok(landBox.y + landBox.height <= 140, 'Floating land label stays strictly above wireframe');
+    assert.equal(landBox.toX, 400);
+    assert.equal(landBox.toY, 265, 'Thin center arrow points directly to land base center');
+
+    const sculptures = [
+      { id: 'sc-1', title: 'Alpha Tree', modelType: 'custom-3d', customModel: { format: 'glb' }, lat: 39.738, lng: -121.849 },
+      { id: 'sc-2', title: 'Beta Arch', voxelCount: 42, lat: 39.7381, lng: -121.8488 },
+      { id: 'sc-3', title: 'Gamma Cube', voxelCount: 18, lat: 39.7382, lng: -121.8485 },
+      { id: 'sc-4', title: 'Delta Spire', voxelCount: 95, lat: 39.7383, lng: -121.8482 },
+      { id: 'sc-5', title: 'Epsilon Orb', voxelCount: 12, lat: 39.7384, lng: -121.8479 }
+    ];
+    const mockPts = {
+      'sc-1': { x: 310, y: 190 },
+      'sc-2': { x: 345, y: 196 },
+      'sc-3': { x: 380, y: 200 },
+      'sc-4': { x: 440, y: 192 },
+      'sc-5': { x: 475, y: 198 }
+    };
+
+    const callouts = computeSideArtworkCallouts({
+      sculptures,
+      volume: { centerLat: 39.7382, centerLng: -121.8485, heightMeters: 12 },
+      viewportWidth: 800,
+      viewportHeight: 420,
+      selectedSculptureId: 'sc-4',
+      topInsetPx: 66,
+      bottomInsetPx: 46,
+      marginPx: 14,
+      labelHeight: 40,
+      gapPx: 8,
+      projectScreenPt: (_lng, _lat, _alt, sc) => mockPts[sc.id]
+    });
+
+    assert.equal(callouts.length, 5);
+    const leftSide = callouts.filter((c) => c.side === 'left').sort((a, b) => a.y - b.y);
+    const rightSide = callouts.filter((c) => c.side === 'right').sort((a, b) => a.y - b.y);
+    assert.ok(leftSide.length >= 2 && rightSide.length >= 2, 'Balanced left/right side split');
+
+    // No vertical overlaps in either column and all stay inside viewport bounds
+    for (const col of [leftSide, rightSide]) {
+      for (let i = 0; i < col.length; i += 1) {
+        assert.ok(col[i].y >= 66 - 0.5, 'Stays below top inset');
+        assert.ok(col[i].y + col[i].height <= 420 - 46 + 0.5, 'Stays above bottom inset');
+        if (i > 0) {
+          assert.ok(
+            col[i].y >= col[i - 1].y + col[i - 1].height + 7.5,
+            'Zero vertical overlap between side artwork labels'
+          );
+        }
+      }
+    }
+
+    const selectedCallout = callouts.find((c) => c.sculptureId === 'sc-4');
+    assert.equal(selectedCallout?.isSelected, true);
+    assert.equal(selectedCallout?.side, 'right');
+    assert.equal(selectedCallout?.targetX, 440);
+    assert.equal(selectedCallout?.targetY, 192);
   });
 });

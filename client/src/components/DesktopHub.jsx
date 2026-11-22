@@ -28,6 +28,7 @@ import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
+import PlotVisitView from './PlotVisitView.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureModal from './SculptureModal.jsx';
 import TitleLandModal from './TitleLandModal.jsx';
@@ -246,15 +247,23 @@ export default function DesktopHub({
     );
     const deepParcel = parsedParcel.parcelId;
     const deepSlug = parsedParcel.slug;
-    const deepLat = Number(urlParams.get('lat'));
-    const deepLng = Number(urlParams.get('lng'));
+    const rawDeepLat = urlParams.get('lat');
+    const rawDeepLng = urlParams.get('lng');
+    const deepLat = rawDeepLat !== null && rawDeepLat !== '' ? Number(rawDeepLat) : NaN;
+    const deepLng = rawDeepLng !== null && rawDeepLng !== '' ? Number(rawDeepLng) : NaN;
     if (deepParcel || deepSlug) {
       const lookupToken = deepParcel || deepSlug;
+      setVisitedParcel({ loading: true, parcel: null, sculptures: [], error: '' });
       api
         .getLandDetail(lookupToken)
         .then((res) => {
           if (res?.parcel) {
-            setVisitedParcel({ parcel: res.parcel, sculptures: res.sculptures || [] });
+            setVisitedParcel({
+              loading: false,
+              parcel: res.parcel,
+              sculptures: res.sculptures || [],
+              error: ''
+            });
             const cLat = Number(res.parcel.centerLat ?? res.parcel.volume?.centerLat);
             const cLng = Number(res.parcel.centerLng ?? res.parcel.volume?.centerLng);
             if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
@@ -268,6 +277,7 @@ export default function DesktopHub({
         })
         .catch(() => {
           if (deepParcel && Number.isFinite(deepLat) && Number.isFinite(deepLng)) {
+            setVisitedParcel(null);
             const deepW = Number(urlParams.get('w')) || LAND_VOLUME_LIMITS.defaultWidthMeters;
             const deepD = Number(urlParams.get('d')) || LAND_VOLUME_LIMITS.defaultDepthMeters;
             const deepH = Number(urlParams.get('h')) || LAND_VOLUME_LIMITS.defaultHeightMeters;
@@ -296,6 +306,13 @@ export default function DesktopHub({
             setSidebarTab('land');
             setViewMode('3d');
             setMapViewport((prev) => ({ ...(prev || {}), lat: deepLat, lng: deepLng, zoom: 17.5 }));
+          } else {
+            setVisitedParcel({
+              loading: false,
+              parcel: null,
+              sculptures: [],
+              error: 'Virtual Land plot not found.'
+            });
           }
         });
     }
@@ -311,6 +328,37 @@ export default function DesktopHub({
         .catch(() => {});
     }
   }, [refreshData, refreshMyLands]);
+
+  const activeVisitedParcelId = visitedParcel?.parcel?.parcelId || '';
+  const refreshVisitedParcelDetail = useCallback(
+    async (parcelId = activeVisitedParcelId) => {
+      if (!parcelId) return;
+      try {
+        const res = await api.getLandDetail(parcelId);
+        if (!res?.parcel) return;
+        setVisitedParcel((prev) =>
+          prev?.parcel?.parcelId === parcelId
+            ? {
+                ...prev,
+                loading: false,
+                parcel: res.parcel,
+                sculptures: res.sculptures || [],
+                error: ''
+              }
+            : prev
+        );
+      } catch {
+        // ignore transient refresh failure
+      }
+    },
+    [activeVisitedParcelId]
+  );
+
+  // When auth changes while inspecting a plot link, refresh detail so owner/contributor permissions appear immediately
+  useEffect(() => {
+    if (!activeVisitedParcelId) return;
+    refreshVisitedParcelDetail(activeVisitedParcelId);
+  }, [activeVisitedParcelId, user?.id, refreshVisitedParcelDetail]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -1151,50 +1199,6 @@ export default function DesktopHub({
           />
         )}
 
-        {visitedParcel?.parcel && (
-          <div className="desktop-visited-parcel-bar" role="region" aria-label="Shared parcel visit overview">
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <strong>{getLiveLandName(visitedParcel.parcel)}</strong>
-                <span className={`badge ${visitedParcel.parcel.frozen ? 'badge-error' : 'teal'}`} style={{ fontSize: 10 }}>
-                  {visitedParcel.parcel.frozen ? '❄️ Frozen' : '✅ Open Land'}
-                </span>
-              </div>
-              {visitedParcel.parcel.description && (
-                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                  {visitedParcel.parcel.description}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-xs btn-outline"
-                onClick={() => handleCopyParcelShareLink(visitedParcel.parcel)}
-              >
-                🔗 Copy Link
-              </button>
-              {visitedParcel.sculptures?.[0] && (
-                <button
-                  type="button"
-                  className="btn btn-xs btn-primary"
-                  onClick={() => openSculpture(visitedParcel.sculptures[0])}
-                >
-                  🧊 View Artwork ({visitedParcel.sculptures.length})
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn-xs"
-                aria-label="Close shared parcel banner"
-                onClick={() => setVisitedParcel(null)}
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-
         <div className="desktop-map-layout">
           <div className="desktop-map-stage">
             <MapView3D
@@ -1896,6 +1900,44 @@ export default function DesktopHub({
         </div>
       )}
 
+      {visitedParcel && (
+        <PlotVisitView
+          variant="desktop"
+          parcel={visitedParcel.parcel}
+          sculptures={visitedParcel.sculptures || []}
+          user={user}
+          ownedParcelIds={ownedParcelIds}
+          config={config}
+          userLocation={userLocation}
+          loading={Boolean(visitedParcel.loading)}
+          error={visitedParcel.error || ''}
+          onSelectSculpture={(sc) => openSculpture(sc)}
+          onOpenManageLand={(pid) => {
+            setLandManageParcelId(pid || '');
+            setLandManageOpen(true);
+          }}
+          onOpenAddLandItem={(pid) => handleOpenAddLandItem(pid)}
+          onOpenProfile={(handle) => {
+            if (handle) setProfileHandle(handle);
+          }}
+          onRequestLogin={() => setLoginOpen(true)}
+          onPlotUpdated={({ parcel: nextParcel, sculptures: nextSculptures }) => {
+            setVisitedParcel((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    parcel: nextParcel || prev.parcel,
+                    sculptures: Array.isArray(nextSculptures) ? nextSculptures : prev.sculptures
+                  }
+                : prev
+            );
+            refreshData();
+            refreshMyLands();
+          }}
+          onClose={() => setVisitedParcel(null)}
+        />
+      )}
+
       {selected && (
         <SculptureModal
           sculpture={selected}
@@ -1908,6 +1950,16 @@ export default function DesktopHub({
             setSculptures((prev) =>
               prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
             );
+            setVisitedParcel((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    sculptures: (prev.sculptures || []).map((s) =>
+                      s.id === updated.id ? { ...s, ...updated } : s
+                    )
+                  }
+                : prev
+            );
             refreshMyLands();
           }}
           onOpenLandManagement={(pid) => {
@@ -1919,6 +1971,7 @@ export default function DesktopHub({
             setSelected(null);
             refreshData();
             refreshMyLands();
+            refreshVisitedParcelDetail();
           }}
         />
       )}
@@ -1933,7 +1986,7 @@ export default function DesktopHub({
           onToggleFreeze={handleToggleFreezeParcel}
           onToggleSculptureVisibility={handleToggleSculptureVisibility}
           onSculptureUploaded={async () => {
-            await Promise.all([refreshData(), refreshMyLands()]);
+            await Promise.all([refreshData(), refreshMyLands(), refreshVisitedParcelDetail()]);
           }}
           onSelectSculpture={(sc) => openSculpture(sc)}
           onOpenLandManagement={(pid) => {
@@ -1996,6 +2049,7 @@ export default function DesktopHub({
           onWorkspaceChanged={() => {
             refreshData();
             refreshMyLands();
+            refreshVisitedParcelDetail();
           }}
           onClose={() => setLandManageOpen(false)}
         />
@@ -2025,14 +2079,35 @@ export default function DesktopHub({
               setMapFocusTarget({ lat: cLat, lng: cLng, zoom: 17.8, ts: Date.now() });
               setMapViewport((prev) => ({ ...(prev || {}), lat: cLat, lng: cLng, zoom: 17.8 }));
             }
+            setProfileHandle('');
+            setVisitedParcel({ loading: true, parcel: null, sculptures: [], error: '' });
             api
               .getLandDetail(land.parcelId)
               .then((res) => {
                 if (res?.parcel) {
-                  setVisitedParcel({ parcel: res.parcel, sculptures: res.sculptures || [] });
+                  setVisitedParcel({
+                    loading: false,
+                    parcel: res.parcel,
+                    sculptures: res.sculptures || [],
+                    error: ''
+                  });
+                } else {
+                  setVisitedParcel({
+                    loading: false,
+                    parcel: null,
+                    sculptures: [],
+                    error: 'Virtual Land plot not found.'
+                  });
                 }
               })
-              .catch(() => {});
+              .catch(() => {
+                setVisitedParcel({
+                  loading: false,
+                  parcel: null,
+                  sculptures: [],
+                  error: 'Could not load Virtual Land plot.'
+                });
+              });
           }}
           onOpenWalletSettings={() => {
             setInfoInitialTab('account');
