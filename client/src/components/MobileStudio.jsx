@@ -157,14 +157,21 @@ export default function MobileStudio({
   });
 
   // Refs bridging actions between circularly-related hooks cleanly
+  const recenterAimRef = useRef(null);
+  const openDraftsSheetRef = useRef(null);
+  const openPairModalRef = useRef(null);
   const openAgentHandoffRef = useRef(null);
   const openPublishSheetRef = useRef(null);
   const openCameraSelectedChatRef = useRef(null);
   const arPinPreviewRef = useRef(null);
 
   // Brush & Canvas hook (receives AR + Chat bridges via refs initialized right below)
+  const recenterAimCaller = useRef((...a) => recenterAimRef.current?.(...a));
+  const openDraftsCaller = useRef((...a) => openDraftsSheetRef.current?.(...a));
+  const openPairCaller = useRef((...a) => openPairModalRef.current?.(...a));
   const openAgentCaller = useRef((...a) => openAgentHandoffRef.current?.(...a));
   const openPublishCaller = useRef((...a) => openPublishSheetRef.current?.(...a));
+  recenterAimRef.current = pol.recenterAim;
   const arTargetedIdRef = useRef('');
   const setArTargetedSculptureBridgeRef = useRef(null);
   const onTapArLandBridgeRef = useRef(null);
@@ -198,6 +205,9 @@ export default function MobileStudio({
     openCameraSelectedChat: (...args) => openCameraSelectedChatRef.current?.(...args),
     onTapArLand: (...args) => onTapArLandBridgeRef.current?.(...args),
     isInteractingWithLandRef,
+    recenterAimRef: recenterAimCaller,
+    openDraftsSheetRef: openDraftsCaller,
+    openPairModalRef: openPairCaller,
     openAgentHandoffRef: openAgentCaller,
     openPublishSheetRef: openPublishCaller
   });
@@ -438,6 +448,7 @@ export default function MobileStudio({
     showTemporaryHint
   });
   openAgentHandoffRef.current = drafts.openAgentHandoff;
+  openDraftsSheetRef.current = drafts.openDraftsSheet;
 
   const lands = useLandManagement({
     user,
@@ -530,6 +541,9 @@ export default function MobileStudio({
   const handleDesktopCommand = useCallback(
     (msg) => {
       if (msg.action === 'set_color' && msg.color) brush.setColor(msg.color);
+      if (msg.action === 'set_block_size' && msg.blockSize != null) {
+        brush.setBlockSize(Number(msg.blockSize));
+      }
       if (msg.action === 'set_tool' && msg.tool) {
         if (!brush.ensureToolUsable(msg.tool)) return;
         if (brush.modeRef.current === 'transform') {
@@ -589,6 +603,7 @@ export default function MobileStudio({
     onDesktopCommand: handleDesktopCommand,
     onDelegatedPublishExecuted: resetFormAfterPublish
   });
+  openPairModalRef.current = () => pairing.setPairOpen(true);
 
   const handlePublishSubmit = async (e) => {
     e.preventDefault();
@@ -802,6 +817,7 @@ export default function MobileStudio({
         mode={brush.mode}
         modeRef={brush.modeRef}
         toolRef={brush.toolRef}
+        blockSizeRef={brush.blockSizeRef}
         colorRef={brush.colorRef}
         voxelsRef={brush.voxelsRef}
         paintingRef={brush.paintingRef}
@@ -971,42 +987,19 @@ export default function MobileStudio({
 
         {!isInteractingWithLand && (
           <StudioDockDrawer
-            quickSculpt={quickSculpt}
             dockOpen={dockOpen}
             onToggleDock={() => setDockOpen((v) => !v)}
-            paletteOpen={brush.paletteOpen}
-            onTogglePalette={() => brush.setPaletteOpen((p) => !p)}
             mode={brush.mode}
-            modeRef={brush.modeRef}
             tool={brush.tool}
-            setMode={brush.setMode}
-            setTool={brush.setTool}
+            onSelectDrawTool={(nextTool) => brush.selectKeyTool(nextTool)}
+            blockSize={brush.blockSize}
+            setBlockSize={brush.setBlockSize}
             color={brush.color}
             setColor={brush.setColor}
             material={brush.material}
             setMaterial={brush.setMaterial}
             reachMeters={brush.reachMeters}
             setReachMeters={brush.setReachMeters}
-            occlusionEnabled={brush.occlusionEnabled}
-            setOcclusionEnabled={brush.setOcclusionEnabled}
-            draftsOpen={drafts.draftsOpen}
-            activeDraftId={drafts.activeDraftId}
-            draftStatusText={drafts.draftStatusText}
-            pairedCode={pairing.pairedCode}
-            agentOpen={drafts.agentOpen}
-            agentSessionCode={drafts.agentSession?.code}
-            toolAvailability={brush.toolAvailability}
-            ensureToolUsable={brush.ensureToolUsable}
-            getDockHoldHandlers={brush.getDockHoldHandlers}
-            commitTransformAndExit={brush.commitTransformAndExit}
-            onClearCanvas={brush.clearCanvas}
-            onToggleTransformLock={brush.toggleTransformLock}
-            onUndo={brush.handleUndo}
-            onRecenterAim={pol.recenterAim}
-            onOpenDraftsSheet={drafts.openDraftsSheet}
-            onOpenPairModal={() => pairing.setPairOpen(true)}
-            onOpenAgentHandoff={drafts.openAgentHandoff}
-            onOpenPublishSheet={openPublishSheet}
           />
         )}
 

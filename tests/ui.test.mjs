@@ -2564,4 +2564,81 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       globalThis.window.Notification = origNotification;
     }
   });
+
+  test('Main swipe menu exposes Brush, Pencil & moved canvas features while bottom-right Palette configures block size & preset colors', async () => {
+    const { KEY_TOOLS } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
+    const { default: StudioDockDrawer } = await loadJsxModule(
+      'client/src/components/studio/StudioDockDrawer.jsx'
+    );
+
+    const ids = KEY_TOOLS.map((t) => t.id);
+    for (const requiredId of [
+      'brush',
+      'pencil',
+      'stack',
+      'erase',
+      'undo',
+      'clear',
+      'transform',
+      'recenter',
+      'preview',
+      'drafts',
+      'occlusion',
+      'pair',
+      'agent',
+      'publish'
+    ]) {
+      assert.ok(ids.includes(requiredId), `Expected "${requiredId}" in bottom-center KEY_TOOLS`);
+    }
+
+    const picked = { tool: 'brush', size: 1, color: '#00f5d4', material: 'matte', reach: 1.8 };
+    let isOpen = false;
+    const renderDrawer = () =>
+      React.createElement(StudioDockDrawer, {
+        dockOpen: isOpen,
+        onToggleDock: () => {
+          isOpen = !isOpen;
+        },
+        mode: 'draw',
+        tool: picked.tool,
+        onSelectDrawTool: (t) => {
+          picked.tool = t;
+        },
+        blockSize: picked.size,
+        setBlockSize: (s) => {
+          picked.size = s;
+        },
+        color: picked.color,
+        setColor: (c) => {
+          picked.color = c;
+        },
+        material: picked.material,
+        setMaterial: (m) => {
+          picked.material = m;
+        },
+        reachMeters: picked.reach,
+        setReachMeters: (r) => {
+          picked.reach = r;
+        }
+      });
+
+    const view = RTL.render(renderDrawer());
+    assert.equal(view.queryByTestId('brush-options-popup'), null);
+    RTL.fireEvent.click(view.getByTestId('palette-options-toggle'));
+    view.rerender(renderDrawer());
+
+    assert.ok(view.getByTestId('brush-options-popup'));
+    RTL.fireEvent.click(view.getByTestId('palette-select-pencil'));
+    RTL.fireEvent.click(view.getByTestId('block-size-xl'));
+    RTL.fireEvent.click(view.getByRole('button', { name: 'Color Red' }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Neon/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: '2.4m' }));
+
+    assert.equal(picked.tool, 'pencil');
+    assert.equal(picked.size, 2);
+    assert.equal(picked.color, '#ef4444');
+    assert.equal(picked.material, 'neon');
+    assert.equal(picked.reach, 2.4);
+    cleanup();
+  });
 });

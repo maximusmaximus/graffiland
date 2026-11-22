@@ -533,6 +533,22 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page2.waitForSelector('[role="tooltip"]', { state: 'detached', timeout: 3000 });
     await page2.getByRole('button', { name: 'Close info' }).click();
 
+    // Mobile Studio bottom-right Palette opens Brush & Pencil Options popup (Block Size + Preset Colors) & switches to Pencil
+    await page2.waitForSelector('[data-testid="palette-options-toggle"]');
+    await page2.getByTestId('palette-options-toggle').click();
+    await page2.waitForSelector('[data-testid="brush-options-popup"]');
+    const popBox = await page2.getByTestId('brush-options-popup').boundingBox();
+    assert.ok(
+      popBox && popBox.x >= 0 && popBox.x + popBox.width <= 390 && popBox.y >= 0,
+      `Expected Brush & Pencil options popup cleanly inside 390x844 viewport, got ${JSON.stringify(popBox)}`
+    );
+    await page2.getByTestId('block-size-l').click();
+    await page2.getByRole('button', { name: 'Color Red' }).click();
+    await page2.getByTestId('palette-select-pencil').click();
+    await page2.waitForSelector('.key-tool-caption:has-text("Pencil")');
+    await page2.getByTestId('palette-options-toggle').click();
+    await page2.waitForSelector('[data-testid="brush-options-popup"]', { state: 'detached' });
+
     assert.deepEqual(errors2, []);
     await ctx2.close();
   });

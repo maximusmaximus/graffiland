@@ -3,6 +3,11 @@ import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
 import {
+  getVoxelCellStep,
+  normalizeBlockScale,
+  snapToVoxelLattice
+} from '../../../shared/voxelStroke.mjs';
+import {
   createVoxelMaterial,
   GRAFFITI_PALETTE,
   snapCoord,
@@ -12,11 +17,18 @@ import {
 import { ForegroundOcclusionCompositor } from '../components/ForegroundOcclusion.js';
 
 export const KEY_TOOLS = [
-  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to spray 4x voxels', quick: true },
-  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack & draw continuously', quick: true },
+  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to draw connected strokes', quick: true },
+  { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap anywhere to place single blocks', quick: true },
+  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Hold to erase blocks continuously', quick: true },
+  { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear', quick: true },
+  { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas', quick: true },
   { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform', quick: false },
+  { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim', quick: true },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat', quick: true },
+  { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts', quick: true },
+  { id: 'occlusion', emoji: '🪞', label: 'Occlusion', hint: 'Toggle foreground occlusion', quick: false },
+  { id: 'pair', emoji: '🔗', label: 'Pair', hint: 'Pair desktop live 3D view', quick: false },
   { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build', quick: false },
   { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone', quick: true }
 ];
@@ -92,6 +104,9 @@ export function useVoxelBrush({
   openCameraSelectedChat,
   onTapArLand = null,
   isInteractingWithLandRef = null,
+  recenterAimRef = null,
+  openDraftsSheetRef = null,
+  openPairModalRef = null,
   openAgentHandoffRef,
   openPublishSheetRef
 }) {
@@ -99,6 +114,14 @@ export function useVoxelBrush({
 
   const [mode, setMode] = useState('draw');
   const [tool, setTool] = useState('brush');
+  const [blockSize, setBlockSizeState] = useState(() =>
+    normalizeBlockScale(initialDraft.blockSize ?? 1)
+  );
+  const setBlockSize = useCallback((nextVal) => {
+    setBlockSizeState((prev) =>
+      normalizeBlockScale(typeof nextVal === 'function' ? nextVal(prev) : nextVal)
+    );
+  }, []);
   const [material, setMaterial] = useState(
     initialDraft.material === 'neon' || initialDraft.material === 'glass'
       ? initialDraft.material
@@ -148,6 +171,7 @@ export function useVoxelBrush({
   const voxelsRef = useRef(voxels);
   const modeRef = useRef(mode);
   const toolRef = useRef(tool);
+  const blockSizeRef = useRef(blockSize);
   const colorRef = useRef(color);
   const materialRef = useRef(material);
   const reachRef = useRef(reachMeters);
@@ -197,10 +221,11 @@ export function useVoxelBrush({
   useEffect(() => {
     modeRef.current = mode;
     toolRef.current = tool;
+    blockSizeRef.current = blockSize;
     colorRef.current = color;
     materialRef.current = material;
     reachRef.current = reachMeters;
-  }, [mode, tool, color, material, reachMeters]);
+  }, [mode, tool, blockSize, color, material, reachMeters]);
 
   useEffect(() => {
     occlusionEnabledRef.current = occlusionEnabled;
@@ -231,6 +256,7 @@ export function useVoxelBrush({
 
     return {
       brush: { usable: !originBlocked, reason: originBlocked ? originMsg : '' },
+      pencil: { usable: !originBlocked, reason: originBlocked ? originMsg : '' },
       stack: {
         usable: !originBlocked && hasVoxels,
         reason: originBlocked ? originMsg : !hasVoxels ? needBlocksFor('stacking onto block faces') : ''
@@ -349,15 +375,38 @@ export function useVoxelBrush({
   }, [voxels, rebuildDraftMesh]);
 
   const computeTargetVoxel = useCallback(
-    (forContinuousHold = false) => {
+    (forContinuousHold = false, screenPoint = null) => {
       const cam = cameraRef.current;
       const draftGroup = draftGroupRef.current;
       if (!cam) return null;
 
-      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
-      const origin = cam.position.clone();
+      const activeScale = normalizeBlockScale(blockSizeRef.current);
+      const cellStep = getVoxelCellStep(VOXEL_STEP, activeScale);
 
-      if (toolRef.current === 'stack' || toolRef.current === 'erase') {
+      let origin = cam.position.clone();
+      let dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+      if (
+        screenPoint &&
+        Number.isFinite(Number(screenPoint.clientX)) &&
+        Number.isFinite(Number(screenPoint.clientY)) &&
+        canvasHostRef.current
+      ) {
+        const rect = canvasHostRef.current.getBoundingClientRect();
+        const ndc = new THREE.Vector2(
+          ((Number(screenPoint.clientX) - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+          -((Number(screenPoint.clientY) - rect.top) / Math.max(1, rect.height)) * 2 + 1
+        );
+        const tapRay = new THREE.Raycaster();
+        tapRay.setFromCamera(ndc, cam);
+        origin = tapRay.ray.origin.clone();
+        dir = tapRay.ray.direction.clone().normalize();
+      }
+
+      if (
+        toolRef.current === 'stack' ||
+        toolRef.current === 'erase' ||
+        (toolRef.current === 'pencil' && screenPoint)
+      ) {
         const raycaster = new THREE.Raycaster(origin, dir, 0.1, 14);
         const targets = draftGroup ? draftGroup.children : [];
         let hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
@@ -385,13 +434,14 @@ export function useVoxelBrush({
             .clone()
             .transformDirection(hit.object.matrixWorld)
             .normalize();
-          const stepOut = VOXEL_STEP * (((hit.object.userData.voxel?.scale ?? 1) + 1) * 0.5);
+          const stepOut = VOXEL_STEP * (((hit.object.userData.voxel?.scale ?? 1) + activeScale) * 0.5);
           const center = hit.object.position.clone().addScaledVector(normal, stepOut);
           return {
             action: 'add',
-            x: snapCoord(center.x),
-            y: snapCoord(center.y),
-            z: snapCoord(center.z),
+            x: snapToVoxelLattice(center.x, VOXEL_STEP, activeScale),
+            y: snapToVoxelLattice(center.y, VOXEL_STEP, activeScale),
+            z: snapToVoxelLattice(center.z, VOXEL_STEP, activeScale),
+            scale: activeScale,
             stackedFrom: {
               x: snapCoord(hit.object.position.x),
               y: snapCoord(hit.object.position.y),
@@ -416,12 +466,13 @@ export function useVoxelBrush({
             const hitPt = origin
               .clone()
               .addScaledVector(dir, t)
-              .addScaledVector(normal, VOXEL_STEP * 0.5);
+              .addScaledVector(normal, cellStep * 0.5);
             return {
               action: 'add',
-              x: snapCoord(hitPt.x),
-              y: snapCoord(hitPt.y),
-              z: snapCoord(hitPt.z)
+              x: snapToVoxelLattice(hitPt.x, VOXEL_STEP, activeScale),
+              y: snapToVoxelLattice(hitPt.y, VOXEL_STEP, activeScale),
+              z: snapToVoxelLattice(hitPt.z, VOXEL_STEP, activeScale),
+              scale: activeScale
             };
           }
         }
@@ -429,21 +480,23 @@ export function useVoxelBrush({
         const fallbackPt = origin.addScaledVector(dir, fallbackDepth);
         return {
           action: 'add',
-          x: snapCoord(fallbackPt.x),
-          y: snapCoord(fallbackPt.y),
-          z: snapCoord(fallbackPt.z)
+          x: snapToVoxelLattice(fallbackPt.x, VOXEL_STEP, activeScale),
+          y: snapToVoxelLattice(fallbackPt.y, VOXEL_STEP, activeScale),
+          z: snapToVoxelLattice(fallbackPt.z, VOXEL_STEP, activeScale),
+          scale: activeScale
         };
       }
 
       const pt = origin.addScaledVector(dir, reachRef.current);
       return {
         action: 'add',
-        x: snapCoord(pt.x),
-        y: snapCoord(pt.y),
-        z: snapCoord(pt.z)
+        x: snapToVoxelLattice(pt.x, VOXEL_STEP, activeScale),
+        y: snapToVoxelLattice(pt.y, VOXEL_STEP, activeScale),
+        z: snapToVoxelLattice(pt.z, VOXEL_STEP, activeScale),
+        scale: activeScale
       };
     },
-    [cameraRef, draftGroupRef]
+    [cameraRef, canvasHostRef, draftGroupRef]
   );
 
   const applyVoxelBatch = useCallback(
@@ -469,7 +522,13 @@ export function useVoxelBrush({
         const k = voxelKey(t.x, t.y, t.z);
         if (!seenBatch.has(k)) {
           seenBatch.add(k);
-          uniqueAdds.push({ x: t.x, y: t.y, z: t.z, key: k });
+          uniqueAdds.push({
+            x: t.x,
+            y: t.y,
+            z: t.z,
+            scale: normalizeBlockScale(t.scale ?? blockSizeRef.current),
+            key: k
+          });
         }
       }
 
@@ -544,7 +603,7 @@ export function useVoxelBrush({
             z: cand.z,
             color: colorRef.current,
             material: materialRef.current,
-            scale: 1
+            scale: normalizeBlockScale(cand.scale ?? blockSizeRef.current)
           });
         }
 
@@ -976,7 +1035,7 @@ export function useVoxelBrush({
         enterTransformMode();
         return;
       }
-      if (toolId === 'brush' || toolId === 'stack' || toolId === 'erase') {
+      if (toolId === 'brush' || toolId === 'pencil' || toolId === 'stack' || toolId === 'erase') {
         if (modeRef.current === 'transform') {
           commitTransformAndExit('draw', toolId);
         } else {
@@ -990,7 +1049,16 @@ export function useVoxelBrush({
           setPaletteOpen(false);
           setMode('preview');
         }
-      } else if (toolId === 'agent' || toolId === 'publish') {
+      } else if (
+        toolId === 'undo' ||
+        toolId === 'clear' ||
+        toolId === 'recenter' ||
+        toolId === 'drafts' ||
+        toolId === 'occlusion' ||
+        toolId === 'pair' ||
+        toolId === 'agent' ||
+        toolId === 'publish'
+      ) {
         if (modeRef.current === 'transform') {
           commitTransformAndExit('draw');
         } else {
@@ -1020,8 +1088,16 @@ export function useVoxelBrush({
     }
     if (curTool === 'transform') {
       toggleTransformLock();
-    } else if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
-      if ((curTool === 'brush' || curTool === 'stack') && !assertOriginUnblockedForPaint()) {
+    } else if (
+      curTool === 'brush' ||
+      curTool === 'pencil' ||
+      curTool === 'stack' ||
+      curTool === 'erase'
+    ) {
+      if (
+        (curTool === 'brush' || curTool === 'pencil' || curTool === 'stack') &&
+        !assertOriginUnblockedForPaint()
+      ) {
         return;
       }
       if (modeRef.current === 'transform') {
@@ -1032,6 +1108,23 @@ export function useVoxelBrush({
         toolRef.current = curTool;
       }
       applyVoxelAction(computeTargetVoxel());
+    } else if (curTool === 'undo') {
+      handleUndo();
+    } else if (curTool === 'clear') {
+      clearCanvas();
+    } else if (curTool === 'recenter') {
+      recenterAimRef?.current?.();
+      showTemporaryHint('3D aim recentered');
+    } else if (curTool === 'drafts') {
+      openDraftsSheetRef?.current?.();
+    } else if (curTool === 'occlusion') {
+      setOcclusionEnabled((prev) => {
+        const next = !prev;
+        showTemporaryHint(next ? 'Foreground Occlusion ON' : 'Foreground Occlusion OFF');
+        return next;
+      });
+    } else if (curTool === 'pair') {
+      openPairModalRef?.current?.();
     } else if (curTool === 'preview') {
       const next = modeRef.current === 'preview' ? 'draw' : 'preview';
       if (modeRef.current === 'transform') {
@@ -1048,12 +1141,18 @@ export function useVoxelBrush({
   }, [
     applyVoxelAction,
     assertOriginUnblockedForPaint,
+    clearCanvas,
     commitTransformAndExit,
     computeTargetVoxel,
     ensureToolUsable,
     enterFullscreen,
+    handleUndo,
     openAgentHandoffRef,
+    openDraftsSheetRef,
+    openPairModalRef,
     openPublishSheetRef,
+    recenterAimRef,
+    showTemporaryHint,
     toggleTransformLock
   ]);
 
@@ -1457,6 +1556,15 @@ export function useVoxelBrush({
             onTapArLand(null, null);
             return;
           }
+          // Pencil mode: tap/click anywhere around the canvas to place a discrete individual voxel!
+          if (toolRef.current === 'pencil') {
+            if (!ensureToolUsable('pencil') || !assertOriginUnblockedForPaint()) return;
+            const tapTarget = computeTargetVoxel(false, { clientX: e.clientX, clientY: e.clientY });
+            if (tapTarget && tapTarget.action === 'add') {
+              applyVoxelBatch([tapTarget]);
+            }
+            return;
+          }
           selectSurfaceAtScreenPoint(e.clientX, e.clientY);
         }
         return;
@@ -1497,10 +1605,14 @@ export function useVoxelBrush({
       }
     },
     [
+      applyVoxelBatch,
       arPinPreview,
       arTargetedIdRef,
+      assertOriginUnblockedForPaint,
       cameraRef,
       canvasHostRef,
+      computeTargetVoxel,
+      ensureToolUsable,
       isInteractingWithLandRef,
       locationRef,
       nearbyGroupRef,
@@ -1525,6 +1637,9 @@ export function useVoxelBrush({
     tool,
     setTool,
     toolRef,
+    blockSize,
+    setBlockSize,
+    blockSizeRef,
     color,
     setColor,
     colorRef,

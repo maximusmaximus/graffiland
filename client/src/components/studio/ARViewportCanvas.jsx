@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
+import {
+  buildConnectedVoxelPath,
+  getVoxelCellStep,
+  normalizeBlockScale
+} from '../../../../shared/voxelStroke.mjs';
 import SceneErrorBoundary from '../SceneErrorBoundary.jsx';
 import {
   createLiveEnvUpdater,
@@ -56,6 +61,7 @@ function ARViewportCanvasInner({
   mode,
   modeRef,
   toolRef,
+  blockSizeRef = null,
   colorRef,
   voxelsRef,
   paintingRef,
@@ -300,10 +306,13 @@ function ARViewportCanvasInner({
       let latestTarget = null;
 
       if (showCursor) {
+        const curBlockScale = normalizeBlockScale(blockSizeRef?.current ?? 1);
+        const curCellStep = getVoxelCellStep(VOXEL_STEP, curBlockScale);
         const target = computeTargetVoxel(paintingRef.current);
         latestTarget = target;
         if (target && target.action === 'add') {
           ghost.position.set(target.x, target.y, target.z);
+          ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
           ghost.material.color.set(
             originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
           );
@@ -319,40 +328,37 @@ function ARViewportCanvasInner({
                 target.stackedFrom.y - prev.y,
                 target.stackedFrom.z - prev.z
               ) <
-                VOXEL_STEP * 0.5 &&
+                curCellStep * 0.5 &&
               now - lastStackAtRef.current < 145;
 
             if (!selfStackBlocked) {
               if (!prev) {
-                lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
-                lastStackAtRef.current = now;
-                applyVoxelBatch([{ action: 'add', x: target.x, y: target.y, z: target.z }]);
-              } else {
-                const dx = target.x - prev.x;
-                const dy = target.y - prev.y;
-                const dz = target.z - prev.z;
-                const dist = Math.hypot(dx, dy, dz);
-                if (dist >= VOXEL_STEP * 0.75) {
-                  const steps = Math.min(28, Math.max(1, Math.ceil(dist / VOXEL_STEP)));
-                  const batch = [];
-                  for (let i = 1; i <= steps; i += 1) {
-                    const t = i / steps;
-                    batch.push({
-                      action: 'add',
-                      x: Math.round((prev.x + dx * t) / VOXEL_STEP) * VOXEL_STEP,
-                      y: Math.round((prev.y + dy * t) / VOXEL_STEP) * VOXEL_STEP,
-                      z: Math.round((prev.z + dz * t) / VOXEL_STEP) * VOXEL_STEP
-                    });
-                  }
-                  lastPaintPosRef.current = { x: target.x, y: target.y, z: target.z };
+                const startStep = buildConnectedVoxelPath(null, target, {
+                  step: VOXEL_STEP,
+                  blockScale: curBlockScale
+                });
+                if (startStep.path.length > 0) {
+                  lastPaintPosRef.current = startStep.lastPoint;
                   lastStackAtRef.current = now;
-                  applyVoxelBatch(batch);
+                  applyVoxelBatch(startStep.path);
+                }
+              } else {
+                const stroke = buildConnectedVoxelPath(prev, target, {
+                  step: VOXEL_STEP,
+                  blockScale: curBlockScale,
+                  maxSteps: 64
+                });
+                if (stroke.path.length > 0) {
+                  lastPaintPosRef.current = stroke.lastPoint;
+                  lastStackAtRef.current = now;
+                  applyVoxelBatch(stroke.path);
                 }
               }
             }
           }
         } else if (target && target.action === 'erase' && target.voxel) {
           ghost.position.set(target.voxel.x, target.voxel.y, target.voxel.z);
+          ghost.scale.setScalar(normalizeBlockScale(target.voxel.scale ?? 1));
           ghost.material.color.set(0xff3e7f);
           if (paintingRef.current && toolRef.current === 'erase') {
             eraseTargetVoxel(target);
@@ -662,6 +668,7 @@ function ARViewportCanvasInner({
     applyVoxelBatch,
     arSelectedLandIdRef,
     arTargetedIdRef,
+    blockSizeRef,
     cameraRef,
     canvasHostRef,
     colorRef,
