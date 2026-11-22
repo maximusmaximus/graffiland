@@ -1262,7 +1262,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     // Clicking Focus Map and 3D inspect fire callbacks cleanly
     RTL.fireEvent.click(view.getByRole('button', { name: /Focus Civic Neon Plaza on map/i }));
     assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
-    RTL.fireEvent.click(view.getAllByRole('button', { name: /3D/i })[0]);
+    RTL.fireEvent.click(RTL.within(nestedItems[0]).getByRole('button', { name: /3D/i }));
     assert.deepEqual(selectedSculptures, ['sc-voxel-1']);
 
     cleanup();
@@ -2042,6 +2042,149 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     assert.equal(guestView.queryAllByTestId('land-manage-gear-btn').length, 0);
     assert.equal(guestView.queryAllByTestId('land-title-edit-trigger').length, 0);
+    cleanup();
+  });
+
+  test('MobileMapSheet switches cleanly between 2D and 3D isometric map views and keeps all buttons working when Full Map is expanded', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const { default: MobileParcelVisitView } = await loadJsxModule(
+      'client/src/components/studio/MobileParcelVisitView.jsx'
+    );
+
+    const parcels = [
+      {
+        parcelId: 'GLAND-9R16561P',
+        customName: 'Magnolia Lot',
+        centerLat: 39.738873,
+        centerLng: -121.847904,
+        stewardStatus: 'awakened',
+        volume: {
+          centerLat: 39.738873,
+          centerLng: -121.847904,
+          widthMeters: 2.82,
+          depthMeters: 2.94,
+          heightMeters: 1.92,
+          footprintAreaSqM: 8.29
+        }
+      },
+      {
+        parcelId: 'GLAND-SECOND02',
+        customName: 'Plaza Two',
+        centerLat: 39.7392,
+        centerLng: -121.8475,
+        stewardStatus: 'awakened',
+        volume: {
+          centerLat: 39.7392,
+          centerLng: -121.8475,
+          widthMeters: 14,
+          depthMeters: 14,
+          heightMeters: 18,
+          footprintAreaSqM: 196
+        }
+      }
+    ];
+    const sculptures = [
+      {
+        id: 'sc-mag-ui',
+        title: 'Magnolia 👶',
+        parcelId: 'GLAND-9R16561P',
+        lat: 39.738873,
+        lng: -121.847904,
+        voxelCount: 268,
+        voxels: [
+          { x: -2.15, y: 0.45, z: 0.1, color: '#ff3e7f' },
+          { x: 0.15, y: 2.0, z: 2.5, color: '#00f5d4' }
+        ]
+      }
+    ];
+
+    const selectedParcels = [];
+    const view = RTL.render(
+      React.createElement(MobileMapSheet, {
+        config: {},
+        location: { lat: 39.7389, lng: -121.8479 },
+        areaFilterMode: 'nearby',
+        mapParcels: parcels,
+        displayedMapSculptures: sculptures,
+        areaSculpturesSorted: sculptures,
+        onSelectParcel: (pid) => selectedParcels.push(pid),
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+
+    // 1) Compact dimensions show decimal precision for <10m fitted lands (2.8×2.9×1.9 m · 8.3 m²)
+    assert.ok(view.container.textContent.includes('2.8×2.9×1.9 m · 8.3 m²'));
+
+    // 2) Starts in 2D map with 3D toggle & Full Map buttons active
+    assert.ok(view.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.equal(view.queryByTestId('mobile-iso-3d-map'), null);
+
+    // 3) Clicking 3D switches to isometric 3D map with 2D toggle, 90° orbit, Fit, Me & Full buttons
+    RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.ok(view.getByTestId('mobile-iso-3d-map'));
+    assert.ok(view.getByTestId('mobile-map-2d-toggle-btn'));
+    assert.ok(view.getByTestId('mobile-map-orbit-btn'));
+    assert.ok(view.getByTestId('mobile-map-fit-btn'));
+    assert.ok(view.getByTestId('mobile-map-me-btn'));
+    assert.ok(view.getByTestId('mobile-map-fullscreen-btn'));
+
+    // Orbit 90° updates compass bearing cleanly
+    const beforeOrbitText = view.getByTestId('mobile-iso-3d-map').textContent;
+    RTL.fireEvent.click(view.getByTestId('mobile-map-orbit-btn'));
+    const afterOrbitText = view.getByTestId('mobile-iso-3d-map').textContent;
+    assert.notEqual(beforeOrbitText, afterOrbitText);
+
+    // 4) Expand Full Map -> full-screen state keeps ALL 3D & 2D toggle buttons working!
+    RTL.fireEvent.click(view.getByTestId('mobile-map-expand-header-btn'));
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'fullscreen');
+    assert.ok(view.getByTestId('mobile-map-fullscreen-dock'));
+    assert.equal(view.queryByTestId('mobile-nearest-lands-list'), null);
+
+    // Switch 3D -> 2D WHILE full-screen expanded
+    RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
+    assert.equal(view.queryByTestId('mobile-iso-3d-map'), null);
+    assert.ok(view.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'fullscreen');
+
+    // Switch 2D -> 3D WHILE still full-screen expanded
+    RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.ok(view.getByTestId('mobile-iso-3d-map'));
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'fullscreen');
+
+    // Exit Full Map using the in-map ⤡ button -> list returns and 3D map stays active
+    RTL.fireEvent.click(view.getByTestId('mobile-map-fullscreen-btn'));
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'compact');
+    assert.ok(view.getByTestId('mobile-nearest-lands-list'));
+
+    // Switch back to 2D, then click "3D Map" button on Land Card #2 -> jumps to 3D focused on Land #2
+    RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
+    const card3dBtns = view.getAllByTestId('land-card-3d-map-btn');
+    assert.equal(card3dBtns.length, 2);
+    RTL.fireEvent.click(card3dBtns[1]);
+    assert.ok(view.getByTestId('mobile-iso-3d-map'));
+    assert.ok(selectedParcels.includes('GLAND-SECOND02'));
+    cleanup();
+
+    // 5) MobileParcelVisitView also supports 2D <-> 3D isometric + full-screen toggle cleanly
+    const visitView = RTL.render(
+      React.createElement(MobileParcelVisitView, {
+        parcel: parcels[0],
+        sculptures,
+        userLocation: { lat: 39.7389, lng: -121.8479 },
+        onClose: () => {}
+      })
+    );
+    assert.ok(visitView.getByTestId('mobile-map-3d-toggle-btn'));
+    RTL.fireEvent.click(visitView.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.ok(visitView.getByTestId('mobile-iso-3d-map'));
+    RTL.fireEvent.click(visitView.getByTestId('mobile-map-fullscreen-btn'));
+    assert.ok(visitView.getByTestId('mobile-map-2d-toggle-btn'));
+    RTL.fireEvent.click(visitView.getByTestId('mobile-map-2d-toggle-btn'));
+    assert.equal(visitView.queryByTestId('mobile-iso-3d-map'), null);
+    assert.ok(visitView.getByTestId('mobile-map-3d-toggle-btn'));
     cleanup();
   });
 });

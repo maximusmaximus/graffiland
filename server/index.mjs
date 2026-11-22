@@ -25,6 +25,7 @@ import {
   scoutLands,
   updateLandVolume
 } from '../shared/agentQuestService.mjs';
+import { buildObjectFittedLandVolume } from '../shared/landVolume.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../shared/geocodeService.mjs';
 import {
   checkUsernameAvailability,
@@ -1881,6 +1882,18 @@ export function createAppServer(serverOptions = {}) {
         now
       );
 
+      const fittedVol = buildObjectFittedLandVolume({
+        parcelId: locationBundle.parcelId,
+        geohash: locationBundle.geohash,
+        lat: locationBundle.lat,
+        lng: locationBundle.lng,
+        voxels: validation.cleanVoxels,
+        anchorOffset: anchorCheck.offset,
+        paddingFraction: 0.1
+      });
+      const parcelCenterLat = fittedVol?.centerLat ?? locationBundle.parcelBounds.center[0];
+      const parcelCenterLng = fittedVol?.centerLng ?? locationBundle.parcelBounds.center[1];
+
       const existingParcel = db
         .prepare('SELECT * FROM land_parcels WHERE parcel_id = ?')
         .get(locationBundle.parcelId);
@@ -1900,11 +1913,35 @@ export function createAppServer(serverOptions = {}) {
         `).run(
           locationBundle.parcelId,
           locationBundle.geohash,
-          locationBundle.parcelBounds.center[0],
-          locationBundle.parcelBounds.center[1],
+          parcelCenterLat,
+          parcelCenterLng,
           req.user.id,
           recipientAddress,
           recipientAddress,
+          now
+        );
+      }
+
+      if (fittedVol) {
+        db.prepare(`
+          INSERT OR IGNORE INTO land_volumes (
+            parcel_id, center_lat, center_lng, width_meters, depth_meters, height_meters,
+            z_scale, rotation_deg, base_altitude_m, footprint_area_sqm, volume_cubic_m,
+            corners_json, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          fittedVol.parcelId,
+          fittedVol.centerLat,
+          fittedVol.centerLng,
+          fittedVol.widthMeters,
+          fittedVol.depthMeters,
+          fittedVol.heightMeters,
+          fittedVol.zScale,
+          fittedVol.rotationDeg,
+          fittedVol.baseAltitudeM,
+          fittedVol.footprintAreaSqM,
+          fittedVol.volumeCubicM,
+          JSON.stringify(fittedVol.corners || []),
           now
         );
       }

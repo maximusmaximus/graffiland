@@ -5,9 +5,12 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { LAND_VOLUME_LIMITS } from '../shared/constants.mjs';
 import {
+  buildMultiObjectFittedLandVolume,
+  buildObjectFittedLandVolume,
   buildParcelShareUrl,
   computeCameraAlignedDraftBox,
   computeMaxHeightForFootprint,
+  computeObjectVoxelBoundsMeters,
   footprintsOverlap,
   resizeDraftFromEdge,
   scaleDraftFromCorner,
@@ -850,5 +853,147 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     } finally {
       await new Promise((r) => assetServer.close(r));
     }
+  });
+
+  test('buildObjectFittedLandVolume centers land around drawn object with exact 10% padding in all 3 dimensions and 3D voxels stay inside', async () => {
+    // 1) Pure geometry check matching live drawn sculpture bounds (X=[-2.15..0.15], Y=[0.45..2.0], Z=[0.1..2.5])
+    const magnoliaVoxels = [
+      { x: -2.15, y: 0.45, z: 0.1, color: '#ff3e7f' },
+      { x: -1.0, y: 1.2, z: 1.3, color: '#00f5d4' },
+      { x: 0.15, y: 2.0, z: 2.5, color: '#ffd166' }
+    ];
+    const bounds = computeObjectVoxelBoundsMeters(magnoliaVoxels);
+    assert.ok(bounds);
+    // Including VOXEL_STEP=0.05 half-block thickness on each face:
+    // W = (0.15 - (-2.15)) + 0.05 = 2.35 m, D = (2.5 - 0.1) + 0.05 = 2.45 m, H = (2.0 - 0.45) + 0.05 = 1.60 m
+    assert.equal(bounds.widthMeters, 2.35);
+    assert.equal(bounds.depthMeters, 2.45);
+    assert.equal(bounds.heightMeters, 1.6);
+
+    const fitted = buildObjectFittedLandVolume({
+      parcelId: 'GLAND-9R16561P',
+      geohash: '9r16561p',
+      lat: 39.738873,
+      lng: -121.847904,
+      voxels: magnoliaVoxels,
+      paddingFraction: 0.1
+    });
+    assert.ok(fitted);
+    // Centered directly on the drawn object (never offset onto a geohash edge!)
+    assert.equal(fitted.centerLat, 39.738873);
+    assert.equal(fitted.centerLng, -121.847904);
+    // Exact 10% padding on EVERY side => 1.20x total span in W, D, and H
+    assert.equal(fitted.widthMeters, 2.82);
+    assert.equal(fitted.depthMeters, 2.94);
+    assert.equal(fitted.heightMeters, 1.92);
+    assert.equal(fitted.corners.length, 4);
+
+    // Corners must be strictly symmetric around object center (object is dead center, NOT on edge)
+    const avgLng = fitted.corners.reduce((s, c) => s + c[0], 0) / 4;
+    const avgLat = fitted.corners.reduce((s, c) => s + c[1], 0) / 4;
+    assert.ok(Math.abs(avgLat - 39.738873) < 1e-6);
+    assert.ok(Math.abs(avgLng - -121.847904) < 1e-6);
+
+    // 2) Multi-object fallback wraps both sculptures centered with 10% padding
+    const multiFit = buildMultiObjectFittedLandVolume({
+      parcelId: 'GLAND-MULTI',
+      sculptures: [
+        { lat: 37.775, lng: -122.419, voxels: magnoliaVoxels },
+        { lat: 37.77504, lng: -122.41895, voxels: magnoliaVoxels }
+      ],
+      paddingFraction: 0.1
+    });
+    assert.ok(multiFit);
+    assert.ok(multiFit.widthMeters > fitted.widthMeters);
+    assert.ok(multiFit.depthMeters > fitted.depthMeters);
+    assert.equal(multiFit.heightMeters, 1.92);
+
+    // 3) 3D voxel extrusion GeoJSON keeps EVERY voxel inside the 10%-padded parcel prism in X, Z, and Y
+    const sc3d = buildSculptures3DGeoJson(
+      [
+        {
+          id: 'sc-mag',
+          title: 'Magnolia',
+          parcelId: 'GLAND-9R16561P',
+          lat: 39.738873,
+          lng: -121.847904,
+          voxels: magnoliaVoxels
+        }
+      ],
+      'sc-mag',
+      [{ parcelId: 'GLAND-9R16561P', volume: fitted }]
+    );
+    assert.equal(sc3d.renderedCount, 1);
+    const parcelMinLng = Math.min(...fitted.corners.map((c) => c[0]));
+    const parcelMaxLng = Math.max(...fitted.corners.map((c) => c[0]));
+    const parcelMinLat = Math.min(...fitted.corners.map((c) => c[1]));
+    const parcelMaxLat = Math.max(...fitted.corners.map((c) => c[1]));
+    const voxelFeats = sc3d.geojson.features.filter((f) => f.properties.part === 'voxel');
+    assert.ok(voxelFeats.length >= 3);
+    for (const f of voxelFeats) {
+      assert.ok(f.properties.baseMeters > 0, 'Bottom 10% padding keeps voxels above 0m floor');
+      assert.ok(
+        f.properties.heightMeters < fitted.heightMeters,
+        `Top voxel (${f.properties.heightMeters}m) must stay inside padded land height (${fitted.heightMeters}m)`
+      );
+      for (const [lng, lat] of f.geometry.coordinates[0]) {
+        assert.ok(lng > parcelMinLng && lng < parcelMaxLng, 'Voxel lng must stay strictly inside padded land');
+        assert.ok(lat > parcelMinLat && lat < parcelMaxLat, 'Voxel lat must stay strictly inside padded land');
+      }
+    }
+
+    // 4) End-to-end POST /api/sculptures/publish persists centered 10%-padded land volume
+    const drawLat = 37.781234;
+    const drawLng = -122.405678;
+    const drawVoxels = [
+      { x: 0, y: 0, z: 0, color: '#00f5d4' },
+      { x: 1.95, y: 0.95, z: 1.45, color: '#ff3e7f' },
+      { x: 1.0, y: 0.5, z: 0.75, color: '#ffd166' }
+    ];
+    // Raw size = 2.00 x 1.50 x 1.00 m -> 10% padding per side => 2.40 x 1.80 x 1.20 m
+    const now = Date.now();
+    const pubRes = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        title: 'Centered Padded Cube',
+        description: 'Drawn object that should center its own 10%-padded land',
+        termsAccepted: true,
+        voxels: drawVoxels,
+        location: { lat: drawLat, lng: drawLng, accuracy: 5, altitude: 10 },
+        proofOfLocation: {
+          gpsSamples: [
+            { lat: drawLat, lng: drawLng, t: now - 4000 },
+            { lat: drawLat + 0.00001, lng: drawLng - 0.00001, t: now - 1000 }
+          ],
+          gyroSamples: 20,
+          cameraFrames: 10,
+          opticalFlowCorrelation: 0.9,
+          horizonLuminance: 140,
+          ambientPalette: ['#00f5d4', '#1a2b4c'],
+          visualDHash: 'f0e1d2c3b4a59687',
+          cameraFacingMode: 'environment',
+          cameraResolution: '1920x1080',
+          sculptDurationMs: 12000,
+          sceneCoveragePct: 100
+        },
+        deviceProfile: { isMobile: true, screenWidth: 390, screenHeight: 844, hasCamera: true }
+      })
+    });
+    const pubBody = await pubRes.json();
+    assert.equal(pubRes.status, 201, JSON.stringify(pubBody));
+    const drawnParcelId = pubBody.sculpture.parcelId;
+
+    const landRes = await fetch(`${baseUrl}/api/lands/${drawnParcelId}`);
+    const landBody = await landRes.json();
+    assert.equal(landRes.status, 200, JSON.stringify(landBody));
+    assert.equal(landBody.parcel.volume.centerLat, drawLat);
+    assert.equal(landBody.parcel.volume.centerLng, drawLng);
+    assert.equal(landBody.parcel.volume.widthMeters, 2.4);
+    assert.equal(landBody.parcel.volume.depthMeters, 1.8);
+    assert.equal(landBody.parcel.volume.heightMeters, 1.2);
   });
 });

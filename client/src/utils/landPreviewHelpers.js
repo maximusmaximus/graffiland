@@ -16,7 +16,7 @@ import {
 const METERS_PER_DEG_LAT = 111320;
 const EARTH_CIRCUMFERENCE_M = 40075016.686;
 const CARDINAL_DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-const SCALE_STEPS_M = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
+const SCALE_STEPS_M = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
 
 function metersPerDegLngAtLat(lat) {
   return METERS_PER_DEG_LAT * Math.max(0.08, Math.cos((Number(lat) * Math.PI) / 180));
@@ -56,15 +56,15 @@ export function resolveParcelVolume(parcel) {
     const centerLat = Number(vol.centerLat);
     const centerLng = Number(vol.centerLng);
     const widthMeters = Math.max(
-      1,
+      0.5,
       Number(vol.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters)
     );
     const depthMeters = Math.max(
-      1,
+      0.5,
       Number(vol.depthMeters || LAND_VOLUME_LIMITS.defaultDepthMeters)
     );
     const heightMeters = Math.max(
-      1,
+      0.5,
       Number(vol.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters)
     );
     const baseAltitudeM = Math.max(0, Number(vol.baseAltitudeM || 0));
@@ -228,8 +228,8 @@ export function computeIsometricCameraFit(
     if (v > maxV) maxV = v;
   }
 
-  const spanU = Math.max(8, Number.isFinite(maxU - minU) ? maxU - minU : volume.widthMeters);
-  const spanV = Math.max(8, Number.isFinite(maxV - minV) ? maxV - minV : volume.depthMeters);
+  const spanU = Math.max(1.0, Number.isFinite(maxU - minU) ? maxU - minU : volume.widthMeters);
+  const spanV = Math.max(1.0, Number.isFinite(maxV - minV) ? maxV - minV : volume.depthMeters);
   const heightM = Math.max(0, Number(volume.heightMeters || 0));
 
   // Total vertical screen span at center depth = ground foreshortening + vertical extrusion lift
@@ -247,13 +247,13 @@ export function computeIsometricCameraFit(
 
   const targetMetersPerPx = Math.max(
     spanU / (usableW * fillX),
-    Math.max(8, projectedHeightM) / (usableH * fillY)
+    Math.max(1.0, projectedHeightM) / (usableH * fillY)
   );
 
-  const rawIsoZoom = Math.log2(metersPerPxAtZ0 / Math.max(0.02, targetMetersPerPx));
-  const clampedIsoZoom = Math.max(14.0, Math.min(19.6, rawIsoZoom));
+  const rawIsoZoom = Math.log2(metersPerPxAtZ0 / Math.max(0.006, targetMetersPerPx));
+  const clampedIsoZoom = Math.max(14.0, Math.min(21.4, rawIsoZoom));
   const zoom = isContext
-    ? Math.max(12.2, Math.min(16.1, clampedIsoZoom - 2.35))
+    ? Math.max(12.2, Math.min(16.8, clampedIsoZoom - 2.35))
     : clampedIsoZoom;
 
   // Shift ground anchor slightly downward by half the extruded prism screen height so the 3D cube
@@ -361,14 +361,33 @@ export function buildParcelGeoSummary(
   const rawCoords = `${volume.centerLat.toFixed(6)}, ${volume.centerLng.toFixed(6)}`;
   const googleMapsUrl = buildGoogleMapsLandUrl(volume.centerLat, volume.centerLng);
 
-  const w = Math.round(volume.widthMeters);
-  const d = Math.round(volume.depthMeters);
-  const h = Math.round(volume.heightMeters);
-  const area = Math.round(volume.footprintAreaSqM || w * d);
-  const volM3 = Math.round(volume.volumeCubicM || area * h);
+  const fmtDim = (v) =>
+    v < 10
+      ? Number.isInteger(Number(v.toFixed(1)))
+        ? String(Math.round(v))
+        : v.toFixed(1)
+      : String(Math.round(v));
+  const rawArea = Number.isFinite(Number(volume.footprintAreaSqM))
+    ? Number(volume.footprintAreaSqM)
+    : volume.widthMeters * volume.depthMeters;
+  const rawVolM3 = Number.isFinite(Number(volume.volumeCubicM))
+    ? Number(volume.volumeCubicM)
+    : rawArea * volume.heightMeters;
+  const areaStr =
+    rawArea < 10
+      ? Number.isInteger(Number(rawArea.toFixed(1)))
+        ? String(Math.round(rawArea))
+        : rawArea.toFixed(1)
+      : Math.round(rawArea).toLocaleString();
+  const volStr =
+    rawVolM3 < 10
+      ? Number.isInteger(Number(rawVolM3.toFixed(1)))
+        ? String(Math.round(rawVolM3))
+        : rawVolM3.toFixed(1)
+      : Math.round(rawVolM3).toLocaleString();
   const rot = Math.round(volume.rotationDeg || 0);
-  const dimensionsLabel = `${w}×${d}×${h} m · ${area.toLocaleString()} m²`;
-  const volumeLabel = `${volM3.toLocaleString()} m³${rot ? ` · ${rot}° rot` : ''}`;
+  const dimensionsLabel = `${fmtDim(volume.widthMeters)}×${fmtDim(volume.depthMeters)}×${fmtDim(volume.heightMeters)} m · ${areaStr} m²`;
+  const volumeLabel = `${volStr} m³${rot ? ` · ${rot}° rot` : ''}`;
 
   let distanceFromUserLabel = '';
   if (

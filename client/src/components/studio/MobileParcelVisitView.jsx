@@ -4,7 +4,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
 import { buildParcelShareUrl } from '../../../../shared/landVolume.mjs';
 import { copyToClipboard } from '../../utils/clipboard.js';
+import { formatLandDimensions } from '../../utils/landMapHelpers.js';
 import XeroIcon from '../XeroIcon.jsx';
+import MobileIsometricMap from './MobileIsometricMap.jsx';
 
 function formatDistance(meters) {
   if (!Number.isFinite(meters)) return '';
@@ -28,6 +30,8 @@ export default function MobileParcelVisitView({
   const mapRef = useRef(null);
   const layerRef = useRef(null);
   const [copiedMsg, setCopiedMsg] = useState('');
+  const [mapDimensionMode, setMapDimensionMode] = useState('2d'); // '2d' | '3d'
+  const [isMapFull, setIsMapFull] = useState(false);
 
   const centerLat = Number(
     parcel?.volume?.centerLat ?? parcel?.centerLat ?? parcel?.bounds?.center?.[0]
@@ -71,34 +75,56 @@ export default function MobileParcelVisitView({
     : '';
 
   useEffect(() => {
-    if (!mapHostRef.current || !hasCenter || mapRef.current) return undefined;
+    if (mapDimensionMode !== '2d' || !mapHostRef.current || !hasCenter || mapRef.current) {
+      return undefined;
+    }
 
     const map = L.map(mapHostRef.current, {
       center: [centerLat, centerLng],
-      zoom: 18,
+      zoom: 19,
+      maxZoom: 21.5,
       zoomControl: false,
       attributionControl: true
     });
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 19
+      maxNativeZoom: 19,
+      maxZoom: 21.5
     }).addTo(map);
 
     const layer = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerRef.current = layer;
 
+    let observer = null;
+    if (typeof ResizeObserver === 'function' && mapHostRef.current) {
+      observer = new ResizeObserver(() => {
+        map.invalidateSize({ animate: false, pan: false });
+      });
+      observer.observe(mapHostRef.current);
+    }
+
     const t = setTimeout(() => map.invalidateSize(), 100);
     return () => {
       clearTimeout(t);
+      observer?.disconnect();
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
     };
-  }, [hasCenter, centerLat, centerLng]);
+  }, [hasCenter, centerLat, centerLng, mapDimensionMode]);
 
   useEffect(() => {
+    if (mapDimensionMode !== '2d') return undefined;
+    const map = mapRef.current;
+    if (!map) return undefined;
+    const t = setTimeout(() => map.invalidateSize({ animate: false, pan: false }), 80);
+    return () => clearTimeout(t);
+  }, [isMapFull, mapDimensionMode]);
+
+  useEffect(() => {
+    if (mapDimensionMode !== '2d') return;
     const map = mapRef.current;
     const layer = layerRef.current;
     if (!map || !layer || !hasCenter) return;
@@ -174,11 +200,11 @@ export default function MobileParcelVisitView({
 
     // Keep the property cleanly centered
     if (parcelLayer && typeof parcelLayer.getBounds === 'function') {
-      map.fitBounds(parcelLayer.getBounds(), { padding: [54, 54], maxZoom: 18.5 });
+      map.fitBounds(parcelLayer.getBounds(), { padding: [44, 44], maxZoom: 21 });
     } else {
-      map.setView([centerLat, centerLng], 18);
+      map.setView([centerLat, centerLng], 19);
     }
-  }, [parcel, sculptures, userLocation, hasCenter, centerLat, centerLng, isFrozen, onSelectSculpture]);
+  }, [parcel, sculptures, userLocation, hasCenter, centerLat, centerLng, isFrozen, onSelectSculpture, mapDimensionMode]);
 
   async function handleCopyShareLink() {
     if (!parcel?.parcelId) return;
@@ -218,11 +244,7 @@ export default function MobileParcelVisitView({
           {parcel && (
             <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
               {parcel.parcelId}
-              {parcel.volume
-                ? ` · ${Math.round(parcel.volume.widthMeters)}×${Math.round(
-                    parcel.volume.depthMeters
-                  )}×${Math.round(parcel.volume.heightMeters)}m`
-                : ''}
+              {formatLandDimensions(parcel) ? ` · ${formatLandDimensions(parcel)}` : ''}
             </div>
           )}
         </div>
@@ -271,15 +293,61 @@ export default function MobileParcelVisitView({
         </div>
       ) : (
         <>
-          {/* Clean Centered Map Focused on This Exact Property */}
-          <div className="mobile-parcel-map-frame">
-            <div ref={mapHostRef} className="mobile-parcel-map-canvas" />
-            <div className="mobile-parcel-map-pill mono">
-              {hasCenter ? `${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}` : parcel.parcelId}
-            </div>
+          {/* Clean Centered Map Focused on This Exact Property (2D <-> 3D Isometric + Full Expand) */}
+          <div
+            className={`mobile-parcel-map-frame ${isMapFull ? 'is-fullscreen' : ''}`}
+            data-map-mode={mapDimensionMode}
+          >
+            {mapDimensionMode === '3d' ? (
+              <MobileIsometricMap
+                parcels={[parcel]}
+                sculptures={sculptures}
+                userLocation={userLocation}
+                selectedParcelId={parcel.parcelId}
+                isFullExpanded={isMapFull}
+                onToggle2D={() => setMapDimensionMode('2d')}
+                onToggleFullMap={() => setIsMapFull((v) => !v)}
+                onSelectSculpture={onSelectSculpture}
+              />
+            ) : (
+              <>
+                <div ref={mapHostRef} className="mobile-parcel-map-canvas" />
+                <div
+                  className="map-compact-fab-row"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="btn map-recenter-fab map-mode-toggle-fab"
+                    data-testid="mobile-map-3d-toggle-btn"
+                    aria-label="Switch to 3D isometric map"
+                    title="View this land in 3D isometric view"
+                    onClick={() => setMapDimensionMode('3d')}
+                  >
+                    <XeroIcon emoji="🧊" size={13} /> 3D
+                  </button>
+                  <button
+                    type="button"
+                    className="btn map-recenter-fab"
+                    data-testid="mobile-map-fullscreen-btn"
+                    aria-label={isMapFull ? 'Exit full map' : 'Expand full map'}
+                    title={isMapFull ? 'Exit full-screen map' : 'Expand map full-screen'}
+                    onClick={() => setIsMapFull((v) => !v)}
+                  >
+                    {isMapFull ? '⤡' : '⤢'}
+                  </button>
+                </div>
+                <div className="mobile-parcel-map-pill mono">
+                  {hasCenter ? `${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}` : parcel.parcelId}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Clear Options & Proximity Actions */}
+          {!isMapFull && (
           <div className="mobile-parcel-body">
             {parcel.description && (
               <p className="mobile-parcel-desc">{parcel.description}</p>
@@ -383,6 +451,7 @@ export default function MobileParcelVisitView({
               </div>
             )}
           </div>
+          )}
         </>
       )}
     </div>

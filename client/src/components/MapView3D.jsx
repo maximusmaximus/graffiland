@@ -792,7 +792,8 @@ export default function MapView3D({
     );
     const sc3d = buildSculptures3DGeoJson(
       sculpturesRef.current || [],
-      selectedSculptureIdRef.current || ''
+      selectedSculptureIdRef.current || '',
+      parcelsRef.current || []
     );
     setRendered3dSculptureCount(sc3d.renderedCount);
 

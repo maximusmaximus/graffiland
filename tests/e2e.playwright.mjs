@@ -1120,6 +1120,47 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       `Expected >= 2 simple land labels on mobile map, got ${mapMetrics.landLabelCount}`
     );
 
+    // Verify 2D <-> 3D Isometric map toggle works cleanly on mobile (compact AND full-screen expanded)
+    await hubPage.getByTestId('mobile-map-3d-toggle-btn').click();
+    await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 10000 });
+    await hubPage.getByTestId('mobile-map-2d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+    await hubPage.getByTestId('mobile-map-orbit-btn').click();
+
+    // Expand Full Map -> verify full-screen height & that 2D/3D/Orbit/Fit/Exit buttons ALL remain clickable
+    await hubPage.getByTestId('mobile-map-expand-header-btn').click();
+    await hubPage.waitForSelector('[data-testid="mobile-map-canvas"][data-map-expanded="fullscreen"]', {
+      timeout: 5000
+    });
+    const full3dMetrics = await hubPage.evaluate(() => ({
+      scrollWidth: globalThis.document.documentElement.scrollWidth,
+      mapHeight: globalThis.document.querySelector('[data-testid="mobile-map-canvas"]')?.clientHeight || 0
+    }));
+    assert.ok(
+      full3dMetrics.scrollWidth <= 391,
+      `Expected full-screen 3D mobile map scrollWidth <= 391, got ${full3dMetrics.scrollWidth}`
+    );
+    assert.ok(
+      full3dMetrics.mapHeight >= 480,
+      `Expected full-screen 3D mobile map height >= 480px, got ${full3dMetrics.mapHeight}`
+    );
+    await hubPage.getByTestId('mobile-map-orbit-btn').click();
+    await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
+    await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const full2dHeight = await hubPage.evaluate(
+      () => globalThis.document.querySelector('.mobile-map-canvas .leaflet-container')?.clientHeight || 0
+    );
+    assert.ok(
+      full2dHeight >= 480,
+      `Expected full-screen 2D mobile map height >= 480px, got ${full2dHeight}`
+    );
+    // Switch back to 3D then collapse full-screen cleanly back to split Nearest Lands view
+    await hubPage.getByTestId('mobile-map-3d-toggle-btn').click();
+    await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 5000 });
+    await hubPage.getByTestId('mobile-map-fullscreen-btn').click();
+    await hubPage.waitForSelector('[data-testid="mobile-nearest-lands-list"]', { timeout: 5000 });
+    await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
+    await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+
     // Open a nested sculpture in 3D modal and verify modal sits cleanly above map overlay
     await sculptureItems.first().getByRole('button', { name: /3D/i }).click();
     await hubPage.waitForSelector('.modal-backdrop', { timeout: 10000 });
