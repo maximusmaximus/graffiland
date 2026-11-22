@@ -405,8 +405,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Copy Autonomous Agent Prompt/i }).click();
     await page.waitForSelector('text=Copied Autonomous Agent Prompt');
     await page.getByRole('button', { name: /Dismiss intro banner/i }).click();
-    await page.getByRole('button', { name: /Connect Agent/i }).click();
-    await page.waitForSelector('text=Wallet / MCP Auth');
+    assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
 
     // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
     await page.getByRole('button', { name: /Quests/i }).click();
@@ -593,6 +592,18 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-search-pin', { timeout: 5000 });
     await page.waitForTimeout(350);
 
+    // Verify broken Connect Agent button is removed, Pair Phone glows, and Pair modal has structured revealable Agent Pairing
+    assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
+    const pairNavBtn = page.getByTestId('nav-pair-phone-btn');
+    assert.ok((await pairNavBtn.getAttribute('class')).includes('btn-pair-glow'));
+    await pairNavBtn.click();
+    await page.waitForSelector('[data-testid="pair-phone-modal"]');
+    assert.equal(await page.locator('[data-testid="pair-agent-structured-steps"]').count(), 0);
+    await page.getByTestId('pair-agent-reveal-toggle').click();
+    await page.waitForSelector('[data-testid="pair-agent-structured-steps"]');
+    await page.getByRole('button', { name: /Close pairing modal/i }).click();
+    await page.waitForSelector('[data-testid="pair-phone-modal"]', { state: 'detached' });
+
     // Hold down in 1 location on the map (~450ms) WITHOUT clicking Draw Land -> activates Hold-to-Draw Cube & drags out a 3D cube!
     const mapBox = await page.locator('.map-container').boundingBox();
     assert.ok(mapBox && mapBox.width > 200 && mapBox.height > 200);
@@ -608,7 +619,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.equal(await stage.getAttribute('data-draw-mode'), 'off');
     const drawnText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(drawnText.includes('315°'), `Expected drawn square to inherit 315° isometric orientation, got: ${drawnText}`);
-    assert.ok(drawnText.includes('Ready'), `Expected drawn plot to be valid Ready, got: ${drawnText}`);
+    assert.ok(drawnText.includes('Name Req.'), `Expected untitled drawn plot to require a land title, got: ${drawnText}`);
+    // No pre-mint copy or Title button next to Mint This Land
+    assert.equal(await page.getByRole('button', { name: /Copy Parcel Link/i }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: /🏷️ Title/i }).count(), 0);
+
+    // Compact sliders start collapsed under Description; expand them for manual checks
+    assert.equal(await page.locator('[data-testid="land-sliders-body"]').count(), 0);
+    await page.getByTestId('land-sliders-toggle').click();
+    await page.waitForSelector('[data-testid="land-sliders-body"]');
+
+    // Give the plot a unique title so it becomes Ready
+    await page.locator('#land-square-name-input').fill('E2E Neon Corner');
+    await page.waitForSelector('[data-testid="land-title-validation"]:has-text("available")', { timeout: 5000 });
 
     // Verify hover-to-select & on-map 3D CAD gizmo handles (corner ball scale, pronounced center up/down Z handle, side bar stretch, vertical bar rotate, body move)
     await page.waitForFunction(() => Boolean(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-active-gizmo')));
@@ -734,6 +757,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-stage[data-draft-count="2"]');
 
     await page.locator('.land-draft-item').first().click();
+    await page.locator('#land-square-name-input').fill('Skyline Studio Plot');
+    await page.waitForSelector('[data-testid="land-title-validation"]:has-text("available")', { timeout: 5000 });
     await page.getByLabel('Width (m)').fill('28');
     await page.getByLabel('Depth (m)').fill('22');
     await page.getByLabel('Rotate (°)').fill('30');
@@ -743,19 +768,6 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(firstItemText.includes('28×22×36m'), `Expected 28x22x36m in ${firstItemText}`);
     assert.ok(firstItemText.includes('30°'), `Expected 30 deg in ${firstItemText}`);
     assert.ok(firstItemText.includes('616 m²'), `Expected 616 m2 in ${firstItemText}`);
-
-    // Copy Parcel Link & Copy All Properties for Agent
-    await page.getByRole('button', { name: /Copy Parcel Link/i }).click();
-    await page.waitForSelector('text=/Copied parcel link for GLAND-/i');
-
-    await page.getByRole('button', { name: /Copy All Properties for Agent/i }).click();
-    const previewBox = page.getByLabel('Agent properties prompt preview');
-    await previewBox.waitFor();
-    const agentPrompt = await previewBox.inputValue();
-    assert.ok(agentPrompt.includes('Total Selected Properties: 2'));
-    assert.ok(agentPrompt.includes('Oriented Corners ([lng, lat]):'));
-    assert.ok(agentPrompt.includes('5,000 m²'));
-    assert.ok((agentPrompt.match(/GLAND-[0-9A-Z]+/g) || []).length >= 2);
 
     // Sign in, complete mandatory username onboarding, and mint the first square from Desktop
     const initialOwned = Number(await stage.getAttribute('data-owned-count'));
@@ -771,13 +783,21 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="desktop-profile-btn"]:has-text("@street_voxel_e2e")');
 
     await page.getByRole('button', { name: /Mint This Land/i }).click();
-    await page.waitForSelector('text=/Minted GLAND-/i');
+    await page.waitForSelector('text=/Minted "Skyline Studio Plot"/i');
     await page.waitForSelector('.map3d-stage[data-draft-count="1"]');
     const afterOwned = Number(await stage.getAttribute('data-owned-count'));
     assert.equal(afterOwned, initialOwned + 1);
 
-    // After minting: glowing "+" button appears on the minted land (on map AND in Owned Plots) -> click map "+" directly!
-    await page.waitForSelector('.map3d-owned-plus-btn', { timeout: 6000 });
+    // Post-mint Copy All Locations + Copy Prompt (All) + Individual Copy Icons become available ONLY after minting
+    await page.waitForSelector('[data-testid="minted-lands-copy-panel"]');
+    await page.getByTestId('copy-all-minted-prompt-btn').click();
+    const mintedPromptBox = page.getByLabel('Minted lands AI agent prompt preview');
+    await mintedPromptBox.waitFor();
+    const mintedPromptVal = await mintedPromptBox.inputValue();
+    assert.ok(mintedPromptVal.includes('Skyline Studio Plot'));
+
+    // After minting: floating pin layer sits strictly ABOVE wireframes with "+" button on map & minted list!
+    await page.waitForSelector('.map3d-floating-pins-layer .map3d-owned-plus-btn', { timeout: 6000 });
     await page.waitForSelector('.land-owned-plus-btn', { timeout: 6000 });
     await page.locator('.map3d-owned-plus-btn').first().click();
     await page.waitForSelector('.add-item-modal-card');
@@ -818,26 +838,22 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       state: 'detached'
     });
 
-    // 2) Add a placeholder plot to cart, edit inline title, open Title Land popup, Save & Mint
+    // 2) Clicking Mint Land auto-selects Draw Land; add plot, enter unique title & description, and Mint!
     await page.locator('.desktop-nav').getByRole('button', { name: /Mint Land/i }).click();
+    assert.equal(await page.locator('.map3d-stage').getAttribute('data-draw-mode'), 'on');
     await page.getByRole('button', { name: /Sign In/i }).first().click();
     await page.getByRole('button', { name: /Continue with Google/i }).click();
     await page.waitForSelector('.modal-backdrop', { state: 'detached' });
 
     await page.getByRole('button', { name: /\+ Add Square/i }).click();
-    await page.waitForSelector('.land-draft-inline-title');
-    await page.locator('.land-draft-inline-title').first().fill('Cart Named Plaza');
-
-    await page.locator('.land-draft-item').first().getByRole('button', { name: /Title popup for/i }).click();
-    await page.waitForSelector('.title-land-modal-card');
-    await page.locator('.title-land-modal-card').getByLabel('Land Title').fill('Civic Sunset Terrace');
+    await page.waitForSelector('#land-square-name-input');
+    await page.locator('#land-square-name-input').fill('Civic Sunset Terrace');
+    await page.waitForSelector('[data-testid="land-title-validation"]:has-text("available")', { timeout: 5000 });
     await page
-      .locator('.title-land-modal-card')
-      .getByLabel('Land Description')
+      .locator('#land-square-desc-input')
       .fill('Open 3D art courtyard at Market and Van Ness.');
-    await page.locator('.title-land-modal-card').getByRole('button', { name: /Save & Mint Land/i }).click();
-    await page.waitForSelector('.title-land-modal-card', { state: 'detached' });
-    await page.waitForSelector('text=/Minted GLAND-/i');
+    await page.getByRole('button', { name: /Mint This Land/i }).click();
+    await page.waitForSelector('text=/Minted "Civic Sunset Terrace"/i');
 
     // Mint a second parcel in a distinct location so Land Management tests switching between isometric land views
     await page.evaluate(async () => {

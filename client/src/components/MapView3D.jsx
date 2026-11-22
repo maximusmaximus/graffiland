@@ -25,6 +25,11 @@ import {
   computePrismScreenGeometry,
   pointInPolygon2D
 } from '../utils/map3dProjection.js';
+import {
+  drawFloatingCenterArrow,
+  drawFloatingLandLabel,
+  getPrismLabelAnchor
+} from '../utils/map3dLabelOverlay.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -154,7 +159,6 @@ function drawGlowingPrism(
     innerColor,
     lineWidth = 2,
     glowBlur = 14,
-    label = '',
     showGizmo = false,
     activeHandle = ''
   }
@@ -409,35 +413,6 @@ function drawGlowingPrism(
     }
     ctx.restore();
   }
-
-  if (label && topCenter?.visible) {
-    ctx.save();
-    ctx.font = '600 10.5px "JetBrains Mono", ui-monospace, monospace';
-    const textW = ctx.measureText(label).width;
-    const padX = 7;
-    const boxW = textW + padX * 2;
-    const boxH = 19;
-    const bx = topCenter.x - boxW / 2;
-    const by = showGizmo
-      ? topCenter.y - HEIGHT_HANDLE_LIFT_PX - boxH - 19
-      : topCenter.y - boxH - 11;
-    ctx.fillStyle = 'rgba(6, 10, 20, 0.9)';
-    ctx.strokeStyle = outerColor;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(bx, by, boxW, boxH, 5);
-    } else {
-      ctx.rect(bx, by, boxW, boxH);
-    }
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = innerColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, topCenter.x, by + boxH / 2 + 0.5);
-    ctx.restore();
-  }
 }
 
 export default function MapView3D({
@@ -470,6 +445,8 @@ export default function MapView3D({
   const stageRef = useRef(null);
   const mapHostRef = useRef(null);
   const wireCanvasRef = useRef(null);
+  const floatingPinsLayerRef = useRef(null);
+  const floatingPinMapRef = useRef(new Map());
   const searchBoxRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -640,6 +617,10 @@ export default function MapView3D({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
+    // PASS 1: Draw all 3D wireframes & gizmos first so floating labels ALWAYS sit strictly on top
+    const parcelGeomMap = new Map();
+    const pendingFloatingLabels = [];
+
     // 1) Existing owned parcels -> glowing Amber/Gold (Icy Blue when frozen, Magenta for dormant quests)
     for (const p of parcelsRef.current || []) {
       const vol =
@@ -650,13 +631,18 @@ export default function MapView3D({
       if (!geom) continue;
       const isDormant = p?.stewardStatus === 'dormant';
       const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
+      const outerColor = isFrozen ? '#7dd3fc' : isDormant ? '#ff3e7f' : '#ffb703';
+      const innerColor = isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#fff3c4';
       drawGlowingPrism(ctx, geom, {
-        outerColor: isFrozen ? '#7dd3fc' : isDormant ? '#ff3e7f' : '#ffb703',
-        innerColor: isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#fff3c4',
+        outerColor,
+        innerColor,
         lineWidth: 1.8,
-        glowBlur: 10,
-        label: isFrozen ? `❄️ ${p.customName || p.parcelId}` : ''
+        glowBlur: 10
       });
+      const pid = String(p?.parcelId || '').toUpperCase();
+      if (pid) {
+        parcelGeomMap.set(pid, { geom, outerColor, innerColor });
+      }
     }
 
     // 2) Considered draft parcels -> electric Cyber Cyan with interactive corner balls, edge bars & vertical rotate bars
@@ -671,18 +657,28 @@ export default function MapView3D({
       const outerColor = hasError ? '#ff4d6d' : showGizmo ? '#00f5d4' : '#00bbf9';
       const innerColor = hasError ? '#ffd6de' : showGizmo ? '#eafffc' : '#cbeeff';
       const handleForThis = showGizmo ? activeHandleRef.current : '';
-      const dimLabel = `${Math.round(d.widthMeters)}×${Math.round(d.depthMeters)}×${Math.round(
-        d.heightMeters
-      )}m · ${Math.round(d.rotationDeg || 0)}°`;
+      const dimLabel = `${d.customName ? `${d.customName} · ` : ''}${Math.round(
+        d.widthMeters
+      )}×${Math.round(d.depthMeters)}×${Math.round(d.heightMeters)}m · ${Math.round(
+        d.rotationDeg || 0
+      )}°`;
 
       drawGlowingPrism(ctx, geom, {
         outerColor,
         innerColor,
         lineWidth: showGizmo ? 2.5 : 1.9,
         glowBlur: showGizmo ? 18 : 11,
-        label: dimLabel,
         showGizmo,
         activeHandle: handleForThis
+      });
+
+      pendingFloatingLabels.push({
+        geom,
+        label: dimLabel,
+        outerColor,
+        innerColor,
+        liftPx: showGizmo ? HEIGHT_HANDLE_LIFT_PX + 24 : 22,
+        minY: 16
       });
 
       if (isSelected || (!activeGizmoCoords && isHovered)) {
@@ -728,12 +724,20 @@ export default function MapView3D({
         const previewLabel = preview.hitLimit
           ? `${preview.widthMeters}×${preview.depthMeters}m · MAX ${LAND_VOLUME_LIMITS.maxFootprintAreaSqM.toLocaleString()} m²`
           : `${preview.widthMeters}×${preview.depthMeters}m · ${Math.round(preview.rotationDeg || 0)}°`;
+        const outerColor = preview.hitLimit ? '#ffd166' : '#00f5d4';
         drawGlowingPrism(ctx, geom, {
-          outerColor: preview.hitLimit ? '#ffd166' : '#00f5d4',
+          outerColor,
           innerColor: '#ffffff',
           lineWidth: 2.3,
-          glowBlur: 18,
-          label: previewLabel
+          glowBlur: 18
+        });
+        pendingFloatingLabels.push({
+          geom,
+          label: previewLabel,
+          outerColor,
+          innerColor: '#ffffff',
+          liftPx: 22,
+          minY: 16
         });
       }
     } else if (drawModeRef.current && hoverDrawPreviewRef.current && !hoveredDraftIdRef.current) {
@@ -743,10 +747,51 @@ export default function MapView3D({
           outerColor: 'rgba(0, 245, 212, 0.72)',
           innerColor: 'rgba(234, 255, 252, 0.85)',
           lineWidth: 1.5,
-          glowBlur: 10,
-          label: 'Click or drag to place'
+          glowBlur: 10
+        });
+        pendingFloatingLabels.push({
+          geom: hoverGeom,
+          label: 'Click or drag to place',
+          outerColor: 'rgba(0, 245, 212, 0.85)',
+          innerColor: '#eafffc',
+          liftPx: 18,
+          minY: 16
         });
       }
+    }
+
+    // PASS 2: Floating labels & center leader arrows strictly ON TOP of every wireframe
+    for (const [pid, pinInfo] of floatingPinMapRef.current.entries()) {
+      const entry = parcelGeomMap.get(pid);
+      const el = pinInfo?.el;
+      if (!el) continue;
+      if (!entry) {
+        el.style.display = 'none';
+        continue;
+      }
+      const anchor = getPrismLabelAnchor(entry.geom);
+      if (!anchor || !anchor.visible || anchor.roofCenter.x < -80 || anchor.roofCenter.x > w + 80 || anchor.highestTopY < -60 || anchor.baseCenter.y > h + 80) {
+        el.style.display = 'none';
+        continue;
+      }
+      const pinBottomY = Math.max(46, anchor.highestTopY - 22);
+      el.style.display = 'flex';
+      el.style.transform = `translate3d(${Math.round(anchor.roofCenter.x)}px, ${Math.round(
+        pinBottomY
+      )}px, 0) translate(-50%, -100%)`;
+
+      drawFloatingCenterArrow(ctx, {
+        fromX: anchor.roofCenter.x,
+        fromY: pinBottomY,
+        toX: anchor.baseCenter.x,
+        toY: anchor.baseCenter.y,
+        color: entry.outerColor,
+        dotColor: entry.innerColor
+      });
+    }
+
+    for (const item of pendingFloatingLabels) {
+      drawFloatingLandLabel(ctx, item.geom, item);
     }
     // 4) Hold-to-draw charge progress ring (when user holds down on 1 map location)
     const hold = holdDrawRef.current;
@@ -1261,13 +1306,18 @@ export default function MapView3D({
     };
   }, [sculptures, userLocation, selectedSculptureId, config, onSelectSculpture]);
 
-  // Render action buttons right beside each minted parcel (+, Title, Copy Share Link for owned; Copy Link for public)
+  // Render floating action & label pins strictly above wireframes (+, Title, Copy Share Link for owned; Copy Link for public)
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return undefined;
+    const pinLayer = floatingPinsLayerRef.current;
+    const pinMap = floatingPinMapRef.current;
+    if (!pinLayer) return undefined;
 
     for (const mk of ownedMarkersRef.current) mk.remove();
     ownedMarkersRef.current = [];
+    for (const { el } of pinMap.values()) {
+      el.remove();
+    }
+    pinMap.clear();
 
     const ownedSet = new Set((ownedParcelIds || []).map((id) => String(id).toUpperCase()));
 
@@ -1354,17 +1404,22 @@ export default function MapView3D({
       badge.title = p.customName ? `${p.customName} (${pid})` : pid;
 
       wrap.append(btnRow, badge);
-      const mk = new maplibregl.Marker({ element: wrap, anchor: 'left', offset: [28, 4] })
-        .setLngLat([lng, lat])
-        .addTo(map);
-      ownedMarkersRef.current.push(mk);
+      wrap.style.display = 'none';
+      pinLayer.appendChild(wrap);
+      pinMap.set(pid, { el: wrap, parcel: p });
     }
+
+    drawWireframes();
 
     return () => {
       for (const mk of ownedMarkersRef.current) mk.remove();
       ownedMarkersRef.current = [];
+      for (const { el } of pinMap.values()) {
+        el.remove();
+      }
+      pinMap.clear();
     };
-  }, [parcels, ownedParcelIds]);
+  }, [parcels, ownedParcelIds, drawWireframes]);
 
   // Close search dropdown on outside click
   useEffect(() => {
@@ -2232,6 +2287,7 @@ export default function MapView3D({
       >
         <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
         <canvas ref={wireCanvasRef} className="map3d-wireframe-canvas" aria-hidden="true" />
+        <div ref={floatingPinsLayerRef} className="map3d-floating-pins-layer" />
 
         {/* Dynamic Live Intersection / Business / Address / Parcel Search */}
         <div ref={searchBoxRef} className="map3d-search-box map3d-ui-stop">

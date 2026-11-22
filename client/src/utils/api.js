@@ -307,6 +307,19 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/quests/nearby${suffix}`);
   },
+  checkLandName: (name, excludeParcelId = '') => {
+    const qs = new URLSearchParams({ name: String(name || '') });
+    if (excludeParcelId) qs.set('excludeParcelId', String(excludeParcelId));
+    return request(`/api/lands/check-name?${qs.toString()}`);
+  },
+  getNotifications: (limit = 40) =>
+    request(`/api/notifications?limit=${encodeURIComponent(String(limit))}`),
+  markNotificationsRead: (payload = { markAll: true }) =>
+    request('/api/notifications/read', { method: 'POST', body: JSON.stringify(payload) }),
+  updateNotificationPreferences: (patch) =>
+    request('/api/notifications/preferences', { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteNotification: (id) =>
+    request(`/api/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   claimLand: (payload) =>
     request('/api/lands/claim', { method: 'POST', body: JSON.stringify(payload) }),
   updateLandVolume: (parcelId, volume) =>

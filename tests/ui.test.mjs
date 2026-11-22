@@ -521,7 +521,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('DesktopLandBuilderPanel renders limits, sliders, and multi-property agent export callbacks', async () => {
+  test('DesktopLandBuilderPanel validates unique titles, compacts sliders, blocks pre-mint copy, shows post-mint copy tools & 3-free limit card', async () => {
     const { DesktopLandBuilderPanel } = await loadJsxModule(
       'client/src/components/DesktopLandBuilderPanel.jsx'
     );
@@ -557,15 +557,29 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       hasOverlap: false,
       errors: []
     };
+    const owned1 = {
+      parcelId: 'GLAND-9Q8YYK9P',
+      customName: 'Minted Terrace',
+      volume: validateAndNormalizeLandVolume({
+        lat: 37.7752,
+        lng: -122.419,
+        widthMeters: 18,
+        depthMeters: 16,
+        heightMeters: 20,
+        rotationDeg: 15
+      }).volume
+    };
 
     const updates = [];
     const minted = [];
+    let pairOpened = 0;
     const view = RTL.render(
       React.createElement(DesktopLandBuilderPanel, {
         draftParcels: [p1, p2],
-        ownedParcels: [],
+        ownedParcels: [owned1],
+        recentlyMintedParcels: [owned1],
         selectedDraftId: 'draft-1',
-        drawMode: false,
+        drawMode: true,
         onToggleDrawMode: () => {},
         onAddDraftAtCenter: () => {},
         onSelectDraft: () => {},
@@ -574,18 +588,42 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         onClearDrafts: () => {},
         onMintDraft: (draft) => minted.push(draft.parcelId),
         onMintAll: () => {},
+        onOpenPairMobile: () => {
+          pairOpened += 1;
+        },
+        mintLimitError: {
+          usedSlots: 3,
+          maxSlots: 3,
+          unbuiltParcels: [{ parcelId: 'GLAND-9Q8YYK9P', displayName: 'Minted Terrace' }]
+        },
+        checkLandNameFn: async (name) => ({
+          ok: true,
+          available: name.toLowerCase() !== 'taken plaza',
+          reason: name.toLowerCase() === 'taken plaza' ? '"Taken Plaza" is already taken.' : ''
+        }),
         cameraBearingDeg: 315,
         user: { id: 'u1', name: 'Land Creator' }
       })
     );
 
+    // 1) Limits, no pre-mint Copy Parcel Link, and no Title button next to Mint This Land
     const limitsCard = view.getByTestId('land-limits-card');
     assert.ok(limitsCard.textContent.includes('5,000 m²'));
     assert.ok(limitsCard.textContent.includes('500,000 m³'));
     assert.ok(limitsCard.textContent.includes('3 free human claims'));
-    RTL.fireEvent.click(view.getByRole('button', { name: /Info: 3D Land Limits & Rules/i }));
-    assert.ok(view.getByRole('tooltip'));
-    assert.ok(view.getByText(/AI agents pay own gas/i));
+    assert.equal(view.queryByRole('button', { name: /Copy Parcel Link/i }), null);
+    assert.equal(view.queryByRole('button', { name: /🏷️ Title/i }), null);
+
+    // 2) 3-free limit notification card renders with unbuilt land + Pair Phone QR button + mobile link
+    assert.ok(view.getByTestId('mint-limit-notification'));
+    assert.ok(/^https?:\/\//.test(view.getByTestId('mint-limit-mobile-link').getAttribute('href') || ''));
+    RTL.fireEvent.click(view.getByTestId('mint-limit-pair-mobile-btn'));
+    assert.equal(pairOpened, 1);
+
+    // 3) Sliders start collapsed under Description and expand on demand
+    assert.equal(view.queryByTestId('land-sliders-body'), null);
+    RTL.fireEvent.click(view.getByTestId('land-sliders-toggle'));
+    assert.ok(view.getByTestId('land-sliders-body'));
 
     RTL.fireEvent.change(view.getByLabelText('Width (m)'), { target: { value: '32' } });
     RTL.fireEvent.change(view.getByLabelText('Depth (m)'), { target: { value: '24' } });
@@ -612,15 +650,19 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     assert.ok(updates.some((u) => u.id === 'draft-1' && u.patch.heightMeters === 250));
 
+    // 4) Post-mint Copy All Locations + Copy Prompt (All) + Individual Copy Icons
+    assert.ok(view.getByTestId('minted-lands-copy-panel'));
     await RTL.act(async () => {
-      RTL.fireEvent.click(view.getByRole('button', { name: /Copy All Properties for Agent/i }));
+      RTL.fireEvent.click(view.getByTestId('copy-all-minted-prompt-btn'));
     });
-    const previewBox = view.getByLabelText('Agent properties prompt preview');
-    assert.ok(previewBox.value.includes('Total Selected Properties: 2'));
-    assert.ok(previewBox.value.includes(p1.parcelId));
-    assert.ok(previewBox.value.includes(p2.parcelId));
-    assert.ok(previewBox.value.includes(JSON.stringify(p1.corners)));
+    const previewBox = view.getByLabelText('Minted lands AI agent prompt preview');
+    assert.ok(previewBox.value.includes('Minted Terrace'));
+    assert.ok(previewBox.value.includes('GLAND-9Q8YYK9P'));
 
+    // 5) Wait for live title validation to confirm availability, then mint
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('land-title-validation').textContent.includes('available'));
+    });
     RTL.fireEvent.click(view.getByRole('button', { name: /Mint This Land/i }));
     assert.deepEqual(minted, [p1.parcelId]);
     cleanup();
@@ -2341,5 +2383,185 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(frozenPanel.queryByTestId('ar-land-manage-btn'), null);
     assert.equal(frozenPanel.queryByTestId('ar-land-title-edit-trigger'), null);
     cleanup();
+  });
+
+  test('ProfileModal hides Gmail fallback picture, renders default GRAFFILAND icon, and shows quick + buttons on unset banner & bio image', async () => {
+    const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
+    const mockData = {
+      profile: {
+        id: 'u-fresh',
+        username: 'fresh_creator',
+        displayName: 'Fresh Creator',
+        bio: '',
+        picture: 'https://lh3.googleusercontent.com/raw-gmail-photo.png',
+        avatarImage: '',
+        headerImage: '',
+        userNumber: 77,
+        userNumberLabel: '#0077',
+        accountType: 'human',
+        walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        joinedAt: '2026-11-01T00:00:00Z'
+      },
+      stats: {
+        landCount: 0,
+        sculptureCount: 0,
+        activeListingCount: 0,
+        questCount: 0,
+        actionCount: 0,
+        totalBlocks: 0,
+        awakenedLands: 0,
+        totalXp: 0
+      },
+      lands: [],
+      sculptures: [],
+      actions: []
+    };
+
+    const view = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'fresh_creator',
+        user: { id: 'u-fresh', username: 'fresh_creator', name: 'Fresh Creator', userNumber: 77 },
+        fetchProfileFn: async () => mockData,
+        onClose: () => {}
+      })
+    );
+
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('profile-default-avatar'));
+    });
+    // Must NEVER fall back to Gmail picture
+    assert.equal(view.queryByTestId('profile-banner-avatar-img'), null);
+    // Unset avatar & header show quick "+" buttons for owner
+    const addBannerBtn = view.getByTestId('profile-add-header-btn');
+    const addAvatarBtn = view.getByTestId('profile-add-avatar-btn');
+    assert.ok(addBannerBtn);
+    assert.ok(addAvatarBtn);
+
+    // Clicking "+" on avatar enters profile edit mode directly
+    RTL.fireEvent.click(addAvatarBtn);
+    assert.ok(view.getByTestId('profile-edit-form'));
+    cleanup();
+  });
+
+  test('NotificationCenter renders bell + badge, mint readiness banner, settings & browser push toggle', async () => {
+    const { default: NotificationCenter } = await loadJsxModule(
+      'client/src/components/NotificationCenter.jsx'
+    );
+    const origFetch = globalThis.fetch;
+    const origNotification = globalThis.Notification;
+    const savedPrefs = [];
+    const sentNative = [];
+
+    function MockNotification(title, opts) {
+      sentNative.push({ title, opts });
+    }
+    MockNotification.permission = 'default';
+    MockNotification.requestPermission = async () => {
+      MockNotification.permission = 'granted';
+      return 'granted';
+    };
+    globalThis.Notification = MockNotification;
+    globalThis.window.Notification = MockNotification;
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/notifications/preferences') && opts.method === 'PATCH') {
+        const body = JSON.parse(opts.body || '{}');
+        savedPrefs.push(body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            preferences: {
+              sculpture_on_land: true,
+              mint_slots_unlocked: true,
+              mint_limit_reached: true,
+              land_expiring: true,
+              land_activity: true,
+              browser_push_enabled: false,
+              ...body
+            }
+          })
+        };
+      }
+      if (u.includes('/api/notifications/read') && opts.method === 'POST') {
+        return { ok: true, status: 200, json: async () => ({ unreadCount: 0 }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          unreadCount: 1,
+          preferences: {
+            sculpture_on_land: true,
+            mint_slots_unlocked: true,
+            mint_limit_reached: true,
+            land_expiring: true,
+            land_activity: true,
+            browser_push_enabled: false
+          },
+          mintStatus: {
+            usedSlots: 1,
+            maxSlots: 3,
+            remainingSlots: 2,
+            canMintDesktop: true
+          },
+          notifications: [
+            {
+              id: 'n-1',
+              category: 'sculpture_on_land',
+              severity: 'info',
+              title: '🎨 New sculpture on "Sunset Plaza"',
+              message: 'Maya placed "Crystal Arch" on your land.',
+              parcelId: 'GLAND-9Q8YYK9P',
+              actionType: 'open_land',
+              actionLabel: 'Inspect Land',
+              read: false,
+              createdAt: new Date().toISOString()
+            }
+          ]
+        })
+      };
+    };
+
+    try {
+      const actions = [];
+      const view = RTL.render(
+        React.createElement(NotificationCenter, {
+          user: { id: 'u-notif', name: 'Notif User' },
+          variant: 'desktop',
+          onAction: (item) => actions.push(item)
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '1');
+      });
+
+      RTL.fireEvent.click(view.getByRole('button', { name: /Notifications/i }));
+      assert.ok(view.getByText(/2\/3 free Desktop slots open/i));
+      assert.ok(view.getByText(/New sculpture on "Sunset Plaza"/i));
+
+      // Switch to Settings tab and enable Browser Notifications
+      RTL.fireEvent.click(view.getByRole('tab', { name: /Settings/i }));
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /Turn On/i }));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(savedPrefs.some((p) => p.browser_push_enabled === true));
+      });
+      assert.ok(sentNative.length >= 1, 'Expected browser confirmation notification');
+
+      // Switch back to Inbox and trigger action
+      RTL.fireEvent.click(view.getByRole('tab', { name: /Inbox/i }));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Inspect Land/i }));
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].parcelId, 'GLAND-9Q8YYK9P');
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      globalThis.Notification = origNotification;
+      globalThis.window.Notification = origNotification;
+    }
   });
 });

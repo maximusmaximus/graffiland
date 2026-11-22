@@ -18,6 +18,7 @@ import {
 } from '../shared/agentAuthService.mjs';
 import {
   awakenParcelByHumanVisit,
+  checkLandTitleAvailability,
   claimDormantLand,
   createArtQuest,
   getLandTelemetry,
@@ -25,6 +26,12 @@ import {
   scoutLands,
   updateLandVolume
 } from '../shared/agentQuestService.mjs';
+import {
+  deleteNotification,
+  listUserNotifications,
+  markNotificationsRead,
+  updateNotificationPreferences
+} from '../shared/notificationService.mjs';
 import { buildObjectFittedLandVolume } from '../shared/landVolume.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../shared/geocodeService.mjs';
 import {
@@ -1074,6 +1081,59 @@ export function createAppServer(serverOptions = {}) {
       })
     )
   );
+
+  app.get('/api/lands/check-name', async (req, res) => {
+    try {
+      const out = await checkLandTitleAvailability(chatDb, {
+        name: String(req.query?.name || ''),
+        excludeParcelId: String(req.query?.excludeParcelId || '')
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not check land title' });
+    }
+  });
+
+  app.get('/api/notifications', requireAuth, async (req, res) => {
+    try {
+      const out = await listUserNotifications(chatDb, req.user.id, {
+        limit: req.query?.limit ? Number(req.query.limit) : 40
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not load notifications' });
+    }
+  });
+
+  app.post('/api/notifications/read', requireAuth, async (req, res) => {
+    try {
+      const out = await markNotificationsRead(chatDb, req.user.id, {
+        ids: Array.isArray(req.body?.ids) ? req.body.ids : null,
+        markAll: Boolean(req.body?.markAll)
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not mark notifications read' });
+    }
+  });
+
+  app.patch('/api/notifications/preferences', requireAuth, async (req, res) => {
+    try {
+      const preferences = await updateNotificationPreferences(chatDb, req.user.id, req.body || {});
+      res.json({ preferences });
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not update notification preferences' });
+    }
+  });
+
+  app.delete('/api/notifications/:id', requireAuth, async (req, res) => {
+    try {
+      const out = await deleteNotification(chatDb, req.user.id, req.params.id);
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not delete notification' });
+    }
+  });
 
   app.post('/api/lands/claim', requireAuth, async (req, res) => {
     try {

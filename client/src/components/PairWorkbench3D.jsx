@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { copyToClipboard } from '../utils/clipboard.js';
 import { getMobileLaunchUrl, getWsUrl } from '../utils/device.js';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import { GRAFFITI_PALETTE } from './VoxelEngine3D.js';
@@ -33,6 +34,9 @@ export default function PairWorkbench3D({ inModal = false }) {
   const [liveQuaternion, setLiveQuaternion] = useState(null);
   const [mobileState, setMobileState] = useState({ mode: 'draw', tool: 'brush', color: '#00f5d4' });
   const [pairNotice, setPairNotice] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [showRemoteControls, setShowRemoteControls] = useState(false);
+  const mobileLaunchUrl = useMemo(() => getMobileLaunchUrl(pairCode), [pairCode]);
 
   const startSession = useCallback(() => {
     if (wsRef.current) wsRef.current.close();
@@ -166,166 +170,170 @@ export default function PairWorkbench3D({ inModal = false }) {
   }
 
   return (
-    <div className="pair-layout">
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
-            <XeroIcon emoji="🔗" size={20} /> Device Pairing
+    <div className="pair-layout pair-layout-clean">
+      <div className="card pair-qr-card">
+        <div className="pair-card-head">
+          <div className="pair-card-title">
+            <XeroIcon emoji="📱" size={18} />
+            <span>Phone QR Pairing</span>
           </div>
           <span className={`badge ${mobileConnected ? 'teal' : 'gold'}`}>
-            {mobileConnected ? 'Live Phone Paired' : 'Waiting for Phone'}
+            {mobileConnected ? '🟢 Phone Connected' : 'Waiting for Phone'}
           </span>
         </div>
 
-        <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-          Scan this QR code on your mobile phone or enter the Pair Code inside the mobile app so
-          your phone becomes a pure 3D brush while your full sculpture renders live here.
-        </p>
+        <ol className="pair-quick-steps">
+          <li><strong>Scan QR</strong> on your phone camera (or open Mobile Studio).</li>
+          <li><strong>Sculpt in AR</strong> while watching the live 3D view beside this card.</li>
+          <li><strong>Publish on mobile</strong> to mint with GPS Proof-of-Location.</li>
+        </ol>
 
-        {qrDataUrl && (
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <div className="pair-qr-stage">
+          {qrDataUrl ? (
             <img
               src={qrDataUrl}
               alt="Pair QR Code"
-              style={{
-                width: 190,
-                height: 190,
-                borderRadius: 14,
-                border: '1px solid rgba(0, 245, 212, 0.35)'
-              }}
+              className="pair-qr-img"
             />
+          ) : (
+            <div className="pair-qr-skeleton">Generating QR…</div>
+          )}
+          <div className="pair-code-block">
+            <span className="pair-code-label">PAIR CODE</span>
+            <div className="pair-code-value mono">{pairCode || '......'}</div>
+            <div className="pair-code-actions">
+              <button
+                type="button"
+                className="btn btn-xs btn-outline"
+                disabled={!pairCode}
+                onClick={async () => {
+                  if (!pairCode) return;
+                  await copyToClipboard(pairCode);
+                  setCopiedCode(true);
+                  window.setTimeout(() => setCopiedCode(false), 1600);
+                }}
+              >
+                {copiedCode ? '✓ Copied' : '📋 Copy Code'}
+              </button>
+              <button type="button" className="btn btn-xs btn-ghost" onClick={startSession}>
+                🔄 New
+              </button>
+              <a
+                href={mobileLaunchUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-xs btn-outline"
+              >
+                📱 Open Link ↗
+              </a>
+            </div>
           </div>
-        )}
-
-        <div
-          className="mono"
-          style={{
-            textAlign: 'center',
-            fontSize: 26,
-            fontWeight: 800,
-            letterSpacing: '0.2em',
-            color: 'var(--accent)',
-            padding: '10px 0',
-            background: 'rgba(0, 245, 212, 0.08)',
-            borderRadius: 12,
-            border: '1px solid rgba(0, 245, 212, 0.28)'
-          }}
-        >
-          {pairCode || '......'}
         </div>
 
-        <button className="btn" onClick={startSession}>
-          <XeroIcon emoji="🔄" size={15} /> New Pair Code
-        </button>
+        <div className="pair-remote-section">
+          <button
+            type="button"
+            className="pair-remote-toggle"
+            aria-expanded={showRemoteControls || mobileConnected}
+            onClick={() => setShowRemoteControls((prev) => !prev)}
+          >
+            <span>🎛️ Remote Phone Brush Controls</span>
+            <span>{showRemoteControls || mobileConnected ? '▾' : '▸'}</span>
+          </button>
 
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-            Remote Phone Brush Controls
-          </div>
-          {pairNotice && (
-            <div
-              role="status"
-              aria-live="polite"
-              style={{
-                marginBottom: 8,
-                padding: '7px 10px',
-                borderRadius: 10,
-                background: 'rgba(255, 209, 102, 0.14)',
-                border: '1px solid rgba(255, 209, 102, 0.45)',
-                fontSize: 12,
-                color: '#ffe8a3',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6
-              }}
-            >
-              <XeroIcon emoji="🔒" size={13} />
-              <span>{pairNotice}</span>
+          {(showRemoteControls || mobileConnected) && (
+            <div className="pair-remote-body">
+              {pairNotice && (
+                <div role="status" aria-live="polite" className="pair-remote-notice">
+                  <XeroIcon emoji="🔒" size={13} />
+                  <span>{pairNotice}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                <button
+                  className={`btn btn-xs ${mobileState.tool === 'brush' ? 'btn-primary' : ''} ${!pairAvailability.brush.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.brush.usable || undefined}
+                  title={pairAvailability.brush.usable ? 'Switch phone to 3D Brush' : pairAvailability.brush.reason}
+                  onClick={() => runPairAction('brush', 'set_tool', { tool: 'brush' })}
+                >
+                  <XeroIcon emoji="🖌️" size={13} /> Brush
+                </button>
+                <button
+                  className={`btn btn-xs ${mobileState.tool === 'stack' ? 'btn-primary' : ''} ${!pairAvailability.stack.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.stack.usable || undefined}
+                  title={pairAvailability.stack.usable ? 'Switch phone to Stack mode' : pairAvailability.stack.reason}
+                  onClick={() => runPairAction('stack', 'set_tool', { tool: 'stack' })}
+                >
+                  <XeroIcon emoji="🧱" size={13} /> Stack
+                </button>
+                <button
+                  className={`btn btn-xs ${mobileState.tool === 'erase' ? 'btn-pink' : ''} ${!pairAvailability.erase.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.erase.usable || undefined}
+                  title={pairAvailability.erase.usable ? 'Switch phone to Erase mode' : pairAvailability.erase.reason}
+                  onClick={() => runPairAction('erase', 'set_tool', { tool: 'erase' })}
+                >
+                  <XeroIcon emoji="🧽" size={13} /> Erase
+                </button>
+                <button
+                  className={`btn btn-xs ${!pairAvailability.undo.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.undo.usable || undefined}
+                  title={pairAvailability.undo.usable ? 'Undo last block on phone' : pairAvailability.undo.reason}
+                  onClick={() => runPairAction('undo', 'undo')}
+                >
+                  <XeroIcon emoji="↩️" size={13} /> Undo
+                </button>
+                <button
+                  className={`btn btn-xs ${!pairAvailability.recenter.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.recenter.usable || undefined}
+                  title={pairAvailability.recenter.usable ? 'Recenter phone gyroscope aim' : pairAvailability.recenter.reason}
+                  onClick={() => runPairAction('recenter', 'recenter')}
+                >
+                  <XeroIcon emoji="🧭" size={13} /> Recenter
+                </button>
+                <button
+                  className={`btn btn-xs ${mobileState.mode === 'preview' ? 'btn-primary' : ''} ${!pairAvailability.preview.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.preview.usable || undefined}
+                  title={pairAvailability.preview.usable ? 'Toggle AR Preview on phone' : pairAvailability.preview.reason}
+                  onClick={() =>
+                    runPairAction('preview', 'set_mode', {
+                      mode: mobileState.mode === 'preview' ? 'draw' : 'preview'
+                    })
+                  }
+                >
+                  <XeroIcon emoji="👁️" size={13} /> AR Preview
+                </button>
+                <button
+                  className={`btn btn-xs btn-pink ${!pairAvailability.publish.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.publish.usable || undefined}
+                  title={pairAvailability.publish.usable ? 'Open Publish sheet on phone' : pairAvailability.publish.reason}
+                  onClick={() => runPairAction('publish', 'set_mode', { mode: 'publish' })}
+                >
+                  <XeroIcon emoji="🚀" size={13} /> Publish
+                </button>
+                <button
+                  className={`btn btn-xs btn-danger ${!pairAvailability.clear.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.clear.usable || undefined}
+                  title={pairAvailability.clear.usable ? 'Clear phone canvas' : pairAvailability.clear.reason}
+                  onClick={() => runPairAction('clear', 'clear')}
+                >
+                  <XeroIcon emoji="🗑️" size={13} /> Clear
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {GRAFFITI_PALETTE.map((hex) => (
+                  <button
+                    key={hex}
+                    className={`swatch ${mobileState.color === hex ? 'active' : ''} ${!pairAvailability.palette.usable ? 'is-unavailable' : ''}`}
+                    style={{ backgroundColor: hex }}
+                    aria-disabled={!pairAvailability.palette.usable || undefined}
+                    title={pairAvailability.palette.usable ? `Select color ${hex}` : pairAvailability.palette.reason}
+                    onClick={() => runPairAction('palette', 'set_color', { color: hex })}
+                  />
+                ))}
+              </div>
             </div>
           )}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-            <button
-              className={`btn ${mobileState.tool === 'brush' ? 'btn-primary' : ''} ${!pairAvailability.brush.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.brush.usable || undefined}
-              title={pairAvailability.brush.usable ? 'Switch phone to 3D Brush' : pairAvailability.brush.reason}
-              onClick={() => runPairAction('brush', 'set_tool', { tool: 'brush' })}
-            >
-              <XeroIcon emoji="🖌️" size={14} /> Brush
-            </button>
-            <button
-              className={`btn ${mobileState.tool === 'stack' ? 'btn-primary' : ''} ${!pairAvailability.stack.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.stack.usable || undefined}
-              title={pairAvailability.stack.usable ? 'Switch phone to Stack mode' : pairAvailability.stack.reason}
-              onClick={() => runPairAction('stack', 'set_tool', { tool: 'stack' })}
-            >
-              <XeroIcon emoji="🧱" size={14} /> Stack
-            </button>
-            <button
-              className={`btn ${mobileState.tool === 'erase' ? 'btn-pink' : ''} ${!pairAvailability.erase.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.erase.usable || undefined}
-              title={pairAvailability.erase.usable ? 'Switch phone to Erase mode' : pairAvailability.erase.reason}
-              onClick={() => runPairAction('erase', 'set_tool', { tool: 'erase' })}
-            >
-              <XeroIcon emoji="🧽" size={14} /> Erase
-            </button>
-            <button
-              className={`btn ${!pairAvailability.undo.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.undo.usable || undefined}
-              title={pairAvailability.undo.usable ? 'Undo last block on phone' : pairAvailability.undo.reason}
-              onClick={() => runPairAction('undo', 'undo')}
-            >
-              <XeroIcon emoji="↩️" size={14} /> Undo
-            </button>
-            <button
-              className={`btn ${!pairAvailability.recenter.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.recenter.usable || undefined}
-              title={pairAvailability.recenter.usable ? 'Recenter phone gyroscope aim' : pairAvailability.recenter.reason}
-              onClick={() => runPairAction('recenter', 'recenter')}
-            >
-              <XeroIcon emoji="🧭" size={14} /> Recenter
-            </button>
-            <button
-              className={`btn ${mobileState.mode === 'preview' ? 'btn-primary' : ''} ${!pairAvailability.preview.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.preview.usable || undefined}
-              title={pairAvailability.preview.usable ? 'Toggle AR Preview on phone' : pairAvailability.preview.reason}
-              onClick={() =>
-                runPairAction('preview', 'set_mode', {
-                  mode: mobileState.mode === 'preview' ? 'draw' : 'preview'
-                })
-              }
-            >
-              <XeroIcon emoji="👁️" size={14} /> AR Preview
-            </button>
-            <button
-              className={`btn btn-pink ${!pairAvailability.publish.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.publish.usable || undefined}
-              title={pairAvailability.publish.usable ? 'Open Publish sheet on phone' : pairAvailability.publish.reason}
-              onClick={() => runPairAction('publish', 'set_mode', { mode: 'publish' })}
-            >
-              <XeroIcon emoji="🚀" size={14} /> Open Publish
-            </button>
-            <button
-              className={`btn btn-danger ${!pairAvailability.clear.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!pairAvailability.clear.usable || undefined}
-              title={pairAvailability.clear.usable ? 'Clear phone canvas' : pairAvailability.clear.reason}
-              onClick={() => runPairAction('clear', 'clear')}
-            >
-              <XeroIcon emoji="🗑️" size={14} /> Clear
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {GRAFFITI_PALETTE.map((hex) => (
-              <button
-                key={hex}
-                className={`swatch ${mobileState.color === hex ? 'active' : ''} ${!pairAvailability.palette.usable ? 'is-unavailable' : ''}`}
-                style={{ backgroundColor: hex }}
-                aria-disabled={!pairAvailability.palette.usable || undefined}
-                title={pairAvailability.palette.usable ? `Select color ${hex}` : pairAvailability.palette.reason}
-                onClick={() => runPairAction('palette', 'set_color', { color: hex })}
-              />
-            ))}
-          </div>
         </div>
       </div>
 
@@ -351,7 +359,7 @@ export default function PairWorkbench3D({ inModal = false }) {
 
         <SculptureViewer3D
           voxels={liveVoxels}
-          height={inModal ? 480 : 540}
+          height={inModal ? 420 : 540}
           autoRotate={false}
           liveCursor={liveCursor}
           liveQuaternion={liveQuaternion}
