@@ -3202,7 +3202,29 @@ export default {
           });
         }
         if (custom.model_url) {
-          return Response.redirect(custom.model_url, 302);
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: custom.model_url,
+              'Cache-Control': 'no-store',
+              ...corsHeaders(request)
+            }
+          });
+        }
+        if (cid && /^[a-zA-Z0-9_-]{16,128}$/.test(cid)) {
+          const gwBase = String(cfg.ipfsGateway || 'https://gateway.pinata.cloud/ipfs').replace(
+            /\/+$/,
+            ''
+          );
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: `${gwBase}/${cid}`,
+              'Cache-Control': 'no-store',
+              'X-Model-Source': 'ipfs-redirect',
+              ...corsHeaders(request)
+            }
+          });
         }
         // NEVER silently fall through to a 1-voxel placeholder box for a custom 3D model!
         return new Response(
