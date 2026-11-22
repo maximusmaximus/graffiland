@@ -1945,12 +1945,37 @@ export default function DesktopHub({
           variant="desktop"
           parcel={visitedParcel.parcel}
           sculptures={visitedParcel.sculptures || []}
+          allParcels={parcels}
           user={user}
           ownedParcelIds={ownedParcelIds}
           config={config}
           userLocation={userLocation}
           loading={Boolean(visitedParcel.loading)}
           error={visitedParcel.error || ''}
+          onSelectNeighborParcel={async (neighborParcel) => {
+            if (!neighborParcel?.parcelId) return;
+            setVisitedParcel({
+              loading: true,
+              parcel: neighborParcel,
+              sculptures: [],
+              error: ''
+            });
+            try {
+              const res = await api.getLandDetail(neighborParcel.parcelId);
+              if (res?.parcel) {
+                setVisitedParcel({
+                  loading: false,
+                  parcel: res.parcel,
+                  sculptures: res.sculptures || [],
+                  error: ''
+                });
+              }
+            } catch {
+              setVisitedParcel((prev) =>
+                prev ? { ...prev, loading: false, error: 'Could not load neighboring land.' } : null
+              );
+            }
+          }}
           onSelectSculpture={(sc) => openSculpture(sc)}
           onOpenManageLand={(pid) => {
             setLandManageParcelId(pid || '');

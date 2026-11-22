@@ -3407,4 +3407,131 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
 
     cleanup();
   });
+
+  test('LandIsometricPreview & MobileIsometricMap render clickable directional edge-arrow labels for selectable neighboring lands without showing other lands wireframes', async () => {
+    const { default: LandIsometricPreview } = await loadJsxModule(
+      'client/src/components/LandIsometricPreview.jsx'
+    );
+    const { default: MobileIsometricMap } = await loadJsxModule(
+      'client/src/components/studio/MobileIsometricMap.jsx'
+    );
+
+    const squiggleLand = {
+      parcelId: 'GLAND-9R1652WM',
+      customName: 'Squiggle Bro Land',
+      geohash: '9r1652wm',
+      centerLat: 39.7302,
+      centerLng: -121.84067,
+      volume: {
+        parcelId: 'GLAND-9R1652WM',
+        centerLat: 39.7302,
+        centerLng: -121.84067,
+        widthMeters: 5,
+        depthMeters: 2.3,
+        heightMeters: 2,
+        rotationDeg: 0
+      },
+      sculptures: []
+    };
+    const twinPalms = {
+      parcelId: 'GLAND-TWINPALM',
+      customName: 'Twin Palms',
+      geohash: '9r1652wp',
+      centerLat: 39.73032,
+      centerLng: -121.84023,
+      volume: {
+        parcelId: 'GLAND-TWINPALM',
+        centerLat: 39.73032,
+        centerLng: -121.84023,
+        widthMeters: 12,
+        depthMeters: 10,
+        heightMeters: 8,
+        rotationDeg: 0
+      },
+      sculptures: []
+    };
+    const drugden = {
+      parcelId: 'GLAND-DRUGDEN1',
+      customName: 'DRUGDEN',
+      geohash: '9r1652w9',
+      centerLat: 39.7296,
+      centerLng: -121.8414,
+      volume: {
+        parcelId: 'GLAND-DRUGDEN1',
+        centerLat: 39.7296,
+        centerLng: -121.8414,
+        widthMeters: 10,
+        depthMeters: 10,
+        heightMeters: 6,
+        rotationDeg: 0
+      },
+      sculptures: []
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ shortLabel: '112 W 2nd St, Chico, CA' })
+    });
+
+    try {
+      // 1) LandIsometricPreview shows clickable directional edge-arrow pills for neighboring lands
+      let selectedInPreview = null;
+      const preview = RTL.render(
+        React.createElement(LandIsometricPreview, {
+          parcel: squiggleLand,
+          allParcels: [squiggleLand, twinPalms, drugden],
+          onSelectParcel: (p) => {
+            selectedInPreview = p;
+          }
+        })
+      );
+
+      await RTL.waitFor(() => {
+        const arrows = preview.getAllByTestId('neighbor-edge-arrow');
+        assert.equal(arrows.length, 2, 'Expected 2 neighbor edge-arrow labels');
+      });
+
+      const twinArrow = preview
+        .getAllByTestId('neighbor-edge-arrow')
+        .find((el) => el.getAttribute('data-parcel-id') === 'GLAND-TWINPALM');
+      assert.ok(twinArrow, 'Expected edge-arrow button pointing to Twin Palms');
+      assert.ok(twinArrow.textContent.includes('Twin Palms'));
+      assert.ok(['left', 'right', 'top', 'bottom'].includes(twinArrow.getAttribute('data-edge-side')));
+      assert.ok(twinArrow.querySelector('svg.neighbor-edge-arrow-svg'));
+
+      RTL.fireEvent.click(twinArrow);
+      assert.equal(selectedInPreview?.parcelId, 'GLAND-TWINPALM');
+      cleanup();
+
+      // 2) MobileIsometricMap shows clickable directional edge-arrow labels for neighboring lands
+      let selectedInMobile = null;
+      const mobileIso = RTL.render(
+        React.createElement(MobileIsometricMap, {
+          parcels: [squiggleLand, twinPalms, drugden],
+          sculptures: [],
+          selectedParcelId: 'GLAND-9R1652WM',
+          onSelectParcel: (p) => {
+            selectedInMobile = p;
+          }
+        })
+      );
+
+      await RTL.waitFor(() => {
+        const arrows = mobileIso.getAllByTestId('neighbor-edge-arrow');
+        assert.ok(arrows.length >= 1, 'Expected neighbor edge arrows on MobileIsometricMap');
+      });
+
+      const mobileTwinArrow = mobileIso
+        .getAllByTestId('neighbor-edge-arrow')
+        .find((el) => el.getAttribute('data-parcel-id') === 'GLAND-TWINPALM');
+      assert.ok(mobileTwinArrow, 'Expected Twin Palms edge arrow on MobileIsometricMap');
+      RTL.fireEvent.click(mobileTwinArrow);
+      assert.equal(selectedInMobile?.parcelId, 'GLAND-TWINPALM');
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

@@ -224,6 +224,12 @@ export function useARPreview({
         loadCustomModelObject(sc, resolveApiUrl)
           .then((loaded) => {
             if (cancelled || !loaded) return;
+            loaded.object3d.traverse((obj) => {
+              if (obj.isMesh || obj.isPoints || obj.isLine) {
+                obj.userData.sculpture = sc;
+                if (parentLand) obj.userData.parcel = parentLand;
+              }
+            });
             sub.add(loaded.object3d);
             const loadedCenter = new THREE.Vector3();
             const loadedSize = new THREE.Vector3();

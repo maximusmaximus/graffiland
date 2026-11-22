@@ -154,6 +154,9 @@ export async function pinSculptureToIpfs({
       preview.mime
     );
     modelPin = await pinFileToPinata(modelBuffer, `${sculptureId}-model.${modelExt}`, modelMime);
+    if (hasCustomBytes && modelPin?.cid) {
+      cacheLocalIpfsCid(modelPin.cid, modelBuffer, modelMime);
+    }
   } else if (CONFIG.ipfsApiUrl) {
     imagePin = await pinBufferToKubo(preview.buffer, `${sculptureId}-preview.png`);
     modelPin = await pinBufferToKubo(modelBuffer, `${sculptureId}-model.${modelExt}`);
@@ -201,6 +204,21 @@ export async function pinJsonDocumentToIpfs(obj, fileName = 'document.json') {
     return pinBufferToKubo(Buffer.from(JSON.stringify(obj, null, 2), 'utf8'), fileName);
   }
   return pinBufferToLocal(Buffer.from(JSON.stringify(obj, null, 2), 'utf8'), 'application/json');
+}
+
+export function cacheLocalIpfsCid(cid, buffer, ext = '') {
+  if (!/^[a-zA-Z0-9_-]{10,128}$/.test(String(cid || ''))) return false;
+  try {
+    fs.mkdirSync(CONFIG.ipfsStorageDir, { recursive: true });
+    const filePath = path.join(CONFIG.ipfsStorageDir, cid);
+    fs.writeFileSync(filePath, buffer);
+    if (ext) {
+      fs.writeFileSync(`${filePath}.meta.json`, JSON.stringify({ ext, size: buffer.length }));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readLocalIpfsCid(cid) {

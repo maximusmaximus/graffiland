@@ -164,6 +164,11 @@ export function serializeSculptureRow(
     { fallback: 'Creator', includeAt: true }
   );
 
+  const customModelCid = row.custom_model_cid || row.ipfs_model_cid || '';
+  const modelCacheTag = customModelCid
+    ? `?cid=${encodeURIComponent(String(customModelCid).slice(0, 16))}`
+    : `?rev=${Number(row.current_rev || 1)}`;
+
   return {
     id: row.id,
     title: row.title,
@@ -184,9 +189,9 @@ export function serializeSculptureRow(
             mimeType: row.custom_model_mime || 'model/gltf-binary',
             sourceType: row.custom_model_source_type || 'ipfs',
             externalUrl: row.custom_model_url || '',
-            ipfsCid: row.custom_model_cid || row.ipfs_model_cid || '',
+            ipfsCid: customModelCid,
             ipfsUri: row.custom_model_uri || `ipfs://${row.ipfs_model_cid}`,
-            downloadUrl: `/api/sculptures/${row.id}/model`,
+            downloadUrl: `/api/sculptures/${row.id}/model${modelCacheTag}`,
             scale: effectiveScale,
             rotationY: Number(row.custom_model_rotation_y || 0),
             byteLength: Number(row.custom_model_bytes || 0)
@@ -195,7 +200,9 @@ export function serializeSculptureRow(
       : { customModel: null }),
     modelGlbUrl:
       isCustom3d && customFormat !== 'glb'
-        ? `/api/sculptures/${row.id}/model`
+        ? `/api/sculptures/${row.id}/model${modelCacheTag}`
+        : isCustom3d
+        ? `/api/sculptures/${row.id}/model.glb${modelCacheTag}`
         : `/api/sculptures/${row.id}/model.glb`,
     metadataUrl: `/api/sculptures/${row.id}/metadata.json`,
     lat: row.lat,

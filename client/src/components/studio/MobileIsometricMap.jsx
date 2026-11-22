@@ -25,7 +25,12 @@ import {
 } from '../../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects } from '../../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../../utils/map3dSculptureLayer.js';
+import {
+  buildNeighborArrowsSignature,
+  computeNeighborEdgeArrows
+} from '../../utils/neighborEdgeArrows.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
+import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 const OPENFREEMAP_LIBERTY_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -436,6 +441,9 @@ export default function MobileIsometricMap({
   const [liveZoom, setLiveZoom] = useState(19);
   const [hydrationVersion, setHydrationVersion] = useState(0);
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
+  const [neighborArrows, setNeighborArrows] = useState([]);
+  const [stageDims, setStageDims] = useState({ width: 360, height: 240 });
+  const neighborArrowsSigRef = useRef('');
   const threeLayerRef = useRef(null);
   const landLabelBtnRef = useRef(null);
   const calloutBtnMapRef = useRef(new Map());
@@ -479,6 +487,14 @@ export default function MobileIsometricMap({
       resolvedEntries[0] ||
       null,
     [effectiveSelectedId, resolvedEntries]
+  );
+
+  const otherEntries = useMemo(
+    () =>
+      resolvedEntries.filter(
+        (e) => e.parcel.parcelId && e.parcel.parcelId !== primaryEntry?.parcel?.parcelId
+      ),
+    [primaryEntry?.parcel?.parcelId, resolvedEntries]
   );
 
   // Merge cached full voxel arrays into sculptures so drawn objects render in full 3D inside their land
@@ -546,6 +562,7 @@ export default function MobileIsometricMap({
   const entriesRef = useRef(resolvedEntries);
   const effectiveSelectedIdRef = useRef(effectiveSelectedId);
   const primaryEntryRef = useRef(primaryEntry);
+  const otherEntriesRef = useRef(otherEntries);
   const hydratedSculpturesRef = useRef(hydratedSculptures);
   const selectedSculptureIdRef = useRef(selectedSculptureId);
   const userLocationRef = useRef(userLocation);
@@ -557,7 +574,8 @@ export default function MobileIsometricMap({
     entriesRef.current = resolvedEntries;
     effectiveSelectedIdRef.current = effectiveSelectedId;
     primaryEntryRef.current = primaryEntry;
-  }, [effectiveSelectedId, primaryEntry, resolvedEntries]);
+    otherEntriesRef.current = otherEntries;
+  }, [effectiveSelectedId, otherEntries, primaryEntry, resolvedEntries]);
   useEffect(() => {
     hydratedSculpturesRef.current = hydratedSculptures;
     selectedSculptureIdRef.current = selectedSculptureId;
@@ -597,82 +615,74 @@ export default function MobileIsometricMap({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const activeId = effectiveSelectedIdRef.current;
-    const list = entriesRef.current || [];
+    const primary = primaryEntryRef.current;
 
-    // Pass 1: Draw all prism wireframes first (non-selected then focused)
-    const ordered = [
-      ...list.filter((e) => e.parcel.parcelId !== activeId),
-      ...list.filter((e) => e.parcel.parcelId === activeId)
-    ];
-
+    // Pass 1: Draw ONLY the focused land wireframe (never draw neighboring lands' wireframe lines)
     const pendingLabels = [];
     let primaryGeom = null;
     let primaryOuterColor = '#00f5d4';
     let primaryInnerColor = '#eafffc';
 
-    for (const entry of ordered) {
-      const geom = computePrismScreenGeometry(map, maplibregl, entry.volume);
-      if (!geom) continue;
-      const isFocused = entry.parcel.parcelId === activeId;
-      const isFrozen = Boolean(entry.parcel?.frozen || entry.parcel?.settings?.frozen);
-      const isDormant = String(entry.parcel?.stewardStatus || '').toLowerCase() === 'dormant';
-      const simpleLabel = formatSimpleLandLabel(entry.parcel, showcaseModeRef.current ? null : entry.rankIndex);
-      const dims = `${formatCompactMeter(entry.volume.widthMeters)}×${formatCompactMeter(
-        entry.volume.depthMeters
-      )}×${formatCompactMeter(entry.volume.heightMeters)}m`;
-      const outerColor = isFocused
-        ? landSelectedRef.current && showcaseModeRef.current
-          ? '#ffd166'
-          : isFrozen
-          ? '#7dd3fc'
-          : '#00f5d4'
-        : isDormant
-          ? 'rgba(255, 62, 127, 0.85)'
-          : 'rgba(255, 183, 3, 0.85)';
-      const innerColor = isFocused
-        ? landSelectedRef.current && showcaseModeRef.current
-          ? '#fff3c4'
-          : isFrozen
-          ? '#e0f2fe'
-          : '#eafffc'
-        : '#fff3c4';
+    if (primary?.volume) {
+      const geom = computePrismScreenGeometry(map, maplibregl, primary.volume);
+      if (geom) {
+        const isFrozen = Boolean(primary.parcel?.frozen || primary.parcel?.settings?.frozen);
+        const simpleLabel = formatSimpleLandLabel(
+          primary.parcel,
+          showcaseModeRef.current ? null : primary.rankIndex
+        );
+        const dims = `${formatCompactMeter(primary.volume.widthMeters)}×${formatCompactMeter(
+          primary.volume.depthMeters
+        )}×${formatCompactMeter(primary.volume.heightMeters)}m`;
+        const outerColor =
+          landSelectedRef.current && showcaseModeRef.current
+            ? '#ffd166'
+            : isFrozen
+              ? '#7dd3fc'
+              : '#00f5d4';
+        const innerColor =
+          landSelectedRef.current && showcaseModeRef.current
+            ? '#fff3c4'
+            : isFrozen
+              ? '#e0f2fe'
+              : '#eafffc';
 
-      drawMobilePrismWireframe(ctx, geom, {
-        outerColor,
-        innerColor,
-        lineWidth: isFocused ? 2.2 : 1.4,
-        glowBlur: isFocused ? 13 : 6,
-        dashed: !isFocused,
-        showGroundHalo: isFocused
-      });
+        drawMobilePrismWireframe(ctx, geom, {
+          outerColor,
+          innerColor,
+          lineWidth: 2.2,
+          glowBlur: 13,
+          dashed: false,
+          showGroundHalo: true
+        });
 
-      if (isFocused) {
         primaryGeom = geom;
         primaryOuterColor = outerColor;
         primaryInnerColor = innerColor;
-      }
 
-      if (!showcaseModeRef.current || !isFocused) {
-        pendingLabels.push({
-          geom,
-          outerColor,
-          innerColor,
-          label: isFocused ? `${simpleLabel} · ${dims}` : simpleLabel,
-          liftPx: isFocused ? 20 : 16,
-          minY: 52,
-          isPrimary: Boolean(isFocused)
-        });
+        if (!showcaseModeRef.current) {
+          pendingLabels.push({
+            geom,
+            outerColor,
+            innerColor,
+            label: `${simpleLabel} · ${dims}`,
+            liftPx: 20,
+            minY: 52,
+            isPrimary: true
+          });
+        }
       }
     }
 
-    // Measure HUD controls inside the mobile map viewport so floating labels never collide with buttons
+    // Measure HUD controls inside the mobile map viewport so floating labels & neighbor arrows never collide
     const measuredHudRects = [];
     const stageEl = rootRef.current;
     if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
       const stageRect = stageEl.getBoundingClientRect();
       stageEl
-        .querySelectorAll('.mobile-iso-hud-left, .mobile-iso-hud-right, .mobile-iso-hud-bottom, .mobile-map-top-controls')
+        .querySelectorAll(
+          '.mobile-iso-fab-row, .mobile-iso-hud-left, .mobile-iso-hud-right, .mobile-iso-hud-bottom, .mobile-map-top-controls'
+        )
         .forEach((node) => {
           const r = node.getBoundingClientRect();
           if (r.width > 0 && r.height > 0) {
@@ -692,8 +702,7 @@ export default function MobileIsometricMap({
     });
     const placedRects = [];
 
-    // Pass 2: Draw primary land label first, then non-colliding neighbor labels strictly ON TOP of wireframes
-    pendingLabels.sort((a, b) => (a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1));
+    // Pass 2: Draw primary land label strictly ON TOP of its wireframe
     for (const item of pendingLabels) {
       drawFloatingLandLabel(ctx, item.geom, {
         ...item,
@@ -708,12 +717,13 @@ export default function MobileIsometricMap({
     if (showcaseModeRef.current) {
       const landBtn = landLabelBtnRef.current;
       if (primaryGeom) {
+        const approxW = landBtn?.offsetWidth || 168;
         const landBox = computeFloatingLandLabelBox(primaryGeom, {
           viewportWidth: w,
           liftPx: 20,
           minY: w < 520 ? 56 : 46,
           pillHeight: 28,
-          approxWidth: landBtn?.offsetWidth || 168
+          approxWidth: approxW
         });
         if (landBox) {
           drawFloatingCenterArrow(ctx, {
@@ -729,6 +739,12 @@ export default function MobileIsometricMap({
             landBtn.style.top = `${Math.round(landBox.y)}px`;
             landBtn.style.display = 'inline-flex';
           }
+          placedRects.push({
+            x: landBox.centerX - approxW / 2,
+            y: landBox.y,
+            w: approxW,
+            h: 30
+          });
         } else if (landBtn) {
           landBtn.style.display = 'none';
         }
@@ -757,6 +773,12 @@ export default function MobileIsometricMap({
       for (const c of callouts) {
         drawArtworkCalloutLeader(ctx, c);
         positionedIds.add(c.sculptureId);
+        placedRects.push({
+          x: c.x,
+          y: c.y,
+          w: c.width,
+          h: c.height || (w < 520 ? 36 : 42)
+        });
         const btn = calloutBtnMapRef.current.get(c.sculptureId);
         if (btn) {
           btn.style.left = `${c.x}px`;
@@ -774,25 +796,63 @@ export default function MobileIsometricMap({
         }
       }
     }
+
+    // Pass 4: Compute directional edge-arrow labels pointing to selectable neighboring lands
+    const prismAvoidRects = [];
+    if (primaryGeom) {
+      const pts = [...primaryGeom.bottom, ...primaryGeom.top];
+      const minX = Math.min(...pts.map((p) => p.x));
+      const maxX = Math.max(...pts.map((p) => p.x));
+      const minY = Math.min(...pts.map((p) => p.y));
+      const maxY = Math.max(...pts.map((p) => p.y));
+      if (Number.isFinite(minX) && Number.isFinite(maxX) && maxX > minX && maxY > minY) {
+        prismAvoidRects.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+      }
+    }
+    const nextArrows = primary?.volume
+      ? computeNeighborEdgeArrows({
+          focusedEntry: primary,
+          otherEntries: otherEntriesRef.current || [],
+          projectLngLat: (lng, lat) => map.project([lng, lat]),
+          viewportWidth: w,
+          viewportHeight: h,
+          bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
+          reservedRects: [...reservedRects, ...placedRects],
+          avoidRects: prismAvoidRects,
+          maxArrows: showcaseModeRef.current ? 2 : null
+        })
+      : [];
+    const nextSig = buildNeighborArrowsSignature(nextArrows);
+    if (nextSig !== neighborArrowsSigRef.current) {
+      neighborArrowsSigRef.current = nextSig;
+      setNeighborArrows(nextArrows);
+    }
   }, []);
 
   const syncMapSources = useCallback(() => {
     const map = mapRef.current;
     if (!map || !styleReadyRef.current) return;
 
-    const activeId = effectiveSelectedIdRef.current;
-    const entries = entriesRef.current || [];
-    const landFeatures = entries
+    const primary = primaryEntryRef.current;
+    // When focused on a land, NEVER render extrusion prisms or lines for other lands
+    const focusedEntries = primary ? [primary] : [];
+    const landFeatures = focusedEntries
       .map((entry) =>
         parcelVolumeToFeature(entry.parcel, entry.volume, {
-          isSelected: entry.parcel.parcelId === activeId
+          isSelected: true
         })
       )
       .filter(Boolean);
 
-    const parcelsWithVolumes = entries.map((e) => ({ ...e.parcel, volume: e.volume }));
+    const parcelsWithVolumes = focusedEntries.map((e) => ({ ...e.parcel, volume: e.volume }));
+    const focusedPid = primary?.parcel?.parcelId || '';
+    const focusedSculptures = focusedPid
+      ? (hydratedSculpturesRef.current || []).filter(
+          (s) => !s?.parcelId || s.parcelId === focusedPid
+        )
+      : hydratedSculpturesRef.current || [];
     const sc3d = buildSculptures3DGeoJson(
-      hydratedSculpturesRef.current || [],
+      focusedSculptures,
       selectedSculptureIdRef.current || '',
       parcelsWithVolumes
     );
@@ -808,7 +868,7 @@ export default function MobileIsometricMap({
     }
     if (threeLayerRef.current && typeof threeLayerRef.current.setData === 'function') {
       threeLayerRef.current.setData({
-        sculptures: hydratedSculpturesRef.current || [],
+        sculptures: focusedSculptures,
         parcels: parcelsWithVolumes,
         selectedSculptureId: selectedSculptureIdRef.current || ''
       });
@@ -1210,7 +1270,11 @@ export default function MobileIsometricMap({
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver !== 'function') return undefined;
-    const ro = new ResizeObserver(() => {
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setStageDims({ width: Math.round(rect.width), height: Math.round(rect.height) });
+      }
       const map = mapRef.current;
       if (!map) return;
       map.resize();
@@ -1222,6 +1286,35 @@ export default function MobileIsometricMap({
     ro.observe(el);
     return () => ro.disconnect();
   }, [drawWireframes, fitCameraToTarget]);
+
+  // Compute neighbor edge arrows for SVG fallback mode (and before initial WebGL paint)
+  useEffect(() => {
+    if (webglAvailable && mapReady) return;
+    if (!primaryEntry?.volume) {
+      if (neighborArrowsSigRef.current !== '') {
+        neighborArrowsSigRef.current = '';
+        setNeighborArrows([]);
+      }
+      return;
+    }
+    const vw = stageDims.width || 360;
+    const vh = stageDims.height || 240;
+    const reservedRects = buildDefaultHudReservedRects({ stageWidth: vw, stageHeight: vh });
+    const nextArrows = computeNeighborEdgeArrows({
+      focusedEntry: primaryEntry,
+      otherEntries,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      bearingDeg: liveBearing,
+      reservedRects,
+      maxArrows: showcaseMode ? 2 : null
+    });
+    const nextSig = buildNeighborArrowsSignature(nextArrows);
+    if (nextSig !== neighborArrowsSigRef.current) {
+      neighborArrowsSigRef.current = nextSig;
+      setNeighborArrows(nextArrows);
+    }
+  }, [webglAvailable, mapReady, primaryEntry, otherEntries, stageDims.width, stageDims.height, liveBearing, showcaseMode]);
 
   // Extra resize pulse when isFullExpanded toggles on mobile
   useEffect(() => {
@@ -1472,6 +1565,12 @@ export default function MobileIsometricMap({
           <span>{scaleBar.label}</span>
         </span>
       </div>
+
+      {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
+      <NeighborEdgeArrowsOverlay
+        arrows={neighborArrows}
+        onSelectParcel={onSelectParcel}
+      />
     </div>
   );
 }
