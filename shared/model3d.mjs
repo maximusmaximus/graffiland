@@ -125,6 +125,12 @@ function inspectGltfJsonStats(parsed) {
   const images = Array.isArray(parsed?.images) ? parsed.images : [];
   const extensionsUsed = Array.isArray(parsed?.extensionsUsed) ? parsed.extensionsUsed : [];
   let triangleCount = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
 
   for (const mesh of meshes) {
     for (const prim of mesh?.primitives || []) {
@@ -136,14 +142,43 @@ function inspectGltfJsonStats(parsed) {
         const count = Number(accessors[prim.attributes.POSITION].count || 0);
         triangleCount += mode === 4 ? Math.ceil(count / 3) : Math.max(0, count - 2);
       }
+      const posAcc =
+        prim?.attributes?.POSITION !== undefined ? accessors[prim.attributes.POSITION] : null;
+      if (Array.isArray(posAcc?.min) && Array.isArray(posAcc?.max) && posAcc.min.length >= 3 && posAcc.max.length >= 3) {
+        const [x0, y0, z0] = posAcc.min.map(Number);
+        const [x1, y1, z1] = posAcc.max.map(Number);
+        if ([x0, y0, z0, x1, y1, z1].every(Number.isFinite)) {
+          if (x0 < minX) minX = x0;
+          if (y0 < minY) minY = y0;
+          if (z0 < minZ) minZ = z0;
+          if (x1 > maxX) maxX = x1;
+          if (y1 > maxY) maxY = y1;
+          if (z1 > maxZ) maxZ = z1;
+        }
+      }
     }
+  }
+
+  let bbox = null;
+  if ([minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) {
+    const rawW = Math.max(0.01, maxX - minX);
+    const rawH = Math.max(0.01, maxY - minY);
+    const rawD = Math.max(0.01, maxZ - minZ);
+    const maxDim = Math.max(rawW, rawH, rawD, 0.001);
+    const autoFit = maxDim > 3.2 || maxDim < 0.28 ? 1.4 / maxDim : 1;
+    bbox = {
+      width: Math.round(Math.max(0.05, rawW * autoFit) * 10000) / 10000,
+      height: Math.round(Math.max(0.05, rawH * autoFit) * 10000) / 10000,
+      depth: Math.round(Math.max(0.05, rawD * autoFit) * 10000) / 10000
+    };
   }
 
   return {
     triangleCount,
     textureCount: Math.max(textures.length, images.length),
     hasDraco: extensionsUsed.includes('KHR_draco_mesh_compression'),
-    hasMeshopt: extensionsUsed.includes('EXT_meshopt_compression')
+    hasMeshopt: extensionsUsed.includes('EXT_meshopt_compression'),
+    ...(bbox ? { bbox } : {})
   };
 }
 
@@ -214,18 +249,38 @@ export function inspectCustomModelStats(format, bytes) {
   return { stats, error: null };
 }
 
-export function validateAnchorOffset(raw = {}) {
+export function validateAnchorOffset(raw = {}, { parcelVolume = null } = {}) {
   const src = /** @type {Record<string, any>} */ (raw && typeof raw === 'object' ? raw : {});
   const dx = Number(src.dx ?? 0);
   const dy = Number(src.dy ?? 0);
   const dz = Number(src.dz ?? 0);
   const yaw = Number(src.yaw ?? 0);
+  const hasScale = src.scale !== undefined && src.scale !== null && src.scale !== '';
+  const scale = hasScale ? Number(src.scale) : null;
   if (![dx, dy, dz, yaw].every(Number.isFinite)) {
     return { error: 'anchorOffset coordinates (dx, dy, dz, yaw) must be finite numbers.', offset: null };
   }
-  if (Math.abs(dx) > 20 || Math.abs(dz) > 20 || dy < -5 || dy > 30) {
+  if (hasScale && (!Number.isFinite(scale) || scale < 0.1 || scale > 60)) {
     return {
-      error: 'anchorOffset out of parcel landmark bounds (|dx|,|dz| <= 20m, -5m <= dy <= 30m).',
+      error: 'Artwork scale must be a finite number between 0.1 and 60.',
+      offset: null
+    };
+  }
+  const maxHoriz = parcelVolume
+    ? Math.max(
+        20,
+        Number(parcelVolume.widthMeters || 0) / 2 + 2,
+        Number(parcelVolume.depthMeters || 0) / 2 + 2
+      )
+    : 20;
+  const maxVert = parcelVolume
+    ? Math.max(30, Number(parcelVolume.heightMeters || 0) + 2)
+    : 30;
+  if (Math.abs(dx) > maxHoriz || Math.abs(dz) > maxHoriz || dy < -5 || dy > maxVert) {
+    return {
+      error: `anchorOffset out of parcel landmark bounds (|dx|,|dz| <= ${Math.round(
+        maxHoriz
+      )}m, -5m <= dy <= ${Math.round(maxVert)}m).`,
       offset: null
     };
   }
@@ -235,7 +290,8 @@ export function validateAnchorOffset(raw = {}) {
       dx: Math.round(dx * 1000) / 1000,
       dy: Math.round(dy * 1000) / 1000,
       dz: Math.round(dz * 1000) / 1000,
-      yaw: Math.round(yaw * 10000) / 10000
+      yaw: Math.round(yaw * 10000) / 10000,
+      ...(hasScale ? { scale: Math.round(scale * 10000) / 10000 } : {})
     }
   };
 }

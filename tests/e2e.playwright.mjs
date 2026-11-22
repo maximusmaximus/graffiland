@@ -1588,4 +1588,120 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(mobErrors, []);
     await mobCtx.close();
   });
+
+  test('Logged-in owner visiting ?sculpture=<id> can modify, scale, move (gently pushing sibling inside land bounds), block out-of-bounds scale, and remove artwork', async () => {
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: { email: 'sculpt-edit-e2e@graffiland.test', name: 'Sculpture Studio Owner' }
+      })
+    }).then((r) => r.json());
+    assert.ok(ownerAuth.token);
+
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({ username: 'sculpt_studio_owner', bio: '3D transform tester' })
+    });
+
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({
+        lat: 37.7832,
+        lng: -122.4112,
+        customName: 'Studio Bounds Park',
+        volume: {
+          centerLat: 37.7832,
+          centerLng: -122.4112,
+          widthMeters: 10,
+          depthMeters: 10,
+          heightMeters: 12,
+          rotationDeg: 0
+        }
+      })
+    }).then((r) => r.json());
+    const pid = claimRes.parcelId;
+    assert.ok(pid);
+
+    const createItem = async (title, dx) => {
+      const r = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(pid)}/sculptures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+        body: JSON.stringify({
+          title,
+          description: `${title} in Studio Bounds Park`,
+          anchorOffset: { dx, dy: 0, dz: 0, yaw: 0 },
+          voxels: [
+            { x: -0.5, y: 0, z: -0.5, color: '#00f5d4', material: 'neon' },
+            { x: 0.5, y: 1.0, z: 0.5, color: '#ffd166', material: 'matte' }
+          ]
+        })
+      }).then((res) => res.json());
+      return r.sculpture;
+    };
+
+    const mainArt = await createItem('Hero Pine', 0);
+    const neighborArt = await createItem('Side Lantern', 1.4);
+    assert.ok(mainArt?.id && neighborArt?.id);
+
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await ctx.addInitScript((token) => {
+      globalThis.localStorage.setItem('graffiland_jwt', token);
+    }, ownerAuth.token);
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    await page.goto(`${baseUrl}/?sculpture=${encodeURIComponent(mainArt.id)}`, {
+      waitUntil: 'networkidle'
+    });
+    await page.waitForSelector('[data-testid="sculpture-transform-studio"]', { timeout: 10000 });
+
+    // Scale up to 3.0x -> gently shifts Side Lantern inside land bounds without intersection
+    await page.locator('[data-testid="sculpture-scale-input"]').fill('3');
+    await page.waitForSelector('[data-testid="sculpture-placement-status"]');
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="sculpture-placement-status"]')
+          ?.textContent?.includes('Side Lantern'),
+      null,
+      { timeout: 10000 }
+    );
+
+    // Oversize to 15x -> blocked cleanly & Fit Max Safe restores valid placement
+    await page.locator('[data-testid="sculpture-scale-input"]').fill('15');
+    await page.waitForSelector('[data-testid="sculpture-placement-blocked"]');
+    assert.equal(await page.locator('[data-testid="sculpture-save-transform-btn"]').isDisabled(), true);
+    await page.locator('[data-testid="sculpture-scale-input"]').fill('3');
+    await page.waitForSelector('[data-testid="sculpture-placement-status"]');
+
+    // Save transform and verify persistence + pushed sibling strictly inside bounds
+    await page.locator('[data-testid="sculpture-save-transform-btn"]').click();
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="sculpture-scale-badge"]')
+          ?.textContent?.includes('3.00×'),
+      null,
+      { timeout: 10000 }
+    );
+
+    const sibCheck = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(neighborArt.id)}`).then((r) =>
+      r.json()
+    );
+    assert.ok(
+      sibCheck.sculpture.anchorOffset.dx > 2.0 && sibCheck.sculpture.anchorOffset.dx <= 4.5,
+      `Expected pushed sibling inside land bounds, got dx=${sibCheck.sculpture.anchorOffset.dx}`
+    );
+
+    // Two-step Remove Artwork closes modal cleanly and removes it from backend
+    await page.locator('[data-testid="sculpture-remove-btn"]').click();
+    await page.locator('[data-testid="sculpture-confirm-remove-btn"]').click();
+    await page.waitForSelector('[data-testid="sculpture-modal"]', { state: 'detached', timeout: 10000 });
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
 });

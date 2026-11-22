@@ -6,6 +6,7 @@ import {
   computeArLandPrismLocalGeometry,
   findNearbyCameraLands
 } from '../utils/arLandHelpers.js';
+import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { groupNearestLandsWithSculptures } from '../utils/landMapHelpers.js';
 import {
@@ -295,9 +296,15 @@ export function useARPreview({
       const ax = Number(sc.anchorOffset?.dx || 0);
       const ay = Number(sc.anchorOffset?.dy || 0);
       const az = Number(sc.anchorOffset?.dz || 0);
-      const ayaw = Number(sc.anchorOffset?.yaw || 0);
+      const ayaw = yawToRadians(sc.anchorOffset?.yaw || 0);
       if (Number.isFinite(ayaw) && ayaw !== 0) {
         sub.rotation.y = ayaw;
+      }
+      if (sc.modelType !== 'custom-3d') {
+        const scScale = extractSculptureScale(sc);
+        if (scScale !== 1) {
+          sub.scale.setScalar(scScale);
+        }
       }
       sub.position.set(
         offset.east * clampFactor + ax,

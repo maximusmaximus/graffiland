@@ -2987,4 +2987,164 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('SculptureModal exposes Modify, Scale, Move & Remove studio for logged-in owners with live sibling push and bounds guard', async () => {
+    const { default: SculptureModal } = await loadJsxModule('client/src/components/SculptureModal.jsx');
+    const scTree = {
+      id: 'sc-tree-modal',
+      parcelId: 'GLAND-9R1652RD',
+      parcelName: 'DRUGDEN',
+      landDisplayName: 'DRUGDEN',
+      title: 'Christmas Tree',
+      description: 'Holiday centerpiece',
+      creatorSub: 'google:owner-99',
+      ownerAddress: '0x0000000000000000000000000000000000000099',
+      recipientAddress: '0x0000000000000000000000000000000000000099',
+      modelType: 'custom-3d',
+      scale: 1,
+      customModel: { format: 'glb', scale: 1, rotationY: 0 },
+      meshStats: { bbox: { width: 2, height: 3, depth: 2 } },
+      lat: 39.72836,
+      lng: -121.83889,
+      anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, scale: 1 },
+      polScore: 95,
+      currentRev: 1,
+      chain: { chainName: 'Robinhood Chain Testnet', chainId: 46630, tokenId: '8', royaltyPercent: 5 },
+      ipfs: { metadataUri: 'ipfs://QmMeta', gatewayUrl: '' },
+      viewerIsLandOwner: true
+    };
+    const scGift = {
+      id: 'sc-gift-sibling',
+      parcelId: 'GLAND-9R1652RD',
+      title: 'Wrapped Gift',
+      modelType: 'custom-3d',
+      scale: 1,
+      customModel: { format: 'glb', scale: 1, rotationY: 0 },
+      meshStats: { bbox: { width: 2, height: 2, depth: 2 } },
+      lat: 39.72836,
+      lng: -121.83889,
+      anchorOffset: { dx: 2.3, dy: 0, dz: 0, yaw: 0, scale: 1 }
+    };
+    const parcelPayload = {
+      parcel: {
+        parcelId: 'GLAND-9R1652RD',
+        customName: 'DRUGDEN',
+        displayName: 'DRUGDEN',
+        ownerSub: 'google:owner-99',
+        volume: {
+          centerLat: 39.72836,
+          centerLng: -121.83889,
+          widthMeters: 10,
+          depthMeters: 10,
+          heightMeters: 12,
+          rotationDeg: 0
+        }
+      },
+      sculptures: [scTree, scGift]
+    };
+
+    const origFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      calls.push({ url: u, method: opts.method || 'GET', body: opts.body });
+      if (u.includes('/api/lands/GLAND-9R1652RD')) {
+        return { ok: true, status: 200, json: async () => parcelPayload };
+      }
+      if (u.includes('/api/sculptures/sc-tree-modal') && opts.method === 'PUT') {
+        const body = JSON.parse(opts.body || '{}');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sculpture: { ...scTree, title: body.title, scale: body.scale, anchorOffset: body.anchorOffset },
+            pushedSiblings: [{ id: scGift.id, title: scGift.title, dx: 3.9, dy: 0, dz: 0 }]
+          })
+        };
+      }
+      if (u.includes('/api/sculptures/sc-tree-modal') && opts.method === 'DELETE') {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      if (u.includes('/api/sculptures/sc-tree-modal') && (!opts.method || opts.method === 'GET')) {
+        return { ok: true, status: 200, json: async () => ({ sculpture: scTree }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ revisions: [] }) };
+    };
+
+    try {
+      // 1) Logged-out guest sees Sign In bar and NO transform studio
+      const guest = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: scTree,
+          user: null,
+          config: null,
+          onRequestLogin: () => {},
+          onClose: () => {}
+        })
+      );
+      assert.ok(guest.getByTestId('sculpture-guest-signin-bar'));
+      assert.equal(guest.queryByTestId('sculpture-transform-studio'), null);
+      cleanup();
+
+      // 2) Logged-in owner sees Modify/Scale/Move/Remove studio immediately below 3D viewer
+      let deletedId = '';
+      const owner = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: scTree,
+          user: { id: 'google:owner-99', walletAddress: '0x0000000000000000000000000000000000000099' },
+          config: null,
+          onSculptureUpdated: () => {},
+          onSculptureDeleted: (id) => {
+            deletedId = id;
+          },
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(owner.getByTestId('sculpture-transform-studio'));
+        assert.ok(owner.getByText(/1 other placed item untouched/i));
+      });
+
+      // Scale up to 2.8x -> pushes Wrapped Gift gently inside bounds
+      RTL.fireEvent.change(owner.getByTestId('sculpture-scale-input'), { target: { value: '2.8' } });
+      await RTL.waitFor(() => {
+        assert.ok(owner.getByTestId('sculpture-placement-status').textContent.includes('Wrapped Gift'));
+      });
+
+      // Oversize to 12x -> blocked cleanly & Fit Max Safe restores valid scale
+      RTL.fireEvent.change(owner.getByTestId('sculpture-scale-input'), { target: { value: '12' } });
+      await RTL.waitFor(() => {
+        assert.ok(owner.getByTestId('sculpture-placement-blocked'));
+      });
+      assert.equal(owner.getByTestId('sculpture-save-transform-btn').disabled, true);
+      RTL.fireEvent.click(owner.getByTestId('sculpture-fit-max-scale-btn'));
+      await RTL.waitFor(() => {
+        assert.equal(owner.queryByTestId('sculpture-placement-blocked'), null);
+        assert.equal(owner.getByTestId('sculpture-save-transform-btn').disabled, false);
+      });
+
+      // Save artwork changes -> PUT /api/sculptures/sc-tree-modal includes scale & anchorOffset
+      await RTL.act(async () => {
+        RTL.fireEvent.click(owner.getByTestId('sculpture-save-transform-btn'));
+      });
+      const putCall = calls.find((c) => c.method === 'PUT' && c.url.includes('/sc-tree-modal'));
+      assert.ok(putCall);
+      const putPayload = JSON.parse(putCall.body);
+      assert.ok(putPayload.scale > 1);
+      assert.ok(putPayload.anchorOffset);
+
+      // Two-step Remove Artwork -> calls DELETE and notifies parent
+      RTL.fireEvent.click(owner.getByTestId('sculpture-remove-btn'));
+      await RTL.act(async () => {
+        RTL.fireEvent.click(owner.getByTestId('sculpture-confirm-remove-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(deletedId, 'sc-tree-modal');
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

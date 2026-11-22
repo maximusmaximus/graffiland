@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
 import { buildVoxelGroup, disposeObject3D } from '../components/VoxelEngine3D.js';
 import {
   enforceCrispTexturesAndShading,
@@ -94,11 +95,12 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
   const anchorDx = Number.isFinite(Number(off.dx)) ? Number(off.dx) : 0;
   const anchorDy = Number.isFinite(Number(off.dy)) ? Math.max(0, Number(off.dy)) : 0;
   const anchorDz = Number.isFinite(Number(off.dz)) ? Number(off.dz) : 0;
-  const yawRad = Number.isFinite(Number(off.yaw)) ? Number(off.yaw) : 0;
+  const yawRad = yawToRadians(off.yaw || 0);
+  const userScale = extractSculptureScale(sc);
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
 
-  let scale = Math.max(1, 7.2 / maxObjDim);
+  let scale = Math.max(0.05, Math.max(1, 7.2 / maxObjDim) * userScale);
   let altitudeMeters = baseAlt + anchorDy;
 
   if (hasVol) {
@@ -109,22 +111,30 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
     const innerD = volD / 1.2;
     const innerH = volH / 1.2;
 
-    const maxFitScale = Math.min(innerW / safeSizeX, innerD / safeSizeZ, innerH / safeSizeY);
+    const innerMaxFitScale = Math.min(innerW / safeSizeX, innerD / safeSizeZ, innerH / safeSizeY);
+    const fullVolMaxFitScale = Math.min(volW / safeSizeX, volD / safeSizeZ, volH / safeSizeY);
     const targetSpan = Math.min(Math.max(7.2, Math.min(innerW, innerD) * 0.62), 24);
-    const desiredScale = targetSpan / maxObjDim;
+    const baselineScale =
+      Number.isFinite(innerMaxFitScale) && innerMaxFitScale > 0
+        ? Math.min(targetSpan / maxObjDim, innerMaxFitScale)
+        : targetSpan / maxObjDim;
 
-    if (Number.isFinite(maxFitScale) && maxFitScale > 0) {
-      scale = Math.min(desiredScale, maxFitScale);
+    if (Math.abs(userScale - 1) <= 1e-4) {
+      scale = baselineScale;
     } else {
-      scale = desiredScale;
+      const scaled = baselineScale * userScale;
+      scale =
+        Number.isFinite(fullVolMaxFitScale) && fullVolMaxFitScale > 0
+          ? Math.min(scaled, fullVolMaxFitScale)
+          : scaled;
     }
 
     const renderedH = safeSizeY * scale;
-    const isObjectFittedParcel = volH <= renderedH * 1.45;
+    const isObjectFittedParcel = Math.abs(userScale - 1) <= 1e-4 && anchorDy === 0 && volH <= renderedH * 1.45;
     if (isObjectFittedParcel) {
       altitudeMeters = baseAlt + Math.max(0, (volH - renderedH) / 2);
     } else {
-      altitudeMeters = baseAlt + anchorDy;
+      altitudeMeters = baseAlt + Math.min(anchorDy, Math.max(0, volH - renderedH));
     }
   }
 
@@ -171,7 +181,7 @@ function buildSculptureSignature(sc, parcelVolume) {
     cm.format || '',
     cm.downloadUrl || sc?.modelGlbUrl || '',
     cm.ipfsCid || '',
-    cm.scale ?? 1,
+    extractSculptureScale(sc),
     cm.rotationY ?? 0,
     sc?.lat ?? '',
     sc?.lng ?? '',
@@ -394,7 +404,7 @@ export function createSculptureThreeLayer({
       entries.set(scId, entry);
 
       if (isCustom3d) {
-        loadCustomModelObject(sc, resolveUrlFn, { maxAnisotropy })
+        loadCustomModelObject(sc, resolveUrlFn, { maxAnisotropy, applyCustomScale: false })
           .then((loaded) => {
             if (!loaded || disposed || entry.cancelled) {
               if (loaded?.object3d) disposeObject3D(loaded.object3d);
