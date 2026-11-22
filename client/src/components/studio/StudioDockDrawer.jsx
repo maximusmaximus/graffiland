@@ -1,283 +1,196 @@
 import React from 'react';
-import { GRAFFITI_PALETTE } from '../VoxelEngine3D.js';
+import {
+  BLOCK_SIZE_PRESETS,
+  STANDARD_COLOR_PRESETS,
+  normalizeBlockScale
+} from '../../../../shared/voxelStroke.mjs';
 import XeroIcon from '../XeroIcon.jsx';
 
+const REACH_PRESETS = [1.2, 1.8, 2.4, 3.0];
+
+/**
+ * Bottom-right Brush & Pencil Options Palette.
+ * Core studio/canvas features live in the bottom-center swipe menu (ToolCarouselBar),
+ * while this dedicated palette exposes block size, preset standard colors, material finish,
+ * reach distance, and quick switching between Brush (connected strokes) and Pencil (single tap).
+ */
 export default function StudioDockDrawer({
-  quickSculpt,
   dockOpen,
   onToggleDock,
-  paletteOpen,
-  onTogglePalette,
   mode,
-  modeRef,
   tool,
-  setMode,
-  setTool,
+  onSelectDrawTool = null,
+  blockSize = 1,
+  setBlockSize = null,
   color,
   setColor,
   material,
   setMaterial,
   reachMeters,
-  setReachMeters,
-  occlusionEnabled,
-  setOcclusionEnabled,
-  draftsOpen,
-  activeDraftId,
-  draftStatusText,
-  pairedCode,
-  agentOpen,
-  agentSessionCode,
-  toolAvailability,
-  ensureToolUsable,
-  getDockHoldHandlers,
-  commitTransformAndExit,
-  onClearCanvas,
-  onToggleTransformLock,
-  onUndo,
-  onRecenterAim,
-  onOpenDraftsSheet,
-  onOpenPairModal,
-  onOpenAgentHandoff,
-  onOpenPublishSheet
+  setReachMeters
 }) {
+  const activeScale = normalizeBlockScale(blockSize);
+  const activeSizePreset =
+    BLOCK_SIZE_PRESETS.find((p) => Math.abs(p.scale - activeScale) < 0.05) || BLOCK_SIZE_PRESETS[1];
+  const activeToolLabel = tool === 'pencil' ? 'Pencil' : 'Brush';
+
   return (
     <>
       <button
-        className="floating-tools-toggle"
+        type="button"
+        className={`floating-tools-toggle palette-fab-btn ${dockOpen ? 'is-open' : ''}`}
+        data-testid="palette-options-toggle"
         onClick={onToggleDock}
-        aria-label="Toggle tools"
-        title="Tools"
+        aria-expanded={dockOpen}
+        aria-label={dockOpen ? 'Close brush & pencil options' : 'Brush & pencil options'}
+        title={`${activeToolLabel} options · Size ${activeSizePreset.label} · Color ${color}`}
       >
-        <XeroIcon emoji={dockOpen ? '➖' : '🎨'} size={22} />
+        {dockOpen ? (
+          <XeroIcon emoji="✖️" size={18} />
+        ) : (
+          <>
+            <XeroIcon emoji="🎨" size={22} />
+            <span
+              className="palette-fab-color-dot"
+              style={{ backgroundColor: color }}
+              aria-hidden="true"
+            />
+            <span className="palette-fab-size-tag" aria-hidden="true">
+              {activeSizePreset.label}
+            </span>
+          </>
+        )}
       </button>
 
-      {dockOpen && paletteOpen && mode === 'draw' && (
-        <div className="palette-strip hud-interactive">
-          {GRAFFITI_PALETTE.map((hex) => (
-            <button
-              key={hex}
-              className={`swatch ${color === hex ? 'active' : ''}`}
-              style={{ backgroundColor: hex }}
-              onClick={() => setColor(hex)}
-              aria-label={`Color ${hex}`}
-            />
-          ))}
-          <button
-            className="dock-btn"
-            style={{ width: 28, height: 28 }}
-            onClick={() =>
-              setMaterial((m) => (m === 'matte' ? 'neon' : m === 'neon' ? 'glass' : 'matte'))
-            }
-            title={`Material: ${material}`}
-          >
-            <XeroIcon emoji={material === 'neon' ? '✨' : material === 'glass' ? '🧊' : '🎨'} size={15} />
-          </button>
-          <button
-            className="dock-btn"
-            style={{ width: 28, height: 28 }}
-            onClick={() => setReachMeters((r) => (r >= 2.8 ? 1.2 : Number((r + 0.6).toFixed(1))))}
-            title={`Reach ${reachMeters}m`}
-          >
-            <XeroIcon emoji="🎯" size={15} />
-          </button>
-        </div>
-      )}
-
       {dockOpen && (
-        <div className="floating-dock hud-interactive">
-          <button
-            className={`dock-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''} ${!toolAvailability.brush.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.brush.usable || undefined}
-            onClick={() => {
-              if (!ensureToolUsable('brush')) return;
-              if (modeRef.current === 'transform') {
-                commitTransformAndExit('draw', 'brush');
-              } else {
-                setMode('draw');
-                setTool('brush');
-              }
-            }}
-            title={toolAvailability.brush.usable ? '3D Brush' : toolAvailability.brush.reason}
-          >
-            <XeroIcon emoji="🖌️" size={19} />
-          </button>
-          <button
-            className={`dock-btn ${mode === 'draw' && tool === 'stack' ? 'active' : ''} ${!toolAvailability.stack.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.stack.usable || undefined}
-            {...getDockHoldHandlers('stack')}
-            onClick={() => {
-              if (!ensureToolUsable('stack')) return;
-              if (modeRef.current === 'transform') {
-                commitTransformAndExit('draw', 'stack');
-              } else {
-                setMode('draw');
-                setTool('stack');
-              }
-            }}
-            aria-label="Stack (Hold to Draw)"
-            title={
-              toolAvailability.stack.usable
-                ? 'Stack Voxels — Tap to select, hold down to continuously stack & draw'
-                : toolAvailability.stack.reason
-            }
-          >
-            <XeroIcon emoji="🧱" size={19} />
-          </button>
-          <button
-            className={`dock-btn pink ${mode === 'draw' && tool === 'erase' ? 'active' : ''} ${!toolAvailability.erase.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.erase.usable || undefined}
-            {...getDockHoldHandlers('erase')}
-            onClick={() => {
-              if (!ensureToolUsable('erase')) return;
-              if (modeRef.current === 'transform') {
-                commitTransformAndExit('draw', 'erase');
-              } else {
-                setMode('draw');
-                setTool('erase');
-              }
-            }}
-            aria-label="Eraser (Hold to Erase)"
-            title={
-              toolAvailability.erase.usable
-                ? 'Eraser — Tap to select, hold down to continuously erase'
-                : toolAvailability.erase.reason
-            }
-          >
-            <XeroIcon emoji="🧽" size={19} />
-          </button>
-          <button
-            className={`dock-btn pink ${!toolAvailability.clear.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.clear.usable || undefined}
-            onClick={onClearCanvas}
-            aria-label="Trash Bin — Erase Current Canvas"
-            title={
-              toolAvailability.clear.usable
-                ? 'Trash Bin — Erase Current Canvas'
-                : toolAvailability.clear.reason
-            }
-          >
-            <XeroIcon emoji="🗑️" size={19} />
-          </button>
-          {!quickSculpt && (
-            <button
-              className={`dock-btn check-btn ${mode === 'transform' ? 'active' : ''} ${!toolAvailability.transform.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.transform.usable || undefined}
-              onClick={onToggleTransformLock}
-              aria-label={
-                mode === 'transform'
-                  ? 'Confirm Transform & Back to Draw'
-                  : 'Lock Art to Scale & Transform'
-              }
-              title={
-                !toolAvailability.transform.usable
-                  ? toolAvailability.transform.reason
-                  : mode === 'transform'
-                  ? 'Check — Return to Drawing Mode'
-                  : 'Check — Lock Art, Scale & Transform'
-              }
-            >
-              <XeroIcon emoji="✅" size={19} />
-            </button>
-          )}
-          <button
-            className={`dock-btn ${paletteOpen ? 'active' : ''} ${!toolAvailability.palette.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.palette.usable || undefined}
-            onClick={() => {
-              if (!ensureToolUsable('palette')) return;
-              onTogglePalette();
-            }}
-            title={
-              toolAvailability.palette.usable ? 'Colors & Finish' : toolAvailability.palette.reason
-            }
-          >
-            <XeroIcon emoji="🎨" size={19} />
-          </button>
-          <button
-            className={`dock-btn ${!toolAvailability.undo.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.undo.usable || undefined}
-            onClick={onUndo}
-            title={toolAvailability.undo.usable ? 'Undo / Restore Clear' : toolAvailability.undo.reason}
-          >
-            <XeroIcon emoji="↩️" size={18} />
-          </button>
-          <button className="dock-btn" onClick={onRecenterAim} title="Recenter Aim">
-            <XeroIcon emoji="🧭" size={19} />
-          </button>
-          {!quickSculpt && (
-            <button
-              className={`dock-btn ${occlusionEnabled ? 'active' : ''} ${!toolAvailability.occlusion.usable ? 'is-unavailable' : ''}`}
-              aria-disabled={!toolAvailability.occlusion.usable || undefined}
-              onClick={() => {
-                if (!ensureToolUsable('occlusion')) return;
-                setOcclusionEnabled((v) => !v);
-              }}
-              title={
-                toolAvailability.occlusion.usable
-                  ? 'Toggle Foreground Occlusion'
-                  : toolAvailability.occlusion.reason
-              }
-              aria-label="Toggle Foreground Occlusion"
-            >
-              <XeroIcon emoji="🪞" size={19} />
-            </button>
-          )}
-          <button
-            className={`dock-btn ${mode === 'preview' ? 'active' : ''} ${!toolAvailability.preview.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.preview.usable || undefined}
-            onClick={() => {
-              if (!ensureToolUsable('preview')) return;
-              if (modeRef.current === 'transform') {
-                commitTransformAndExit('preview');
-              } else {
-                setMode((m) => (m === 'preview' ? 'draw' : 'preview'));
-              }
-            }}
-            title={
-              toolAvailability.preview.usable
-                ? 'AR Preview Nearby Sculptures'
-                : toolAvailability.preview.reason
-            }
-          >
-            <XeroIcon emoji="👁️" size={19} />
-          </button>
-          <button
-            className={`dock-btn ${draftsOpen || activeDraftId ? 'active' : ''}`}
-            onClick={onOpenDraftsSheet}
-            title={draftStatusText ? `Saved Drafts · ${draftStatusText}` : 'Saved Drafts'}
-            aria-label="Saved Drafts"
-          >
-            <XeroIcon emoji="💾" size={19} />
-          </button>
-          {!quickSculpt && (
-            <>
+        <div
+          className="brush-options-popover hud-interactive"
+          data-testid="brush-options-popup"
+          role="dialog"
+          aria-label="Brush & Pencil Options"
+        >
+          <div className="brush-opt-header">
+            <div className="brush-opt-tool-switch" role="group" aria-label="Draw mode">
               <button
-                className={`dock-btn ${pairedCode ? 'active' : ''}`}
-                onClick={onOpenPairModal}
-                title="Pair Desktop"
+                type="button"
+                className={`brush-opt-mode-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''}`}
+                data-testid="palette-select-brush"
+                onClick={() => onSelectDrawTool?.('brush')}
               >
-                <XeroIcon emoji="🔗" size={19} />
+                <XeroIcon emoji="🖌️" size={13} /> Brush
               </button>
               <button
-                className={`dock-btn ${agentOpen || agentSessionCode ? 'active' : ''} ${!toolAvailability.agent.usable ? 'is-unavailable' : ''}`}
-                aria-disabled={!toolAvailability.agent.usable || undefined}
-                onClick={onOpenAgentHandoff}
-                title={
-                  toolAvailability.agent.usable ? 'Copy Agent Code' : toolAvailability.agent.reason
-                }
-                aria-label="Copy Agent Code"
+                type="button"
+                className={`brush-opt-mode-btn ${mode === 'draw' && tool === 'pencil' ? 'active' : ''}`}
+                data-testid="palette-select-pencil"
+                onClick={() => onSelectDrawTool?.('pencil')}
               >
-                <XeroIcon emoji="📋" size={19} />
+                <XeroIcon emoji="✏️" size={13} /> Pencil
               </button>
-            </>
-          )}
-          <button
-            className={`dock-btn ${mode === 'publish' ? 'active' : ''} ${!toolAvailability.publish.usable ? 'is-unavailable' : ''}`}
-            aria-disabled={!toolAvailability.publish.usable || undefined}
-            onClick={onOpenPublishSheet}
-            title={toolAvailability.publish.usable ? 'Publish & Mint' : toolAvailability.publish.reason}
-          >
-            <XeroIcon emoji="🚀" size={19} />
-          </button>
+            </div>
+            <span className="brush-opt-mode-hint">
+              {tool === 'pencil' ? 'Tap for single blocks' : 'Connected 3D strokes'}
+            </span>
+          </div>
+
+          {/* Block Size Selector */}
+          <div className="brush-opt-section">
+            <div className="brush-opt-label-row">
+              <span>Block Size</span>
+              <strong className="mono">{activeSizePreset.hint}</strong>
+            </div>
+            <div className="brush-size-grid" role="group" aria-label="Block size presets">
+              {BLOCK_SIZE_PRESETS.map((preset) => {
+                const isSelected = Math.abs(preset.scale - activeScale) < 0.05;
+                const boxPx = Math.round(8 + preset.scale * 5);
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`brush-size-pill ${isSelected ? 'active' : ''}`}
+                    data-testid={`block-size-${preset.id}`}
+                    aria-pressed={isSelected}
+                    title={preset.hint}
+                    onClick={() => setBlockSize?.(preset.scale)}
+                  >
+                    <span
+                      className="brush-size-cube"
+                      style={{ width: boxPx, height: boxPx, backgroundColor: color }}
+                      aria-hidden="true"
+                    />
+                    <span className="brush-size-label">{preset.label}</span>
+                    <span className="brush-size-scale">{preset.scale}×</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Standard Preset Colors */}
+          <div className="brush-opt-section">
+            <div className="brush-opt-label-row">
+              <span>Preset Colors</span>
+              <span className="mono">{color}</span>
+            </div>
+            <div className="brush-color-grid" role="group" aria-label="Standard preset colors">
+              {STANDARD_COLOR_PRESETS.map((preset) => {
+                const isSelected = String(color || '').toLowerCase() === preset.hex.toLowerCase();
+                return (
+                  <button
+                    key={preset.hex}
+                    type="button"
+                    className={`swatch brush-color-swatch ${isSelected ? 'active' : ''}`}
+                    style={{ backgroundColor: preset.hex }}
+                    aria-label={`Color ${preset.name}`}
+                    aria-pressed={isSelected}
+                    title={`${preset.name} (${preset.hex})`}
+                    onClick={() => setColor?.(preset.hex)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Finish & Reach */}
+          <div className="brush-opt-footer-grid">
+            <div className="brush-opt-mini-group">
+              <span className="brush-opt-mini-label">Finish</span>
+              <div className="brush-opt-pill-row">
+                {[
+                  { id: 'matte', emoji: '🎨', label: 'Matte' },
+                  { id: 'neon', emoji: '✨', label: 'Neon' },
+                  { id: 'glass', emoji: '🧊', label: 'Glass' }
+                ].map((fin) => (
+                  <button
+                    key={fin.id}
+                    type="button"
+                    className={`brush-mini-pill ${material === fin.id ? 'active' : ''}`}
+                    aria-pressed={material === fin.id}
+                    onClick={() => setMaterial?.(fin.id)}
+                  >
+                    <XeroIcon emoji={fin.emoji} size={12} /> {fin.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="brush-opt-mini-group">
+              <span className="brush-opt-mini-label">Reach ({reachMeters}m)</span>
+              <div className="brush-opt-pill-row">
+                {REACH_PRESETS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    className={`brush-mini-pill ${Math.abs(Number(reachMeters) - r) < 0.15 ? 'active' : ''}`}
+                    aria-pressed={Math.abs(Number(reachMeters) - r) < 0.15}
+                    onClick={() => setReachMeters?.(r)}
+                  >
+                    {r}m
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </>

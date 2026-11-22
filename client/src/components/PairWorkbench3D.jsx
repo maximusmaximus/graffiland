@@ -1,9 +1,12 @@
 import QRCode from 'qrcode';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BLOCK_SIZE_PRESETS,
+  STANDARD_COLOR_PRESETS
+} from '../../../shared/voxelStroke.mjs';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { getMobileLaunchUrl, getWsUrl } from '../utils/device.js';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
-import { GRAFFITI_PALETTE } from './VoxelEngine3D.js';
 import XeroIcon from './XeroIcon.jsx';
 
 const PAIR_VOXELS_STORAGE_KEY = 'graffiland_last_pair_voxels_v1';
@@ -32,7 +35,12 @@ export default function PairWorkbench3D({ inModal = false }) {
   const [hasClearedBackup, setHasClearedBackup] = useState(false);
   const [liveCursor, setLiveCursor] = useState(null);
   const [liveQuaternion, setLiveQuaternion] = useState(null);
-  const [mobileState, setMobileState] = useState({ mode: 'draw', tool: 'brush', color: '#00f5d4' });
+  const [mobileState, setMobileState] = useState({
+    mode: 'draw',
+    tool: 'brush',
+    color: '#00f5d4',
+    blockSize: 1
+  });
   const [pairNotice, setPairNotice] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
   const [showRemoteControls, setShowRemoteControls] = useState(false);
@@ -77,11 +85,13 @@ export default function PairWorkbench3D({ inModal = false }) {
         } else if (msg.type === 'brush_state') {
           setLiveCursor(msg.cursor || null);
           setLiveQuaternion(msg.q || null);
-          setMobileState({
+          setMobileState((prev) => ({
+            ...prev,
             mode: msg.mode || 'draw',
             tool: msg.tool || 'brush',
-            color: msg.color || '#00f5d4'
-          });
+            color: msg.color || '#00f5d4',
+            ...(msg.blockSize != null ? { blockSize: Number(msg.blockSize) } : {})
+          }));
         }
       } catch {
         // ignore
@@ -112,6 +122,7 @@ export default function PairWorkbench3D({ inModal = false }) {
 
     return {
       brush: { usable: mobileConnected, reason: mobileConnected ? '' : connectReason },
+      pencil: { usable: mobileConnected, reason: mobileConnected ? '' : connectReason },
       stack: {
         usable: mobileConnected && hasBlocks,
         reason: !mobileConnected ? connectReason : !hasBlocks ? blockReason('stacking onto block faces') : ''
@@ -253,10 +264,18 @@ export default function PairWorkbench3D({ inModal = false }) {
                 <button
                   className={`btn btn-xs ${mobileState.tool === 'brush' ? 'btn-primary' : ''} ${!pairAvailability.brush.usable ? 'is-unavailable' : ''}`}
                   aria-disabled={!pairAvailability.brush.usable || undefined}
-                  title={pairAvailability.brush.usable ? 'Switch phone to 3D Brush' : pairAvailability.brush.reason}
+                  title={pairAvailability.brush.usable ? 'Switch phone to connected 3D Brush' : pairAvailability.brush.reason}
                   onClick={() => runPairAction('brush', 'set_tool', { tool: 'brush' })}
                 >
                   <XeroIcon emoji="🖌️" size={13} /> Brush
+                </button>
+                <button
+                  className={`btn btn-xs ${mobileState.tool === 'pencil' ? 'btn-primary' : ''} ${!pairAvailability.pencil.usable ? 'is-unavailable' : ''}`}
+                  aria-disabled={!pairAvailability.pencil.usable || undefined}
+                  title={pairAvailability.pencil.usable ? 'Switch phone to single-block Pencil' : pairAvailability.pencil.reason}
+                  onClick={() => runPairAction('pencil', 'set_tool', { tool: 'pencil' })}
+                >
+                  <XeroIcon emoji="✏️" size={13} /> Pencil
                 </button>
                 <button
                   className={`btn btn-xs ${mobileState.tool === 'stack' ? 'btn-primary' : ''} ${!pairAvailability.stack.usable ? 'is-unavailable' : ''}`}
@@ -320,15 +339,33 @@ export default function PairWorkbench3D({ inModal = false }) {
                 </button>
               </div>
 
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {GRAFFITI_PALETTE.map((hex) => (
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
+                {BLOCK_SIZE_PRESETS.map((preset) => (
                   <button
-                    key={hex}
-                    className={`swatch ${mobileState.color === hex ? 'active' : ''} ${!pairAvailability.palette.usable ? 'is-unavailable' : ''}`}
-                    style={{ backgroundColor: hex }}
+                    key={preset.id}
+                    type="button"
+                    className={`btn btn-xs ${Math.abs((mobileState.blockSize || 1) - preset.scale) < 0.05 ? 'btn-primary' : 'btn-outline'} ${!pairAvailability.palette.usable ? 'is-unavailable' : ''}`}
                     aria-disabled={!pairAvailability.palette.usable || undefined}
-                    title={pairAvailability.palette.usable ? `Select color ${hex}` : pairAvailability.palette.reason}
-                    onClick={() => runPairAction('palette', 'set_color', { color: hex })}
+                    title={pairAvailability.palette.usable ? `Block size ${preset.hint}` : pairAvailability.palette.reason}
+                    onClick={() => {
+                      setMobileState((prev) => ({ ...prev, blockSize: preset.scale }));
+                      runPairAction('palette', 'set_block_size', { blockSize: preset.scale });
+                    }}
+                  >
+                    {preset.label} ({preset.scale}×)
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {STANDARD_COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.hex}
+                    className={`swatch ${mobileState.color === preset.hex ? 'active' : ''} ${!pairAvailability.palette.usable ? 'is-unavailable' : ''}`}
+                    style={{ backgroundColor: preset.hex }}
+                    aria-disabled={!pairAvailability.palette.usable || undefined}
+                    title={pairAvailability.palette.usable ? `Select ${preset.name} (${preset.hex})` : pairAvailability.palette.reason}
+                    onClick={() => runPairAction('palette', 'set_color', { color: preset.hex })}
                   />
                 ))}
               </div>
