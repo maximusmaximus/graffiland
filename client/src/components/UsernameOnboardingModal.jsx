@@ -18,8 +18,8 @@ export default function UsernameOnboardingModal({
   checkUsernameFn = null,
   saveProfileFn = null
 }) {
-  const [usernameInput, setUsernameInput] = useState(() =>
-    suggestUsernameFromName(user?.name || '', user?.email || '')
+  const [usernameInput, setUsernameInput] = useState(
+    () => user?.username || suggestUsernameFromName(user?.name || '', user?.email || '')
   );
   const [bioInput, setBioInput] = useState(() => user?.bio || '');
   const [availability, setAvailability] = useState({

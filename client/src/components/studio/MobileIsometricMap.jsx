@@ -23,6 +23,7 @@ import {
   drawFloatingCenterArrow,
   drawFloatingLandLabel
 } from '../../utils/map3dLabelOverlay.js';
+import { buildDefaultHudReservedRects } from '../../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
 import XeroIcon from '../XeroIcon.jsx';
@@ -659,14 +660,48 @@ export default function MobileIsometricMap({
           innerColor,
           label: isFocused ? `${simpleLabel} · ${dims}` : simpleLabel,
           liftPx: isFocused ? 20 : 16,
-          minY: 48
+          minY: 52,
+          isPrimary: Boolean(isFocused)
         });
       }
     }
 
-    // Pass 2: Floating labels strictly ON TOP of all wireframes with thin arrow from land center
+    // Measure HUD controls inside the mobile map viewport so floating labels never collide with buttons
+    const measuredHudRects = [];
+    const stageEl = rootRef.current;
+    if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
+      const stageRect = stageEl.getBoundingClientRect();
+      stageEl
+        .querySelectorAll('.mobile-iso-hud-left, .mobile-iso-hud-right, .mobile-iso-hud-bottom, .mobile-map-top-controls')
+        .forEach((node) => {
+          const r = node.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            measuredHudRects.push({
+              x: r.left - stageRect.left,
+              y: r.top - stageRect.top,
+              w: r.width,
+              h: r.height
+            });
+          }
+        });
+    }
+    const reservedRects = buildDefaultHudReservedRects({
+      stageWidth: w,
+      stageHeight: h,
+      measuredRects: measuredHudRects
+    });
+    const placedRects = [];
+
+    // Pass 2: Draw primary land label first, then non-colliding neighbor labels strictly ON TOP of wireframes
+    pendingLabels.sort((a, b) => (a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1));
     for (const item of pendingLabels) {
-      drawFloatingLandLabel(ctx, item.geom, item);
+      drawFloatingLandLabel(ctx, item.geom, {
+        ...item,
+        stageWidth: w,
+        stageHeight: h,
+        reservedRects,
+        placedRects
+      });
     }
 
     // Pass 3 (Showcase Mode): Position clickable floating Land Label & Left/Right Side Artwork Labels + elbow pointers

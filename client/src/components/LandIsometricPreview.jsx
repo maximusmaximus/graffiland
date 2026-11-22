@@ -12,6 +12,7 @@ import {
 import { hasWebGLSupport, loadMapLibre } from '../utils/loadMapLibre.js';
 import { computePrismScreenGeometry } from '../utils/map3dProjection.js';
 import { drawFloatingLandLabel } from '../utils/map3dLabelOverlay.js';
+import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
@@ -493,7 +494,8 @@ export default function LandIsometricPreview({
     ctx.clearRect(0, 0, w, h);
 
     // Pass 1: Draw all wireframes first so floating labels sit strictly on top
-    const pendingLabels = [];
+    const secondaryLabels = [];
+    let primaryLabel = null;
 
     // 1) Other owned lands in subtle dashed amber so user sees spatial relationships
     for (const entry of otherEntriesRef.current || []) {
@@ -508,13 +510,14 @@ export default function LandIsometricPreview({
         glowBlur: 6,
         dashed: true
       });
-      pendingLabels.push({
+      secondaryLabels.push({
         geom,
         outerColor,
         innerColor,
         label: resolveLandDisplayName(entry.parcel, { defaultName: 'Virtual Land' }),
         liftPx: 18,
-        minY: 10
+        minY: 48,
+        isPrimary: false
       });
     }
 
@@ -536,20 +539,64 @@ export default function LandIsometricPreview({
           glowBlur: 14,
           showGroundHalo: true
         });
-        pendingLabels.push({
+        primaryLabel = {
           geom,
           outerColor,
           innerColor,
           label: `${isFrozenNow ? '❄️ ' : ''}${trimmed} · ${heightTag}`,
           liftPx: 22,
-          minY: 10
-        });
+          minY: 48,
+          isPrimary: true
+        };
       }
     }
 
-    // Pass 2: Floating labels on top of all wireframes with thin arrow from land center
-    for (const item of pendingLabels) {
-      drawFloatingLandLabel(ctx, item.geom, item);
+    // Measure actual HUD control boxes inside the map stage so floating labels NEVER overlap
+    // mode switchers, compass pills, 90° orbit chips, scale bar, or refit chip.
+    const measuredHudRects = [];
+    const stageEl = stageRef.current;
+    if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
+      const stageRect = stageEl.getBoundingClientRect();
+      const hudNodes = stageEl.querySelectorAll(
+        '.land-preview-mode-group, .land-preview-compass-group, .land-preview-scale, .land-preview-refit'
+      );
+      hudNodes.forEach((node) => {
+        const r = node.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          measuredHudRects.push({
+            x: r.left - stageRect.left,
+            y: r.top - stageRect.top,
+            w: r.width,
+            h: r.height
+          });
+        }
+      });
+    }
+    const reservedRects = buildDefaultHudReservedRects({
+      stageWidth: w,
+      stageHeight: h,
+      measuredRects: measuredHudRects
+    });
+    const placedRects = [];
+
+    // Pass 2: Primary land label placed first, then non-colliding secondary neighbor labels
+    if (primaryLabel) {
+      drawFloatingLandLabel(ctx, primaryLabel.geom, {
+        ...primaryLabel,
+        stageWidth: w,
+        stageHeight: h,
+        reservedRects,
+        placedRects
+      });
+    }
+    for (const item of secondaryLabels) {
+      drawFloatingLandLabel(ctx, item.geom, {
+        ...item,
+        stageWidth: w,
+        stageHeight: h,
+        reservedRects,
+        placedRects
+      });
     }
   }, []);
 
@@ -1035,66 +1082,67 @@ export default function LandIsometricPreview({
           />
         )}
 
-        {/* Top-Left: View Mode Switcher (Iso / Area / 2D) */}
-        <div className="land-preview-mode-group" role="group" aria-label="Preview map angle">
-          <button
-            type="button"
-            className={`land-preview-chip ${viewMode === 'isometric' ? 'is-active' : ''}`}
-            aria-pressed={viewMode === 'isometric'}
-            onClick={() => handleModeChange('isometric')}
-          >
-            🧊 Iso
-          </button>
-          <button
-            type="button"
-            className={`land-preview-chip ${viewMode === 'context' ? 'is-active' : ''}`}
-            aria-pressed={viewMode === 'context'}
-            title="Zoom out to see surrounding neighborhood, streets & nearby lands"
-            onClick={() => handleModeChange('context')}
-          >
-            🏙️ Area
-          </button>
-          <button
-            type="button"
-            className={`land-preview-chip ${viewMode === 'topdown' ? 'is-active' : ''}`}
-            aria-pressed={viewMode === 'topdown'}
-            title="North-up top-down footprint plan"
-            onClick={() => handleModeChange('topdown')}
-          >
-            🗺️ 2D
-          </button>
-        </div>
-
-        {/* Top-Right: Rotating North Compass Rose + 90° Isometric Orbit */}
-        <div className="land-preview-compass-group">
-          <button
-            type="button"
-            className="land-preview-compass"
-            aria-label={`Compass heading ${compass.label}. Click to reset isometric view`}
-            title={`Facing ${compass.label} (${compass.degrees}°) — click to reset isometric angle`}
-            onClick={handleResetCompass}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              style={{ transform: `rotate(${-liveBearing}deg)`, transition: 'transform 220ms ease' }}
-              aria-hidden="true"
+        {/* Non-overlapping Top HUD Bar: View Mode Switcher + Rotating Compass & 90° Orbit */}
+        <div className="land-preview-top-hud" data-testid="land-preview-top-hud">
+          <div className="land-preview-mode-group" role="group" aria-label="Preview map angle">
+            <button
+              type="button"
+              className={`land-preview-chip ${viewMode === 'isometric' ? 'is-active' : ''}`}
+              aria-pressed={viewMode === 'isometric'}
+              onClick={() => handleModeChange('isometric')}
             >
-              <polygon points="12,2 15.2,12 12,10.2 8.8,12" fill="#ff5e7e" />
-              <polygon points="12,22 15.2,12 12,13.8 8.8,12" fill="rgba(255,255,255,0.45)" />
-            </svg>
-            <span className="land-preview-compass-label">{compass.label}</span>
-          </button>
-          <button
-            type="button"
-            className="land-preview-chip"
-            aria-label="Rotate isometric view 90 degrees"
-            title="Orbit 90° around your land"
-            onClick={handleOrbit90}
-          >
-            ↻ 90°
-          </button>
+              🧊 Iso
+            </button>
+            <button
+              type="button"
+              className={`land-preview-chip ${viewMode === 'context' ? 'is-active' : ''}`}
+              aria-pressed={viewMode === 'context'}
+              title="Zoom out to see surrounding neighborhood, streets & nearby lands"
+              onClick={() => handleModeChange('context')}
+            >
+              🏙️ Area
+            </button>
+            <button
+              type="button"
+              className={`land-preview-chip ${viewMode === 'topdown' ? 'is-active' : ''}`}
+              aria-pressed={viewMode === 'topdown'}
+              title="North-up top-down footprint plan"
+              onClick={() => handleModeChange('topdown')}
+            >
+              🗺️ 2D
+            </button>
+          </div>
+
+          <div className="land-preview-compass-group">
+            <button
+              type="button"
+              className="land-preview-compass"
+              aria-label={`Compass heading ${compass.label}. Click to reset isometric view`}
+              title={`Facing ${compass.label} (${compass.degrees}°) — click to reset isometric angle`}
+              onClick={handleResetCompass}
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                style={{ transform: `rotate(${-liveBearing}deg)`, transition: 'transform 220ms ease' }}
+                aria-hidden="true"
+              >
+                <polygon points="12,2 15.2,12 12,10.2 8.8,12" fill="#ff5e7e" />
+                <polygon points="12,22 15.2,12 12,13.8 8.8,12" fill="rgba(255,255,255,0.45)" />
+              </svg>
+              <span className="land-preview-compass-label">{compass.label}</span>
+            </button>
+            <button
+              type="button"
+              className="land-preview-chip"
+              aria-label="Rotate isometric view 90 degrees"
+              title="Orbit 90° around your land"
+              onClick={handleOrbit90}
+            >
+              ↻ 90°
+            </button>
+          </div>
         </div>
 
         {/* Bottom-Left: Dynamic Geographic Metric Scale Bar */}

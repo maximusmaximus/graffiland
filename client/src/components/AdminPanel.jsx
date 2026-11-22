@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function AdminPanel({ user, config, onModerationChange, onSelectSculpture }) {
@@ -197,7 +198,18 @@ export default function AdminPanel({ user, config, onModerationChange, onSelectS
                     </div>
                   </td>
                   <td>
-                    <div>{item.creatorName}</div>
+                    <div>
+                      <UserHandleBadge
+                        user={{
+                          id: item.creatorSub,
+                          username: item.creatorUsername,
+                          creatorName: item.creatorName,
+                          avatarImage: item.creatorAvatar
+                        }}
+                        fallback="Creator"
+                        size="xs"
+                      />
+                    </div>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
                       {item.creatorEmail}
                     </div>

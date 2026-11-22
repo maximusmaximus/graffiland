@@ -6,10 +6,16 @@ import {
   buildObjectFittedLandVolume,
   buildParcelShareUrl,
   computeOrientedFootprintLngLat,
+  ensureLandVolumeFitsSculptures,
   resolveLandDisplayName,
   slugifyLandTitle,
   validateLandTitle
 } from '../landVolume.mjs';
+import {
+  resolveAuthorHandleForStorage,
+  resolvePublicUserHandle,
+  resolveSafeUserAvatar
+} from '../userDisplay.mjs';
 import { notifyAfterSculpturePublished } from '../notificationService.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
@@ -67,7 +73,7 @@ export async function listLandsWithCurations(db) {
   const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
   const settingRows = await db.all('SELECT * FROM land_settings').catch(() => []);
   const userRows = await db
-    .all("SELECT id, username FROM users WHERE username != ''")
+    .all('SELECT id, username, avatar_image, user_number FROM users')
     .catch(() => []);
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
@@ -77,7 +83,16 @@ export async function listLandsWithCurations(db) {
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
   const settingsMap = new Map((settingRows || []).map((s) => [s.parcel_id, s]));
-  const usernameMap = new Map((userRows || []).map((u) => [u.id, u.username || '']));
+  const userInfoMap = new Map(
+    (userRows || []).map((u) => [
+      u.id,
+      {
+        username: String(u.username || '').trim(),
+        avatarImage: resolveSafeUserAvatar(u.avatar_image || ''),
+        userNumber: Number(u.user_number || 0)
+      }
+    ])
+  );
 
   const allParcelIds = new Set([...scMap.keys(), ...lpMap.keys()]);
   const parcels = [];
@@ -105,17 +120,21 @@ export async function listLandsWithCurations(db) {
       }
     }
     let fittedFallbackVolume = null;
-    if (!vr && sc) {
-      const parcelScRows = await db
+    let parcelScRows = [];
+    if (sc) {
+      parcelScRows = await db
         .all(
-          `SELECT s.lat, s.lng, s.voxels_json, a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw
+          `SELECT s.lat, s.lng, s.voxels_json, s.parcel_id, s.geohash,
+                  a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+                  m.scale AS custom_model_scale
            FROM sculptures s
            LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+           LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
            WHERE s.parcel_id = ? AND s.hidden = 0`,
           [parcelId]
         )
         .catch(() => []);
-      if (parcelScRows && parcelScRows.length > 0) {
+      if (!vr && parcelScRows && parcelScRows.length > 0) {
         fittedFallbackVolume = buildMultiObjectFittedLandVolume({
           parcelId,
           geohash,
@@ -125,7 +144,7 @@ export async function listLandsWithCurations(db) {
       }
     }
 
-    const volume = vr
+    const rawVolume = vr
       ? {
           parcelId,
           geohash,
@@ -162,10 +181,37 @@ export async function listLandsWithCurations(db) {
         }
       : fittedFallbackVolume || buildDefaultVolumeFromBounds(bounds, parcelId, geohash);
 
+    const volume =
+      parcelScRows.length > 0
+        ? ensureLandVolumeFitsSculptures(rawVolume, parcelScRows, { paddingFraction: 0.1 })
+        : rawVolume;
+
     const stewardStatus = st?.status || 'awakened';
     const ownerSub = st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
     const stewardType =
       st?.steward_type || (String(ownerSub).startsWith('agent:') ? 'agent' : 'human');
+    const ownerInfo = userInfoMap.get(ownerSub) || null;
+    const firstSub = first?.creator_sub || lp?.first_claimant_sub || ownerSub;
+    const firstInfo = userInfoMap.get(firstSub) || ownerInfo;
+    const safeStewardName = resolvePublicUserHandle(
+      {
+        id: ownerSub,
+        username: ownerInfo?.username || '',
+        stewardName: st?.steward_name || first?.creator_name || '',
+        stewardType,
+        userNumber: ownerInfo?.userNumber || 0
+      },
+      { fallback: stewardType === 'agent' ? 'AI Steward' : 'Land Holder', includeAt: true }
+    );
+    const safeFirstClaimantName = resolvePublicUserHandle(
+      {
+        id: firstSub,
+        username: firstInfo?.username || '',
+        creatorName: first?.creator_name || st?.steward_name || '',
+        userNumber: firstInfo?.userNumber || 0
+      },
+      { fallback: 'Land Holder', includeAt: true }
+    );
 
     parcels.push({
       parcelId,
@@ -176,11 +222,14 @@ export async function listLandsWithCurations(db) {
       centerLng: volume?.centerLng ?? bounds.center[1],
       sculptureCount: Number(sc?.visible_count ?? lp?.sculpture_count ?? 0),
       firstClaimantAddress: first?.recipient_address || lp?.first_claimant_address || '',
-      firstClaimantName: first?.creator_name || st?.steward_name || '',
+      firstClaimantName: safeFirstClaimantName,
+      firstClaimantUsername: firstInfo?.username || '',
+      firstClaimantAvatar: firstInfo?.avatarImage || '',
       ownerSub,
       stewardSub: ownerSub,
-      stewardName: st?.steward_name || first?.creator_name || '',
-      stewardUsername: usernameMap.get(ownerSub) || '',
+      stewardName: safeStewardName,
+      stewardUsername: ownerInfo?.username || '',
+      stewardAvatar: ownerInfo?.avatarImage || '',
       stewardType,
       stewardStatus,
       firstSparkBoost: stewardStatus === 'dormant',
@@ -294,12 +343,19 @@ export async function getLandSettingsInternal(db, parcelId) {
 }
 
 function formatContributorRow(row) {
+  const username = String(row.contributor_username || '').trim();
+  const avatarImage = resolveSafeUserAvatar(row.contributor_avatar || '');
   return {
     id: row.id,
     parcelId: row.parcel_id,
     contributorSub: row.contributor_sub,
     email: row.contributor_email || '',
-    name: row.contributor_name || 'Artist',
+    username,
+    avatarImage,
+    name: resolvePublicUserHandle(
+      { id: row.contributor_sub, username, name: row.contributor_name },
+      { fallback: 'Artist', includeAt: true }
+    ),
     walletAddress: row.contributor_address || '',
     canEditSculptures: Boolean(row.can_edit_sculptures),
     createdAt: row.created_at,
@@ -310,7 +366,8 @@ function formatContributorRow(row) {
 async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
   const cleanId = normalizeParcelId(parcelId);
   const rows = await db.all(
-    `SELECT DISTINCT u.id AS userId, u.email, u.name, u.wallet_address AS walletAddress,
+    `SELECT DISTINCT u.id AS userId, u.email, u.username, u.avatar_image AS avatarImage,
+            u.user_number AS userNumber, u.wallet_address AS walletAddress,
             u.custom_payout_address AS customPayoutAddress
      FROM users u
      WHERE u.id != ?
@@ -330,15 +387,23 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
            WHERE p.parcel_id = ? AND p.user_id = u.id AND p.consumed = 1
          )
        )
-     ORDER BY u.name ASC`,
+     ORDER BY u.username ASC, u.created_at ASC`,
     [ownerSub, cleanId, cleanId, cleanId]
   );
-  return (rows || []).map((r) => ({
-    userId: r.userId,
-    email: r.email || '',
-    name: r.name || 'Visitor',
-    walletAddress: r.customPayoutAddress || r.walletAddress || ''
-  }));
+  return (rows || []).map((r) => {
+    const username = String(r.username || '').trim();
+    return {
+      userId: r.userId,
+      email: r.email || '',
+      username,
+      avatarImage: resolveSafeUserAvatar(r.avatarImage || ''),
+      name: resolvePublicUserHandle(
+        { id: r.userId, username, userNumber: r.userNumber },
+        { fallback: 'Visitor', includeAt: true }
+      ),
+      walletAddress: r.customPayoutAddress || r.walletAddress || ''
+    };
+  });
 }
 
 export async function listOwnerLandsAndSculptures(db, ownerUser) {
@@ -366,12 +431,16 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       COALESCE(l.layer_role, 'artist_work') AS layer_role,
       COALESCE(l.quest_id, '') AS layer_quest_id,
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
-      COALESCE(l.qual_contributor, 1) AS qual_contributor
+      COALESCE(l.qual_contributor, 1) AS qual_contributor,
+      COALESCE(cu.username, '') AS creator_username,
+      COALESCE(cu.avatar_image, '') AS creator_avatar,
+      COALESCE(cu.user_number, 0) AS creator_user_number
      FROM sculptures s
      LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     LEFT JOIN users cu ON cu.id = s.creator_sub
      ORDER BY s.created_at DESC`
   );
   const ownedSculptures = (allRows || []).filter(
@@ -415,7 +484,11 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     const cur = curationMap.get(pid);
     const settings = await getLandSettingsInternal(db, pid);
     const contribRows = await db.all(
-      'SELECT * FROM land_contributors WHERE parcel_id = ? ORDER BY created_at DESC',
+      `SELECT lc.*, COALESCE(u.username, '') AS contributor_username, COALESCE(u.avatar_image, '') AS contributor_avatar
+       FROM land_contributors lc
+       LEFT JOIN users u ON u.id = lc.contributor_sub
+       WHERE lc.parcel_id = ?
+       ORDER BY lc.created_at DESC`,
       [pid]
     );
     const eligibleVisitors = await findEligibleParcelVisitors(db, {
@@ -459,7 +532,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
             paddingFraction: 0.1
           })
         : null;
-    const volume = vr
+    const rawOwnerVolume = vr
       ? {
           parcelId: pid,
           geohash,
@@ -480,6 +553,11 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
               : fallbackFootprint?.ring || []
         }
       : fittedOwnerFallback || (bounds ? buildDefaultVolumeFromBounds(bounds, pid, geohash) : null);
+
+    const volume =
+      rawOwnerVolume && visibleOnLand.length > 0
+        ? ensureLandVolumeFitsSculptures(rawOwnerVolume, visibleOnLand, { paddingFraction: 0.1 })
+        : rawOwnerVolume;
 
     const visibleCount = visibleOnLand.length;
     parcels.push({
@@ -1264,7 +1342,7 @@ export async function applyCreateSculptureOnLand(
       title,
       description,
       ownerUser.id,
-      ownerUser.name,
+      resolveAuthorHandleForStorage(ownerUser, 'Creator'),
       ownerUser.email,
       ownerAddress,
       lat,
@@ -1391,7 +1469,7 @@ export async function applyCreateSculptureOnLand(
       sculptureId,
       sculptureTitle: title,
       creatorSub: ownerUser?.id || '',
-      creatorName: ownerUser?.name || 'An artist',
+      creatorName: resolveAuthorHandleForStorage(ownerUser, 'Creator'),
       awakenedParcel: false,
       wasPreviouslyEmpty: Number(visibleCntRow?.cnt || 0) <= 1
     });
@@ -1771,7 +1849,7 @@ export async function applyPublishOnBehalf(
       payload.title,
       payload.description,
       ownerUser.id,
-      ownerUser.name,
+      resolveAuthorHandleForStorage(ownerUser, 'Creator'),
       ownerUser.email,
       ownerAddress,
       locBundle.lat,
@@ -2037,9 +2115,14 @@ export async function listSculptureRevisions(db, { sculptureId }) {
   }
   const anchor = await db.get('SELECT * FROM sculpture_anchors WHERE sculpture_id = ?', [row.id]);
   const revRows = await db.all(
-    `SELECT * FROM sculpture_revisions
-     WHERE sculpture_id = ?
-     ORDER BY rev_num DESC
+    `SELECT sr.*,
+            COALESCE(u.username, '') AS editor_username,
+            COALESCE(u.avatar_image, '') AS editor_avatar,
+            COALESCE(u.user_number, 0) AS editor_user_number
+     FROM sculpture_revisions sr
+     LEFT JOIN users u ON u.id = sr.editor_sub
+     WHERE sr.sculpture_id = ?
+     ORDER BY sr.rev_num DESC
      LIMIT 30`,
     [row.id]
   );
@@ -2048,22 +2131,37 @@ export async function listSculptureRevisions(db, { sculptureId }) {
     parcelId: row.parcel_id,
     currentRev: Number(anchor?.current_rev || revRows?.[0]?.rev_num || 1),
     lastErc4906TxHash: anchor?.last_erc4906_tx_hash || '',
-    revisions: (revRows || []).map((r) => ({
-      id: r.id,
-      revNum: Number(r.rev_num),
-      editorSub: r.editor_sub,
-      editorName: r.editor_name || 'Artist',
-      editorRole: r.editor_role || 'owner',
-      modelType: r.model_type || 'voxel',
-      voxelCount: Number(r.voxel_count || 0),
-      title: r.title,
-      description: r.description,
-      ipfsMetadataCid: r.ipfs_metadata_cid,
-      ipfsModelCid: r.ipfs_model_cid,
-      ipfsImageCid: r.ipfs_image_cid,
-      changeSummary: r.change_summary || '',
-      createdAt: r.created_at
-    }))
+    revisions: (revRows || []).map((r) => {
+      const editorUsername = String(r.editor_username || '').trim();
+      const editorAvatar = resolveSafeUserAvatar(r.editor_avatar || '');
+      return {
+        id: r.id,
+        revNum: Number(r.rev_num),
+        editorSub: r.editor_sub,
+        editorUsername,
+        editorAvatar,
+        editorName: resolvePublicUserHandle(
+          {
+            id: r.editor_sub,
+            username: editorUsername,
+            editorName: r.editor_name,
+            editorRole: r.editor_role,
+            userNumber: r.editor_user_number
+          },
+          { fallback: 'Creator', includeAt: true }
+        ),
+        editorRole: r.editor_role || 'owner',
+        modelType: r.model_type || 'voxel',
+        voxelCount: Number(r.voxel_count || 0),
+        title: r.title,
+        description: r.description,
+        ipfsMetadataCid: r.ipfs_metadata_cid,
+        ipfsModelCid: r.ipfs_model_cid,
+        ipfsImageCid: r.ipfs_image_cid,
+        changeSummary: r.change_summary || '',
+        createdAt: r.created_at
+      };
+    })
   };
 }
 

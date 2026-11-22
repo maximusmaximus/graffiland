@@ -8,6 +8,7 @@ import {
   requestPasskeyAssertion
 } from '../utils/passkeyClient.js';
 import InfoTip from './InfoTip.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 function detectInitialViewportTab() {
@@ -388,13 +389,8 @@ export default function InfoTermsModal({
                 <div className="card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
                     <div>
-                      <div style={{ fontWeight: 700 }}>
-                        {user.name}{' '}
-                        {user.username && (
-                          <span className="badge teal" style={{ fontSize: 11, marginLeft: 4 }}>
-                            @{user.username}
-                          </span>
-                        )}
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                        <UserHandleBadge user={user} fallback="Creator" size="md" />
                       </div>
                       <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
                         {user.email}

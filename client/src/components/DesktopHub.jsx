@@ -32,6 +32,7 @@ import PlotVisitView from './PlotVisitView.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureModal from './SculptureModal.jsx';
 import TitleLandModal from './TitleLandModal.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const DESKTOP_SESSION_KEY = 'graffiland_desktop_session_v1';
@@ -427,11 +428,14 @@ export default function DesktopHub({
   const creatorLeaderboard = useMemo(() => {
     const byCreator = new Map();
     for (const sc of sculptures || []) {
-      const key = sc.creatorEmail || sc.creatorName || sc.recipientAddress || 'anonymous';
+      const key = sc.creatorSub || sc.creatorUsername || sc.recipientAddress || 'anonymous';
       if (!byCreator.has(key)) {
         byCreator.set(key, {
           key,
-          name: sc.creatorName || 'Street Artist',
+          profileId: sc.creatorUsername || sc.creatorSub || '',
+          username: sc.creatorUsername || '',
+          avatarImage: sc.creatorAvatar || '',
+          creatorSub: sc.creatorSub || '',
           sculptures: 0,
           voxels: 0,
           parcels: new Set()
@@ -1163,14 +1167,7 @@ export default function DesktopHub({
               onClick={() => setProfileHandle(user.username || user.id)}
               title="Open your public profile, edit @username, bio, icon & header banner"
             >
-              {user.avatarImage ? (
-                <img className="nav-profile-avatar" src={user.avatarImage} alt="" />
-              ) : (
-                <span className="nav-profile-default-badge" aria-hidden="true">
-                  {String(user.username || user.name || 'G').replace(/^@/, '').slice(0, 1).toUpperCase()}
-                </span>
-              )}{' '}
-              {user.username ? `@${user.username}` : user.name}
+              <UserHandleBadge user={user} fallback="Creator" size="sm" />
             </button>
           ) : (
             <button type="button" className="btn" onClick={() => setLoginOpen(true)}>
@@ -1420,9 +1417,21 @@ export default function DesktopHub({
                         <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left', marginTop: 2 }}>
                           {q.prompt}
                         </div>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
                           <span className="badge gold" style={{ fontSize: 10 }}>{getLiveLandName(q)}</span>
-                          <span className="badge" style={{ fontSize: 10 }}>🤖 {q.stewardName}</span>
+                          <span className="badge" style={{ fontSize: 10 }}>
+                            <UserHandleBadge
+                              user={{
+                                id: q.stewardSub,
+                                username: q.stewardUsername,
+                                stewardName: q.stewardName,
+                                stewardType: q.stewardType || 'agent',
+                                avatarImage: q.stewardAvatar
+                              }}
+                              fallback="AI Steward"
+                              size="xs"
+                            />
+                          </span>
                           {q.bountyEth > 0 && (
                             <span className="badge teal" style={{ fontSize: 10 }}>
                               🏆 {q.bountyEth} ETH Bounty
@@ -1468,8 +1477,23 @@ export default function DesktopHub({
                         <strong style={{ fontSize: 12.5 }}>{lst.sculptureTitle || lst.sculptureId}</strong>
                         <span className="badge teal" style={{ fontSize: 11 }}>{lst.priceEth} ETH</span>
                       </div>
-                      <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
-                        {getLiveLandName(lst)} · Seller: {lst.sellerName}
+                      <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span>{getLiveLandName(lst)} · Seller:</span>
+                        <UserHandleBadge
+                          user={{
+                            id: lst.sellerSub,
+                            username: lst.sellerUsername,
+                            sellerName: lst.sellerName,
+                            avatarImage: lst.sellerAvatar
+                          }}
+                          fallback="Seller"
+                          size="xs"
+                          onClick={
+                            lst.sellerUsername || lst.sellerSub
+                              ? () => setProfileHandle(lst.sellerUsername || lst.sellerSub)
+                              : null
+                          }
+                        />
                       </div>
                       {lst.splits && (
                         <div className="mono" style={{ fontSize: 10, color: 'var(--accent-gold)', marginTop: 4 }}>
@@ -1505,17 +1529,19 @@ export default function DesktopHub({
                     ? dualLeaders.humanArtists.map((h) => ({
                         key: h.userId,
                         profileId: h.username || h.userId,
-                        name: h.name,
+                        userId: h.userId,
                         username: h.username || '',
+                        avatarImage: h.avatarImage || '',
                         sculptures: h.sculptureCount,
                         parcelCount: h.parcelsVisited,
                         metaText: `${h.totalXp} XP · ${h.landsAwakened} awakened`
                       }))
                     : creatorLeaderboard.map((c) => ({
                         key: c.key,
-                        profileId: '',
-                        name: c.name,
-                        username: '',
+                        profileId: c.profileId || '',
+                        userId: c.creatorSub || '',
+                        username: c.username || '',
+                        avatarImage: c.avatarImage || '',
                         sculptures: c.sculptures,
                         parcelCount: c.parcelCount,
                         metaText: `${c.voxels.toLocaleString()} total 3D blocks`
@@ -1535,14 +1561,18 @@ export default function DesktopHub({
                         }
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                        <strong style={{ fontSize: 12.5 }}>
-                          #{idx + 1} {entry.name}{' '}
-                          {entry.username && (
-                            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                              @{entry.username}
-                            </span>
-                          )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, width: '100%' }}>
+                        <strong style={{ fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span>#{idx + 1}</span>
+                          <UserHandleBadge
+                            user={{
+                              id: entry.userId,
+                              username: entry.username,
+                              avatarImage: entry.avatarImage
+                            }}
+                            fallback="Creator"
+                            size="xs"
+                          />
                         </strong>
                         <span className="badge teal" style={{ fontSize: 10 }}>
                           {entry.sculptures} art · {entry.parcelCount} land
@@ -1617,9 +1647,19 @@ export default function DesktopHub({
                         {sc.description}
                       </div>
                     )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, width: '100%', marginTop: 4 }}>
-                      <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                        {sc.modelType === 'custom-3d' ? '3D File' : `${sc.voxelCount || 0} blocks`} · PoL {sc.polScore}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, width: '100%', marginTop: 4, flexWrap: 'wrap' }}>
+                      <span className="mono" style={{ fontSize: 10, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                        <UserHandleBadge
+                          user={{
+                            id: sc.creatorSub,
+                            username: sc.creatorUsername,
+                            creatorName: sc.creatorName,
+                            avatarImage: sc.creatorAvatar
+                          }}
+                          fallback="Creator"
+                          size="xs"
+                        />
+                        <span>· {sc.modelType === 'custom-3d' ? '3D File' : `${sc.voxelCount || 0} blocks`} · PoL {sc.polScore}</span>
                       </span>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button

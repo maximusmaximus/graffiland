@@ -33,9 +33,14 @@ import {
   copyToClipboard
 } from '../utils/clipboard.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
+import {
+  resolveAuthorHandleForStorage,
+  resolveSafeUserAvatar
+} from '../../../shared/userDisplay.mjs';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 async function switchOrAddRobinhoodNetwork(eth, chainInfo) {
@@ -102,7 +107,8 @@ export default function SculptureModal({
   const [parcelDetail, setParcelDetail] = useState(null);
   const [parcelSculptures, setParcelSculptures] = useState([]);
   const [studioOpen, setStudioOpen] = useState(true);
-  const [showLandBoundsPreview, setShowLandBoundsPreview] = useState(false);
+  const [showLandBoundsPreview, setShowLandBoundsPreview] = useState(true);
+  const [showGizmoHandles, setShowGizmoHandles] = useState(true);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
   const [showAllMetadata, setShowAllMetadata] = useState(false);
@@ -190,8 +196,15 @@ export default function SculptureModal({
         if (cancelled) return;
         if (res?.parcel) {
           setParcelDetail(res.parcel);
-          if (res.parcel.customName) {
-            setLandCustomName((prev) => prev || res.parcel.customName);
+          const resolvedName =
+            res.parcel.customName ||
+            resolveLandDisplayName(res.parcel, { defaultName: '' });
+          if (resolvedName) {
+            setLandCustomName((prev) => prev || resolvedName);
+          }
+          const resolvedNote = String(res.parcel.description || res.parcel.curationNote || '').trim();
+          if (resolvedNote) {
+            setLandCurationNote((prev) => prev || resolvedNote);
           }
           if (res.parcel.frozen !== undefined) {
             setParcelFrozen(Boolean(res.parcel.frozen));
@@ -927,38 +940,112 @@ export default function SculptureModal({
 
   const siblingCount = Math.max(0, placementItems.length - 1);
   const currentSavedScale = extractSculptureScale(sculpture);
+  const isCompactViewport = typeof window !== 'undefined' && window.innerWidth <= 640;
+
+  const handleGizmoTransformChange = (patch) => {
+    if (!patch || typeof patch !== 'object') return;
+    setShowLandBoundsPreview(true);
+    if (patch.scale !== undefined && Number.isFinite(Number(patch.scale))) {
+      setEditScale(Number(patch.scale));
+    }
+    if (
+      patch.dx !== undefined ||
+      patch.dy !== undefined ||
+      patch.dz !== undefined ||
+      patch.yaw !== undefined
+    ) {
+      setEditOffset((prev) => ({
+        dx: patch.dx !== undefined ? Number(patch.dx) : prev.dx,
+        dy: patch.dy !== undefined ? Number(patch.dy) : prev.dy,
+        dz: patch.dz !== undefined ? Number(patch.dz) : prev.dz,
+        yaw: patch.yaw !== undefined ? Number(patch.yaw) : prev.yaw
+      }));
+    }
+  };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="modal-card"
-        style={{ maxWidth: 800 }}
+        className="modal-card sculpture-modal-card"
+        style={{ maxWidth: 820 }}
         data-testid="sculpture-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header">
-          <h2 className="modal-title">
-            <XeroIcon emoji="🧊" size={24} />
-            {sculpture.title}
-          </h2>
-          <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
-            <XeroIcon emoji="❌" size={16} />
-          </button>
+        {/* Pinned Top 3D Model Window — Stays in view while modifiers scroll smoothly behind it */}
+        <div className="sculpture-modal-sticky-stage" data-testid="sculpture-sticky-stage">
+          <div className="modal-header sculpture-modal-header">
+            <div className="sculpture-modal-title-group">
+              <h2 className="modal-title">
+                <XeroIcon emoji="🧊" size={22} />
+                <span>{sculpture.title}</span>
+              </h2>
+              {(sculpture.creatorUsername || sculpture.creatorName) && (
+                <UserHandleBadge
+                  user={{
+                    id: sculpture.creatorSub,
+                    username: sculpture.creatorUsername,
+                    creatorName: sculpture.creatorName,
+                    avatarImage: sculpture.creatorAvatar
+                  }}
+                  fallback="Creator"
+                  size="xs"
+                />
+              )}
+            </div>
+            <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
+              <XeroIcon emoji="❌" size={16} />
+            </button>
+          </div>
+
+          <SculptureViewer3D
+            sculpture={sculpture}
+            voxels={sculpture.voxels || []}
+            height={isCompactViewport ? 224 : 284}
+            autoRotate
+            liveTransform={canModifySculpture ? viewerLiveTransform : null}
+            parcelVolume={placementVolume}
+            siblingBoxes={viewerSiblingBoxes}
+            showLandBounds={canModifySculpture && showLandBoundsPreview}
+            showEditGizmo={canModifySculpture && showGizmoHandles}
+            maxSafeScale={maxSafeScale}
+            moveRanges={moveRanges}
+            placementBlocked={Boolean(canModifySculpture && livePlacement && !livePlacement.ok)}
+            onModelBoundsMeasured={handleMeasuredBounds}
+            onTransformChange={canModifySculpture ? handleGizmoTransformChange : null}
+          />
+
+          {canModifySculpture && (
+            <div className="sculpture-sticky-toolbar">
+              <div className="sculpture-sticky-toggles">
+                <button
+                  type="button"
+                  className={`btn btn-xs ${showLandBoundsPreview ? 'btn-primary' : ''}`}
+                  data-testid="sculpture-land-preview-toggle"
+                  onClick={() => setShowLandBoundsPreview((v) => !v)}
+                  title="Toggle 3D Land Bounds & neighboring items preview"
+                >
+                  {showLandBoundsPreview ? '📦 Land Bounds: ON' : '📦 Land Bounds'}
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${showGizmoHandles ? 'btn-primary' : ''}`}
+                  data-testid="sculpture-gizmo-toggle"
+                  onClick={() => setShowGizmoHandles((v) => !v)}
+                  title="Toggle 3D drag bars & corner points on artwork"
+                >
+                  {showGizmoHandles ? '🎛️ 3D Bars & Points: ON' : '🎛️ 3D Bars & Points'}
+                </button>
+              </div>
+              <span className="mono sculpture-sticky-readout">
+                {Number(editScale || 1).toFixed(2)}× · X {Number(editOffset.dx || 0).toFixed(1)}m · Z{' '}
+                {Number(editOffset.dz || 0).toFixed(1)}m · {Math.round(Number(editOffset.yaw || 0))}°
+              </span>
+            </div>
+          )}
         </div>
 
-        <SculptureViewer3D
-          sculpture={sculpture}
-          voxels={sculpture.voxels || []}
-          height={310}
-          autoRotate
-          liveTransform={canModifySculpture ? viewerLiveTransform : null}
-          parcelVolume={placementVolume}
-          siblingBoxes={viewerSiblingBoxes}
-          showLandBounds={canModifySculpture && showLandBoundsPreview}
-          placementBlocked={Boolean(canModifySculpture && livePlacement && !livePlacement.ok)}
-          onModelBoundsMeasured={handleMeasuredBounds}
-        />
-
+        {/* Scrollable Modifiers & Details Body — Slides behind the pinned 3D model window */}
+        <div className="sculpture-modal-scroll-body" data-testid="sculpture-scroll-body">
         {/* Immediate Logged-In Artwork Studio (Modify, Scale, Move, Rotate, Hide & Remove) */}
         {canModifySculpture ? (
           <div className="card sculpture-transform-studio" data-testid="sculpture-transform-studio">
@@ -974,21 +1061,12 @@ export default function SculptureModal({
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <button
                   type="button"
-                  className={`btn btn-xs ${showLandBoundsPreview ? 'btn-primary' : ''}`}
-                  data-testid="sculpture-land-preview-toggle"
-                  onClick={() => setShowLandBoundsPreview((v) => !v)}
-                  title="Toggle 3D Land Bounds & neighboring items preview"
-                >
-                  {showLandBoundsPreview ? '📦 Land Bounds: ON' : '📦 Land Bounds View'}
-                </button>
-                <button
-                  type="button"
                   className="btn btn-xs"
                   data-testid="sculpture-studio-toggle"
                   aria-expanded={studioOpen}
                   onClick={() => setStudioOpen((v) => !v)}
                 >
-                  {studioOpen ? '▾ Hide Studio' : '▴ Open Studio'}
+                  {studioOpen ? '▾ Hide Sliders' : '▴ Open Sliders'}
                 </button>
               </div>
             </div>
@@ -2176,7 +2254,9 @@ export default function SculptureModal({
                       {
                         id: crypto.randomUUID(),
                         text: txt,
-                        authorName: user?.name || 'Land Holder',
+                        authorName: resolveAuthorHandleForStorage(user, 'Land Holder'),
+                        authorUsername: user?.username || '',
+                        authorAvatar: resolveSafeUserAvatar(user?.avatarImage || ''),
                         authorAddress: ownerAddr,
                         pinnedAt: nowIso,
                         updatedAt: nowIso
@@ -2220,6 +2300,7 @@ export default function SculptureModal({
               Locked to physical in-person mobile AR camera selection only. Neither desktop browsers nor our servers can decrypt past chat history or parcel-pinned IPFS batches.
             </span>
           </div>
+        </div>
         </div>
       </div>
     </div>

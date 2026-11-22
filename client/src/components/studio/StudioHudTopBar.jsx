@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import NotificationCenter from '../NotificationCenter.jsx';
+import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobilePairApprovalDropdown from './MobilePairApprovalDropdown.jsx';
 
@@ -126,16 +127,7 @@ export default function StudioHudTopBar({
             aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
             title="Open Profile, edit @username, bio, icon & header banner"
           >
-            {user.avatarImage ? (
-              <img className="nav-profile-avatar is-sm" src={user.avatarImage} alt="" />
-            ) : (
-              <span className="nav-profile-default-badge is-sm" aria-hidden="true">
-                {String(user.username || user.name || 'G').replace(/^@/, '').slice(0, 1).toUpperCase()}
-              </span>
-            )}
-            <span className="mobile-profile-pill-label">
-              {user.username ? `@${user.username}` : user.name}
-            </span>
+            <UserHandleBadge user={user} fallback="Creator" size="xs" />
           </button>
         ) : (
           <button

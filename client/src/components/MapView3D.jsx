@@ -31,6 +31,7 @@ import {
   drawFloatingLandLabel,
   getPrismLabelAnchor
 } from '../utils/map3dLabelOverlay.js';
+import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
@@ -794,8 +795,26 @@ export default function MapView3D({
       });
     }
 
+    const desktopReservedRects = buildDefaultHudReservedRects({
+      stageWidth: w,
+      stageHeight: h,
+      topLeftWidth: 260,
+      topRightWidth: 220,
+      topHeight: 54,
+      bottomLeftWidth: 160,
+      bottomRightWidth: 140,
+      bottomHeight: 46
+    });
+    const desktopPlacedLabels = [];
     for (const item of pendingFloatingLabels) {
-      drawFloatingLandLabel(ctx, item.geom, item);
+      drawFloatingLandLabel(ctx, item.geom, {
+        ...item,
+        minY: Math.max(52, Number(item.minY || 52)),
+        stageWidth: w,
+        stageHeight: h,
+        reservedRects: desktopReservedRects,
+        placedRects: desktopPlacedLabels
+      });
     }
     // 4) Hold-to-draw charge progress ring (when user holds down on 1 map location)
     const hold = holdDrawRef.current;

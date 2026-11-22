@@ -1,4 +1,5 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import { ensureLandVolumeFitsSculptures } from '../../../shared/landVolume.mjs';
 import { groupNearestLandsWithSculptures, isLandOwnedByUser } from './landMapHelpers.js';
 import { resolveParcelVolume } from './landPreviewHelpers.js';
 
@@ -143,8 +144,13 @@ export function findNearbyCameraLands({
 
   const visibleLands = [];
   for (const land of grouped.allLands) {
-    const volume = resolveParcelVolume(land);
-    if (!volume) continue;
+    const rawVolume = resolveParcelVolume(land);
+    if (!rawVolume) continue;
+    const volume =
+      Array.isArray(land.sculptures) && land.sculptures.length > 0
+        ? ensureLandVolumeFitsSculptures(rawVolume, land.sculptures, { paddingFraction: 0.1 }) ||
+          rawVolume
+        : rawVolume;
 
     const edgeDistanceMeters = computeParcelEdgeDistanceMeters(uLat, uLng, volume);
     const centerDistanceMeters = haversineMeters(uLat, uLng, volume.centerLat, volume.centerLng);
@@ -203,7 +209,9 @@ export function computeArLandPrismLocalGeometry({
   volume,
   baseY = -1.15,
   maxClampDistM = 55,
-  maxVisualHeightM = 28
+  maxVisualHeightM = 28,
+  enclosingLocalBox = null,
+  paddingFraction = 0.1
 }) {
   if (!location || !volume || !Array.isArray(volume.corners) || volume.corners.length < 4) {
     return null;
@@ -213,17 +221,18 @@ export function computeArLandPrismLocalGeometry({
   const uLng = Number(location.lng);
   if (!Number.isFinite(uLat) || !Number.isFinite(uLng)) return null;
 
-  const heightMeters = Math.max(
+  let resolvedBaseY = Number(baseY);
+  let heightMeters = Math.max(
     0.8,
     Math.min(maxVisualHeightM, Number(volume.heightMeters || 12))
   );
-  const topY = Number((baseY + heightMeters).toFixed(3));
+  let topY = Number((resolvedBaseY + heightMeters).toFixed(3));
 
   const centerOff = projectLngLatToLocalMeters(uLat, uLng, volume.centerLat, volume.centerLng);
   const centerDist = Math.hypot(centerOff.east, centerOff.north);
   const clampRatio = centerDist > maxClampDistM ? maxClampDistM / centerDist : 1;
 
-  const bottomCorners = volume.corners.slice(0, 4).map(([cLng, cLat]) => {
+  let bottomCorners = volume.corners.slice(0, 4).map(([cLng, cLat]) => {
     const off = projectLngLatToLocalMeters(uLat, uLng, cLat, cLng);
     // Preserve relative parcel shape cleanly even if distant center is softly clamped
     const x =
@@ -236,10 +245,87 @@ export function computeArLandPrismLocalGeometry({
         : -off.north;
     return {
       x: Number(x.toFixed(3)),
-      y: baseY,
+      y: resolvedBaseY,
       z: Number(z.toFixed(3))
     };
   });
+
+  // Guarantee rendered artworks belonging to this land ALWAYS stay inside the AR prism
+  // horizontally AND vertically with symmetric padding on all faces.
+  let centerLocalX = centerOff.east * clampRatio;
+  let centerLocalZ = -centerOff.north * clampRatio;
+  let effWidthMeters = Number(volume.widthMeters || 4);
+  let effDepthMeters = Number(volume.depthMeters || 4);
+
+  if (
+    enclosingLocalBox &&
+    Number.isFinite(enclosingLocalBox.minX) &&
+    Number.isFinite(enclosingLocalBox.maxX) &&
+    Number.isFinite(enclosingLocalBox.minY) &&
+    Number.isFinite(enclosingLocalBox.maxY) &&
+    Number.isFinite(enclosingLocalBox.minZ) &&
+    Number.isFinite(enclosingLocalBox.maxZ)
+  ) {
+    const padFrac = Math.max(0.05, Math.min(0.5, Number(paddingFraction || 0.1)));
+    const boxW = Math.max(0.2, enclosingLocalBox.maxX - enclosingLocalBox.minX);
+    const boxH = Math.max(0.2, enclosingLocalBox.maxY - enclosingLocalBox.minY);
+    const boxD = Math.max(0.2, enclosingLocalBox.maxZ - enclosingLocalBox.minZ);
+    const padX = Math.max(0.12, boxW * padFrac);
+    const padY = Math.max(0.12, boxH * padFrac);
+    const padZ = Math.max(0.12, boxD * padFrac);
+
+    const artMinY = enclosingLocalBox.minY - padY;
+    const artMaxY = enclosingLocalBox.maxY + padY;
+    if (artMinY < resolvedBaseY || enclosingLocalBox.maxY < resolvedBaseY + 0.15) {
+      resolvedBaseY = Number(artMinY.toFixed(3));
+    }
+    topY = Number(
+      Math.max(resolvedBaseY + heightMeters, artMaxY, resolvedBaseY + 0.8).toFixed(3)
+    );
+    heightMeters = Math.min(maxVisualHeightM, Math.max(0.8, Number((topY - resolvedBaseY).toFixed(3))));
+    topY = Number((resolvedBaseY + heightMeters).toFixed(3));
+
+    // Check if the rendered artwork sticks out horizontally from bottomCorners
+    let polyMinX = Infinity;
+    let polyMaxX = -Infinity;
+    let polyMinZ = Infinity;
+    let polyMaxZ = -Infinity;
+    for (const pt of bottomCorners) {
+      if (pt.x < polyMinX) polyMinX = pt.x;
+      if (pt.x > polyMaxX) polyMaxX = pt.x;
+      if (pt.z < polyMinZ) polyMinZ = pt.z;
+      if (pt.z > polyMaxZ) polyMaxZ = pt.z;
+    }
+
+    const reqMinX = enclosingLocalBox.minX - padX;
+    const reqMaxX = enclosingLocalBox.maxX + padX;
+    const reqMinZ = enclosingLocalBox.minZ - padZ;
+    const reqMaxZ = enclosingLocalBox.maxZ + padZ;
+
+    if (
+      reqMinX < polyMinX - 0.05 ||
+      reqMaxX > polyMaxX + 0.05 ||
+      reqMinZ < polyMinZ - 0.05 ||
+      reqMaxZ > polyMaxZ + 0.05
+    ) {
+      const nextMinX = Math.min(polyMinX, reqMinX);
+      const nextMaxX = Math.max(polyMaxX, reqMaxX);
+      const nextMinZ = Math.min(polyMinZ, reqMinZ);
+      const nextMaxZ = Math.max(polyMaxZ, reqMaxZ);
+      centerLocalX = (nextMinX + nextMaxX) / 2;
+      centerLocalZ = (nextMinZ + nextMaxZ) / 2;
+      effWidthMeters = Number((nextMaxX - nextMinX).toFixed(2));
+      effDepthMeters = Number((nextMaxZ - nextMinZ).toFixed(2));
+      bottomCorners = [
+        { x: Number(nextMinX.toFixed(3)), y: resolvedBaseY, z: Number(nextMinZ.toFixed(3)) },
+        { x: Number(nextMaxX.toFixed(3)), y: resolvedBaseY, z: Number(nextMinZ.toFixed(3)) },
+        { x: Number(nextMaxX.toFixed(3)), y: resolvedBaseY, z: Number(nextMaxZ.toFixed(3)) },
+        { x: Number(nextMinX.toFixed(3)), y: resolvedBaseY, z: Number(nextMaxZ.toFixed(3)) }
+      ];
+    } else {
+      bottomCorners = bottomCorners.map((pt) => ({ ...pt, y: resolvedBaseY }));
+    }
+  }
 
   const topCorners = bottomCorners.map((pt) => ({
     x: pt.x,
@@ -251,14 +337,14 @@ export function computeArLandPrismLocalGeometry({
     bottomCorners,
     topCorners,
     centerLocal: {
-      x: Number((centerOff.east * clampRatio).toFixed(3)),
-      y: Number((baseY + heightMeters * 0.5).toFixed(3)),
-      z: Number((-centerOff.north * clampRatio).toFixed(3))
+      x: Number(centerLocalX.toFixed(3)),
+      y: Number((resolvedBaseY + heightMeters * 0.5).toFixed(3)),
+      z: Number(centerLocalZ.toFixed(3))
     },
-    widthMeters: Number(volume.widthMeters || 4),
-    depthMeters: Number(volume.depthMeters || 4),
+    widthMeters: effWidthMeters,
+    depthMeters: effDepthMeters,
     heightMeters,
-    baseY,
+    baseY: resolvedBaseY,
     topY
   };
 }

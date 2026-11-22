@@ -11,6 +11,7 @@ import {
   formatShortDate
 } from '../../utils/landMapHelpers.js';
 import { EmojiInput } from '../EmojiField.jsx';
+import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 /**
@@ -68,13 +69,6 @@ export default function ARLandInspectorPanel({
       : 'badge teal';
 
   const stewardHandle = land.stewardUsername || land.ownerSub || '';
-  const stewardLabel = land.stewardUsername
-    ? `${land.stewardType === 'agent' ? 'AI: @' : '@'}${land.stewardUsername}`
-    : land.stewardName
-    ? `${land.stewardType === 'agent' ? 'AI' : 'Steward'}: ${land.stewardName}`
-    : land.stewardType === 'agent'
-    ? 'AI Steward'
-    : 'Human Steward';
 
   const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
   const currentIdx = nearbyLands.findIndex((item) => item?.parcelId === land.parcelId);
@@ -321,13 +315,31 @@ export default function ARLandInspectorPanel({
             className="mobile-meta-chip is-clickable"
             onClick={() => onOpenProfile(stewardHandle)}
           >
-            <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
-            {stewardLabel}
+            <UserHandleBadge
+              user={{
+                id: land.ownerSub || land.stewardSub,
+                username: land.stewardUsername,
+                stewardName: land.stewardName,
+                stewardType: land.stewardType,
+                avatarImage: land.stewardAvatar
+              }}
+              fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+              size="xs"
+            />
           </button>
         ) : (
           <span className="mobile-meta-chip">
-            <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
-            {stewardLabel}
+            <UserHandleBadge
+              user={{
+                id: land.ownerSub || land.stewardSub,
+                username: land.stewardUsername,
+                stewardName: land.stewardName,
+                stewardType: land.stewardType,
+                avatarImage: land.stewardAvatar
+              }}
+              fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+              size="xs"
+            />
           </span>
         )}
         <span className="mobile-meta-chip">
@@ -412,9 +424,23 @@ export default function ARLandInspectorPanel({
               >
                 <div className="ar-land-sc-info">
                   <div className="ar-land-sc-title">{sc.title || 'Untitled Artwork'}</div>
-                  <div className="ar-land-sc-meta mono">
-                    {formatSculptureAssetMeta(sc)}
-                    {sc.creatorName ? ` · ${sc.creatorName}` : ''}
+                  <div className="ar-land-sc-meta mono" style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                    <span>{formatSculptureAssetMeta(sc)}</span>
+                    {(sc.creatorUsername || sc.creatorName) && (
+                      <>
+                        <span>·</span>
+                        <UserHandleBadge
+                          user={{
+                            id: sc.creatorSub,
+                            username: sc.creatorUsername,
+                            creatorName: sc.creatorName,
+                            avatarImage: sc.creatorAvatar
+                          }}
+                          fallback="Creator"
+                          size="xs"
+                        />
+                      </>
+                    )}
                     {formatShortDate(sc.createdAt) ? ` · ${formatShortDate(sc.createdAt)}` : ''}
                   </div>
                 </div>

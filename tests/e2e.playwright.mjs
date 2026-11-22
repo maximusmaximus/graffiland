@@ -47,6 +47,12 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       body: JSON.stringify({ devProfile: { email: 'e2e@graffiland.test', name: 'E2E Artist' } })
     }).then((r) => r.json());
 
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginRes.token}` },
+      body: JSON.stringify({ username: 'e2e_artist', bio: 'Seeded E2E sculptor' })
+    });
+
     const pubRes = await fetch(`${baseUrl}/api/sculptures/publish`, {
       method: 'POST',
       headers: {
@@ -427,7 +433,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Leaders/i }).click();
     await page.waitForSelector('[aria-label="Creator Leaderboard"]');
     const leaderText = await page.textContent('[aria-label="Creator Leaderboard"]');
-    assert.ok(leaderText.includes('E2E Artist'));
+    // Must refer to human creators ONLY by chosen @username (never raw Google display name)
+    assert.ok(leaderText.includes('@e2e_artist'), `Expected @e2e_artist in leaderboard, got: ${leaderText}`);
+    assert.ok(!leaderText.includes('E2E Artist'), 'Leaderboard must never expose Google first/last name');
     assert.ok(leaderText.includes('Playwright Bot Steward'));
 
     // Open QR Pair modal and verify it stacks above Leaflet
@@ -1658,6 +1666,41 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       waitUntil: 'networkidle'
     });
     await page.waitForSelector('[data-testid="sculpture-transform-studio"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="sculpture-sticky-stage"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="sculpture-gizmo-hud"]', { timeout: 10000 });
+
+    // Verify 3D model window stays pinned at top while modifier sliders scroll smoothly behind it
+    const stickyMetrics = await page.evaluate(() => {
+      const sticky = globalThis.document.querySelector('[data-testid="sculpture-sticky-stage"]');
+      const scrollBody = globalThis.document.querySelector('[data-testid="sculpture-scroll-body"]');
+      const viewer = globalThis.document.querySelector('[data-testid="sculpture-viewer-3d"]');
+      const beforeTop = sticky.getBoundingClientRect().top;
+      const beforeBottom = sticky.getBoundingClientRect().bottom;
+      scrollBody.scrollTop = 260;
+      const afterTop = sticky.getBoundingClientRect().top;
+      const afterBottom = sticky.getBoundingClientRect().bottom;
+      const stickyZ = Number(globalThis.getComputedStyle(sticky).zIndex || 0);
+      const bodyZ = Number(globalThis.getComputedStyle(scrollBody).zIndex || 0);
+      return {
+        beforeTop,
+        afterTop,
+        beforeBottom,
+        afterBottom,
+        scrolled: scrollBody.scrollTop,
+        stickyZ,
+        bodyZ,
+        gizmoAttr: viewer?.getAttribute('data-edit-gizmo')
+      };
+    });
+    assert.ok(Math.abs(stickyMetrics.beforeTop - stickyMetrics.afterTop) < 1);
+    assert.ok(Math.abs(stickyMetrics.beforeBottom - stickyMetrics.afterBottom) < 1);
+    assert.ok(stickyMetrics.scrolled > 50, `Expected modifier body to scroll, got ${stickyMetrics.scrolled}`);
+    assert.ok(stickyMetrics.stickyZ > stickyMetrics.bodyZ, 'Sticky 3D model stage must layer above modifier scroll body');
+    assert.equal(stickyMetrics.gizmoAttr, 'on');
+    await page.evaluate(() => {
+      const scrollBody = globalThis.document.querySelector('[data-testid="sculpture-scroll-body"]');
+      if (scrollBody) scrollBody.scrollTop = 0;
+    });
 
     // Scale up to 3.0x -> gently shifts Side Lantern inside land bounds without intersection
     await page.locator('[data-testid="sculpture-scale-input"]').fill('3');

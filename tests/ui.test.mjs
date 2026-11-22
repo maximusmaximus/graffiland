@@ -1282,9 +1282,10 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(expBadges[1].textContent.includes('Permanent'));
     assert.ok(view.getByTestId('land-expiration-detail').textContent.includes('2x First-Spark XP'));
 
-    // Land metadata (dimensions, steward, quests, contributors) renders
+    // Land metadata (dimensions, steward with icon badge, quests, contributors) renders
     assert.ok(cards[0].textContent.includes('24×16×36 m · 384 m²'));
-    assert.ok(cards[0].textContent.includes('AI: PainterBot'));
+    assert.ok(cards[0].textContent.includes('PainterBot'));
+    assert.ok(cards[0].querySelector('[data-testid="user-handle-badge"]'));
     assert.ok(cards[0].textContent.includes('2 open quests'));
     assert.ok(cards[1].textContent.includes('3 contributors'));
 
@@ -3146,5 +3147,264 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       globalThis.fetch = origFetch;
       cleanup();
     }
+  });
+
+  test('ProfileModal hides Google display names, renders user icon + @username, and pre-populates logged-in Username & Bio fields immediately', async () => {
+    const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
+    const loggedInUser = {
+      id: 'google:115933089146422565011',
+      name: 'drawing "The Drawing Show" show',
+      username: 'bigdog',
+      bio: 'Sculpting giant voxel bros in Chico CA',
+      avatarImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      userNumber: 1,
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+
+    const view = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'bigdog',
+        user: loggedInUser,
+        initialEditing: true,
+        fetchProfileFn: async () => ({
+          profile: {
+            id: loggedInUser.id,
+            userNumber: 1,
+            userNumberLabel: '#0001',
+            username: 'bigdog',
+            displayName: '@bigdog',
+            bio: 'Sculpting giant voxel bros in Chico CA',
+            avatarImage: loggedInUser.avatarImage,
+            headerImage: '',
+            walletAddress: loggedInUser.walletAddress,
+            accountType: 'human',
+            joinedAt: '2026-01-01T00:00:00Z'
+          },
+          stats: { landCount: 1, sculptureCount: 1, totalBlocks: 120, totalXp: 250 },
+          lands: [],
+          sculptures: [],
+          listings: [],
+          actions: []
+        }),
+        checkUsernameFn: async (u) => ({ available: true, username: u }),
+        onClose: () => {}
+      })
+    );
+
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('profile-edit-form'));
+    });
+
+    // Must NEVER expose Google first/last name anywhere in ProfileModal
+    assert.ok(!view.container.textContent.includes('The Drawing Show'));
+    assert.ok(view.container.textContent.includes('@bigdog'));
+    // User icon renders beside username in header
+    assert.ok(view.getByTestId('user-handle-badge').querySelector('img'));
+
+    // Logged-in Username and Bio fields MUST be pre-populated immediately (never empty)
+    const usernameField = view.getByLabelText('Username');
+    const bioField = view.getByLabelText('Bio');
+    assert.equal(usernameField.value, 'bigdog');
+    assert.equal(bioField.value, 'Sculpting giant voxel bros in Chico CA');
+    cleanup();
+  });
+
+  test('SculptureModal pins 3D model stage at top above scrollable modifiers, enables 3D gizmo bars & points, and pre-populates land curation note', async () => {
+    const { default: SculptureModal } = await loadJsxModule('client/src/components/SculptureModal.jsx');
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/sculptures/sc-sticky-1')) {
+        return new Response(
+          JSON.stringify({
+            sculpture: {
+              id: 'sc-sticky-1',
+              title: 'Squiggle Bro',
+              description: 'Neon voxel friend on 2nd St',
+              creatorSub: 'google:owner-1',
+              creatorUsername: 'bigdog',
+              creatorName: '@bigdog',
+              creatorAvatar: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+              recipientAddress: '0x2222222222222222222222222222222222222222',
+              parcelId: 'GLAND-9R1652WM',
+              parcelName: 'Squiggle Bro Land',
+              landDisplayName: 'Squiggle Bro Land',
+              lat: 39.730204,
+              lng: -121.840674,
+              voxelCount: 4,
+              voxels: [
+                { x: -0.5, y: 0, z: -0.5, color: '#00f5d4' },
+                { x: 0.5, y: 1.0, z: 0.5, color: '#ffd166' }
+              ],
+              scale: 1,
+              anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0 },
+              viewerCanContribute: true,
+              viewerIsLandOwner: true,
+              polScore: 98,
+              chain: { tokenId: '1', simulated: true, chainName: 'Robinhood Chain Testnet' },
+              ipfs: { metadataCid: 'bafy123', modelCid: 'bafy456' }
+            }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (u.includes('/api/lands/GLAND-9R1652WM')) {
+        return new Response(
+          JSON.stringify({
+            parcel: {
+              parcelId: 'GLAND-9R1652WM',
+              customName: 'Squiggle Bro Land',
+              displayName: 'Squiggle Bro Land',
+              description: 'Chico downtown voxel corner',
+              curationNote: 'Chico downtown voxel corner',
+              volume: {
+                parcelId: 'GLAND-9R1652WM',
+                centerLat: 39.730204,
+                centerLng: -121.840674,
+                widthMeters: 6,
+                depthMeters: 6,
+                heightMeters: 8
+              }
+            },
+            sculptures: []
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (u.includes('/revisions')) {
+        return new Response(JSON.stringify({ revisions: [], currentRev: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: {
+            id: 'sc-sticky-1',
+            title: 'Squiggle Bro',
+            description: 'Neon voxel friend on 2nd St',
+            creatorSub: 'google:owner-1',
+            creatorUsername: 'bigdog',
+            creatorName: '@bigdog',
+            recipientAddress: '0x2222222222222222222222222222222222222222',
+            parcelId: 'GLAND-9R1652WM',
+            parcelName: 'Squiggle Bro Land',
+            lat: 39.730204,
+            lng: -121.840674,
+            voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }],
+            viewerCanContribute: true,
+            viewerIsLandOwner: true,
+            chain: { tokenId: '1', simulated: true },
+            ipfs: { metadataCid: 'bafy123' }
+          },
+          user: {
+            id: 'google:owner-1',
+            username: 'bigdog',
+            name: 'Google Full Name Should Hide',
+            walletAddress: '0x2222222222222222222222222222222222222222'
+          },
+          config: { chain: { network: { name: 'Robinhood Chain Testnet' } } },
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(view.getByTestId('sculpture-sticky-stage'));
+        assert.ok(view.getByTestId('sculpture-scroll-body'));
+        assert.ok(view.getByTestId('sculpture-gizmo-hud'));
+      });
+
+      // Sticky stage wraps the 3D viewer, separate from the scrollable modifier body below it
+      const sticky = view.getByTestId('sculpture-sticky-stage');
+      const scrollBody = view.getByTestId('sculpture-scroll-body');
+      assert.ok(sticky.contains(view.getByTestId('sculpture-viewer-3d')));
+      assert.ok(scrollBody.contains(view.getByTestId('sculpture-transform-studio')));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-edit-gizmo'), 'on');
+      assert.ok(view.getByTestId('sculpture-gizmo-hud').textContent.includes('Corners: Scale'));
+
+      // Toggle 3D bars & points off and back on
+      RTL.fireEvent.click(view.getByTestId('sculpture-gizmo-toggle'));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-edit-gizmo'), 'off');
+      RTL.fireEvent.click(view.getByTestId('sculpture-gizmo-toggle'));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-edit-gizmo'), 'on');
+
+      // Land curation name & description are pre-populated for logged-in land owner
+      await RTL.waitFor(() => {
+        const noteInput = view.getByPlaceholderText(/Land note or curator statement/i);
+        assert.equal(noteInput.value, 'Chico downtown voxel corner');
+      });
+
+      // Never exposes Google full name; displays @bigdog with icon
+      assert.ok(!view.container.textContent.includes('Google Full Name Should Hide'));
+      assert.ok(sticky.textContent.includes('@bigdog'));
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('SculptureChatDrawer renders clean 3-tab navigation (Chat, Pinned, Access) with @username + user icon and never Google names', async () => {
+    const { default: SculptureChatDrawer } = await loadJsxModule(
+      'client/src/components/SculptureChatDrawer.jsx'
+    );
+    const view = RTL.render(
+      React.createElement(SculptureChatDrawer, {
+        sculpture: {
+          id: 'sc-chat-ui-1',
+          title: 'Squiggle Bro',
+          description: 'Talk to visitors on 2nd St',
+          creatorSub: 'google:owner-1',
+          creatorUsername: 'bigdog',
+          creatorName: '@bigdog',
+          parcelId: 'GLAND-9R1652WM',
+          parcelName: 'Squiggle Bro Land',
+          distanceMeters: 4
+        },
+        user: null,
+        initialPinData: {
+          unlocked: true,
+          pins: [
+            {
+              id: 'pin-1',
+              text: 'Welcome to Squiggle Bro Land!',
+              authorName: '@bigdog',
+              authorUsername: 'bigdog'
+            }
+          ],
+          meta: { hasPins: true, batchSeq: 1, ipfsCid: 'bafypin1234567890' }
+        },
+        onRequestLogin: () => {},
+        onClose: () => {}
+      })
+    );
+
+    assert.ok(view.getByTestId('sculpture-chat-drawer'));
+    assert.ok(view.getByTestId('chat-tab-messages'));
+    assert.ok(view.getByTestId('chat-tab-pins'));
+    assert.ok(view.getByTestId('chat-tab-access'));
+    assert.ok(view.container.textContent.includes('@bigdog'));
+
+    // Navigate to Pinned tab and verify pinned note renders cleanly without cluttering main chat
+    RTL.fireEvent.click(view.getByTestId('chat-tab-pins'));
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('chat-panel-pins'));
+      assert.ok(view.getByTestId('chat-panel-pins').textContent.includes('Welcome to Squiggle Bro Land!'));
+    });
+
+    // Navigate to Access tab and verify security summary renders
+    RTL.fireEvent.click(view.getByTestId('chat-tab-access'));
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('chat-panel-access'));
+      assert.ok(view.getByTestId('chat-panel-access').textContent.includes('AES-256-GCM'));
+    });
+
+    cleanup();
   });
 });

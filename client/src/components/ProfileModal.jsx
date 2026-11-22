@@ -26,6 +26,7 @@ import {
 import { prepareProfileImageFile } from '../utils/profileImageHelper.js';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 function shortenAddress(addr) {
@@ -58,16 +59,31 @@ export default function ProfileModal({
   saveProfileFn = null
 }) {
   const targetHandle = handle || user?.username || user?.id || '';
+  const isOwnTarget = Boolean(
+    user?.id &&
+      (!handle ||
+        String(handle) === String(user.id) ||
+        String(handle).replace(/^@+/, '').toLowerCase() ===
+          String(user.username || '').toLowerCase())
+  );
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('lands'); // 'lands' | 'sculptures' | 'actions'
   const [editing, setEditing] = useState(Boolean(initialEditing));
 
-  const [usernameInput, setUsernameInput] = useState('');
-  const [bioInput, setBioInput] = useState('');
-  const [avatarInput, setAvatarInput] = useState('');
-  const [headerInput, setHeaderInput] = useState('');
+  const [usernameInput, setUsernameInput] = useState(() =>
+    isOwnTarget ? String(user?.username || '') : ''
+  );
+  const [bioInput, setBioInput] = useState(() => (isOwnTarget ? String(user?.bio || '') : ''));
+  const [avatarInput, setAvatarInput] = useState(() =>
+    isOwnTarget ? String(user?.avatarImage || '') : ''
+  );
+  const [headerInput, setHeaderInput] = useState(() =>
+    isOwnTarget ? String(user?.headerImage || '') : ''
+  );
+  const [usernameDirty, setUsernameDirty] = useState(false);
+  const [bioDirty, setBioDirty] = useState(false);
   const [avatarDirty, setAvatarDirty] = useState(false);
   const [headerDirty, setHeaderDirty] = useState(false);
   const [mediaBusy, setMediaBusy] = useState('');
@@ -127,10 +143,27 @@ export default function ProfileModal({
             : api.getPublicProfile(id));
       const res = await fetcher(targetHandle);
       setData(res);
-      setUsernameInput(res?.profile?.username || '');
-      setBioInput(res?.profile?.bio || '');
-      setAvatarInput(res?.profile?.avatarImage || '');
-      setHeaderInput(res?.profile?.headerImage || '');
+      const isSelfLoaded = Boolean(
+        curUser?.id && res?.profile?.id && String(curUser.id) === String(res.profile.id)
+      );
+      setUsernameInput(
+        String(res?.profile?.username || (isSelfLoaded ? curUser?.username || '' : ''))
+      );
+      setBioInput(
+        res?.profile?.bio !== undefined && res?.profile?.bio !== ''
+          ? String(res.profile.bio)
+          : isSelfLoaded
+          ? String(curUser?.bio || '')
+          : ''
+      );
+      setAvatarInput(
+        String(res?.profile?.avatarImage || (isSelfLoaded ? curUser?.avatarImage || '' : ''))
+      );
+      setHeaderInput(
+        String(res?.profile?.headerImage || (isSelfLoaded ? curUser?.headerImage || '' : ''))
+      );
+      setUsernameDirty(false);
+      setBioDirty(false);
       setAvatarDirty(false);
       setHeaderDirty(false);
       setMediaError('');
@@ -150,6 +183,22 @@ export default function ProfileModal({
   useEffect(() => {
     loadProfile();
   }, [loadProfile]);
+
+  // Keep owner's username & bio inputs populated whenever logged-in user or loaded profile updates
+  useEffect(() => {
+    if (!isOwnTarget && !isOwner) return;
+    const nextUsername = String(profile?.username || user?.username || '');
+    const nextBio =
+      profile?.bio !== undefined && profile?.bio !== ''
+        ? String(profile.bio)
+        : String(user?.bio || '');
+    if (!usernameDirty && nextUsername && !usernameInput) {
+      setUsernameInput(nextUsername);
+    }
+    if (!bioDirty && nextBio && !bioInput) {
+      setBioInput(nextBio);
+    }
+  }, [isOwnTarget, isOwner, profile?.username, profile?.bio, user?.username, user?.bio, usernameDirty, bioDirty, usernameInput, bioInput]);
 
   const localUsernameValidation = validateUsername(usernameInput);
   const localBioValidation = validateBio(bioInput);
@@ -411,10 +460,16 @@ export default function ProfileModal({
 
   function openEditMode(triggerPicker = '') {
     if (!editing) {
-      setUsernameInput(profile?.username || '');
-      setBioInput(profile?.bio || '');
-      setAvatarInput(profile?.avatarImage || '');
-      setHeaderInput(profile?.headerImage || '');
+      setUsernameInput(String(profile?.username || user?.username || ''));
+      setBioInput(
+        profile?.bio !== undefined && profile?.bio !== ''
+          ? String(profile.bio)
+          : String(user?.bio || '')
+      );
+      setAvatarInput(String(profile?.avatarImage || user?.avatarImage || ''));
+      setHeaderInput(String(profile?.headerImage || user?.headerImage || ''));
+      setUsernameDirty(false);
+      setBioDirty(false);
       setAvatarDirty(false);
       setHeaderDirty(false);
       setMediaError('');
@@ -447,8 +502,13 @@ export default function ProfileModal({
       <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" style={{ marginBottom: 10 }}>
           <h2 className="modal-title">
-            <XeroIcon emoji="👤" size={20} />
-            {profile?.username ? `@${profile.username}` : profile?.displayName || 'Profile'}
+            <UserHandleBadge
+              user={profile || (isOwnTarget ? user : null)}
+              username={displayUsername || (isOwnTarget ? user?.username || '' : '')}
+              avatarImage={liveAvatarSrc || (isOwnTarget ? user?.avatarImage || '' : '')}
+              fallback="Profile"
+              size="md"
+            />
           </h2>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {isOwner && !editing && (
@@ -642,18 +702,17 @@ export default function ProfileModal({
 
                   <div className="profile-banner-identity">
                     <div className="profile-banner-username-row">
-                      {displayUsername ? (
-                        <strong className="profile-banner-username" data-testid="profile-handle">
-                          @{displayUsername}
-                        </strong>
-                      ) : (
-                        <strong className="profile-banner-username">{profile.displayName}</strong>
-                      )}
+                      <strong className="profile-banner-username" data-testid="profile-handle">
+                        {displayUsername
+                          ? `@${displayUsername}`
+                          : profile.accountType === 'agent'
+                          ? profile.displayName || 'AI Agent'
+                          : userNumberLabel
+                          ? `Creator ${userNumberLabel}`
+                          : 'Creator'}
+                      </strong>
                     </div>
                     <div className="profile-banner-sub-row">
-                      {displayUsername && profile.displayName && (
-                        <span className="profile-banner-display-name">{profile.displayName}</span>
-                      )}
                       {profile.walletAddress && (
                         <span className="profile-banner-meta-pill mono" title={profile.walletAddress}>
                           {shortenAddress(profile.walletAddress)}
@@ -928,7 +987,10 @@ export default function ProfileModal({
                       type="text"
                       maxLength={24}
                       value={usernameInput}
-                      onChange={(e) => setUsernameInput(e.target.value.replace(/\s+/g, ''))}
+                      onChange={(e) => {
+                        setUsernameDirty(true);
+                        setUsernameInput(e.target.value.replace(/\s+/g, ''));
+                      }}
                       placeholder="your_handle"
                       required
                     />
@@ -967,7 +1029,10 @@ export default function ProfileModal({
                     rows={3}
                     maxLength={BIO_MAX_LEN}
                     value={bioInput}
-                    onChange={(e) => setBioInput(e.target.value)}
+                    onChange={(e) => {
+                      setBioDirty(true);
+                      setBioInput(e.target.value);
+                    }}
                     placeholder="Share your artistic style, cities you sculpt in, or links... (type : for emojis)"
                   />
                 </div>
@@ -984,8 +1049,16 @@ export default function ProfileModal({
                     className="btn btn-sm"
                     disabled={saving}
                     onClick={() => {
-                      setAvatarInput(profile?.avatarImage || '');
-                      setHeaderInput(profile?.headerImage || '');
+                      setUsernameInput(String(profile?.username || user?.username || ''));
+                      setBioInput(
+                        profile?.bio !== undefined && profile?.bio !== ''
+                          ? String(profile.bio)
+                          : String(user?.bio || '')
+                      );
+                      setAvatarInput(String(profile?.avatarImage || user?.avatarImage || ''));
+                      setHeaderInput(String(profile?.headerImage || user?.headerImage || ''));
+                      setUsernameDirty(false);
+                      setBioDirty(false);
                       setAvatarDirty(false);
                       setHeaderDirty(false);
                       setMediaError('');

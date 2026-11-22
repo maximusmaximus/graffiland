@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { POLICY } from '../constants.mjs';
 import { resolveLandDisplayName } from '../landVolume.mjs';
+import { resolveAuthorHandleForStorage } from '../userDisplay.mjs';
 import { decodeGeohashBounds } from '../../server/services/pol.mjs';
 
 export class McpServiceError extends Error {
@@ -343,12 +344,16 @@ export async function fetchSculptureWithModelRow(db, sculptureId) {
       COALESCE(l.layer_role, 'artist_work') AS layer_role,
       COALESCE(l.quest_id, '') AS layer_quest_id,
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
-      COALESCE(l.qual_contributor, 1) AS qual_contributor
+      COALESCE(l.qual_contributor, 1) AS qual_contributor,
+      COALESCE(cu.username, '') AS creator_username,
+      COALESCE(cu.avatar_image, '') AS creator_avatar,
+      COALESCE(cu.user_number, 0) AS creator_user_number
      FROM sculptures s
      LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     LEFT JOIN users cu ON cu.id = s.creator_sub
      WHERE s.id = ?`,
     [sculptureId]
   );
@@ -427,7 +432,7 @@ export async function upsertAnchorAndRevision(
       sculptureId,
       Number(revNum),
       editorUser?.id || '',
-      editorUser?.name || 'Artist',
+      resolveAuthorHandleForStorage(editorUser, 'Creator'),
       editorRole,
       modelType,
       JSON.stringify(voxels || []),
