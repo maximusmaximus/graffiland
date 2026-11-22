@@ -305,7 +305,7 @@ describe('All 5 Custom 3D Formats (.glb, .gltf, .obj, .stl, .ply) & Gateway Mode
     assert.ok(fetched, 'Expected fallback gateway to return valid GLB');
     assert.equal(fetched.bytes.length, realGlb.length);
     assert.equal(seenUrls.length, 3);
-    assert.ok(seenUrls[2].includes('dweb.link'));
+    assert.ok(seenUrls[2].includes('ipfs.filebase.io'));
   });
 
   test('serializeSculptureRow appends deterministic ?cid= cache-buster to custom 3D model downloadUrl', () => {

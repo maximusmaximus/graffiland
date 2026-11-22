@@ -701,8 +701,10 @@ export async function fetchModelBytesFromGateways({
       pushUrl(gatewayUrl);
     }
     pushUrl(`https://gateway.pinata.cloud/ipfs/${cleanCid}`);
+    pushUrl(`https://ipfs.filebase.io/ipfs/${cleanCid}`);
     pushUrl(`https://dweb.link/ipfs/${cleanCid}`);
     pushUrl(`https://ipfs.io/ipfs/${cleanCid}`);
+    pushUrl(`https://w3s.link/ipfs/${cleanCid}`);
   }
 
   if (externalUrl) {
@@ -721,7 +723,8 @@ export async function fetchModelBytesFromGateways({
         redirect: 'follow',
         signal: controller?.signal,
         headers: {
-          Accept: 'model/gltf-binary,model/gltf+json,application/octet-stream,*/*;q=0.8'
+          Accept: 'model/gltf-binary,model/gltf+json,application/octet-stream,*/*;q=0.8',
+          'User-Agent': 'Graffiland/1.0 (+https://maximusmaximus.github.io/graffiland)'
         }
       });
       if (!res || !res.ok) continue;

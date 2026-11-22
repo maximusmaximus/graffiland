@@ -277,6 +277,7 @@ async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
   const cid = String(cm.ipfsCid || sculpture?.ipfs?.modelCid || '').trim();
   if (cid && /^[a-zA-Z0-9_-]{16,128}$/.test(cid)) {
     candidates.push(`https://gateway.pinata.cloud/ipfs/${cid}`);
+    candidates.push(`https://ipfs.filebase.io/ipfs/${cid}`);
     candidates.push(`https://dweb.link/ipfs/${cid}`);
   }
 
