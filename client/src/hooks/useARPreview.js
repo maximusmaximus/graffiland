@@ -169,15 +169,26 @@ export function useARPreview({
     for (const land of cameraLands.visibleLands) {
       if (land?.parcelId) landByParcelId.set(land.parcelId, land);
     }
+    const parcelRenderedBoxes = new Map();
 
     for (const sc of nearbySculptures) {
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const dist = Math.hypot(offset.east, offset.north);
       const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
-      const sub = isCustom3d
-        ? new THREE.Group()
-        : buildVoxelGroup(sc.voxels || [], { simplifyLod: false });
+      const sub = new THREE.Group();
+      if (!isCustom3d) {
+        const voxelMeshGroup = buildVoxelGroup(sc.voxels || [], { simplifyLod: false });
+        // Horizontally center voxel clouds on their own anchor (matching 3D Map, GeoJSON, and 3D Viewer)
+        // so legacy off-origin AR sculptures ALWAYS render dead-center inside their land volume!
+        const rawVoxelBounds = new THREE.Box3().setFromObject(voxelMeshGroup);
+        if (!rawVoxelBounds.isEmpty()) {
+          const rawCenter = new THREE.Vector3();
+          rawVoxelBounds.getCenter(rawCenter);
+          voxelMeshGroup.position.set(-rawCenter.x, 0, -rawCenter.z);
+        }
+        sub.add(voxelMeshGroup);
+      }
       sub.traverse((obj) => {
         if (obj.isMesh) {
           obj.userData.sculpture = sc;
@@ -205,6 +216,7 @@ export function useARPreview({
       );
       hitProxy.position.copy(boxCenter);
       hitProxy.userData.sculpture = sc;
+      hitProxy.userData.isHitProxy = true;
       if (parentLand) hitProxy.userData.parcel = parentLand;
       sub.add(hitProxy);
 
@@ -312,6 +324,43 @@ export function useARPreview({
         -offset.north * clampFactor + az
       );
       group.add(sub);
+
+      // Record rendered local 3D bounds per parcel (artwork meshes only, excluding shadow/halo rings)
+      // so AR land prisms always wrap symmetrically around the actual rendered sculpture voxels in X, Y, and Z.
+      if (sc.parcelId) {
+        sub.updateMatrixWorld(true);
+        const scBox = new THREE.Box3();
+        sub.traverse((obj) => {
+          if (
+            obj.isMesh &&
+            !obj.userData?.clickableBase &&
+            !obj.userData?.isHitProxy &&
+            !(obj.material && obj.material.isShadowMaterial)
+          ) {
+            scBox.expandByObject(obj);
+          }
+        });
+        if (!scBox.isEmpty()) {
+          const prevBox = parcelRenderedBoxes.get(sc.parcelId);
+          if (prevBox) {
+            prevBox.minX = Math.min(prevBox.minX, scBox.min.x);
+            prevBox.maxX = Math.max(prevBox.maxX, scBox.max.x);
+            prevBox.minY = Math.min(prevBox.minY, scBox.min.y);
+            prevBox.maxY = Math.max(prevBox.maxY, scBox.max.y);
+            prevBox.minZ = Math.min(prevBox.minZ, scBox.min.z);
+            prevBox.maxZ = Math.max(prevBox.maxZ, scBox.max.z);
+          } else {
+            parcelRenderedBoxes.set(sc.parcelId, {
+              minX: scBox.min.x,
+              maxX: scBox.max.x,
+              minY: scBox.min.y,
+              maxY: scBox.max.y,
+              minZ: scBox.min.z,
+              maxZ: scBox.max.z
+            });
+          }
+        }
+      }
     }
 
     // Render interactive 3D Holographic Virtual Land Volume Prisms for every visible nearby land
@@ -320,7 +369,9 @@ export function useARPreview({
         location,
         volume: land.volume,
         baseY: -1.15,
-        maxClampDistM: 55
+        maxClampDistM: 55,
+        enclosingLocalBox: parcelRenderedBoxes.get(land.parcelId) || null,
+        paddingFraction: 0.1
       });
       if (!prism) continue;
 

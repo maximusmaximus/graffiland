@@ -20,6 +20,7 @@ import {
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
 
@@ -539,9 +540,6 @@ export default function PlotVisitView({
   }
 
   const stewardHandle = activeParcel?.stewardUsername || activeParcel?.ownerSub || '';
-  const stewardLabel = activeParcel?.stewardUsername
-    ? `${activeParcel?.stewardType === 'agent' ? 'AI: ' : ''}@${activeParcel.stewardUsername}`
-    : activeParcel?.stewardName || (activeParcel?.stewardType === 'agent' ? 'AI Steward' : 'Land Steward');
 
   const isDesktop = variant === 'desktop';
 
@@ -804,9 +802,28 @@ export default function PlotVisitView({
                               />{' '}
                               {formatSculptureAssetMeta(selectedArtwork)}
                             </span>
-                            {selectedArtwork.creatorName && (
+                            {(selectedArtwork.creatorUsername || selectedArtwork.creatorName) && (
                               <span className="mobile-sc-chip">
-                                <XeroIcon emoji="👤" size={10} /> {selectedArtwork.creatorName}
+                                <UserHandleBadge
+                                  user={{
+                                    id: selectedArtwork.creatorSub,
+                                    username: selectedArtwork.creatorUsername,
+                                    creatorName: selectedArtwork.creatorName,
+                                    avatarImage: selectedArtwork.creatorAvatar
+                                  }}
+                                  fallback="Creator"
+                                  size="xs"
+                                  onClick={
+                                    onOpenProfile &&
+                                    (selectedArtwork.creatorUsername || selectedArtwork.creatorSub)
+                                      ? () =>
+                                          onOpenProfile(
+                                            selectedArtwork.creatorUsername ||
+                                              selectedArtwork.creatorSub
+                                          )
+                                      : null
+                                  }
+                                />
                               </span>
                             )}
                             {Number.isFinite(Number(selectedArtwork.polScore)) &&
@@ -1051,19 +1068,35 @@ export default function PlotVisitView({
                             className="mobile-sc-chip is-clickable"
                             onClick={() => onOpenProfile(stewardHandle)}
                           >
-                            <XeroIcon
-                              emoji={activeParcel.stewardType === 'agent' ? '🤖' : '👤'}
-                              size={10}
-                            />{' '}
-                            {stewardLabel}
+                            <UserHandleBadge
+                              user={{
+                                id: activeParcel.ownerSub || activeParcel.stewardSub,
+                                username: activeParcel.stewardUsername,
+                                stewardName: activeParcel.stewardName,
+                                stewardType: activeParcel.stewardType,
+                                avatarImage: activeParcel.stewardAvatar
+                              }}
+                              fallback={
+                                activeParcel.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'
+                              }
+                              size="xs"
+                            />
                           </button>
                         ) : (
                           <span className="mobile-sc-chip">
-                            <XeroIcon
-                              emoji={activeParcel.stewardType === 'agent' ? '🤖' : '👤'}
-                              size={10}
-                            />{' '}
-                            {stewardLabel}
+                            <UserHandleBadge
+                              user={{
+                                id: activeParcel.ownerSub || activeParcel.stewardSub,
+                                username: activeParcel.stewardUsername,
+                                stewardName: activeParcel.stewardName,
+                                stewardType: activeParcel.stewardType,
+                                avatarImage: activeParcel.stewardAvatar
+                              }}
+                              fallback={
+                                activeParcel.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'
+                              }
+                              size="xs"
+                            />
                           </span>
                         )}
                         <span className="mobile-sc-chip">

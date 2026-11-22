@@ -26,7 +26,12 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../../shared/notificationService.mjs';
-import { buildObjectFittedLandVolume } from '../../shared/landVolume.mjs';
+import {
+  buildObjectFittedLandVolume,
+  centerVoxelsHorizontally,
+  offsetLatLngByLocalXZ
+} from '../../shared/landVolume.mjs';
+import { resolveAuthorHandleForStorage } from '../../shared/userDisplay.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../../shared/geocodeService.mjs';
 import {
   checkUsernameAvailability,
@@ -334,11 +339,11 @@ function sanitizeUser(row) {
   return {
     id: row.id,
     email: row.email,
-    name: row.name,
+    name: username ? `@${username}` : isAgent ? row.name || 'AI Agent' : 'Creator',
     username,
     bio: String(row.bio || ''),
     needsUsernameOnboarding: !username && !isAgent,
-    picture: avatarImage || row.picture || '',
+    picture: avatarImage || '',
     avatarImage,
     headerImage,
     userNumber,
@@ -1446,12 +1451,16 @@ export default {
         COALESCE(l.quest_id, '') AS layer_quest_id,
         COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
         COALESCE(l.qual_contributor, 1) AS qual_contributor,
-        COALESCE(pc.custom_name, '') AS parcel_custom_name
+        COALESCE(pc.custom_name, '') AS parcel_custom_name,
+        COALESCE(cu.username, '') AS creator_username,
+        COALESCE(cu.avatar_image, '') AS creator_avatar,
+        COALESCE(cu.user_number, 0) AS creator_user_number
        FROM sculptures s
        LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
        LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
        LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
        LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
+       LEFT JOIN users cu ON cu.id = s.creator_sub
     `;
 
     // List public sculptures
@@ -2637,6 +2646,27 @@ export default {
         });
         quotaConsumed = Boolean(qRes?.consumed);
 
+        // Horizontally center newly drawn voxel clouds on their local origin (0, 0)
+        // and shift (lat, lng) by the centroid offset so the art ALWAYS fits dead-center inside its land.
+        const centeredVoxelCloud = centerVoxelsHorizontally(validation.cleanVoxels);
+        const publishedVoxels = centeredVoxelCloud.voxels;
+        const shiftedGeo =
+          centeredVoxelCloud.shiftX !== 0 || centeredVoxelCloud.shiftZ !== 0
+            ? offsetLatLngByLocalXZ(
+                locationBundle.lat,
+                locationBundle.lng,
+                centeredVoxelCloud.shiftX,
+                centeredVoxelCloud.shiftZ
+              )
+            : { lat: locationBundle.lat, lng: locationBundle.lng };
+        const publishedLat = Number.isFinite(shiftedGeo.lat) ? shiftedGeo.lat : locationBundle.lat;
+        const publishedLng = Number.isFinite(shiftedGeo.lng) ? shiftedGeo.lng : locationBundle.lng;
+        const publishedLocationBundle = {
+          ...locationBundle,
+          lat: publishedLat,
+          lng: publishedLng
+        };
+
         const sculptureId = crypto.randomUUID();
         const recipientAddress =
           user.custom_payout_address && ethers.isAddress(user.custom_payout_address)
@@ -2651,9 +2681,9 @@ export default {
               sculptureId,
               title: validation.title,
               description: validation.description,
-              voxels: validation.cleanVoxels,
+              voxels: publishedVoxels,
               previewDataUrl: body?.previewDataUrl || '',
-              locationBundle,
+              locationBundle: publishedLocationBundle,
               creatorAddress: recipientAddress
             },
             url.origin,
@@ -2667,8 +2697,8 @@ export default {
               metadataUri: ipfsResult.metadataUri,
               parcelBytes32: locationBundle.parcelBytes32,
               proofHash: locationBundle.proofHash,
-              lat: locationBundle.lat,
-              lng: locationBundle.lng
+              lat: publishedLat,
+              lng: publishedLng
             },
             env,
             cfg
@@ -2718,11 +2748,11 @@ export default {
             validation.title,
             validation.description,
             user.id,
-            user.name,
+            resolveAuthorHandleForStorage(user, 'Creator'),
             user.email,
             recipientAddress,
-            locationBundle.lat,
-            locationBundle.lng,
+            publishedLat,
+            publishedLng,
             locationBundle.altitude,
             locationBundle.accuracy,
             locationBundle.heading,
@@ -2731,8 +2761,8 @@ export default {
             locationBundle.geoInfo.placeName,
             locationBundle.geoInfo.country,
             locationBundle.timezone,
-            JSON.stringify(validation.cleanVoxels),
-            validation.cleanVoxels.length,
+            JSON.stringify(publishedVoxels),
+            publishedVoxels.length,
             locationBundle.score,
             JSON.stringify(locationBundle.proofBundle),
             locationBundle.proofHash,
@@ -2757,9 +2787,9 @@ export default {
         const fittedVol = buildObjectFittedLandVolume({
           parcelId: locationBundle.parcelId,
           geohash: locationBundle.geohash,
-          lat: locationBundle.lat,
-          lng: locationBundle.lng,
-          voxels: validation.cleanVoxels,
+          lat: publishedLat,
+          lng: publishedLng,
+          voxels: publishedVoxels,
           anchorOffset: anchorCheck.offset,
           paddingFraction: 0.1
         });

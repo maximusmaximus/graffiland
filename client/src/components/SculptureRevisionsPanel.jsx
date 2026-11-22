@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function SculptureRevisionsPanel({
@@ -119,10 +120,23 @@ export default function SculptureRevisionsPanel({
                     <span style={{ color: 'var(--text)' }}>{rev.changeSummary || rev.title}</span>{' '}
                     {isCurrent && <span className="badge teal" style={{ fontSize: 9.5 }}>LIVE</span>}
                   </div>
-                  <div className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                    {rev.editorName} ({rev.editorRole}) ·{' '}
-                    {rev.ipfsMetadataCid ? `${rev.ipfsMetadataCid.slice(0, 12)}...` : 'local'} ·{' '}
-                    {rev.modelType === 'custom-3d' ? '3D asset' : `${rev.voxelCount} voxels`}
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                    <UserHandleBadge
+                      user={{
+                        id: rev.editorSub,
+                        username: rev.editorUsername,
+                        editorName: rev.editorName,
+                        editorRole: rev.editorRole,
+                        avatarImage: rev.editorAvatar
+                      }}
+                      fallback="Creator"
+                      size="xs"
+                    />
+                    <span>
+                      ({rev.editorRole}) ·{' '}
+                      {rev.ipfsMetadataCid ? `${rev.ipfsMetadataCid.slice(0, 12)}...` : 'local'} ·{' '}
+                      {rev.modelType === 'custom-3d' ? '3D asset' : `${rev.voxelCount} voxels`}
+                    </span>
                   </div>
                 </div>
                 {canRollback && !isCurrent && (

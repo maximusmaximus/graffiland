@@ -1,3 +1,5 @@
+import { placeFloatingLabelRect } from './canvasLabelLayout.js';
+
 /**
  * Shared 2D canvas overlay helper for 3D map wireframes.
  * Always called in Pass 2 (after all prism wireframes and gizmos are drawn)
@@ -121,7 +123,12 @@ export function drawFloatingLandLabel(
     innerColor = '#eafffc',
     liftPx = 20,
     minY = 12,
-    font = '700 10.5px "JetBrains Mono", ui-monospace, monospace'
+    font = '700 10.5px "JetBrains Mono", ui-monospace, monospace',
+    stageWidth = 0,
+    stageHeight = 0,
+    reservedRects = null,
+    placedRects = null,
+    isPrimary = false
   }
 ) {
   if (!ctx || !label) return null;
@@ -134,9 +141,38 @@ export function drawFloatingLandLabel(
   const padX = 8;
   const boxW = textW + padX * 2;
   const boxH = 20;
-  const pillCenterX = anchor.roofCenter.x;
-  const bx = pillCenterX - boxW / 2;
-  const by = Math.max(minY, anchor.highestTopY - boxH - liftPx);
+  let bx = anchor.roofCenter.x - boxW / 2;
+  let by = Math.max(minY, anchor.highestTopY - boxH - liftPx);
+
+  if (
+    stageWidth > 0 &&
+    stageHeight > 0 &&
+    (Array.isArray(reservedRects) || Array.isArray(placedRects))
+  ) {
+    const placed = placeFloatingLabelRect({
+      desiredX: bx,
+      desiredY: by,
+      width: boxW,
+      height: boxH,
+      stageWidth,
+      stageHeight,
+      reservedRects: reservedRects || [],
+      placedRects: placedRects || [],
+      isPrimary,
+      topMinY: minY
+    });
+    if (!placed) {
+      ctx.restore();
+      return null;
+    }
+    bx = placed.x;
+    by = placed.y;
+    if (Array.isArray(placedRects)) {
+      placedRects.push({ x: bx, y: by, w: boxW, h: boxH });
+    }
+  }
+
+  const pillCenterX = bx + boxW / 2;
 
   // Leader arrow from bottom of floating pill down to the exact land center
   drawFloatingCenterArrow(ctx, {

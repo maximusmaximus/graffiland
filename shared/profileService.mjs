@@ -566,7 +566,12 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
   const publicHandle = String(userRow.username || '').trim();
   const avatarImage = String(userRow.avatar_image || '');
   const headerImage = String(userRow.header_image || '');
-  const effectivePicture = avatarImage || userRow.picture || '';
+  const effectivePicture = avatarImage || '';
+  const safeDisplayName = publicHandle
+    ? `@${publicHandle}`
+    : accountType === 'agent'
+    ? userRow.name || 'AI Agent'
+    : `Creator ${formatUserNumber(userNumber)}`;
 
   return {
     profile: {
@@ -574,7 +579,7 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
       userNumber,
       userNumberLabel: formatUserNumber(userNumber),
       username: publicHandle,
-      displayName: userRow.name || publicHandle || 'Creator',
+      displayName: safeDisplayName,
       bio: userRow.bio || '',
       picture: effectivePicture,
       avatarImage,

@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import {
+  resolveAuthorHandleForStorage,
+  resolveSafeUserAvatar
+} from '../../../shared/userDisplay.mjs';
 import { api } from '../utils/api.js';
 import {
   computeRoomPossessionProof,
@@ -19,7 +23,15 @@ import {
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
 import { EmojiInput } from './EmojiField.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
+
+function formatShortChatTime(iso) {
+  if (!iso) return '';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 export default function SculptureChatDrawer({
   sculpture,
@@ -62,6 +74,7 @@ export default function SculptureChatDrawer({
   const [newCluePrompt, setNewCluePrompt] = useState('');
   const [newClueAnswer, setNewClueAnswer] = useState('');
   const [savingClue, setSavingClue] = useState(false);
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'pins' | 'access'
 
   const reqSentRef = useRef(false);
   const autoInitRef = useRef(false);
@@ -477,7 +490,7 @@ export default function SculptureChatDrawer({
         senderSub: user.id,
         identity,
         text: msgInput,
-        authorName: user.name || 'Artist',
+        authorName: resolveAuthorHandleForStorage(user, 'Artist'),
         sightDistM: entered?.sight?.distanceMeters ?? null,
         altM: location?.altitude != null ? Math.round(location.altitude) : null
       });
@@ -570,7 +583,9 @@ export default function SculptureChatDrawer({
       {
         id: crypto.randomUUID(),
         text,
-        authorName: user?.name || 'Land Holder',
+        authorName: resolveAuthorHandleForStorage(user, 'Land Holder'),
+        authorUsername: user?.username || '',
+        authorAvatar: resolveSafeUserAvatar(user?.avatarImage || ''),
         authorAddress: user?.customPayoutAddress || user?.walletAddress || '',
         pinnedAt: nowIso,
         updatedAt: nowIso
@@ -598,70 +613,294 @@ export default function SculptureChatDrawer({
 
   const distLabel =
     entered?.sight?.distanceMeters != null
-      ? `${entered.sight.distanceMeters}m away`
+      ? `${entered.sight.distanceMeters}m`
       : sculpture.distanceMeters != null
-        ? `${sculpture.distanceMeters}m away`
-        : 'In Camera View';
+        ? `${sculpture.distanceMeters}m`
+        : 'In View';
+  const landDisplayName = resolveLandDisplayName(
+    {
+      customName: sculpture.parcelName || sculpture.landDisplayName || '',
+      firstSculptureTitle: sculpture.title || '',
+      placeName: sculpture.placeName || ''
+    },
+    { defaultName: 'Virtual Land' }
+  );
+  const isUnlocked = Boolean(roomKeyB64);
+  const hasPinsTab = Boolean(
+    pinMeta?.hasPins || entered?.isLandHolder || pinUnlockStatus === 'locked' || pinnedItems.length > 0
+  );
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div>
-            <h3 className="modal-title" style={{ fontSize: 16 }}>
-              <XeroIcon emoji="💬" size={20} /> {sculpture.title}
-            </h3>
-            {sculpture.description && (
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3, lineHeight: 1.35 }}>
-                {sculpture.description}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-              <span className="badge teal">
-                <XeroIcon emoji="🔐" size={12} /> Server-Blind E2EE
+      <div
+        className="modal-card chat-board-modal"
+        data-testid="sculpture-chat-drawer"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Clean Compact Chat Board Header */}
+        <div className="chat-board-header">
+          <div className="chat-board-header-info">
+            <div className="chat-board-title-row">
+              <XeroIcon emoji="💬" size={18} />
+              <h3 className="chat-board-title">{sculpture.title}</h3>
+            </div>
+            <div className="chat-board-meta-row">
+              <span className="chat-board-pill is-gold">
+                <XeroIcon emoji="📍" size={11} /> {landDisplayName}
               </span>
-              <span className="badge">
-                <XeroIcon emoji="👁️" size={12} /> {distLabel}
-              </span>
-              <span className="badge gold">
-                <XeroIcon emoji="📍" size={12} />{' '}
-                {resolveLandDisplayName(
-                  {
-                    customName: sculpture.parcelName || sculpture.landDisplayName || '',
-                    firstSculptureTitle: sculpture.title || '',
-                    placeName: sculpture.placeName || ''
-                  },
-                  { defaultName: 'Virtual Land' }
-                )}
+              {(sculpture.creatorUsername || sculpture.creatorName) && (
+                <UserHandleBadge
+                  user={{
+                    id: sculpture.creatorSub,
+                    username: sculpture.creatorUsername,
+                    creatorName: sculpture.creatorName,
+                    avatarImage: sculpture.creatorAvatar
+                  }}
+                  fallback="Creator"
+                  size="xs"
+                />
+              )}
+              <span className={`chat-board-pill ${isUnlocked ? 'is-teal' : ''}`}>
+                <XeroIcon emoji={isUnlocked ? '🔓' : '🔐'} size={10} />{' '}
+                {isUnlocked ? 'E2EE Live' : 'Locked'} · {distLabel}
               </span>
             </div>
           </div>
-          <button className="btn" onClick={onClose} aria-label="Close chat">
-            <XeroIcon emoji="❌" size={15} />
+          <button
+            type="button"
+            className="btn btn-xs chat-board-close-btn"
+            onClick={onClose}
+            aria-label="Close chat"
+          >
+            <XeroIcon emoji="❌" size={13} />
           </button>
         </div>
 
-        {(pinMeta?.hasPins || entered?.isLandHolder || pinUnlockStatus === 'locked' || pinnedItems.length > 0) && (
-          <div className="pin-batch-box" style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
-              <span style={{ fontWeight: 700, fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent-gold)' }}>
-                <XeroIcon emoji="📌" size={14} /> Land Holder Pinned IPFS Batch
-              </span>
+        {/* Clean 3-Tab Navigation Bar */}
+        <div className="chat-board-tabs" role="tablist" aria-label="Chat board sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'chat'}
+            data-testid="chat-tab-messages"
+            className={`chat-board-tab ${activeTab === 'chat' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('chat')}
+          >
+            <span>💬 Chat</span>
+            <span className="chat-board-tab-count">{messages.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'pins'}
+            data-testid="chat-tab-pins"
+            className={`chat-board-tab ${activeTab === 'pins' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('pins')}
+          >
+            <span>📌 Pinned</span>
+            <span className="chat-board-tab-count">{pinnedItems.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'access'}
+            data-testid="chat-tab-access"
+            className={`chat-board-tab ${activeTab === 'access' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('access')}
+          >
+            <span>🔐 Access</span>
+            {pendingGrants.length > 0 && (
+              <span className="chat-board-tab-count is-alert">{pendingGrants.length}</span>
+            )}
+          </button>
+        </div>
+
+        {errorMsg && (
+          <div className="chat-board-error" role="alert">
+            <XeroIcon emoji="⚠️" size={13} /> <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {/* TAB 1: CHAT FEED + STICKY BOTTOM COMPOSER */}
+        {activeTab === 'chat' && (
+          <div className="chat-board-panel" role="tabpanel">
+            {!user ? (
+              <div className="chat-board-empty-card">
+                <XeroIcon emoji="🔐" size={24} />
+                <p>
+                  Sign in to unlock your E2EE identity key and chat with visitors at{' '}
+                  <strong>{landDisplayName}</strong>.
+                </p>
+                <button type="button" className="btn btn-primary" onClick={onRequestLogin}>
+                  <XeroIcon emoji="🔑" size={15} /> Sign In to Chat
+                </button>
+              </div>
+            ) : loading ? (
+              <div className="chat-board-empty-card">
+                <XeroIcon emoji="⏳" size={22} />
+                <p>Verifying AR camera sight &amp; decrypting messages…</p>
+              </div>
+            ) : entered && !entered.initialized ? (
+              <div className="chat-board-empty-card">
+                <XeroIcon emoji="🔐" size={24} />
+                <strong>Start the Location Chat Board</strong>
+                <p>
+                  Generates an end-to-end encrypted AES-256-GCM room key strictly on your device.
+                </p>
+                <button type="button" className="btn btn-primary" onClick={handleInitializeBoard}>
+                  <XeroIcon emoji="🔑" size={15} /> Create E2EE Board (Epoch 1)
+                </button>
+              </div>
+            ) : !roomKeyB64 ? (
+              <div className="chat-board-locked-wrap">
+                <div className="chat-board-empty-card">
+                  <XeroIcon emoji="🔒" size={22} />
+                  <strong>
+                    Encrypted Board ({entered?.messages?.length || 0} past{' '}
+                    {(entered?.messages?.length || 0) === 1 ? 'post' : 'posts'})
+                  </strong>
+                  <p>
+                    Messages are end-to-end encrypted. Answer the on-site visual clue or wait for a
+                    nearby keyholder to admit your device.
+                  </p>
+                </div>
+                {entered?.board?.hasClue && (
+                  <form onSubmit={handleUnlockClue} className="chat-board-clue-card">
+                    <div className="chat-board-clue-title">
+                      <XeroIcon emoji="🧩" size={14} /> On-Site Clue Unlock
+                    </div>
+                    <div className="chat-board-clue-prompt">
+                      &ldquo;{entered.board.cluePrompt}&rdquo;
+                    </div>
+                    <div className="chat-board-inline-row">
+                      <input
+                        className="input"
+                        value={clueInput}
+                        onChange={(e) => setClueInput(e.target.value)}
+                        placeholder="Answer visible here…"
+                        required
+                      />
+                      <button className="btn btn-primary" type="submit" disabled={clueBusy}>
+                        <XeroIcon emoji="🔑" size={13} /> {clueBusy ? '…' : 'Unlock'}
+                      </button>
+                    </div>
+                    {clueError && <div className="chat-board-inline-err">{clueError}</div>}
+                  </form>
+                )}
+              </div>
+            ) : (
+              <>
+                {pinnedItems.length > 0 && (
+                  <button
+                    type="button"
+                    className="chat-board-pin-teaser"
+                    onClick={() => setActiveTab('pins')}
+                  >
+                    <span className="chat-board-pin-teaser-label">
+                      <XeroIcon emoji="📌" size={12} /> Pinned ({pinnedItems.length}):
+                    </span>
+                    <span className="chat-board-pin-teaser-text">{pinnedItems[0].text}</span>
+                    <span className="chat-board-pin-teaser-link">View ›</span>
+                  </button>
+                )}
+
+                <div className="chat-board-feed" data-testid="chat-board-feed">
+                  {messages.length === 0 ? (
+                    <div className="chat-board-empty-card is-compact">
+                      <XeroIcon emoji="💬" size={20} />
+                      <p>
+                        Board unlocked! Leave the first encrypted note for future visitors standing
+                        at <strong>{landDisplayName}</strong>.
+                      </p>
+                    </div>
+                  ) : (
+                    messages.map((m) => {
+                      const isMine = Boolean(user?.id && m.senderSub && m.senderSub === user.id);
+                      const timeLabel = formatShortChatTime(m.createdAt);
+                      return (
+                        <div
+                          key={m.id}
+                          className={`chat-bubble ${isMine ? 'is-mine' : 'is-other'}`}
+                        >
+                          <div className="chat-bubble-head">
+                            <UserHandleBadge
+                              user={{
+                                id: m.senderSub,
+                                username: isMine ? user?.username || '' : '',
+                                authorName: m.authorName,
+                                avatarImage: isMine ? user?.avatarImage || '' : ''
+                              }}
+                              fallback="Artist"
+                              size="xs"
+                            />
+                            <span className="chat-bubble-meta mono">
+                              {m.verifiedSig !== false && <span title="Verified E2EE signature">🛡️</span>}
+                              {m.sightDistM != null ? ` ${m.sightDistM}m` : ''}
+                              {timeLabel ? ` · ${timeLabel}` : ''}
+                            </span>
+                          </div>
+                          <div className="chat-bubble-text">{m.text}</div>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={listEndRef} />
+                </div>
+
+                {pendingGrants.length > 0 && (
+                  <div className="chat-board-pending-strip">
+                    <XeroIcon emoji="⏳" size={12} /> Auto-wrapping key for {pendingGrants.length}{' '}
+                    nearby verified visitor{pendingGrants.length === 1 ? '' : 's'}…
+                  </div>
+                )}
+
+                <form onSubmit={handleSendMessage} className="chat-board-composer">
+                  <EmojiInput
+                    className="input"
+                    wrapperStyle={{ flex: 1, minWidth: 0 }}
+                    value={msgInput}
+                    maxLength={500}
+                    onChange={(e) => setMsgInput(e.target.value)}
+                    placeholder="Write an encrypted note… (: for emojis)"
+                    required
+                  />
+                  <button
+                    className="btn btn-primary chat-board-send-btn"
+                    type="submit"
+                    disabled={sending || !msgInput.trim()}
+                  >
+                    <XeroIcon emoji="📤" size={14} /> {sending ? '…' : 'Send'}
+                  </button>
+                </form>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: PINNED IPFS NOTES */}
+        {activeTab === 'pins' && (
+          <div className="chat-board-panel" role="tabpanel" data-testid="chat-panel-pins">
+            <div className="chat-board-section-head">
+              <strong>
+                <XeroIcon emoji="📌" size={14} /> Parcel-Locked Pinned Notes
+              </strong>
               {pinMeta?.ipfsCid && (
-                <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                  ipfs://{pinMeta.ipfsCid.slice(0, 12)}... · v{pinMeta.batchSeq}
+                <span className="mono chat-board-cid-chip">
+                  ipfs://{pinMeta.ipfsCid.slice(0, 10)}… · v{pinMeta.batchSeq}
                 </span>
               )}
             </div>
 
             {pinUnlockError && (
-              <div style={{ fontSize: 11, color: 'var(--accent-gold)', marginBottom: 6 }}>
-                <XeroIcon emoji="🔒" size={12} /> {pinUnlockError}
+              <div className="chat-board-clue-card">
+                <div style={{ fontSize: 12, color: 'var(--accent-gold)' }}>
+                  <XeroIcon emoji="🔒" size={12} /> {pinUnlockError}
+                </div>
                 {pinUnlockStatus === 'locked' && (
                   <button
                     type="button"
-                    className="btn"
-                    style={{ marginLeft: 8, padding: '2px 7px', fontSize: 10 }}
+                    className="btn btn-xs"
+                    style={{ alignSelf: 'flex-start', marginTop: 6 }}
                     onClick={() => {
                       pinAttemptedRef.current = false;
                       syncBoard();
@@ -673,16 +912,12 @@ export default function SculptureChatDrawer({
               </div>
             )}
 
-            {pinnedItems.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {pinnedItems.map((pin) => (
-                  <div
-                    key={pin.id}
-                    className="card"
-                    style={{ padding: '7px 9px', borderColor: 'rgba(255, 209, 102, 0.35)' }}
-                  >
+            <div className="chat-board-pins-list">
+              {pinnedItems.length > 0 ? (
+                pinnedItems.map((pin) => (
+                  <div key={pin.id} className="chat-pin-card">
                     {editingPinId === pin.id ? (
-                      <div style={{ display: 'flex', gap: 6 }}>
+                      <div className="chat-board-inline-row">
                         <EmojiInput
                           className="input"
                           wrapperStyle={{ flex: 1, minWidth: 0 }}
@@ -692,8 +927,7 @@ export default function SculptureChatDrawer({
                         />
                         <button
                           type="button"
-                          className="btn btn-primary"
-                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          className="btn btn-xs btn-primary"
                           disabled={pinBusy}
                           onClick={() => handleSavePinEdit(pin.id)}
                         >
@@ -701,8 +935,7 @@ export default function SculptureChatDrawer({
                         </button>
                         <button
                           type="button"
-                          className="btn"
-                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          className="btn btn-xs"
                           onClick={() => setEditingPinId('')}
                         >
                           Cancel
@@ -710,25 +943,22 @@ export default function SculptureChatDrawer({
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{pin.text}</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, fontSize: 10, color: 'var(--muted)' }}>
-                          <span>
-                            {pin.authorName} · Encrypted on IPFS for{' '}
-                            {resolveLandDisplayName(
-                              {
-                                customName: sculpture.parcelName || sculpture.landDisplayName || '',
-                                firstSculptureTitle: sculpture.title || '',
-                                placeName: sculpture.placeName || ''
-                              },
-                              { defaultName: 'this land' }
-                            )}
-                          </span>
+                        <div className="chat-pin-text">{pin.text}</div>
+                        <div className="chat-pin-footer">
+                          <UserHandleBadge
+                            user={{
+                              username: pin.authorUsername || '',
+                              authorName: pin.authorName,
+                              avatarImage: pin.authorAvatar || ''
+                            }}
+                            fallback="Land Holder"
+                            size="xs"
+                          />
                           {entered?.isLandHolder && (
-                            <span style={{ display: 'flex', gap: 4 }}>
+                            <span style={{ display: 'inline-flex', gap: 4 }}>
                               <button
                                 type="button"
-                                className="btn"
-                                style={{ padding: '2px 6px', fontSize: 10 }}
+                                className="btn btn-xs"
                                 disabled={pinBusy}
                                 onClick={() => {
                                   setEditingPinId(pin.id);
@@ -739,8 +969,7 @@ export default function SculptureChatDrawer({
                               </button>
                               <button
                                 type="button"
-                                className="btn btn-danger"
-                                style={{ padding: '2px 6px', fontSize: 10 }}
+                                className="btn btn-xs btn-danger"
                                 disabled={pinBusy}
                                 onClick={() => handleDeletePin(pin.id)}
                               >
@@ -752,214 +981,145 @@ export default function SculptureChatDrawer({
                       </>
                     )}
                   </div>
-                ))}
-              </div>
-            ) : entered?.isLandHolder ? (
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>
-                No pinned messages yet. Add an encrypted note below that only real-life visitors on this parcel can decrypt.
-              </div>
-            ) : null}
+                ))
+              ) : (
+                <div className="chat-board-empty-card is-compact">
+                  <XeroIcon emoji="📌" size={18} />
+                  <p>
+                    {entered?.isLandHolder
+                      ? 'Pin an encrypted note below that only in-person visitors on this land can read.'
+                      : hasPinsTab
+                      ? 'No unlocked pinned notes available yet.'
+                      : 'No pinned notes on this land yet.'}
+                  </p>
+                </div>
+              )}
+            </div>
 
             {entered?.isLandHolder && (
-              <form onSubmit={handleAddPin} style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <form onSubmit={handleAddPin} className="chat-board-composer">
                 <EmojiInput
                   className="input"
                   wrapperStyle={{ flex: 1, minWidth: 0 }}
                   value={pinInput}
                   maxLength={500}
                   onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Pin encrypted IPFS message (type : for emojis)..."
+                  placeholder="Pin an encrypted IPFS note… (: for emojis)"
                   required
                 />
-                <button className="btn btn-primary" type="submit" disabled={pinBusy} style={{ fontSize: 11 }}>
-                  <XeroIcon emoji="📌" size={13} /> {pinBusy ? '...' : 'Pin'}
+                <button className="btn btn-primary" type="submit" disabled={pinBusy}>
+                  <XeroIcon emoji="📌" size={13} /> {pinBusy ? '…' : 'Pin'}
                 </button>
               </form>
             )}
           </div>
         )}
 
-        {!user ? (
-          <div className="card" style={{ textAlign: 'center', padding: 16 }}>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-              Sign in with Google to generate your device&apos;s E2EE identity key and enter this
-              location&apos;s encrypted sculpture chat board.
-            </p>
-            <button className="btn btn-primary" onClick={onRequestLogin}>
-              <XeroIcon emoji="🔑" size={16} /> Google Sign-In
-            </button>
-          </div>
-        ) : loading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-            <XeroIcon emoji="⏳" size={18} /> Verifying AR camera sight &amp; decrypting board...
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {errorMsg && (
-              <div className="card" style={{ borderColor: 'var(--danger)', color: 'var(--danger)', fontSize: 12 }}>
-                {errorMsg}
+        {/* TAB 3: ACCESS, E2EE SECURITY & ON-SITE CLUE */}
+        {activeTab === 'access' && (
+          <div className="chat-board-panel" role="tabpanel" data-testid="chat-panel-access">
+            <div className="chat-access-grid">
+              <div className="chat-access-stat">
+                <span className="chat-access-label">Encryption</span>
+                <strong className="chat-access-val">AES-256-GCM · Epoch {entered?.board?.keyEpoch || 1}</strong>
+              </div>
+              <div className="chat-access-stat">
+                <span className="chat-access-label">Sight Proximity</span>
+                <strong className="chat-access-val">{distLabel}</strong>
+              </div>
+              <div className="chat-access-stat">
+                <span className="chat-access-label">Room Key Status</span>
+                <strong className="chat-access-val">
+                  {isUnlocked ? '🔓 Unlocked on Device' : '🔒 Awaiting Unlock'}
+                </strong>
+              </div>
+              {identity && (
+                <div className="chat-access-stat">
+                  <span className="chat-access-label">Device Fingerprint</span>
+                  <strong className="chat-access-val mono">{identity.pubFingerprint}</strong>
+                </div>
+              )}
+            </div>
+
+            {sculpture.description && (
+              <div className="chat-pin-card">
+                <span className="chat-access-label">Artwork Description</span>
+                <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.4 }}>
+                  {sculpture.description}
+                </div>
               </div>
             )}
 
-            {entered && !entered.initialized ? (
-              <div className="card" style={{ padding: 14 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-                  <XeroIcon emoji="🔐" size={16} /> Initialize Encrypted Location Board
+            {entered?.board?.hasClue && !roomKeyB64 && (
+              <form onSubmit={handleUnlockClue} className="chat-board-clue-card">
+                <div className="chat-board-clue-title">
+                  <XeroIcon emoji="🧩" size={14} /> Unlock with On-Site Visual Clue
                 </div>
-                <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--muted)' }}>
-                  No chat board key has been created for this sculpture yet. Initializing generates
-                  a 256-bit client-side AES-GCM key exclusively on your device.
-                </p>
-                <button className="btn btn-primary" onClick={handleInitializeBoard}>
-                  <XeroIcon emoji="🔑" size={15} /> Create E2EE Board (Epoch 1)
-                </button>
-              </div>
-            ) : !roomKeyB64 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="card" style={{ padding: 12, fontSize: 12 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <XeroIcon emoji="🔒" size={16} /> Board Key Required to Decrypt ({entered?.messages?.length || 0} past posts)
-                  </div>
-                  <p style={{ margin: 0, color: 'var(--muted)', lineHeight: 1.45 }}>
-                    Past messages are end-to-end encrypted in AES-256-GCM. Neither the map,
-                    desktop browsers, nor our server can decrypt them.
-                  </p>
-                  {identity && (
-                    <div className="mono" style={{ fontSize: 10, color: 'var(--accent)', marginTop: 8 }}>
-                      Device Key FP: {identity.pubFingerprint} · Status: Waiting for ECDH wrap
-                    </div>
-                  )}
-                </div>
-
-                {entered?.board?.hasClue && (
-                  <form onSubmit={handleUnlockClue} className="card" style={{ padding: 12 }}>
-                    <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <XeroIcon emoji="🧩" size={15} /> Unlock Instantly with On-Site Clue
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--gold)', marginBottom: 8 }}>
-                      &ldquo;{entered.board.cluePrompt}&rdquo;
-                    </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input
-                        className="input"
-                        value={clueInput}
-                        onChange={(e) => setClueInput(e.target.value)}
-                        placeholder="Answer visible at this physical spot"
-                        required
-                      />
-                      <button className="btn btn-primary" type="submit" disabled={clueBusy}>
-                        <XeroIcon emoji="🔑" size={14} /> {clueBusy ? '...' : 'Unlock'}
-                      </button>
-                    </div>
-                    {clueError && (
-                      <div style={{ color: 'var(--danger)', fontSize: 11, marginTop: 6 }}>{clueError}</div>
-                    )}
-                  </form>
-                )}
-
-                <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center' }}>
-                  Your camera sight request is queued automatically for the creator or nearby keyholders.
-                </div>
-              </div>
-            ) : (
-              <>
-                <div
-                  style={{
-                    maxHeight: 270,
-                    overflowY: 'auto',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                    paddingRight: 2
-                  }}
-                >
-                  {messages.length === 0 ? (
-                    <div className="card" style={{ padding: 14, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>
-                      <XeroIcon emoji="💬" size={18} />
-                      <div style={{ marginTop: 6 }}>
-                        Location board unlocked! Leave the first encrypted note for future visitors standing here.
-                      </div>
-                    </div>
-                  ) : (
-                    messages.map((m) => (
-                      <div key={m.id} className="card" style={{ padding: '8px 10px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, marginBottom: 4 }}>
-                          <span style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <XeroIcon emoji="🛡️" size={12} /> {m.authorName}
-                          </span>
-                          <span className="mono" style={{ color: 'var(--muted)', fontSize: 10 }}>
-                            {m.sightDistM != null ? `${m.sightDistM}m` : ''}
-                            {m.altM != null ? ` · ${m.altM}m alt` : ''}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 13, lineHeight: 1.4 }}>{m.text}</div>
-                      </div>
-                    ))
-                  )}
-                  <div ref={listEndRef} />
-                </div>
-
-                <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 6 }}>
-                  <EmojiInput
+                <div className="chat-board-clue-prompt">&ldquo;{entered.board.cluePrompt}&rdquo;</div>
+                <div className="chat-board-inline-row">
+                  <input
                     className="input"
-                    wrapperStyle={{ flex: 1, minWidth: 0 }}
-                    value={msgInput}
-                    maxLength={500}
-                    onChange={(e) => setMsgInput(e.target.value)}
-                    placeholder="Send E2EE note (type : for emojis)..."
+                    value={clueInput}
+                    onChange={(e) => setClueInput(e.target.value)}
+                    placeholder="Answer visible here…"
                     required
                   />
-                  <button className="btn btn-primary" type="submit" disabled={sending}>
-                    <XeroIcon emoji="📤" size={15} /> {sending ? '...' : 'Send'}
+                  <button className="btn btn-primary" type="submit" disabled={clueBusy}>
+                    <XeroIcon emoji="🔑" size={13} /> {clueBusy ? '…' : 'Unlock'}
                   </button>
-                </form>
+                </div>
+                {clueError && <div className="chat-board-inline-err">{clueError}</div>}
+              </form>
+            )}
 
-                {pendingGrants.length > 0 && (
-                  <div className="badge gold" style={{ alignSelf: 'flex-start' }}>
-                    <XeroIcon emoji="⏳" size={13} /> Auto-wrapping {pendingGrants.length} verified viewer(s)...
+            {user && entered?.board?.creatorSub === user.id && roomKeyB64 && (
+              <div className="chat-pin-card">
+                <div className="chat-board-section-head" style={{ marginBottom: 6 }}>
+                  <strong>
+                    <XeroIcon emoji="🧩" size={13} /> On-Site Visual Clue (Optional)
+                  </strong>
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    onClick={() => {
+                      setNewCluePrompt(entered.board.cluePrompt || '');
+                      setClueEditOpen((o) => !o);
+                    }}
+                  >
+                    {clueEditOpen ? 'Close' : entered.board.hasClue ? 'Edit Clue' : '+ Add Clue'}
+                  </button>
+                </div>
+                {!clueEditOpen && (
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                    {entered.board.hasClue
+                      ? `Active clue: "${entered.board.cluePrompt}"`
+                      : 'Add a real-world question so in-person visitors can unlock this chat without waiting.'}
                   </div>
                 )}
-
-                {entered?.board?.creatorSub === user.id && (
-                  <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ fontSize: 11, padding: '5px 9px' }}
-                      onClick={() => {
-                        setNewCluePrompt(entered.board.cluePrompt || '');
-                        setClueEditOpen((o) => !o);
-                      }}
-                    >
-                      <XeroIcon emoji="🧩" size={13} />{' '}
-                      {entered.board.hasClue ? 'Update On-Site Visual Clue' : 'Add Optional On-Site Clue'}
-                    </button>
-                    {clueEditOpen && (
-                      <form onSubmit={handleSaveClue} style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                        <EmojiInput
-                          className="input"
-                          maxLength={140}
-                          value={newCluePrompt}
-                          onChange={(e) => setNewCluePrompt(e.target.value)}
-                          placeholder="Question visible at this location (type : for emojis)"
-                        />
-                        {newCluePrompt.trim() && (
-                          <input
-                            className="input"
-                            value={newClueAnswer}
-                            onChange={(e) => setNewClueAnswer(e.target.value)}
-                            placeholder="Exact real-world answer (PBKDF2 hashed locally)"
-                            required
-                          />
-                        )}
-                        <button className="btn btn-primary" type="submit" disabled={savingClue}>
-                          {savingClue ? 'Saving...' : newCluePrompt.trim() ? 'Save Clue Envelope' : 'Disable Clue'}
-                        </button>
-                      </form>
+                {clueEditOpen && (
+                  <form onSubmit={handleSaveClue} style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                    <EmojiInput
+                      className="input"
+                      maxLength={140}
+                      value={newCluePrompt}
+                      onChange={(e) => setNewCluePrompt(e.target.value)}
+                      placeholder="Question visible at this location (type : for emojis)"
+                    />
+                    {newCluePrompt.trim() && (
+                      <input
+                        className="input"
+                        value={newClueAnswer}
+                        onChange={(e) => setNewClueAnswer(e.target.value)}
+                        placeholder="Exact real-world answer (PBKDF2 hashed locally)"
+                        required
+                      />
                     )}
-                  </div>
+                    <button className="btn btn-primary btn-sm" type="submit" disabled={savingClue}>
+                      {savingClue ? 'Saving…' : newCluePrompt.trim() ? 'Save Clue Envelope' : 'Disable Clue'}
+                    </button>
+                  </form>
                 )}
-              </>
+              </div>
             )}
           </div>
         )}

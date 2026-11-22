@@ -1,5 +1,10 @@
 import { decodeGeohashBounds } from '../server/services/pol.mjs';
 import { resolveLandDisplayName } from './landVolume.mjs';
+import {
+  extractPublicUsername,
+  resolvePublicUserHandle,
+  resolveSafeUserAvatar
+} from './userDisplay.mjs';
 
 /**
  * Shared SELECT column list omitting `voxels_json` on lightweight list/spatial queries
@@ -47,12 +52,16 @@ export function buildSculptureSelectSql({ includeVoxels = true } = {}) {
       COALESCE(l.quest_id, '') AS layer_quest_id,
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
       COALESCE(l.qual_contributor, 1) AS qual_contributor,
-      COALESCE(pc.custom_name, '') AS parcel_custom_name
+      COALESCE(pc.custom_name, '') AS parcel_custom_name,
+      COALESCE(cu.username, '') AS creator_username,
+      COALESCE(cu.avatar_image, '') AS creator_avatar,
+      COALESCE(cu.user_number, 0) AS creator_user_number
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
      LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
+     LEFT JOIN users cu ON cu.id = s.creator_sub
   `;
 }
 
@@ -140,12 +149,29 @@ export function serializeSculptureRow(
       ? Math.max(0.1, Math.min(60, Math.round(rawTransformScale * 10000) / 10000))
       : 1;
 
+  const creatorUsername = extractPublicUsername({
+    username: row.creator_username || '',
+    creatorName: row.creator_name || ''
+  });
+  const creatorAvatar = resolveSafeUserAvatar(row.creator_avatar || '');
+  const safeCreatorName = resolvePublicUserHandle(
+    {
+      id: row.creator_sub,
+      username: creatorUsername,
+      creatorName: row.creator_name,
+      userNumber: row.creator_user_number
+    },
+    { fallback: 'Creator', includeAt: true }
+  );
+
   return {
     id: row.id,
     title: row.title,
     description: row.description,
     creatorSub: row.creator_sub,
-    creatorName: row.creator_name,
+    creatorName: safeCreatorName,
+    creatorUsername,
+    creatorAvatar,
     ...(includeAdminFields ? { creatorEmail: row.creator_email } : {}),
     recipientAddress: row.recipient_address,
     ownerAddress: row.recipient_address,

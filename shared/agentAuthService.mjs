@@ -1,5 +1,9 @@
 import { ethers } from 'ethers';
 import { STEWARD_DEFAULTS } from './constants.mjs';
+import {
+  resolvePublicUserHandle,
+  resolveSafeUserAvatar
+} from './userDisplay.mjs';
 import { McpServiceError } from './mcp/helpers.mjs';
 
 function b64UrlEncode(input) {
@@ -390,8 +394,9 @@ export async function getDualLeaderboards(db, { limit = 25 } = {}) {
 
   const humanRows = await db.all(
     `SELECT s.creator_sub AS userId,
-            MAX(s.creator_name) AS name,
             MAX(u.username) AS username,
+            MAX(u.avatar_image) AS avatarImage,
+            MAX(u.user_number) AS userNumber,
             MAX(s.recipient_address) AS walletAddress,
             COUNT(*) AS sculptureCount,
             COUNT(DISTINCT s.parcel_id) AS parcelsVisited,
@@ -419,15 +424,22 @@ export async function getDualLeaderboards(db, { limit = 25 } = {}) {
       attractedHumans: Number(r.attracted_humans || 0),
       parcelVolumeEth: Number(r.parcel_volume_eth || 0)
     })),
-    humanArtists: (humanRows || []).map((r) => ({
-      userId: r.userId,
-      name: r.name || 'Street Artist',
-      username: r.username || '',
-      walletAddress: r.walletAddress || '',
-      sculptureCount: Number(r.sculptureCount || 0),
-      parcelsVisited: Number(r.parcelsVisited || 0),
-      landsAwakened: Number(r.landsAwakened || 0),
-      totalXp: Number(r.totalXp || 0)
-    }))
+    humanArtists: (humanRows || []).map((r) => {
+      const username = String(r.username || '').trim();
+      return {
+        userId: r.userId,
+        name: resolvePublicUserHandle(
+          { id: r.userId, username, userNumber: r.userNumber },
+          { fallback: 'Creator', includeAt: true }
+        ),
+        username,
+        avatarImage: resolveSafeUserAvatar(r.avatarImage || ''),
+        walletAddress: r.walletAddress || '',
+        sculptureCount: Number(r.sculptureCount || 0),
+        parcelsVisited: Number(r.parcelsVisited || 0),
+        landsAwakened: Number(r.landsAwakened || 0),
+        totalXp: Number(r.totalXp || 0)
+      };
+    })
   };
 }

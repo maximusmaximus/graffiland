@@ -113,11 +113,11 @@ export function sanitizeUser(userRow) {
   return {
     id: userRow.id,
     email: userRow.email,
-    name: userRow.name,
+    name: username ? `@${username}` : isAgent ? userRow.name || 'AI Agent' : 'Creator',
     username,
     bio: String(userRow.bio || ''),
     needsUsernameOnboarding: !username && !isAgent,
-    picture: avatarImage || userRow.picture || '',
+    picture: avatarImage || '',
     avatarImage,
     headerImage,
     userNumber,

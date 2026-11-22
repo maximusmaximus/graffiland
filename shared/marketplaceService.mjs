@@ -1,6 +1,11 @@
 import { ethers } from 'ethers';
 import { STEWARD_DEFAULTS, TRANSACTION_FEES } from './constants.mjs';
 import { resolveLandDisplayName } from './landVolume.mjs';
+import {
+  resolveAuthorHandleForStorage,
+  resolvePublicUserHandle,
+  resolveSafeUserAvatar
+} from './userDisplay.mjs';
 import { McpServiceError, checkSculptureOwnership, resolvePreferredOwnerWallet } from './mcp/helpers.mjs';
 import { notifyLandMarketplaceSale } from './notificationService.mjs';
 
@@ -227,7 +232,7 @@ export async function createMarketplaceListing(
       scRow.id,
       scRow.parcel_id,
       sellerUser.id,
-      sellerUser.name || scRow.creator_name || 'Seller',
+      resolveAuthorHandleForStorage(sellerUser, 'Seller'),
       sellerAddress,
       splits.grossEth,
       splits.grossWei,
@@ -242,12 +247,25 @@ export async function createMarketplaceListing(
 
 function serializeListingRow(row, sculptureRow = null, steward = null) {
   const splits = row.split_breakdown_json ? JSON.parse(row.split_breakdown_json) : null;
+  const sellerUsername = String(row.seller_username || '').trim();
+  const sellerAvatar = resolveSafeUserAvatar(row.seller_avatar || '');
+  const safeSellerName = resolvePublicUserHandle(
+    {
+      id: row.seller_sub,
+      username: sellerUsername,
+      sellerName: row.seller_name,
+      userNumber: row.seller_user_number
+    },
+    { fallback: 'Seller', includeAt: true }
+  );
   return {
     id: row.id,
     sculptureId: row.sculpture_id,
     parcelId: row.parcel_id,
     sellerSub: row.seller_sub,
-    sellerName: row.seller_name,
+    sellerName: safeSellerName,
+    sellerUsername,
+    sellerAvatar,
     sellerAddress: row.seller_address,
     priceEth: Number(row.price_eth),
     priceWei: row.price_wei,
@@ -295,13 +313,20 @@ export async function listMarketplaceItems(db, { status = 'active', parcelId = '
             s.preview_data_url AS preview_data_url, s.token_id AS token_id, s.place_name AS place_name,
             COALESCE(pc.custom_name, '') AS parcel_custom_name,
             COALESCE(l.layer_role, 'artist_work') AS layer_role,
-            st.steward_name, st.steward_type, st.steward_address,
+            COALESCE(su.username, '') AS seller_username,
+            COALESCE(su.avatar_image, '') AS seller_avatar,
+            COALESCE(su.user_number, 0) AS seller_user_number,
+            st.steward_sub, st.steward_name, st.steward_type, st.steward_address,
+            COALESCE(stu.username, '') AS steward_username,
+            COALESCE(stu.avatar_image, '') AS steward_avatar,
             st.human_contributor_count
      FROM marketplace_listings ml
      JOIN sculptures s ON s.id = ml.sculpture_id
      LEFT JOIN parcel_curations pc ON pc.parcel_id = ml.parcel_id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     LEFT JOIN users su ON su.id = ml.seller_sub
      LEFT JOIN land_steward_state st ON st.parcel_id = ml.parcel_id
+     LEFT JOIN users stu ON stu.id = st.steward_sub
      ${where}
      ORDER BY ml.created_at DESC
      LIMIT ?`,
@@ -322,7 +347,17 @@ export async function listMarketplaceItems(db, { status = 'active', parcelId = '
       firstSculptureTitle: r.sculpture_title || '',
       placeName: r.place_name || ''
     }),
-    stewardName: r.steward_name || 'Parcel Steward',
+    stewardUsername: String(r.steward_username || '').trim(),
+    stewardAvatar: resolveSafeUserAvatar(r.steward_avatar || ''),
+    stewardName: resolvePublicUserHandle(
+      {
+        id: r.steward_sub,
+        username: r.steward_username,
+        stewardName: r.steward_name,
+        stewardType: r.steward_type
+      },
+      { fallback: 'Parcel Steward', includeAt: true }
+    ),
     stewardType: r.steward_type || 'human',
     stewardAddress: r.steward_address || '',
     humanContributorCount: Number(r.human_contributor_count || 0)

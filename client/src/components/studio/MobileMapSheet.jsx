@@ -14,6 +14,7 @@ import {
 } from '../../utils/landMapHelpers.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
+import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobileIsometricMap from './MobileIsometricMap.jsx';
 
@@ -557,13 +558,31 @@ export default function MobileMapSheet({
                         onClick={() => onOpenProfile(stewardHandle)}
                         title={`View public profile for ${stewardLabel}`}
                       >
-                        <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
-                        {stewardLabel}
+                        <UserHandleBadge
+                          user={{
+                            id: land.ownerSub || land.stewardSub,
+                            username: land.stewardUsername,
+                            stewardName: land.stewardName,
+                            stewardType: land.stewardType,
+                            avatarImage: land.stewardAvatar
+                          }}
+                          fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+                          size="xs"
+                        />
                       </button>
                     ) : (
                       <span className="mobile-meta-chip">
-                        <XeroIcon emoji={land.stewardType === 'agent' ? '🤖' : '👤'} size={11} />{' '}
-                        {stewardLabel}
+                        <UserHandleBadge
+                          user={{
+                            id: land.ownerSub || land.stewardSub,
+                            username: land.stewardUsername,
+                            stewardName: land.stewardName,
+                            stewardType: land.stewardType,
+                            avatarImage: land.stewardAvatar
+                          }}
+                          fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+                          size="xs"
+                        />
                       </span>
                     )}
                     <span className="mobile-meta-chip">
@@ -712,9 +731,26 @@ export default function MobileMapSheet({
                                           {assetMeta}
                                         </span>
                                       )}
-                                      {sc.creatorName && (
+                                      {(sc.creatorUsername || sc.creatorName) && (
                                         <span className="mobile-sc-chip">
-                                          <XeroIcon emoji="👤" size={10} /> {sc.creatorName}
+                                          <UserHandleBadge
+                                            user={{
+                                              id: sc.creatorSub,
+                                              username: sc.creatorUsername,
+                                              creatorName: sc.creatorName,
+                                              avatarImage: sc.creatorAvatar
+                                            }}
+                                            fallback="Creator"
+                                            size="xs"
+                                            onClick={
+                                              onOpenProfile && (sc.creatorUsername || sc.creatorSub)
+                                                ? () =>
+                                                    onOpenProfile(
+                                                      sc.creatorUsername || sc.creatorSub
+                                                    )
+                                                : null
+                                            }
+                                          />
                                         </span>
                                       )}
                                       {polScore !== null && Number.isFinite(Number(polScore)) && (

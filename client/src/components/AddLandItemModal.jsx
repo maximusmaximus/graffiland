@@ -8,6 +8,7 @@ import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const SUPPORTED_ITEM_TYPES = [
@@ -732,11 +733,23 @@ export default function AddLandItemModal({
                       </span>
                     )}
                   </div>
-                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                    {sc.modelType === 'custom-3d'
-                      ? `.${sc.customModel?.format || 'glb'}`
-                      : `${sc.voxelCount || 0} voxels`}{' '}
-                    · by {sc.creatorName || 'Artist'}
+                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                    <span>
+                      {sc.modelType === 'custom-3d'
+                        ? `.${sc.customModel?.format || 'glb'}`
+                        : `${sc.voxelCount || 0} voxels`}
+                    </span>
+                    <span>·</span>
+                    <UserHandleBadge
+                      user={{
+                        id: sc.creatorSub,
+                        username: sc.creatorUsername,
+                        creatorName: sc.creatorName,
+                        avatarImage: sc.creatorAvatar
+                      }}
+                      fallback="Creator"
+                      size="xs"
+                    />
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>

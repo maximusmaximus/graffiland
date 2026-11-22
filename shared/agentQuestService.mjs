@@ -15,6 +15,7 @@ import {
   notifyAfterSculpturePublished,
   notifyFreeLimitReached
 } from './notificationService.mjs';
+import { resolveAuthorHandleForStorage } from './userDisplay.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -1321,7 +1322,7 @@ export async function awakenParcelByHumanVisit(
       sculptureId,
       sculptureTitle: scMeta?.title || 'New Sculpture',
       creatorSub: artistUser?.id || '',
-      creatorName: artistUser?.name || 'An artist',
+      creatorName: resolveAuthorHandleForStorage(artistUser, 'Creator'),
       awakenedParcel: awakenedNow,
       wasPreviouslyEmpty
     });

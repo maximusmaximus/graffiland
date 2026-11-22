@@ -308,8 +308,66 @@ export function computeObjectVoxelBoundsMeters(voxels = []) {
 }
 
 /**
+ * Shifts a geographic coordinate `(lat, lng)` by local Three.js AR offsets
+ * (`localX = +east`, `localZ = -north`, so `+localZ` is south).
+ * @param {number} lat
+ * @param {number} lng
+ * @param {number} localX
+ * @param {number} localZ
+ */
+export function offsetLatLngByLocalXZ(lat, lng, localX = 0, localZ = 0) {
+  const baseLat = Number(lat);
+  const baseLng = Number(lng);
+  if (!Number.isFinite(baseLat) || !Number.isFinite(baseLng)) {
+    return { lat: baseLat, lng: baseLng };
+  }
+  const mPerDegLng = metersPerDegLngAtLat(baseLat);
+  const east = Number(localX || 0);
+  const north = -Number(localZ || 0);
+  return {
+    lat: Number((baseLat + north / METERS_PER_DEG_LAT).toFixed(7)),
+    lng: Number((baseLng + east / mPerDegLng).toFixed(7))
+  };
+}
+
+/**
+ * Centers a voxel cloud horizontally on `(0, 0)` in XZ so the sculpture's local
+ * origin sits at the exact center of its footprint, returning the horizontal shift
+ * `(shiftX, shiftZ)` in meters so the caller can shift GPS / anchor coordinates accordingly.
+ * Preserves vertical `y` coordinates intact.
+ * @param {Array<any>} voxels
+ */
+export function centerVoxelsHorizontally(voxels = []) {
+  if (!Array.isArray(voxels) || voxels.length === 0) {
+    return { voxels: [], shiftX: 0, shiftZ: 0, bounds: null };
+  }
+  const bounds = computeObjectVoxelBoundsMeters(voxels);
+  if (!bounds) {
+    return { voxels: voxels.slice(), shiftX: 0, shiftZ: 0, bounds: null };
+  }
+  const shiftX = Number(bounds.midX || 0);
+  const shiftZ = Number(bounds.midZ || 0);
+  if (Math.abs(shiftX) < 1e-4 && Math.abs(shiftZ) < 1e-4) {
+    return { voxels: voxels.slice(), shiftX: 0, shiftZ: 0, bounds };
+  }
+  const centered = voxels.map((v) => ({
+    ...v,
+    x: Number((Number(v.x || 0) - shiftX).toFixed(4)),
+    z: Number((Number(v.z || 0) - shiftZ).toFixed(4))
+  }));
+  return {
+    voxels: centered,
+    shiftX: Number(shiftX.toFixed(4)),
+    shiftZ: Number(shiftZ.toFixed(4)),
+    bounds: computeObjectVoxelBoundsMeters(centered)
+  };
+}
+
+/**
  * Fits a 3D Virtual Land volume centered directly on a drawn 3D object with symmetric
  * padding (default 10% on every side => 1.20x total span) in all three dimensions (W, D, H).
+ * Accounts for BOTH `anchorOffset` AND the voxel cloud's actual `(midX, midZ)` centroid
+ * so off-origin AR drawings always land dead-center inside their parcel footprint.
  * @param {{
  *   parcelId?: string,
  *   geohash?: string,
@@ -317,6 +375,7 @@ export function computeObjectVoxelBoundsMeters(voxels = []) {
  *   lng?: number,
  *   voxels?: any[],
  *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number } | null,
+ *   scale?: number,
  *   paddingFraction?: number,
  *   minDimensionMeters?: number
  * }} [options]
@@ -328,6 +387,7 @@ export function buildObjectFittedLandVolume({
   lng = NaN,
   voxels = [],
   anchorOffset = null,
+  scale = 1,
   paddingFraction = 0.1,
   minDimensionMeters = 0.6
 } = {}) {
@@ -340,19 +400,24 @@ export function buildObjectFittedLandVolume({
     : 0.1;
   const padMultiplier = 1 + 2 * padFrac; // 10% padding on each side in every dimension = 1.2x
 
+  const objScale = Number.isFinite(Number(scale)) && Number(scale) > 0 ? Number(scale) : 1;
   const dx = Number(anchorOffset?.dx || 0);
   const dz = Number(anchorOffset?.dz || 0);
   const yaw = Number(anchorOffset?.yaw || 0);
   const mPerDegLng = metersPerDegLngAtLat(baseLat);
 
-  // Center the land directly on the object anchor (never off on a geohash edge)
+  const bounds = computeObjectVoxelBoundsMeters(voxels);
+
+  // Center the land directly on the object anchor (lat, lng) + (dx, dz).
+  // All 3D renderers (AR camera, 3D map layer, GeoJSON map extrusions, and 3D viewer)
+  // horizontally center each voxel cloud on its own anchor, and /api/sculptures/publish
+  // normalizes newly drawn voxels around (0, 0) while shifting (lat, lng) to the drawn spot.
   const centerLat = baseLat + (-dz / METERS_PER_DEG_LAT);
   const centerLng = baseLng + (dx / mPerDegLng);
 
-  const bounds = computeObjectVoxelBoundsMeters(voxels);
-  const rawW = bounds ? bounds.widthMeters : 1.0;
-  const rawD = bounds ? bounds.depthMeters : 1.0;
-  const rawH = bounds ? bounds.heightMeters : 1.0;
+  const rawW = (bounds ? bounds.widthMeters : 1.0) * objScale;
+  const rawD = (bounds ? bounds.depthMeters : 1.0) * objScale;
+  const rawH = (bounds ? bounds.heightMeters : 1.0) * objScale;
 
   let widthMeters = Math.max(
     minDimensionMeters,
@@ -503,19 +568,27 @@ export function buildMultiObjectFittedLandVolume({
       }
     }
     const vb = computeObjectVoxelBoundsMeters(Array.isArray(voxels) ? voxels : []);
-    const halfW = (vb ? vb.widthMeters : 1.0) / 2;
-    const halfD = (vb ? vb.depthMeters : 1.0) / 2;
-    const objH = vb ? vb.heightMeters : 1.0;
+    const scScale =
+      Number.isFinite(Number(sc.scale)) && Number(sc.scale) > 0 ? Number(sc.scale) : 1;
+    const rawObjW = (vb ? vb.widthMeters : 1.0) * scScale;
+    const rawObjD = (vb ? vb.depthMeters : 1.0) * scScale;
+    const objH = (vb ? vb.heightMeters : 1.0) * scScale;
     if (objH > maxRawH) maxRawH = objH;
 
     const dx = Number(sc.anchorOffset?.dx ?? sc.anchor_dx ?? 0);
     const dz = Number(sc.anchorOffset?.dz ?? sc.anchor_dz ?? 0);
+    const yaw = Number(sc.anchorOffset?.yaw ?? sc.anchor_yaw ?? 0);
+    const cosY = Number.isFinite(yaw) ? Math.cos(yaw) : 1;
+    const sinY = Number.isFinite(yaw) ? Math.sin(yaw) : 0;
+
+    const effHalfW = (Math.abs(cosY) * rawObjW + Math.abs(sinY) * rawObjD) / 2;
+    const effHalfD = (Math.abs(sinY) * rawObjW + Math.abs(cosY) * rawObjD) / 2;
     const e = (Number(sc.lng) - refLng) * mPerDegLng + dx;
     const n = (Number(sc.lat) - refLat) * METERS_PER_DEG_LAT - dz;
-    if (e - halfW < minE) minE = e - halfW;
-    if (e + halfW > maxE) maxE = e + halfW;
-    if (n - halfD < minN) minN = n - halfD;
-    if (n + halfD > maxN) maxN = n + halfD;
+    if (e - effHalfW < minE) minE = e - effHalfW;
+    if (e + effHalfW > maxE) maxE = e + effHalfW;
+    if (n - effHalfD < minN) minN = n - effHalfD;
+    if (n + effHalfD > maxN) maxN = n + effHalfD;
   }
 
   const rawW = Math.max(minDimensionMeters / padMultiplier, maxE - minE);
@@ -584,6 +657,198 @@ export function buildMultiObjectFittedLandVolume({
     volumeCubicM,
     paddingFraction: padFrac,
     fitMode: 'object-padded',
+    corners,
+    ring
+  };
+}
+
+/**
+ * Ensures an existing land volume genuinely encloses all visible voxel sculptures on it.
+ * Repairs legacy parcels minted when `buildObjectFittedLandVolume` omitted `(midX, midZ)`
+ * so artworks never render outside their parcel boundaries.
+ * @param {any} volume
+ * @param {any[]} sculptures
+ * @param {{ paddingFraction?: number }} [options]
+ */
+export function ensureLandVolumeFitsSculptures(
+  volume,
+  sculptures = [],
+  { paddingFraction = 0.1 } = {}
+) {
+  if (!volume || !Array.isArray(sculptures) || sculptures.length === 0) return volume;
+  const cLat = Number(volume.centerLat);
+  const cLng = Number(volume.centerLng);
+  const volW = Number(volume.widthMeters);
+  const volD = Number(volume.depthMeters);
+  const volH = Number(volume.heightMeters || 1);
+  if (
+    !Number.isFinite(cLat) ||
+    !Number.isFinite(cLng) ||
+    !Number.isFinite(volW) ||
+    !Number.isFinite(volD) ||
+    volW <= 0 ||
+    volD <= 0
+  ) {
+    return volume;
+  }
+
+  const mPerDegLng = metersPerDegLngAtLat(cLat);
+  const rotRad = (Number(volume.rotationDeg || 0) * Math.PI) / 180;
+  const cosR = Math.cos(rotRad);
+  const sinR = Math.sin(rotRad);
+
+  let anyOutside = false;
+  let minU = Infinity;
+  let maxU = -Infinity;
+  let minV = Infinity;
+  let maxV = -Infinity;
+  let maxSculptureH = 0;
+  let checkedCount = 0;
+  let singleVoxelSculpture = null;
+
+  for (const sc of sculptures) {
+    if (!sc || sc.hidden) continue;
+    const sLat = Number(sc.lat);
+    const sLng = Number(sc.lng);
+    if (!Number.isFinite(sLat) || !Number.isFinite(sLng)) continue;
+
+    let voxels = sc.voxels;
+    if (!Array.isArray(voxels) && typeof sc.voxels_json === 'string') {
+      try {
+        voxels = JSON.parse(sc.voxels_json);
+      } catch {
+        voxels = [];
+      }
+    }
+    if (!Array.isArray(voxels) || voxels.length === 0) continue;
+
+    const vb = computeObjectVoxelBoundsMeters(voxels);
+    if (!vb) continue;
+
+    const scScale =
+      Number.isFinite(Number(sc.scale)) && Number(sc.scale) > 0 ? Number(sc.scale) : 1;
+    const dx = Number(sc.anchorOffset?.dx ?? sc.anchor_dx ?? 0);
+    const dy = Number(sc.anchorOffset?.dy ?? sc.anchor_dy ?? 0);
+    const dz = Number(sc.anchorOffset?.dz ?? sc.anchor_dz ?? 0);
+    const yaw = Number(sc.anchorOffset?.yaw ?? sc.anchor_yaw ?? 0);
+    const cosY = Number.isFinite(yaw) ? Math.cos(yaw) : 1;
+    const sinY = Number.isFinite(yaw) ? Math.sin(yaw) : 0;
+
+    const effHalfW = (Math.abs(cosY) * vb.widthMeters + Math.abs(sinY) * vb.depthMeters) * scScale * 0.5;
+    const effHalfD = (Math.abs(sinY) * vb.widthMeters + Math.abs(cosY) * vb.depthMeters) * scScale * 0.5;
+    const objTopH = Math.max(0, dy) + vb.heightMeters * scScale;
+    if (objTopH > maxSculptureH) maxSculptureH = objTopH;
+
+    const east = (sLng - cLng) * mPerDegLng + dx;
+    const north = (sLat - cLat) * METERS_PER_DEG_LAT - dz;
+
+    // Check all 4 footprint corners of this sculpture in the volume's rotated frame
+    const cornerOffsets = [
+      [-effHalfW, -effHalfD],
+      [effHalfW, -effHalfD],
+      [effHalfW, effHalfD],
+      [-effHalfW, effHalfD]
+    ];
+    for (const [oe, on] of cornerOffsets) {
+      const pe = east + oe;
+      const pn = north + on;
+      // Inverse of computeOrientedFootprintLngLat rotation:
+      // east = u*cosR + v*sinR, north = -u*sinR + v*cosR
+      const u = pe * cosR - pn * sinR;
+      const v = pe * sinR + pn * cosR;
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+      if (Math.abs(u) > volW / 2 + 0.08 || Math.abs(v) > volD / 2 + 0.08) {
+        anyOutside = true;
+      }
+    }
+    checkedCount += 1;
+    singleVoxelSculpture = { sc, voxels, vb, scScale, dx, dy, dz, yaw };
+  }
+
+  if (checkedCount === 0 || !anyOutside) return volume;
+
+  // If this parcel has a single voxel sculpture whose legacy object-fitted volume had
+  // matching dimensions but un-shifted centerLat/centerLng, re-center cleanly around it!
+  if (checkedCount === 1 && singleVoxelSculpture) {
+    const { sc, voxels, vb, scScale, dx, dy, dz, yaw } = singleVoxelSculpture;
+    const padMult = 1 + 2 * Math.max(0, Math.min(1, Number(paddingFraction || 0.1)));
+    const expectedW = Math.max(0.6, vb.widthMeters * scScale * padMult);
+    const expectedD = Math.max(0.6, vb.depthMeters * scScale * padMult);
+    const looksLikeLegacyObjectFit =
+      Math.abs(volW - expectedW) <= Math.max(0.6, expectedW * 0.25) &&
+      Math.abs(volD - expectedD) <= Math.max(0.6, expectedD * 0.25);
+    if (looksLikeLegacyObjectFit) {
+      return (
+        buildObjectFittedLandVolume({
+          parcelId: volume.parcelId || sc.parcelId || sc.parcel_id || '',
+          geohash: volume.geohash || sc.geohash || '',
+          lat: Number(sc.lat),
+          lng: Number(sc.lng),
+          voxels,
+          anchorOffset: { dx, dy, dz, yaw },
+          scale: scScale,
+          paddingFraction
+        }) || volume
+      );
+    }
+  }
+
+  // Otherwise expand the parcel footprint just enough to enclose both the original parcel and its sculptures
+  const padFrac = Math.max(0, Math.min(1, Number(paddingFraction || 0.1)));
+  const spanU = Math.max(0.5, maxU - minU);
+  const spanV = Math.max(0.5, maxV - minV);
+  const padU = Math.max(0.25, spanU * padFrac);
+  const padV = Math.max(0.25, spanV * padFrac);
+
+  const nextMinU = Math.min(-volW / 2, minU - padU);
+  const nextMaxU = Math.max(volW / 2, maxU + padU);
+  const nextMinV = Math.min(-volD / 2, minV - padV);
+  const nextMaxV = Math.max(volD / 2, maxV + padV);
+
+  const shiftU = (nextMinU + nextMaxU) / 2;
+  const shiftV = (nextMinV + nextMaxV) / 2;
+  const shiftE = shiftU * cosR + shiftV * sinR;
+  const shiftN = -shiftU * sinR + shiftV * cosR;
+
+  const nextLat = cLat + shiftN / METERS_PER_DEG_LAT;
+  const nextLng = cLng + shiftE / mPerDegLng;
+  let nextW = Math.min(LAND_VOLUME_LIMITS.maxWidthMeters, nextMaxU - nextMinU);
+  let nextD = Math.min(LAND_VOLUME_LIMITS.maxDepthMeters, nextMaxV - nextMinV);
+  let nextH = Math.min(
+    LAND_VOLUME_LIMITS.maxHeightMeters,
+    Math.max(volH, maxSculptureH * (1 + 2 * padFrac))
+  );
+
+  if (nextW * nextD > LAND_VOLUME_LIMITS.maxFootprintAreaSqM) {
+    const shrink = Math.sqrt(LAND_VOLUME_LIMITS.maxFootprintAreaSqM / (nextW * nextD));
+    nextW *= shrink;
+    nextD *= shrink;
+  }
+  const roundedW = Number(nextW.toFixed(2));
+  const roundedD = Number(nextD.toFixed(2));
+  const roundedH = Number(nextH.toFixed(2));
+  const rotationDeg = normalizeRotationDeg(volume.rotationDeg || 0);
+  const { corners, ring } = computeOrientedFootprintLngLat({
+    lat: nextLat,
+    lng: nextLng,
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    rotationDeg
+  });
+  const footprintAreaSqM = Number((roundedW * roundedD).toFixed(2));
+  return {
+    ...volume,
+    centerLat: Number(nextLat.toFixed(6)),
+    centerLng: Number(nextLng.toFixed(6)),
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    heightMeters: roundedH,
+    zScale: Number((roundedH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+    footprintAreaSqM,
+    volumeCubicM: Number((footprintAreaSqM * roundedH).toFixed(2)),
     corners,
     ring
   };

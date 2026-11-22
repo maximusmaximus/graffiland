@@ -1044,7 +1044,7 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       paddingFraction: 0.1
     });
     assert.ok(fitted);
-    // Centered directly on the drawn object (never offset onto a geohash edge!)
+    // Centered directly on the object anchor (never offset onto a geohash edge!)
     assert.equal(fitted.centerLat, 39.738873);
     assert.equal(fitted.centerLng, -121.847904);
     // Exact 10% padding on EVERY side => 1.20x total span in W, D, and H
@@ -1155,8 +1155,11 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     const landRes = await fetch(`${baseUrl}/api/lands/${drawnParcelId}`);
     const landBody = await landRes.json();
     assert.equal(landRes.status, 200, JSON.stringify(landBody));
-    assert.equal(landBody.parcel.volume.centerLat, drawLat);
-    assert.equal(landBody.parcel.volume.centerLng, drawLng);
+    // Published voxels are centered on (0, 0) in XZ and the land center matches the shifted sculpture world center!
+    const pubBounds = computeObjectVoxelBoundsMeters(pubBody.sculpture.voxels || []);
+    assert.ok(pubBounds && Math.abs(pubBounds.midX) < 1e-3 && Math.abs(pubBounds.midZ) < 1e-3);
+    assert.equal(landBody.parcel.volume.centerLat, Number(pubBody.sculpture.lat.toFixed(6)));
+    assert.equal(landBody.parcel.volume.centerLng, Number(pubBody.sculpture.lng.toFixed(6)));
     assert.equal(landBody.parcel.volume.widthMeters, 2.4);
     assert.equal(landBody.parcel.volume.depthMeters, 1.8);
     assert.equal(landBody.parcel.volume.heightMeters, 1.2);

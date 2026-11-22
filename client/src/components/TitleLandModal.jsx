@@ -14,14 +14,16 @@ export default function TitleLandModal({
   onSaveAndMint = null,
   onClose
 }) {
-  const [title, setTitle] = useState(parcel?.customName || '');
+  const [title, setTitle] = useState(
+    () => parcel?.customName || resolveLandDisplayName(parcel, { defaultName: '' })
+  );
   const [description, setDescription] = useState(
     parcel?.description || parcel?.curationNote || ''
   );
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    setTitle(parcel?.customName || '');
+    setTitle(parcel?.customName || resolveLandDisplayName(parcel, { defaultName: '' }));
     setDescription(parcel?.description || parcel?.curationNote || '');
     setErrorMsg('');
   }, [parcel]);

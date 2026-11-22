@@ -32,7 +32,12 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../shared/notificationService.mjs';
-import { buildObjectFittedLandVolume } from '../shared/landVolume.mjs';
+import {
+  buildObjectFittedLandVolume,
+  centerVoxelsHorizontally,
+  offsetLatLngByLocalXZ
+} from '../shared/landVolume.mjs';
+import { resolveAuthorHandleForStorage } from '../shared/userDisplay.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../shared/geocodeService.mjs';
 import {
   checkUsernameAvailability,
@@ -1837,6 +1842,27 @@ export function createAppServer(serverOptions = {}) {
         dailyQuota: effectiveRelayerDailyQuota
       });
 
+      // Horizontally center newly drawn voxel clouds on their own local origin (0, 0)
+      // and shift (lat, lng) by the centroid offset so the art ALWAYS fits dead-center inside its land.
+      const centeredVoxelCloud = centerVoxelsHorizontally(validation.cleanVoxels);
+      const publishedVoxels = centeredVoxelCloud.voxels;
+      const shiftedGeo =
+        centeredVoxelCloud.shiftX !== 0 || centeredVoxelCloud.shiftZ !== 0
+          ? offsetLatLngByLocalXZ(
+              locationBundle.lat,
+              locationBundle.lng,
+              centeredVoxelCloud.shiftX,
+              centeredVoxelCloud.shiftZ
+            )
+          : { lat: locationBundle.lat, lng: locationBundle.lng };
+      const publishedLat = Number.isFinite(shiftedGeo.lat) ? shiftedGeo.lat : locationBundle.lat;
+      const publishedLng = Number.isFinite(shiftedGeo.lng) ? shiftedGeo.lng : locationBundle.lng;
+      const publishedLocationBundle = {
+        ...locationBundle,
+        lat: publishedLat,
+        lng: publishedLng
+      };
+
       const sculptureId = crypto.randomUUID();
       const recipientAddress = resolveRecipientAddress(req.user);
 
@@ -1847,9 +1873,9 @@ export function createAppServer(serverOptions = {}) {
           sculptureId,
           title: validation.title,
           description: validation.description,
-          voxels: validation.cleanVoxels,
+          voxels: publishedVoxels,
           previewDataUrl: req.body?.previewDataUrl || '',
-          locationBundle,
+          locationBundle: publishedLocationBundle,
           creatorAddress: recipientAddress,
           royaltyBps: CONFIG.resaleFeeBps,
           royaltyReceiver: getChainStatus().royaltyReceiver
@@ -1907,11 +1933,11 @@ export function createAppServer(serverOptions = {}) {
         validation.title,
         validation.description,
         req.user.id,
-        req.user.name,
+        resolveAuthorHandleForStorage(req.user, 'Creator'),
         req.user.email,
         recipientAddress,
-        locationBundle.lat,
-        locationBundle.lng,
+        publishedLat,
+        publishedLng,
         locationBundle.altitude,
         locationBundle.accuracy,
         locationBundle.heading,
@@ -1920,8 +1946,8 @@ export function createAppServer(serverOptions = {}) {
         locationBundle.geoInfo.placeName,
         locationBundle.geoInfo.country,
         locationBundle.timezone,
-        JSON.stringify(validation.cleanVoxels),
-        validation.cleanVoxels.length,
+        JSON.stringify(publishedVoxels),
+        publishedVoxels.length,
         locationBundle.score,
         JSON.stringify(locationBundle.proofBundle),
         locationBundle.proofHash,
@@ -1945,9 +1971,9 @@ export function createAppServer(serverOptions = {}) {
       const fittedVol = buildObjectFittedLandVolume({
         parcelId: locationBundle.parcelId,
         geohash: locationBundle.geohash,
-        lat: locationBundle.lat,
-        lng: locationBundle.lng,
-        voxels: validation.cleanVoxels,
+        lat: publishedLat,
+        lng: publishedLng,
+        voxels: publishedVoxels,
         anchorOffset: anchorCheck.offset,
         paddingFraction: 0.1
       });

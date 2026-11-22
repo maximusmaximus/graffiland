@@ -11,6 +11,7 @@ import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
+import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function LandManagementModal({
@@ -71,7 +72,9 @@ export default function LandManagementModal({
         const preferredId = selectedParcelIdRef.current || initialParcelId;
         const picked = list.find((p) => p.parcelId === preferredId) || list[0];
         setSelectedParcelId(picked.parcelId);
-        setCustomName(picked.customName || '');
+        setCustomName(
+          picked.customName || resolveLandDisplayName(picked, { defaultName: '' })
+        );
         setCurationNote(picked.description || picked.curationNote || '');
         setAllowAgentErase(picked.settings?.allowAgentErase !== false);
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
@@ -100,7 +103,7 @@ export default function LandManagementModal({
 
   function selectParcel(p) {
     setSelectedParcelId(p.parcelId);
-    setCustomName(p.customName || '');
+    setCustomName(p.customName || resolveLandDisplayName(p, { defaultName: '' }));
     setCurationNote(p.description || p.curationNote || '');
     setAllowAgentErase(p.settings?.allowAgentErase !== false);
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
@@ -760,10 +763,19 @@ export default function LandManagementModal({
                         );
                         return (
                           <div key={vis.userId} className="land-mgmt-row">
-                            <div style={{ fontSize: 12 }}>
-                              <strong>{vis.name}</strong>{' '}
+                            <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <UserHandleBadge
+                                user={{
+                                  id: vis.userId,
+                                  username: vis.username,
+                                  avatarImage: vis.avatarImage,
+                                  name: vis.name
+                                }}
+                                fallback="Visitor"
+                                size="xs"
+                              />
                               <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                                {vis.email || vis.walletAddress.slice(0, 10)}
+                                {vis.walletAddress ? vis.walletAddress.slice(0, 10) : ''}
                               </span>
                             </div>
                             {alreadyAdded ? (
@@ -816,11 +828,22 @@ export default function LandManagementModal({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                       {activeParcel.contributors.map((c) => (
                         <div key={c.contributorSub} className="land-mgmt-row is-active">
-                          <div style={{ fontSize: 12 }}>
-                            <strong>{c.name}</strong> ·{' '}
-                            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                              {c.email || c.walletAddress}
-                            </span>
+                          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <UserHandleBadge
+                              user={{
+                                id: c.contributorSub,
+                                username: c.username,
+                                avatarImage: c.avatarImage,
+                                name: c.name
+                              }}
+                              fallback="Artist"
+                              size="xs"
+                            />
+                            {c.walletAddress && (
+                              <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                                {c.walletAddress.slice(0, 10)}…
+                              </span>
+                            )}
                           </div>
                           <button
                             type="button"
@@ -996,11 +1019,23 @@ export default function LandManagementModal({
                                   </span>
                                 )}
                               </div>
-                              <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                                {sc.modelType === 'custom-3d'
-                                  ? `.${String(sc.customModel?.format || 'glb').toUpperCase()}`
-                                  : `${sc.voxelCount} blocks`}{' '}
-                                · {sc.creatorName || 'Artist'}
+                              <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                <span>
+                                  {sc.modelType === 'custom-3d'
+                                    ? `.${String(sc.customModel?.format || 'glb').toUpperCase()}`
+                                    : `${sc.voxelCount} blocks`}
+                                </span>
+                                <span>·</span>
+                                <UserHandleBadge
+                                  user={{
+                                    id: sc.creatorSub,
+                                    username: sc.creatorUsername,
+                                    creatorName: sc.creatorName,
+                                    avatarImage: sc.creatorAvatar
+                                  }}
+                                  fallback="Creator"
+                                  size="xs"
+                                />
                                 {sc.meshStats?.triangleCount > 0
                                   ? ` · ${sc.meshStats.triangleCount.toLocaleString()} tris`
                                   : ''}
