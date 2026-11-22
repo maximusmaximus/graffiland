@@ -5801,6 +5801,261 @@ select {
   outline-offset: 1px;
 }
 
+/* AR Camera Drawing View: Live Nearby Land Pill & Focused Land Inspector Sheet */
+.ar-land-exit-pill {
+  background: rgba(8, 13, 24, 0.92);
+  border-color: rgba(0, 245, 212, 0.72);
+  color: #eafffc;
+  font-weight: 800;
+  gap: 6px;
+  padding: 7px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.ar-nearby-land-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: min(352px, calc(100vw - 24px));
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(7, 14, 26, 0.9);
+  border: 1.5px solid rgba(0, 245, 212, 0.75);
+  color: #eafffc;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), 0 0 12px rgba(0, 245, 212, 0.22);
+  transition: transform 0.16s ease, border-color 0.16s ease;
+}
+
+.ar-nearby-land-pill:active {
+  transform: scale(0.985);
+}
+
+.ar-nearby-land-pill.is-inside {
+  background: rgba(24, 18, 6, 0.92);
+  border-color: rgba(255, 209, 102, 0.92);
+  color: #fff7d6;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 14px rgba(255, 209, 102, 0.28);
+}
+
+.ar-nearby-land-pill-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ar-nearby-land-pill-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-nearby-land-pill-dist {
+  font-size: 10.5px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.ar-nearby-land-pill-own {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.ar-nearby-land-pill-cta {
+  font-size: 11px;
+  font-weight: 800;
+  color: #00f5d4;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ar-nearby-land-pill.is-inside .ar-nearby-land-pill-cta {
+  color: #ffd166;
+}
+
+.ar-land-inspector {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 48;
+  max-width: 440px;
+  margin: 0 auto;
+  max-height: min(56dvh, 430px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 13px;
+  border-radius: 18px;
+  background: rgba(7, 12, 24, 0.93);
+  border: 1.5px solid rgba(0, 245, 212, 0.58);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65), 0 0 22px rgba(0, 245, 212, 0.16);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.ar-land-inspector-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ar-land-status-pills {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ar-land-top-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.ar-land-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ar-land-pager-count {
+  font-size: 10.5px;
+  color: var(--muted);
+  padding: 0 3px;
+}
+
+.ar-land-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ar-land-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-land-title-btn {
+  max-width: 100%;
+}
+
+.ar-land-subline {
+  font-size: 10.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.ar-land-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.38;
+  color: #cbd5e1;
+}
+
+.ar-land-meta-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ar-land-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ar-land-primary-cta {
+  font-weight: 800;
+}
+
+.ar-land-sculptures {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ar-land-sculptures-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.ar-land-sculptures-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 122px;
+  overflow-y: auto;
+}
+
+.ar-land-sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ar-land-sc-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ar-land-sc-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-land-sc-meta {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-land-sc-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
 /* Comfortable touch targets on touch screens without inflating compact .btn-sm / .btn-xs controls. */
 @media (pointer: coarse) {
   .btn:not(.btn-sm):not(.btn-xs) {

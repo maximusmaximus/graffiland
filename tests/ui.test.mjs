@@ -2187,4 +2187,159 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(visitView.getByTestId('mobile-map-3d-toggle-btn'));
     cleanup();
   });
+
+  test('StudioHudTopBar shows On/Near Land pill on camera view and hides non-useful buttons while interacting with a land', async () => {
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+
+    const nearbyLand = {
+      parcelId: 'GLAND-9R16561P',
+      customName: 'Magnolia Lot',
+      displayName: 'Magnolia Lot',
+      description: 'Backyard voxel garden',
+      centerLat: 39.738873,
+      centerLng: -121.847904,
+      edgeDistanceMeters: 0,
+      distanceMeters: 0,
+      isInside: true,
+      isNear: true,
+      isOwned: true,
+      isFrozen: false,
+      dimensionsLabel: '2.8×2.9×1.9 m · 8.3 m²',
+      stewardUsername: 'bigdog',
+      stewardType: 'human',
+      humanContributorCount: 2,
+      googleMapsUrl: 'https://www.google.com/maps/dir/?api=1&destination=39.738873,-121.847904',
+      expiration: { state: 'permanent', urgent: false, badgeText: 'Permanent', detailText: 'Permanent land' },
+      sculptures: [
+        { id: 'sc-mag', title: 'Magnolia 👶', voxelCount: 268, creatorName: 'BigDog' }
+      ]
+    };
+    const secondLand = {
+      ...nearbyLand,
+      parcelId: 'GLAND-SECOND02',
+      customName: 'Frozen Courtyard',
+      displayName: 'Frozen Courtyard',
+      isInside: false,
+      isOwned: false,
+      isFrozen: true,
+      edgeDistanceMeters: 12,
+      sculptures: []
+    };
+
+    const inspected = [];
+    const exited = [];
+    const baseProps = {
+      user: { id: 'google:u1', name: 'BigDog', username: 'bigdog' },
+      mode: 'draw',
+      dockOpen: false,
+      location: { lat: 39.738873, lng: -121.847904 },
+      voxels: [],
+      quickSculpt: false,
+      hasOwnedLand: true,
+      ownedLandCount: 1,
+      cameraReady: true,
+      originStatus: { originBlocked: false, reason: '' },
+      sceneScan: { optimal: true },
+      nearbyCount: 1,
+      nearbyCameraLand: nearbyLand,
+      nearbyCameraLandCount: 2,
+      onInspectArLand: (l) => inspected.push(l.parcelId),
+      onExitArLand: () => exited.push(true),
+      onOpenAreaMap: () => {}
+    };
+
+    // 1) Initial camera drawing view: live On Land pill + normal HUD controls visible
+    const view1 = RTL.render(
+      React.createElement(StudioHudTopBar, { ...baseProps, isInteractingWithLand: false })
+    );
+    const pill = view1.getByTestId('ar-nearby-land-pill');
+    assert.ok(pill.textContent.includes('On Land:'));
+    assert.ok(pill.textContent.includes('Magnolia Lot'));
+    assert.ok(view1.getByTestId('mobile-pair-hub-btn'));
+    assert.ok(view1.getByLabelText('Open Nearest Lands Map'));
+    RTL.fireEvent.click(pill);
+    assert.deepEqual(inspected, ['GLAND-9R16561P']);
+    cleanup();
+
+    // 2) Interacting with land: non-useful buttons temporarily hidden; Back to Draw pill active
+    const view2 = RTL.render(
+      React.createElement(StudioHudTopBar, { ...baseProps, isInteractingWithLand: true })
+    );
+    assert.ok(view2.getByTestId('ar-land-exit-top-btn'));
+    assert.equal(view2.queryByTestId('mobile-pair-hub-btn'), null);
+    assert.equal(view2.queryByTestId('mobile-profile-btn'), null);
+    assert.equal(view2.queryByLabelText('Open Nearest Lands Map'), null);
+    assert.equal(view2.queryByLabelText('Info and Terms'), null);
+    assert.equal(view2.queryByLabelText('Open Tutorial Guide'), null);
+    assert.equal(view2.queryByLabelText('Land Management'), null);
+    assert.equal(view2.queryByTestId('ar-nearby-land-pill'), null);
+    RTL.fireEvent.click(view2.getByTestId('ar-land-exit-top-btn'));
+    assert.equal(exited.length, 1);
+    cleanup();
+
+    // 3) ARLandInspectorPanel renders full details, inline rename for owner, sculptures & actions
+    const calls = { draw: [], map3d: [], manage: [], rename: [], switched: [], closed: 0 };
+    const panel = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: nearbyLand,
+        nearbyLands: [nearbyLand, secondLand],
+        onSelectNearbyLand: (l) => calls.switched.push(l.parcelId),
+        onDrawHere: (l) => calls.draw.push(l.parcelId),
+        onOpen3DMap: (l) => calls.map3d.push(l.parcelId),
+        onManageLand: (pid) => calls.manage.push(pid),
+        onRenameLand: async (l, name) => calls.rename.push({ parcelId: l.parcelId, name }),
+        onShowHint: () => {},
+        onClose: () => {
+          calls.closed += 1;
+        }
+      })
+    );
+    assert.ok(panel.getByTestId('ar-land-inspector'));
+    assert.ok(panel.getByTestId('ar-land-proximity-badge').textContent.includes('Inside Land'));
+    assert.ok(panel.getByTestId('ar-land-owned-badge'));
+    assert.ok(panel.getByTestId('ar-land-meta-chips').textContent.includes('2.8×2.9×1.9 m · 8.3 m²'));
+    assert.equal(panel.getAllByTestId('ar-land-sculpture-row').length, 1);
+
+    // Inline rename directly from camera view
+    RTL.fireEvent.click(panel.getByTestId('ar-land-title-edit-trigger'));
+    const renameInput = panel.getByLabelText('Rename land');
+    RTL.fireEvent.change(renameInput, { target: { value: 'Secret Garden :sparkles:', selectionStart: 24 } });
+    assert.equal(renameInput.value, 'Secret Garden ✨');
+    await RTL.act(async () => {
+      RTL.fireEvent.click(panel.getByTestId('ar-land-rename-save'));
+    });
+    assert.deepEqual(calls.rename, [{ parcelId: 'GLAND-9R16561P', name: 'Secret Garden ✨' }]);
+
+    RTL.fireEvent.click(panel.getByTestId('ar-land-draw-btn'));
+    RTL.fireEvent.click(panel.getByTestId('ar-land-3d-map-btn'));
+    RTL.fireEvent.click(panel.getByTestId('ar-land-manage-btn'));
+    RTL.fireEvent.click(panel.getByLabelText('Next nearby land'));
+    RTL.fireEvent.click(panel.getByTestId('ar-land-close-btn'));
+    assert.deepEqual(calls.draw, ['GLAND-9R16561P']);
+    assert.deepEqual(calls.map3d, ['GLAND-9R16561P']);
+    assert.deepEqual(calls.manage, ['GLAND-9R16561P']);
+    assert.deepEqual(calls.switched, ['GLAND-SECOND02']);
+    assert.equal(calls.closed, 1);
+    cleanup();
+
+    // 4) Frozen non-owned land hides Draw Here & Manage & inline rename cleanly
+    const frozenPanel = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: secondLand,
+        nearbyLands: [nearbyLand, secondLand],
+        onDrawHere: () => {},
+        onManageLand: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.equal(frozenPanel.queryByTestId('ar-land-draw-btn'), null);
+    assert.equal(frozenPanel.queryByTestId('ar-land-manage-btn'), null);
+    assert.equal(frozenPanel.queryByTestId('ar-land-title-edit-trigger'), null);
+    cleanup();
+  });
 });
