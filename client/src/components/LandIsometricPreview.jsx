@@ -491,7 +491,11 @@ export default function LandIsometricPreview({
     const otherFeats = (otherEntriesRef.current || [])
       .map((entry) => volumeToFeature(entry.parcel, entry.volume, { isSelected: false }))
       .filter(Boolean);
-    const sc3d = buildSculptures3DGeoJson(curParcel?.sculptures || [], '');
+    const sc3d = buildSculptures3DGeoJson(
+      curParcel?.sculptures || [],
+      '',
+      curVol ? [{ ...curParcel, volume: curVol }] : []
+    );
 
     const selSrc = map.getSource('preview-selected-land');
     if (selSrc && typeof selSrc.setData === 'function') {

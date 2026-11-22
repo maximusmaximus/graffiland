@@ -15,6 +15,7 @@ import {
 import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
 import XeroIcon from '../XeroIcon.jsx';
+import MobileIsometricMap from './MobileIsometricMap.jsx';
 
 export default function MobileMapSheet({
   user = null,
@@ -40,7 +41,9 @@ export default function MobileMapSheet({
   onClose,
   nowMsOverride = null
 }) {
-  const [mapHeightMode, setMapHeightMode] = useState('compact'); // 'compact' | 'expanded' | 'hidden'
+  const [mapHeightMode, setMapHeightMode] = useState('compact'); // 'compact' | 'fullscreen'
+  const [mapDimensionMode, setMapDimensionMode] = useState('2d'); // '2d' | '3d'
+  const [localFocusTick, setLocalFocusTick] = useState(0);
   const [collapsedLandIds, setCollapsedLandIds] = useState({});
   const [nowMs, setNowMs] = useState(() => (nowMsOverride ?? Date.now()));
   const [editingParcelId, setEditingParcelId] = useState('');
@@ -89,6 +92,14 @@ export default function MobileMapSheet({
 
   const displayedLands = grouped.displayedLands;
   const totalSculpturesInView = grouped.displayedSculptures.length;
+  const isFullMap = mapHeightMode === 'fullscreen';
+  const focusedLand = useMemo(
+    () =>
+      displayedLands.find((l) => l.parcelId === selectedParcelId) ||
+      displayedLands[0] ||
+      null,
+    [displayedLands, selectedParcelId]
+  );
 
   function toggleLandSculptures(parcelId) {
     setCollapsedLandIds((prev) => ({
@@ -109,10 +120,14 @@ export default function MobileMapSheet({
   }
 
   function handleFocusLandOnMap(parcelId) {
-    if (mapHeightMode === 'hidden') {
-      setMapHeightMode('compact');
-    }
     onSelectParcel?.(parcelId);
+    setLocalFocusTick((t) => t + 1);
+  }
+
+  function handleOpenLandIn3D(parcelId) {
+    onSelectParcel?.(parcelId);
+    setMapDimensionMode('3d');
+    setLocalFocusTick((t) => t + 1);
   }
 
   async function handleCopyLandShare(land) {
@@ -171,18 +186,11 @@ export default function MobileMapSheet({
     }
   }
 
-  function cycleMapHeight() {
-    setMapHeightMode((prev) =>
-      prev === 'compact' ? 'expanded' : prev === 'expanded' ? 'hidden' : 'compact'
-    );
+  function toggleFullMap() {
+    setMapHeightMode((prev) => (prev === 'fullscreen' ? 'compact' : 'fullscreen'));
   }
 
-  const mapToggleLabel =
-    mapHeightMode === 'compact'
-      ? 'Expand Map'
-      : mapHeightMode === 'expanded'
-      ? 'Hide Map'
-      : 'Show Map';
+  const mapToggleLabel = isFullMap ? 'Exit Full' : 'Expand Map';
 
   return (
     <div className="mobile-map-overlay" role="dialog" aria-label="Nearest Lands and Sculptures Map">
@@ -239,20 +247,37 @@ export default function MobileMapSheet({
 
         <button
           type="button"
-          className="btn btn-xs"
-          onClick={cycleMapHeight}
+          className={`btn btn-xs ${isFullMap ? 'btn-primary' : ''}`}
+          data-testid="mobile-map-expand-header-btn"
+          onClick={toggleFullMap}
           aria-label={mapToggleLabel}
         >
-          <XeroIcon emoji={mapHeightMode === 'hidden' ? '🗺️' : '↕️'} size={12} /> {mapToggleLabel}
+          <XeroIcon emoji={isFullMap ? '↙️' : '↕️'} size={12} /> {mapToggleLabel}
         </button>
       </div>
 
-      {mapHeightMode !== 'hidden' && (
-        <div
-          className={`mobile-map-canvas ${
-            mapHeightMode === 'expanded' ? 'is-expanded' : 'is-compact'
-          }`}
-        >
+      <div
+        className={`mobile-map-canvas ${
+          isFullMap ? 'is-fullscreen' : 'is-compact'
+        }`}
+        data-testid="mobile-map-canvas"
+        data-map-expanded={isFullMap ? 'fullscreen' : 'compact'}
+      >
+        {mapDimensionMode === '3d' ? (
+          <MobileIsometricMap
+            parcels={displayedLands}
+            sculptures={grouped.displayedSculptures}
+            userLocation={location}
+            selectedParcelId={selectedParcelId}
+            selectedSculptureId={mapSelectedSculpture?.id || ''}
+            focusParcelTick={focusParcelTick + localFocusTick}
+            isFullExpanded={isFullMap}
+            onToggle2D={() => setMapDimensionMode('2d')}
+            onToggleFullMap={toggleFullMap}
+            onSelectParcel={handleSelectParcelOnMap}
+            onSelectSculpture={onSelectSculpture}
+          />
+        ) : (
           <MapView
             sculptures={grouped.displayedSculptures}
             parcels={displayedLands}
@@ -261,15 +286,51 @@ export default function MobileMapSheet({
             areaRadiusMeters={5000}
             selectedSculptureId={mapSelectedSculpture?.id || ''}
             selectedParcelId={selectedParcelId}
-            focusParcelTick={focusParcelTick}
+            focusParcelTick={focusParcelTick + localFocusTick}
             config={config}
             compact
+            isFullExpanded={isFullMap}
+            onToggle3D={() => setMapDimensionMode('3d')}
+            onToggleFullMap={toggleFullMap}
             onSelectSculpture={onSelectSculpture}
             onSelectParcel={handleSelectParcelOnMap}
           />
+        )}
+      </div>
+
+      {isFullMap && focusedLand && (
+        <div className="mobile-map-fullscreen-dock" data-testid="mobile-map-fullscreen-dock">
+          <div className="mobile-map-fullscreen-dock-info">
+            <strong className="mobile-map-fullscreen-dock-title">{focusedLand.displayName}</strong>
+            <span className="mobile-map-fullscreen-dock-meta mono">
+              {focusedLand.dimensionsLabel || focusedLand.parcelId}
+              {` · ${focusedLand.sculptures.length} art`}
+            </span>
+          </div>
+          <div className="mobile-map-fullscreen-dock-actions">
+            {focusedLand.googleMapsUrl && (
+              <a
+                className="btn btn-xs mobile-land-gmaps-btn"
+                href={focusedLand.googleMapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${focusedLand.displayName} in Google Maps`}
+              >
+                <XeroIcon emoji="🧭" size={12} /> Maps
+              </a>
+            )}
+            <button
+              type="button"
+              className="btn btn-xs"
+              onClick={() => setMapHeightMode('compact')}
+            >
+              ▴ List
+            </button>
+          </div>
         </div>
       )}
 
+      {!isFullMap && (
       <div className="mobile-map-list" data-testid="mobile-nearest-lands-list">
         <div className="mobile-map-summary">
           <div className="mobile-map-summary-left">
@@ -552,6 +613,15 @@ export default function MobileMapSheet({
                     </button>
                     <button
                       type="button"
+                      className="btn btn-xs mobile-land-3d-btn"
+                      data-testid="land-card-3d-map-btn"
+                      onClick={() => handleOpenLandIn3D(land.parcelId)}
+                      aria-label={`View ${land.displayName} in 3D isometric map`}
+                    >
+                      <XeroIcon emoji="🧊" size={12} /> 3D Map
+                    </button>
+                    <button
+                      type="button"
                       className="btn btn-xs"
                       onClick={() => handleCopyLandShare(land)}
                       aria-label={`Copy share link for ${land.displayName}`}
@@ -743,6 +813,7 @@ export default function MobileMapSheet({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

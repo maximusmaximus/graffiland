@@ -1,5 +1,5 @@
 import { encodeGeohash } from '../server/services/pol.mjs';
-import { LAND_VOLUME_LIMITS } from './constants.mjs';
+import { LAND_VOLUME_LIMITS, VOXEL_STEP } from './constants.mjs';
 
 const METERS_PER_DEG_LAT = 111320;
 
@@ -251,6 +251,339 @@ export function buildDefaultVolumeFromBounds(bounds, parcelId = '', geohash = ''
     baseAltitudeM: 0,
     footprintAreaSqM,
     volumeCubicM: Number((footprintAreaSqM * heightMeters).toFixed(2)),
+    corners,
+    ring
+  };
+}
+
+/**
+ * Computes the exact 3D local bounding box (in meters) of a voxel array,
+ * including half-block thickness on every face.
+ * @param {Array<{ x?: number, y?: number, z?: number, scale?: number }>} voxels
+ */
+export function computeObjectVoxelBoundsMeters(voxels = []) {
+  if (!Array.isArray(voxels) || voxels.length === 0) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let count = 0;
+
+  for (const v of voxels) {
+    const x = Number(v?.x);
+    const y = Number(v?.y);
+    const z = Number(v?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const rawScale = Number(v?.scale);
+    const scale = Number.isFinite(rawScale) && rawScale > 0 ? Math.max(0.25, Math.min(8, rawScale)) : 1;
+    const half = (VOXEL_STEP * scale) / 2;
+    if (x - half < minX) minX = x - half;
+    if (x + half > maxX) maxX = x + half;
+    if (y - half < minY) minY = y - half;
+    if (y + half > maxY) maxY = y + half;
+    if (z - half < minZ) minZ = z - half;
+    if (z + half > maxZ) maxZ = z + half;
+    count += 1;
+  }
+
+  if (count === 0) return null;
+
+  return {
+    count,
+    minX: Number(minX.toFixed(4)),
+    maxX: Number(maxX.toFixed(4)),
+    minY: Number(minY.toFixed(4)),
+    maxY: Number(maxY.toFixed(4)),
+    minZ: Number(minZ.toFixed(4)),
+    maxZ: Number(maxZ.toFixed(4)),
+    widthMeters: Number(Math.max(VOXEL_STEP, maxX - minX).toFixed(4)),
+    depthMeters: Number(Math.max(VOXEL_STEP, maxZ - minZ).toFixed(4)),
+    heightMeters: Number(Math.max(VOXEL_STEP, maxY - minY).toFixed(4)),
+    midX: Number(((minX + maxX) / 2).toFixed(4)),
+    midY: Number(((minY + maxY) / 2).toFixed(4)),
+    midZ: Number(((minZ + maxZ) / 2).toFixed(4))
+  };
+}
+
+/**
+ * Fits a 3D Virtual Land volume centered directly on a drawn 3D object with symmetric
+ * padding (default 10% on every side => 1.20x total span) in all three dimensions (W, D, H).
+ * @param {{
+ *   parcelId?: string,
+ *   geohash?: string,
+ *   lat?: number,
+ *   lng?: number,
+ *   voxels?: any[],
+ *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number } | null,
+ *   paddingFraction?: number,
+ *   minDimensionMeters?: number
+ * }} [options]
+ */
+export function buildObjectFittedLandVolume({
+  parcelId = '',
+  geohash = '',
+  lat = NaN,
+  lng = NaN,
+  voxels = [],
+  anchorOffset = null,
+  paddingFraction = 0.1,
+  minDimensionMeters = 0.6
+} = {}) {
+  const baseLat = Number(lat);
+  const baseLng = Number(lng);
+  if (!Number.isFinite(baseLat) || !Number.isFinite(baseLng)) return null;
+
+  const padFrac = Number.isFinite(Number(paddingFraction))
+    ? Math.max(0, Math.min(1, Number(paddingFraction)))
+    : 0.1;
+  const padMultiplier = 1 + 2 * padFrac; // 10% padding on each side in every dimension = 1.2x
+
+  const dx = Number(anchorOffset?.dx || 0);
+  const dz = Number(anchorOffset?.dz || 0);
+  const yaw = Number(anchorOffset?.yaw || 0);
+  const mPerDegLng = metersPerDegLngAtLat(baseLat);
+
+  // Center the land directly on the object anchor (never off on a geohash edge)
+  const centerLat = baseLat + (-dz / METERS_PER_DEG_LAT);
+  const centerLng = baseLng + (dx / mPerDegLng);
+
+  const bounds = computeObjectVoxelBoundsMeters(voxels);
+  const rawW = bounds ? bounds.widthMeters : 1.0;
+  const rawD = bounds ? bounds.depthMeters : 1.0;
+  const rawH = bounds ? bounds.heightMeters : 1.0;
+
+  let widthMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxWidthMeters, rawW * padMultiplier)
+  );
+  let depthMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxDepthMeters, rawD * padMultiplier)
+  );
+  let heightMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxHeightMeters, rawH * padMultiplier)
+  );
+
+  if (widthMeters * depthMeters > LAND_VOLUME_LIMITS.maxFootprintAreaSqM) {
+    const shrink = Math.sqrt(LAND_VOLUME_LIMITS.maxFootprintAreaSqM / (widthMeters * depthMeters));
+    widthMeters *= shrink;
+    depthMeters *= shrink;
+  }
+  if (widthMeters * depthMeters * heightMeters > LAND_VOLUME_LIMITS.maxVolumeCubicM) {
+    heightMeters = LAND_VOLUME_LIMITS.maxVolumeCubicM / Math.max(0.1, widthMeters * depthMeters);
+  }
+
+  const roundedW = Number(widthMeters.toFixed(2));
+  const roundedD = Number(depthMeters.toFixed(2));
+  const roundedH = Number(heightMeters.toFixed(2));
+  // anchorOffset.yaw is Three.js right-handed Y rotation in radians; map rotationDeg is clockwise bearing in degrees
+  const rotationDeg =
+    Number.isFinite(yaw) && yaw !== 0 ? normalizeRotationDeg((-yaw * 180) / Math.PI) : 0;
+
+  const resolvedGeohash =
+    typeof geohash === 'string' && /^[0-9a-z]{5,10}$/i.test(geohash.trim())
+      ? geohash.trim().toLowerCase()
+      : encodeGeohash(centerLat, centerLng, 8);
+  const resolvedParcelId =
+    typeof parcelId === 'string' && parcelId.trim()
+      ? parcelId.trim().toUpperCase()
+      : `GLAND-${resolvedGeohash.toUpperCase()}`;
+
+  const { corners, ring } = computeOrientedFootprintLngLat({
+    lat: centerLat,
+    lng: centerLng,
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    rotationDeg
+  });
+
+  const footprintAreaSqM = Number((roundedW * roundedD).toFixed(2));
+  const volumeCubicM = Number((footprintAreaSqM * roundedH).toFixed(2));
+
+  return {
+    parcelId: resolvedParcelId,
+    geohash: resolvedGeohash,
+    centerLat: Number(centerLat.toFixed(6)),
+    centerLng: Number(centerLng.toFixed(6)),
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    heightMeters: roundedH,
+    zScale: Number((roundedH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+    rotationDeg,
+    baseAltitudeM: 0,
+    footprintAreaSqM,
+    volumeCubicM,
+    paddingFraction: padFrac,
+    fitMode: 'object-padded',
+    objectDimensions: {
+      widthMeters: Number(rawW.toFixed(3)),
+      depthMeters: Number(rawD.toFixed(3)),
+      heightMeters: Number(rawH.toFixed(3))
+    },
+    corners,
+    ring
+  };
+}
+
+/**
+ * Fits a centered 10%-padded 3D land volume around one or more sculptures belonging to a parcel.
+ * @param {{
+ *   parcelId?: string,
+ *   geohash?: string,
+ *   sculptures?: any[],
+ *   paddingFraction?: number,
+ *   minDimensionMeters?: number
+ * }} [options]
+ */
+export function buildMultiObjectFittedLandVolume({
+  parcelId = '',
+  geohash = '',
+  sculptures = [],
+  paddingFraction = 0.1,
+  minDimensionMeters = 0.6
+} = {}) {
+  const valid = (sculptures || []).filter(
+    (sc) => sc && Number.isFinite(Number(sc.lat)) && Number.isFinite(Number(sc.lng))
+  );
+  if (valid.length === 0) return null;
+
+  if (valid.length === 1) {
+    const sc = valid[0];
+    let voxels = sc.voxels;
+    if (!Array.isArray(voxels) && typeof sc.voxels_json === 'string') {
+      try {
+        voxels = JSON.parse(sc.voxels_json);
+      } catch {
+        voxels = [];
+      }
+    }
+    const anchorOffset = sc.anchorOffset || {
+      dx: Number(sc.anchor_dx || 0),
+      dy: Number(sc.anchor_dy || 0),
+      dz: Number(sc.anchor_dz || 0),
+      yaw: Number(sc.anchor_yaw || 0)
+    };
+    return buildObjectFittedLandVolume({
+      parcelId,
+      geohash,
+      lat: Number(sc.lat),
+      lng: Number(sc.lng),
+      voxels: Array.isArray(voxels) ? voxels : [],
+      anchorOffset,
+      paddingFraction,
+      minDimensionMeters
+    });
+  }
+
+  const padFrac = Number.isFinite(Number(paddingFraction))
+    ? Math.max(0, Math.min(1, Number(paddingFraction)))
+    : 0.1;
+  const padMultiplier = 1 + 2 * padFrac;
+
+  const refLat = valid.reduce((sum, s) => sum + Number(s.lat), 0) / valid.length;
+  const refLng = valid.reduce((sum, s) => sum + Number(s.lng), 0) / valid.length;
+  const mPerDegLng = metersPerDegLngAtLat(refLat);
+
+  let minE = Infinity;
+  let maxE = -Infinity;
+  let minN = Infinity;
+  let maxN = -Infinity;
+  let maxRawH = 1.0;
+
+  for (const sc of valid) {
+    let voxels = sc.voxels;
+    if (!Array.isArray(voxels) && typeof sc.voxels_json === 'string') {
+      try {
+        voxels = JSON.parse(sc.voxels_json);
+      } catch {
+        voxels = [];
+      }
+    }
+    const vb = computeObjectVoxelBoundsMeters(Array.isArray(voxels) ? voxels : []);
+    const halfW = (vb ? vb.widthMeters : 1.0) / 2;
+    const halfD = (vb ? vb.depthMeters : 1.0) / 2;
+    const objH = vb ? vb.heightMeters : 1.0;
+    if (objH > maxRawH) maxRawH = objH;
+
+    const dx = Number(sc.anchorOffset?.dx ?? sc.anchor_dx ?? 0);
+    const dz = Number(sc.anchorOffset?.dz ?? sc.anchor_dz ?? 0);
+    const e = (Number(sc.lng) - refLng) * mPerDegLng + dx;
+    const n = (Number(sc.lat) - refLat) * METERS_PER_DEG_LAT - dz;
+    if (e - halfW < minE) minE = e - halfW;
+    if (e + halfW > maxE) maxE = e + halfW;
+    if (n - halfD < minN) minN = n - halfD;
+    if (n + halfD > maxN) maxN = n + halfD;
+  }
+
+  const rawW = Math.max(minDimensionMeters / padMultiplier, maxE - minE);
+  const rawD = Math.max(minDimensionMeters / padMultiplier, maxN - minN);
+  const centerEast = (minE + maxE) / 2;
+  const centerNorth = (minN + maxN) / 2;
+  const centerLat = refLat + centerNorth / METERS_PER_DEG_LAT;
+  const centerLng = refLng + centerEast / mPerDegLng;
+
+  let widthMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxWidthMeters, rawW * padMultiplier)
+  );
+  let depthMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxDepthMeters, rawD * padMultiplier)
+  );
+  let heightMeters = Math.max(
+    minDimensionMeters,
+    Math.min(LAND_VOLUME_LIMITS.maxHeightMeters, maxRawH * padMultiplier)
+  );
+
+  if (widthMeters * depthMeters > LAND_VOLUME_LIMITS.maxFootprintAreaSqM) {
+    const shrink = Math.sqrt(LAND_VOLUME_LIMITS.maxFootprintAreaSqM / (widthMeters * depthMeters));
+    widthMeters *= shrink;
+    depthMeters *= shrink;
+  }
+  if (widthMeters * depthMeters * heightMeters > LAND_VOLUME_LIMITS.maxVolumeCubicM) {
+    heightMeters = LAND_VOLUME_LIMITS.maxVolumeCubicM / Math.max(0.1, widthMeters * depthMeters);
+  }
+
+  const roundedW = Number(widthMeters.toFixed(2));
+  const roundedD = Number(depthMeters.toFixed(2));
+  const roundedH = Number(heightMeters.toFixed(2));
+  const resolvedGeohash =
+    typeof geohash === 'string' && /^[0-9a-z]{5,10}$/i.test(geohash.trim())
+      ? geohash.trim().toLowerCase()
+      : encodeGeohash(centerLat, centerLng, 8);
+  const resolvedParcelId =
+    typeof parcelId === 'string' && parcelId.trim()
+      ? parcelId.trim().toUpperCase()
+      : `GLAND-${resolvedGeohash.toUpperCase()}`;
+
+  const { corners, ring } = computeOrientedFootprintLngLat({
+    lat: centerLat,
+    lng: centerLng,
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    rotationDeg: 0
+  });
+  const footprintAreaSqM = Number((roundedW * roundedD).toFixed(2));
+  const volumeCubicM = Number((footprintAreaSqM * roundedH).toFixed(2));
+
+  return {
+    parcelId: resolvedParcelId,
+    geohash: resolvedGeohash,
+    centerLat: Number(centerLat.toFixed(6)),
+    centerLng: Number(centerLng.toFixed(6)),
+    widthMeters: roundedW,
+    depthMeters: roundedD,
+    heightMeters: roundedH,
+    zScale: Number((roundedH / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+    rotationDeg: 0,
+    baseAltitudeM: 0,
+    footprintAreaSqM,
+    volumeCubicM,
+    paddingFraction: padFrac,
+    fitMode: 'object-padded',
     corners,
     ring
   };

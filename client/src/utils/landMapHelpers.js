@@ -165,6 +165,14 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
   };
 }
 
+function formatCompactDimensionMeters(val) {
+  if (val < 10) {
+    const rounded = Number(val.toFixed(1));
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  }
+  return String(Math.round(val));
+}
+
 /**
  * Format 3D parcel volume dimensions into a crisp single-line summary.
  * @param {any} parcel
@@ -177,13 +185,19 @@ export function formatLandDimensions(parcel) {
   const d = Number(vol.depthMeters);
   const h = Number(vol.heightMeters);
   if (!Number.isFinite(w) || !Number.isFinite(d)) return '';
-  const area = Number.isFinite(Number(vol.footprintAreaSqM))
-    ? Math.round(Number(vol.footprintAreaSqM))
-    : Math.round(w * d);
+  const rawArea = Number.isFinite(Number(vol.footprintAreaSqM))
+    ? Number(vol.footprintAreaSqM)
+    : w * d;
+  const areaLabel =
+    rawArea < 10
+      ? Number.isInteger(Number(rawArea.toFixed(1)))
+        ? String(Math.round(rawArea))
+        : rawArea.toFixed(1)
+      : String(Math.round(rawArea));
   const dimPart = Number.isFinite(h)
-    ? `${Math.round(w)}×${Math.round(d)}×${Math.round(h)} m`
-    : `${Math.round(w)}×${Math.round(d)} m`;
-  return area > 0 ? `${dimPart} · ${area} m²` : dimPart;
+    ? `${formatCompactDimensionMeters(w)}×${formatCompactDimensionMeters(d)}×${formatCompactDimensionMeters(h)} m`
+    : `${formatCompactDimensionMeters(w)}×${formatCompactDimensionMeters(d)} m`;
+  return rawArea > 0 ? `${dimPart} · ${areaLabel} m²` : dimPart;
 }
 
 /**

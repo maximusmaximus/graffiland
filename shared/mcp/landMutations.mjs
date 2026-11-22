@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import { POLICY } from '../constants.mjs';
 import {
   buildDefaultVolumeFromBounds,
+  buildMultiObjectFittedLandVolume,
+  buildObjectFittedLandVolume,
   buildParcelShareUrl,
   computeOrientedFootprintLngLat,
   slugifyLandTitle
@@ -90,6 +92,27 @@ export async function listLandsWithCurations(db) {
         parsedCorners = [];
       }
     }
+    let fittedFallbackVolume = null;
+    if (!vr && sc) {
+      const parcelScRows = await db
+        .all(
+          `SELECT s.lat, s.lng, s.voxels_json, a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw
+           FROM sculptures s
+           LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+           WHERE s.parcel_id = ? AND s.hidden = 0`,
+          [parcelId]
+        )
+        .catch(() => []);
+      if (parcelScRows && parcelScRows.length > 0) {
+        fittedFallbackVolume = buildMultiObjectFittedLandVolume({
+          parcelId,
+          geohash,
+          sculptures: parcelScRows,
+          paddingFraction: 0.1
+        });
+      }
+    }
+
     const volume = vr
       ? {
           parcelId,
@@ -125,7 +148,7 @@ export async function listLandsWithCurations(db) {
                   rotationDeg: Number(vr.rotation_deg)
                 }).ring
         }
-      : buildDefaultVolumeFromBounds(bounds, parcelId, geohash);
+      : fittedFallbackVolume || buildDefaultVolumeFromBounds(bounds, parcelId, geohash);
 
     const stewardStatus = st?.status || 'awakened';
     const ownerSub = st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
@@ -407,6 +430,16 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       : null;
     const resolvedCorners =
       parsedCorners.length >= 4 ? parsedCorners.slice(0, 4) : fallbackFootprint?.corners || [];
+    const visibleOnLand = onLand.filter((r) => !r.hidden);
+    const fittedOwnerFallback =
+      !vr && visibleOnLand.length > 0
+        ? buildMultiObjectFittedLandVolume({
+            parcelId: pid,
+            geohash,
+            sculptures: visibleOnLand,
+            paddingFraction: 0.1
+          })
+        : null;
     const volume = vr
       ? {
           parcelId: pid,
@@ -427,11 +460,9 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
               ? [...resolvedCorners, resolvedCorners[0]]
               : fallbackFootprint?.ring || []
         }
-      : bounds
-      ? buildDefaultVolumeFromBounds(bounds, pid, geohash)
-      : null;
+      : fittedOwnerFallback || (bounds ? buildDefaultVolumeFromBounds(bounds, pid, geohash) : null);
 
-    const visibleCount = onLand.filter((r) => !r.hidden).length;
+    const visibleCount = visibleOnLand.length;
     parcels.push({
       parcelId: pid,
       geohash,
@@ -1408,6 +1439,16 @@ export async function applyPublishOnBehalf(
     ]
   );
 
+  const fittedVolume = buildObjectFittedLandVolume({
+    parcelId: locBundle.parcelId,
+    geohash: locBundle.geohash,
+    lat: locBundle.lat,
+    lng: locBundle.lng,
+    voxels: payload.cleanVoxels,
+    anchorOffset: payload.anchorOffset || null,
+    paddingFraction: 0.1
+  });
+
   const existingParcel = await db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [
     locBundle.parcelId
   ]);
@@ -1426,14 +1467,45 @@ export async function applyPublishOnBehalf(
       [
         locBundle.parcelId,
         locBundle.geohash,
-        locBundle.parcelBounds.center[0],
-        locBundle.parcelBounds.center[1],
+        fittedVolume ? fittedVolume.centerLat : locBundle.parcelBounds.center[0],
+        fittedVolume ? fittedVolume.centerLng : locBundle.parcelBounds.center[1],
         ownerUser.id,
         ownerAddress,
         ownerAddress,
         now
       ]
     );
+  }
+
+  if (fittedVolume) {
+    await db
+      .run(
+        `INSERT OR IGNORE INTO land_volumes (
+          parcel_id, geohash, center_lat, center_lng,
+          width_meters, depth_meters, height_meters, z_scale, rotation_deg,
+          base_altitude_m, footprint_area_sqm, volume_cubic_m, corners_json,
+          claimed_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          fittedVolume.parcelId,
+          fittedVolume.geohash,
+          fittedVolume.centerLat,
+          fittedVolume.centerLng,
+          fittedVolume.widthMeters,
+          fittedVolume.depthMeters,
+          fittedVolume.heightMeters,
+          fittedVolume.zScale,
+          fittedVolume.rotationDeg,
+          fittedVolume.baseAltitudeM,
+          fittedVolume.footprintAreaSqM,
+          fittedVolume.volumeCubicM,
+          JSON.stringify(fittedVolume.corners),
+          ownerUser.id,
+          now,
+          now
+        ]
+      )
+      .catch(() => {});
   }
 
   if (payload.draftId) {

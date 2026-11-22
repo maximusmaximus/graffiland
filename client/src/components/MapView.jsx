@@ -33,7 +33,10 @@ export default function MapView({
   onViewportChange = null,
   config = null,
   onSelectSculpture,
-  onSelectParcel = null
+  onSelectParcel = null,
+  onToggle3D = null,
+  isFullExpanded = false,
+  onToggleFullMap = null
 }) {
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
@@ -83,6 +86,7 @@ export default function MapView({
     const map = L.map(mapHostRef.current, {
       center: initialCenter,
       zoom: initialZoom,
+      maxZoom: 21.5,
       zoomControl: true,
       zoomSnap: 0.25,
       zoomDelta: 0.5
@@ -91,7 +95,7 @@ export default function MapView({
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
       maxNativeZoom: 19,
-      maxZoom: 20
+      maxZoom: 21.5
     }).addTo(map);
 
     const markUserAdjusted = () => {
@@ -124,9 +128,9 @@ export default function MapView({
       try {
         map.stop();
         map.fitBounds(lastAutoBoundsRef.current, {
-          paddingTopLeft: [10, 26],
-          paddingBottomRight: [10, 28],
-          maxZoom: 19.5,
+          paddingTopLeft: [14, 42],
+          paddingBottomRight: [14, 28],
+          maxZoom: 21,
           animate: false
         });
       } finally {
@@ -351,9 +355,9 @@ export default function MapView({
         map.stop();
         if (closestFit.boundsLatLng) {
           map.fitBounds(closestFit.boundsLatLng, {
-            paddingTopLeft: [10, 26],
-            paddingBottomRight: [10, 28],
-            maxZoom: 19.5,
+            paddingTopLeft: [14, 42],
+            paddingBottomRight: [14, 28],
+            maxZoom: 21,
             animate: false
           });
         } else if (hasUser) {
@@ -390,10 +394,27 @@ export default function MapView({
       userAdjustedViewRef.current = true;
       map.fitBounds(
         perimeter.map((pt) => [pt.lat, pt.lng]),
-        { padding: [18, 18], maxZoom: 19.5, animate: true }
+        { paddingTopLeft: [20, 44], paddingBottomRight: [20, 24], maxZoom: 21, animate: true }
       );
     }
   }, [focusParcelTick, selectedParcelId, parcels]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+    const t = setTimeout(() => {
+      map.invalidateSize({ animate: false, pan: false });
+      if (!userAdjustedViewRef.current && lastAutoBoundsRef.current) {
+        map.fitBounds(lastAutoBoundsRef.current, {
+          paddingTopLeft: [14, 42],
+          paddingBottomRight: [14, 28],
+          maxZoom: 21,
+          animate: false
+        });
+      }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [isFullExpanded]);
 
   function fitClosestLands() {
     const map = mapRef.current;
@@ -413,9 +434,9 @@ export default function MapView({
       suppressViewSaveRef.current = true;
       try {
         map.fitBounds(closestFit.boundsLatLng, {
-          paddingTopLeft: [10, 26],
-          paddingBottomRight: [10, 28],
-          maxZoom: 19.5,
+          paddingTopLeft: [14, 42],
+          paddingBottomRight: [14, 28],
+          maxZoom: 21,
           animate: true
         });
       } finally {
@@ -490,14 +511,32 @@ export default function MapView({
         </div>
       )}
 
-      <div className={`map-container ${compact ? 'compact' : ''}`}>
+      <div className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d">
         <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
-        {compact && (parcels.length > 0 || userLocation) && (
-          <div className="map-compact-fab-row">
+        {compact && (onToggle3D || onToggleFullMap || parcels.length > 0 || userLocation) && (
+          <div
+            className="map-compact-fab-row"
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {onToggle3D && (
+              <button
+                type="button"
+                className="btn map-recenter-fab map-mode-toggle-fab"
+                data-testid="mobile-map-3d-toggle-btn"
+                onClick={onToggle3D}
+                aria-label="Switch to 3D isometric map"
+                title="View lands in 3D isometric view"
+              >
+                <XeroIcon emoji="🧊" size={13} /> 3D
+              </button>
+            )}
             {parcels.length > 0 && (
               <button
                 type="button"
                 className="btn map-recenter-fab"
+                data-testid="mobile-map-fit-btn"
                 onClick={fitClosestLands}
                 title="Zoom to fit closest lands perimeter"
               >
@@ -508,10 +547,23 @@ export default function MapView({
               <button
                 type="button"
                 className="btn map-recenter-fab"
+                data-testid="mobile-map-me-btn"
                 onClick={centerOnUser}
                 title="Center map on my GPS location"
               >
                 <XeroIcon emoji="🎯" size={13} /> Me
+              </button>
+            )}
+            {onToggleFullMap && (
+              <button
+                type="button"
+                className="btn map-recenter-fab"
+                data-testid="mobile-map-fullscreen-btn"
+                onClick={onToggleFullMap}
+                aria-label={isFullExpanded ? 'Exit full map' : 'Expand full map'}
+                title={isFullExpanded ? 'Exit full-screen map' : 'Expand map full-screen'}
+              >
+                {isFullExpanded ? '⤡' : '⤢'}
               </button>
             )}
           </div>
