@@ -1,5 +1,5 @@
 import { encodeGeohash } from '../server/services/pol.mjs';
-import { LAND_VOLUME_LIMITS, VOXEL_STEP } from './constants.mjs';
+import { LAND_VOLUME_LIMITS, POLICY, VOXEL_STEP } from './constants.mjs';
 
 const METERS_PER_DEG_LAT = 111320;
 
@@ -1108,5 +1108,60 @@ export function resizeDraftFromEdge({
     heightMeters,
     zScale,
     rotationDeg
+  };
+}
+
+/**
+ * Validates and normalizes a human-chosen Virtual Land title.
+ * Disallows blank names, internal GLAND-* codes, overly short/long names, and prohibited terms.
+ */
+export function validateLandTitle(rawTitle = '') {
+  const normalized = String(rawTitle || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return {
+      ok: false,
+      normalized: '',
+      error: 'A unique land title is required before minting.'
+    };
+  }
+  if (normalized.length < 2) {
+    return {
+      ok: false,
+      normalized,
+      error: 'Land title must be at least 2 characters.'
+    };
+  }
+  if (normalized.length > 48) {
+    return {
+      ok: false,
+      normalized: normalized.slice(0, 48),
+      error: 'Land title must be 48 characters or fewer.'
+    };
+  }
+  if (/^GLAND-[0-9A-Z]{6,10}$/i.test(normalized)) {
+    return {
+      ok: false,
+      normalized,
+      error: 'Choose a memorable land name instead of an internal parcel ID.'
+    };
+  }
+  const lower = normalized.toLowerCase();
+  for (const term of POLICY?.prohibitedTerms || []) {
+    if (lower.includes(term)) {
+      return {
+        ok: false,
+        normalized,
+        error: `Land title violates Limited Terms Policy ("${term}").`
+      };
+    }
+  }
+  return {
+    ok: true,
+    normalized,
+    error: ''
   };
 }

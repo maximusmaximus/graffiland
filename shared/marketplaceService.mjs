@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { STEWARD_DEFAULTS, TRANSACTION_FEES } from './constants.mjs';
 import { McpServiceError, checkSculptureOwnership, resolvePreferredOwnerWallet } from './mcp/helpers.mjs';
+import { notifyLandMarketplaceSale } from './notificationService.mjs';
 
 function weiToEthNumber(wei) {
   return Number(Number(ethers.formatEther(wei)).toFixed(8));
@@ -503,6 +504,20 @@ export async function executeMarketplacePurchase(
       'UPDATE agent_accounts SET total_xp = total_xp + 50, last_seen_at = ? WHERE agent_id = ?',
       [now, steward.stewardSub]
     );
+  }
+
+  try {
+    await notifyLandMarketplaceSale(db, {
+      parcelId: listing.parcel_id,
+      sculptureId: scRow.id,
+      sculptureTitle: scRow.title || 'Sculpture',
+      buyerName: buyerUser?.name || 'A collector',
+      sellerSub: listing.seller_sub || '',
+      stewardSub: steward.stewardSub || '',
+      priceEth: Number(listing.price_eth || 0)
+    });
+  } catch {
+    // Non-fatal notification failure
   }
 
   return {

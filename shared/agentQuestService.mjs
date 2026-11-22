@@ -6,8 +6,14 @@ import {
   buildParcelShareUrl,
   footprintsOverlap,
   slugifyLandTitle,
-  validateAndNormalizeLandVolume
+  validateAndNormalizeLandVolume,
+  validateLandTitle
 } from './landVolume.mjs';
+import {
+  getUserMintCapacityStatus,
+  notifyAfterSculpturePublished,
+  notifyFreeLimitReached
+} from './notificationService.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -349,6 +355,54 @@ async function assertNoFootprintOverlap(db, targetVol, claimantSub) {
 }
 
 /**
+ * Checks whether a desired Virtual Land title is valid and unused by any other parcel.
+ */
+export async function checkLandTitleAvailability(db, { name = '', excludeParcelId = '' } = {}) {
+  const check = validateLandTitle(name);
+  if (!check.ok) {
+    return {
+      ok: false,
+      available: false,
+      normalized: check.normalized,
+      reason: check.error
+    };
+  }
+  const cleanExclude = excludeParcelId ? normalizeParcelId(excludeParcelId) : '';
+  const conflict = cleanExclude
+    ? await db.get(
+        `SELECT parcel_id, custom_name
+         FROM parcel_curations
+         WHERE LOWER(TRIM(custom_name)) = LOWER(?)
+           AND parcel_id != ?
+         LIMIT 1`,
+        [check.normalized, cleanExclude]
+      )
+    : await db.get(
+        `SELECT parcel_id, custom_name
+         FROM parcel_curations
+         WHERE LOWER(TRIM(custom_name)) = LOWER(?)
+         LIMIT 1`,
+        [check.normalized]
+      );
+
+  if (conflict) {
+    return {
+      ok: true,
+      available: false,
+      normalized: check.normalized,
+      conflictingParcelId: conflict.parcel_id,
+      reason: `"${check.normalized}" is already taken by another Virtual Land.`
+    };
+  }
+  return {
+    ok: true,
+    available: true,
+    normalized: check.normalized,
+    reason: ''
+  };
+}
+
+/**
  * Claims an unclaimed or expired Virtual Land parcel with optional custom 3D volume/rotation/Z-scale.
  * Autonomous agents get a 7-day dormant lease (0 platform fee, agent pays own gas).
  * Human Desktop creators mint active starter parcels directly (gas-free starter quota).
@@ -482,19 +536,60 @@ export async function claimDormantLand(
     }
   } else {
     maxSlots = LAND_VOLUME_LIMITS.starterFreeHumanClaims;
-    const unbuiltHumanRow = await db.get(
-      `SELECT COUNT(*) AS cnt FROM land_steward_state st
-       WHERE st.steward_sub = ? AND st.steward_type = 'human'
-         AND NOT EXISTS (SELECT 1 FROM sculptures s WHERE s.parcel_id = st.parcel_id AND s.hidden = 0)`,
-      [agentUser.id]
-    );
-    usedSlots = Number(unbuiltHumanRow?.cnt || 0);
+    const mintCapacity = await getUserMintCapacityStatus(db, agentUser.id);
+    usedSlots = mintCapacity.usedSlots;
     if (usedSlots >= maxSlots) {
+      await notifyFreeLimitReached(db, {
+        userSub: agentUser.id,
+        usedSlots,
+        maxSlots,
+        unbuiltParcels: mintCapacity.unbuiltParcels
+      }).catch(() => {});
       throw new McpServiceError(
-        `Starter Desktop claim limit reached (${usedSlots}/${maxSlots} unbuilt lands). Publish a sculpture on one of your lands to free another Desktop starter claim slot.`,
+        `You have used all ${usedSlots}/${maxSlots} free starter Desktop lands. Build or publish a sculpture on one of your existing lands to unlock another Desktop mint slot — or sculpt in person with Mobile AR right now to claim new land immediately!`,
         429,
-        { usedSlots, maxSlots }
+        {
+          code: 'STARTER_FREE_LAND_LIMIT_REACHED',
+          usedSlots,
+          maxSlots,
+          remainingSlots: 0,
+          unbuiltParcels: mintCapacity.unbuiltParcels,
+          canClaimInPersonMobile: true,
+          nextSteps: [
+            'Place or publish a sculpture on one of your 3 existing unbuilt lands to immediately free a Desktop mint slot.',
+            'Or pair your phone and sculpt in person with Mobile AR to claim new land without waiting.'
+          ]
+        }
       );
+    }
+
+    const titleCheck = await checkLandTitleAvailability(db, {
+      name: effectiveCustomName,
+      excludeParcelId: cleanParcelId
+    });
+    if (!titleCheck.ok) {
+      throw new McpServiceError(titleCheck.reason, 400, {
+        code: 'LAND_TITLE_REQUIRED'
+      });
+    }
+    if (!titleCheck.available) {
+      throw new McpServiceError(titleCheck.reason, 409, {
+        code: 'LAND_TITLE_TAKEN',
+        conflictingParcelId: titleCheck.conflictingParcelId || ''
+      });
+    }
+  }
+
+  if (isAgent && effectiveCustomName) {
+    const titleCheck = await checkLandTitleAvailability(db, {
+      name: effectiveCustomName,
+      excludeParcelId: cleanParcelId
+    });
+    if (!titleCheck.available) {
+      throw new McpServiceError(titleCheck.reason, titleCheck.ok ? 409 : 400, {
+        code: titleCheck.ok ? 'LAND_TITLE_TAKEN' : 'LAND_TITLE_INVALID',
+        conflictingParcelId: titleCheck.conflictingParcelId || ''
+      });
     }
   }
 
@@ -1203,6 +1298,28 @@ export async function awakenParcelByHumanVisit(
     'UPDATE land_steward_state SET human_contributor_count = ?, updated_at = ? WHERE parcel_id = ?',
     [humanCount, now, cleanParcel]
   );
+
+  // Emit land-owner & mint-slot-unlocked notifications cleanly (non-blocking)
+  try {
+    const scMeta = await db
+      .get('SELECT title FROM sculptures WHERE id = ?', [sculptureId])
+      .catch(() => null);
+    const visibleCntRow = await db
+      .get('SELECT COUNT(*) AS cnt FROM sculptures WHERE parcel_id = ? AND hidden = 0', [cleanParcel])
+      .catch(() => null);
+    const wasPreviouslyEmpty = Number(visibleCntRow?.cnt || 0) <= 1;
+    await notifyAfterSculpturePublished(db, {
+      parcelId: cleanParcel,
+      sculptureId,
+      sculptureTitle: scMeta?.title || 'New Sculpture',
+      creatorSub: artistUser?.id || '',
+      creatorName: artistUser?.name || 'An artist',
+      awakenedParcel: awakenedNow,
+      wasPreviouslyEmpty
+    });
+  } catch {
+    // Non-fatal notification failure must never break publish
+  }
 
   return {
     parcelId: cleanParcel,

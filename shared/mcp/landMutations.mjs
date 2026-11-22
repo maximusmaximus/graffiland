@@ -6,8 +6,10 @@ import {
   buildObjectFittedLandVolume,
   buildParcelShareUrl,
   computeOrientedFootprintLngLat,
-  slugifyLandTitle
+  slugifyLandTitle,
+  validateLandTitle
 } from '../landVolume.mjs';
+import { notifyAfterSculpturePublished } from '../notificationService.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -1062,6 +1064,26 @@ export async function applyCreateSculptureOnLand(
   );
 
   const saved = await fetchSculptureWithModelRow(db, sculptureId);
+
+  try {
+    const visibleCntRow = await db
+      .get('SELECT COUNT(*) AS cnt FROM sculptures WHERE parcel_id = ? AND hidden = 0', [
+        parcelCtx.parcelId
+      ])
+      .catch(() => null);
+    await notifyAfterSculpturePublished(db, {
+      parcelId: parcelCtx.parcelId,
+      sculptureId,
+      sculptureTitle: title,
+      creatorSub: ownerUser?.id || '',
+      creatorName: ownerUser?.name || 'An artist',
+      awakenedParcel: false,
+      wasPreviouslyEmpty: Number(visibleCntRow?.cnt || 0) <= 1
+    });
+  } catch {
+    // Non-fatal notification failure
+  }
+
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
     mint: mintResult,
@@ -1212,6 +1234,27 @@ export async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress
   for (const term of POLICY.prohibitedTerms) {
     if (combined.includes(term)) {
       throw new McpServiceError(`Land curation violates Limited Terms Policy ("${term}").`, 400);
+    }
+  }
+  if (incomingName !== undefined && customName) {
+    const titleCheck = validateLandTitle(customName);
+    if (!titleCheck.ok) {
+      throw new McpServiceError(titleCheck.error, 400, { code: 'LAND_TITLE_INVALID' });
+    }
+    const conflict = await db
+      .get(
+        `SELECT parcel_id FROM parcel_curations
+         WHERE LOWER(TRIM(custom_name)) = LOWER(?) AND parcel_id != ?
+         LIMIT 1`,
+        [titleCheck.normalized, parcelCtx.parcelId]
+      )
+      .catch(() => null);
+    if (conflict) {
+      throw new McpServiceError(
+        `"${titleCheck.normalized}" is already taken by another Virtual Land.`,
+        409,
+        { code: 'LAND_TITLE_TAKEN', conflictingParcelId: conflict.parcel_id }
+      );
     }
   }
   if (featuredId && !parcelCtx.visibleRows.some((s) => s.id === featuredId)) {

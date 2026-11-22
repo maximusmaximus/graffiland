@@ -25,6 +25,7 @@ import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
+import NotificationCenter from './NotificationCenter.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureModal from './SculptureModal.jsx';
@@ -119,6 +120,11 @@ export default function DesktopHub({
   const [selectedDraftId, setSelectedDraftId] = useState('');
   const [mintBusy, setMintBusy] = useState(false);
   const [landStatus, setLandStatus] = useState('');
+  const [recentlyMintedParcels, setRecentlyMintedParcels] = useState([]);
+  const [mintLimitError, setMintLimitError] = useState(null);
+  const [notifRefreshSignal, setNotifRefreshSignal] = useState(0);
+  const [agentPairExpanded, setAgentPairExpanded] = useState(false);
+  const [agentPairPromptPreview, setAgentPairPromptPreview] = useState('');
   const draftCountRef = useRef(0);
   draftCountRef.current = draftParcelsRaw.length;
   const [copiedId, setCopiedId] = useState('');
@@ -442,13 +448,29 @@ export default function DesktopHub({
     }
   }
 
-  function openAgentConnectIntro() {
-    setMobileNoticeDismissed(false);
-    setIntroRoleTab('agent');
-    try {
-      sessionStorage.removeItem(DESKTOP_NOTICE_SESSION_KEY);
-    } catch {
-      // ignore
+  function openMintLandMode() {
+    setSidebarTab('land');
+    setDrawMode(true);
+  }
+
+  function switchSidebarTab(nextTab) {
+    setSidebarTab(nextTab);
+    if (nextTab === 'land') {
+      setDrawMode(true);
+    } else {
+      setDrawMode(false);
+    }
+  }
+
+  function handleNotificationAction(item) {
+    if (!item) return;
+    if (item.actionType === 'open_pair_mobile') {
+      openPairModal();
+    } else if (item.actionType === 'open_mint') {
+      openMintLandMode();
+    } else if (item.actionType === 'open_land' && item.parcelId) {
+      setLandManageParcelId(item.parcelId);
+      setLandManageOpen(true);
     }
   }
 
@@ -716,12 +738,13 @@ export default function DesktopHub({
     }
     setMintBusy(true);
     setLandStatus('');
+    setMintLimitError(null);
     try {
       const res = await api.claimLand({
         parcelId: draft.parcelId,
         lat: draft.centerLat,
         lng: draft.centerLng,
-        customName: draft.customName?.trim() || undefined,
+        customName: draft.customName?.trim() || '',
         description: draft.description?.trim() || undefined,
         curationNote: draft.description?.trim() || undefined,
         volume: {
@@ -734,21 +757,52 @@ export default function DesktopHub({
           rotationDeg: draft.rotationDeg
         }
       });
+      const mintedParcelRecord = {
+        parcelId: res.parcelId,
+        customName: res.customName || draft.customName?.trim() || res.parcelId,
+        description: draft.description?.trim() || '',
+        volume: res.volume || {
+          centerLat: draft.centerLat,
+          centerLng: draft.centerLng,
+          widthMeters: draft.widthMeters,
+          depthMeters: draft.depthMeters,
+          heightMeters: draft.heightMeters,
+          zScale: draft.zScale,
+          rotationDeg: draft.rotationDeg
+        }
+      };
+      setRecentlyMintedParcels((prev) => [
+        mintedParcelRecord,
+        ...prev.filter((p) => p.parcelId !== res.parcelId)
+      ]);
       setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== draft.id));
       setSelectedDraftId(`owned:${res.parcelId}`);
       setLandStatus({
-        text: `Minted ${res.parcelId} (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}!`
+        text: `Minted "${mintedParcelRecord.customName}" (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}!`
       });
+      setNotifRefreshSignal((n) => n + 1);
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
-      setLandStatus({ text: err?.message || 'Could not mint land parcel.', isError: true });
+      if (err?.data?.code === 'STARTER_FREE_LAND_LIMIT_REACHED' || err?.status === 429) {
+        setMintLimitError({
+          message: err.message,
+          usedSlots: err?.data?.usedSlots ?? LAND_VOLUME_LIMITS.starterFreeHumanClaims,
+          maxSlots: err?.data?.maxSlots ?? LAND_VOLUME_LIMITS.starterFreeHumanClaims,
+          unbuiltParcels: err?.data?.unbuiltParcels || []
+        });
+        setNotifRefreshSignal((n) => n + 1);
+      } else {
+        setLandStatus({ text: err?.message || 'Could not mint land parcel.', isError: true });
+      }
     } finally {
       setMintBusy(false);
     }
   }, [user?.id, refreshData, refreshMyLands]);
 
   const handleMintAll = useCallback(async () => {
-    const ready = draftParcels.filter((d) => d.valid !== false && !d.hasOverlap);
+    const ready = draftParcels.filter(
+      (d) => d.valid !== false && !d.hasOverlap && String(d.customName || '').trim().length >= 2
+    );
     if (!ready.length) return;
     if (!user?.id) {
       setLoginOpen(true);
@@ -757,16 +811,19 @@ export default function DesktopHub({
     }
     setMintBusy(true);
     setLandStatus('');
+    setMintLimitError(null);
     const mintedIds = [];
+    const mintedRecords = [];
     const mintedSet = new Set();
     let lastError = '';
+    let hitLimitPayload = null;
     for (const draft of ready) {
       try {
         const res = await api.claimLand({
           parcelId: draft.parcelId,
           lat: draft.centerLat,
           lng: draft.centerLng,
-          customName: draft.customName?.trim() || undefined,
+          customName: draft.customName?.trim() || '',
           description: draft.description?.trim() || undefined,
           curationNote: draft.description?.trim() || undefined,
           volume: {
@@ -780,26 +837,64 @@ export default function DesktopHub({
           }
         });
         mintedIds.push(res.parcelId);
+        mintedRecords.push({
+          parcelId: res.parcelId,
+          customName: res.customName || draft.customName?.trim() || res.parcelId,
+          description: draft.description?.trim() || '',
+          volume: res.volume || {
+            centerLat: draft.centerLat,
+            centerLng: draft.centerLng,
+            widthMeters: draft.widthMeters,
+            depthMeters: draft.depthMeters,
+            heightMeters: draft.heightMeters,
+            zScale: draft.zScale,
+            rotationDeg: draft.rotationDeg
+          }
+        });
         mintedSet.add(draft.id);
       } catch (err) {
-        lastError = err?.message || 'Mint failed.';
+        if (err?.data?.code === 'STARTER_FREE_LAND_LIMIT_REACHED' || err?.status === 429) {
+          hitLimitPayload = {
+            message: err.message,
+            usedSlots: err?.data?.usedSlots ?? LAND_VOLUME_LIMITS.starterFreeHumanClaims,
+            maxSlots: err?.data?.maxSlots ?? LAND_VOLUME_LIMITS.starterFreeHumanClaims,
+            unbuiltParcels: err?.data?.unbuiltParcels || []
+          };
+        } else {
+          lastError = err?.message || 'Mint failed.';
+        }
         break;
       }
     }
     if (mintedSet.size > 0) {
+      setRecentlyMintedParcels((prev) => {
+        const addedIds = new Set(mintedRecords.map((r) => r.parcelId));
+        return [...mintedRecords, ...prev.filter((p) => !addedIds.has(p.parcelId))];
+      });
       setDraftParcelsRaw((prev) => prev.filter((item) => !mintedSet.has(item.id)));
       setSelectedDraftId(`owned:${mintedIds[mintedIds.length - 1]}`);
+      setNotifRefreshSignal((n) => n + 1);
       await Promise.all([refreshData(), refreshMyLands()]);
     }
-    if (lastError) {
+    if (hitLimitPayload) {
+      setMintLimitError(hitLimitPayload);
+      setNotifRefreshSignal((n) => n + 1);
+      if (mintedRecords.length > 0) {
+        setLandStatus({
+          text: `Minted ${mintedRecords.map((r) => `"${r.customName}"`).join(', ')}. Free starter limit reached for remaining plots.`
+        });
+      }
+    } else if (lastError) {
       setLandStatus({
-        text: mintedIds.length
-          ? `Minted ${mintedIds.join(', ')}. Stopped: ${lastError}`
+        text: mintedRecords.length
+          ? `Minted ${mintedRecords.map((r) => `"${r.customName}"`).join(', ')}. Stopped: ${lastError}`
           : lastError,
         isError: true
       });
     } else {
-      setLandStatus({ text: `Minted ${mintedIds.length} parcel(s): ${mintedIds.join(', ')}` });
+      setLandStatus({
+        text: `Minted ${mintedRecords.length} land(s): ${mintedRecords.map((r) => `"${r.customName}"`).join(', ')}`
+      });
     }
     setMintBusy(false);
   }, [draftParcels, user?.id, refreshData, refreshMyLands]);
@@ -919,25 +1014,23 @@ export default function DesktopHub({
               <XeroIcon emoji="🕒" size={15} /> Last Viewed: {lastSculpture.title}
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={openPairModal}>
+          <button
+            type="button"
+            className="btn btn-primary btn-pair-glow"
+            data-testid="nav-pair-phone-btn"
+            onClick={openPairModal}
+            title="Pair your mobile phone via QR for live 3D drawing & in-person AR sculpting"
+          >
             <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
           </button>
           <button
             type="button"
             className="btn"
             style={{ borderColor: 'rgba(0, 245, 212, 0.5)', color: 'var(--accent)' }}
-            onClick={() => setSidebarTab('land')}
+            onClick={openMintLandMode}
             title="Select, size, rotate & scale 3D lands on desktop"
           >
             <XeroIcon emoji="🏗️" size={16} /> Mint Land
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={openAgentConnectIntro}
-            title="Show human/agent onboarding & copy agent connection prompts"
-          >
-            <XeroIcon emoji="🤖" size={16} /> Connect Agent
           </button>
           {(myLands.parcelCount > 0 || (myLands.parcels && myLands.parcels.length > 0)) && (
             <button
@@ -966,6 +1059,12 @@ export default function DesktopHub({
               <XeroIcon emoji="🛡️" size={15} /> Admin
             </button>
           )}
+          <NotificationCenter
+            user={user}
+            variant="desktop"
+            refreshSignal={notifRefreshSignal}
+            onAction={handleNotificationAction}
+          />
           {user ? (
             <button
               type="button"
@@ -974,10 +1073,12 @@ export default function DesktopHub({
               onClick={() => setProfileHandle(user.username || user.id)}
               title="Open your public profile, edit @username, bio, icon & header banner"
             >
-              {user.picture ? (
-                <img className="nav-profile-avatar" src={user.picture} alt="" />
+              {user.avatarImage ? (
+                <img className="nav-profile-avatar" src={user.avatarImage} alt="" />
               ) : (
-                <XeroIcon emoji="👤" size={16} />
+                <span className="nav-profile-default-badge" aria-hidden="true">
+                  {String(user.username || user.name || 'G').replace(/^@/, '').slice(0, 1).toUpperCase()}
+                </span>
               )}{' '}
               {user.username ? `@${user.username}` : user.name}
             </button>
@@ -1115,7 +1216,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'list' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('list')}
+                onClick={() => switchSidebarTab('list')}
               >
                 <XeroIcon emoji="📍" size={11} /> List
               </button>
@@ -1123,7 +1224,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'land' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('land')}
+                onClick={openMintLandMode}
               >
                 <XeroIcon emoji="🏗️" size={11} /> Mint Land{draftParcels.length > 0 ? ` (${draftParcels.length})` : ''}
               </button>
@@ -1131,7 +1232,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'quests' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('quests')}
+                onClick={() => switchSidebarTab('quests')}
               >
                 <XeroIcon emoji="🔥" size={11} /> Quests ({quests.length})
               </button>
@@ -1139,7 +1240,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'market' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('market')}
+                onClick={() => switchSidebarTab('market')}
               >
                 <XeroIcon emoji="🛒" size={11} /> Market ({listings.length})
               </button>
@@ -1147,7 +1248,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'gallery' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('gallery')}
+                onClick={() => switchSidebarTab('gallery')}
               >
                 <XeroIcon emoji="🎨" size={11} /> Gallery
               </button>
@@ -1155,7 +1256,7 @@ export default function DesktopHub({
                 type="button"
                 className={`btn ${sidebarTab === 'leaders' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => setSidebarTab('leaders')}
+                onClick={() => switchSidebarTab('leaders')}
               >
                 <XeroIcon emoji="🏆" size={11} /> Leaders
               </button>
@@ -1212,6 +1313,7 @@ export default function DesktopHub({
               <DesktopLandBuilderPanel
                 draftParcels={draftParcels}
                 ownedParcels={ownedUserParcels}
+                recentlyMintedParcels={recentlyMintedParcels}
                 selectedDraftId={selectedDraftId}
                 drawMode={drawMode}
                 onToggleDrawMode={() => setDrawMode((cur) => !cur)}
@@ -1224,7 +1326,6 @@ export default function DesktopHub({
                 onMintAll={handleMintAll}
                 onUpdateOwnedVolume={handleUpdateOwnedVolume}
                 onOpenAddLandItem={handleOpenAddLandItem}
-                onOpenTitleDraft={(draft) => setTitleModalTarget({ mode: 'draft', parcel: draft })}
                 onOpenTitleOwned={(parcel) => setTitleModalTarget({ mode: 'owned', parcel })}
                 onCopyOwnedShareLink={handleCopyParcelShareLink}
                 onToggleFreezeParcel={handleToggleFreezeParcel}
@@ -1232,6 +1333,9 @@ export default function DesktopHub({
                   setLandManageParcelId(pid || '');
                   setLandManageOpen(true);
                 }}
+                onOpenPairMobile={openPairModal}
+                mintLimitError={mintLimitError}
+                onDismissMintLimitError={() => setMintLimitError(null)}
                 mintBusy={mintBusy}
                 landStatus={landStatus}
                 cameraBearingDeg={
@@ -1551,11 +1655,20 @@ export default function DesktopHub({
 
       {pairOpen && (
         <div className="modal-backdrop" onClick={() => setPairOpen(false)}>
-          <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-card wide pair-hub-modal"
+            data-testid="pair-phone-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-header">
-              <h2 className="modal-title">
-                <XeroIcon emoji="🔗" size={22} /> Pair Phone via QR · Large 3D Drawing View
-              </h2>
+              <div>
+                <h2 className="modal-title">
+                  <XeroIcon emoji="🔗" size={22} /> Pair Phone via QR · Large 3D Drawing View
+                </h2>
+                <p className="pair-modal-subtitle">
+                  Scan on mobile to sculpt in AR with a live full-size 3D desktop monitor — and optionally reveal AI Agent (MCP) pairing below.
+                </p>
+              </div>
               <button
                 type="button"
                 className="btn"
@@ -1565,74 +1678,153 @@ export default function DesktopHub({
                 <XeroIcon emoji="❌" size={15} />
               </button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--muted)' }}>
-              Scan the QR code below with your mobile phone to draw &amp; create in AR while watching
-              your sculpture build live in this larger 3D workspace. Remember: publishing on-chain is
-              completed on mobile (or signed by your paired agent when initiated from mobile).
-            </p>
-            {user && (
-              <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span>Robust MCP Agent Pairing</span>
-                    <span className={`badge ${mcpState.mcpActive ? 'teal' : 'gold'}`}>
-                      {mcpState.mcpActive
-                        ? mcpState.activePairing?.keyConnected
-                          ? '🟢 MCP Active · Keys Connected'
-                          : '🟢 MCP Active'
-                        : '🟡 Inactive Until Connected'}
+
+            <PairWorkbench3D inModal />
+
+            {/* Structured Revealable AI Agent Pairing (MCP) Accordion */}
+            <div className="pair-agent-accordion" data-testid="pair-agent-accordion">
+              <button
+                type="button"
+                className="pair-agent-accordion-trigger"
+                data-testid="pair-agent-reveal-toggle"
+                aria-expanded={agentPairExpanded}
+                onClick={() => setAgentPairExpanded((prev) => !prev)}
+              >
+                <div className="pair-agent-trigger-left">
+                  <span className="pair-agent-icon" aria-hidden="true">🤖</span>
+                  <div>
+                    <strong>AI Agent Pairing (MCP)</strong>
+                    <span className="pair-agent-sub">
+                      Connect your AI agent to co-build, stage 3D models, or manage your lands
                     </span>
                   </div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-                    {mcpState.activePairing?.code || mcpState.pairings?.[0]?.code || 'No active GLP pairing code yet'}
-                  </div>
-                  {mcpNotice && (
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--accent)', marginTop: 4 }}>
-                      {mcpNotice}
+                </div>
+                <div className="pair-agent-trigger-right">
+                  <span className={`badge ${mcpState.mcpActive ? 'teal' : 'gold'}`}>
+                    {mcpState.mcpActive
+                      ? mcpState.activePairing?.keyConnected
+                        ? '🟢 Connected'
+                        : '🟢 Active'
+                      : 'Optional Setup'}
+                  </span>
+                  <span className="pair-agent-caret">
+                    {agentPairExpanded ? 'Hide ▴' : 'Reveal Steps ▾'}
+                  </span>
+                </div>
+              </button>
+
+              {agentPairExpanded && (
+                <div className="pair-agent-body" data-testid="pair-agent-structured-steps">
+                  {!user ? (
+                    <div className="pair-agent-signin-row">
+                      <span>Sign in first to generate a personal MCP Agent Pairing code and prompt.</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => {
+                          setPairOpen(false);
+                          setLoginOpen(true);
+                        }}
+                      >
+                        <XeroIcon emoji="🔐" size={13} /> Sign In to Pair Agent
+                      </button>
                     </div>
+                  ) : (
+                    <>
+                      <div className="pair-agent-steps-grid">
+                        <div className="pair-agent-step-card">
+                          <div className="pair-agent-step-num">STEP 1</div>
+                          <strong>Generate Pairing Code</strong>
+                          <p>Creates a personal <code>GLP-…</code> pairing code linked to your wallet.</p>
+                          <div className="pair-agent-code-box mono">
+                            {mcpState.activePairing?.code || mcpState.pairings?.[0]?.code || 'Not generated yet'}
+                          </div>
+                        </div>
+
+                        <div className="pair-agent-step-card">
+                          <div className="pair-agent-step-num">STEP 2</div>
+                          <strong>Copy Structured MCP Prompt</strong>
+                          <p>Paste the prompt into Claude, OpenClaw, Cursor, or any MCP-ready agent.</p>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            data-testid="pair-agent-generate-copy-btn"
+                            onClick={async () => {
+                              const created = await api.createMcpPairing({
+                                apiOrigin: API_BASE || window.location.origin
+                              });
+                              const updated = await api.listMcpPairings();
+                              setMcpState(updated);
+                              const prompt =
+                                created.ownerPrompt ||
+                                buildPropertyOwnerPrompt({
+                                  apiOrigin: API_BASE || window.location.origin,
+                                  pairingCode: created.pairing?.code,
+                                  ownerAddress: user.activeMintRecipient || user.walletAddress
+                                });
+                              setAgentPairPromptPreview(prompt);
+                              await copyToClipboard(prompt);
+                              setMcpNotice(
+                                `Generated ${created.pairing?.code} & copied structured MCP Agent Prompt.`
+                              );
+                            }}
+                          >
+                            <XeroIcon emoji="🔑" size={13} /> Generate Code &amp; Copy Prompt
+                          </button>
+                        </div>
+
+                        <div className="pair-agent-step-card">
+                          <div className="pair-agent-step-num">STEP 3</div>
+                          <strong>Verify &amp; Control Access</strong>
+                          <p>Revoke or rotate your agent pairing code anytime with one click.</p>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span className={`badge ${mcpState.mcpActive ? 'teal' : 'gold'}`}>
+                              {mcpState.mcpActive
+                                ? mcpState.activePairing?.keyConnected
+                                  ? 'Keys Verified'
+                                  : 'Awaiting Agent Handshake'
+                                : 'Standby'}
+                            </span>
+                            {mcpState.activePairing && (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-danger"
+                                onClick={async () => {
+                                  await api.disconnectMcpPairing(mcpState.activePairing.code);
+                                  const updated = await api.listMcpPairings();
+                                  setMcpState(updated);
+                                  setAgentPairPromptPreview('');
+                                  setMcpNotice('Disconnected MCP pairing.');
+                                }}
+                              >
+                                Disconnect
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {mcpNotice && (
+                        <div className="status-banner" role="status" style={{ marginTop: 10 }}>
+                          {mcpNotice}
+                        </div>
+                      )}
+
+                      {agentPairPromptPreview && (
+                        <textarea
+                          readOnly
+                          className="land-agent-preview"
+                          aria-label="Structured MCP agent pairing prompt"
+                          value={agentPairPromptPreview}
+                          rows={5}
+                          style={{ marginTop: 8 }}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={async () => {
-                      const created = await api.createMcpPairing({
-                        apiOrigin: API_BASE || window.location.origin
-                      });
-                      const updated = await api.listMcpPairings();
-                      setMcpState(updated);
-                      const prompt =
-                        created.ownerPrompt ||
-                        buildPropertyOwnerPrompt({
-                          apiOrigin: API_BASE || window.location.origin,
-                          pairingCode: created.pairing?.code,
-                          ownerAddress: user.activeMintRecipient || user.walletAddress
-                        });
-                      await navigator.clipboard?.writeText(prompt);
-                      setMcpNotice(`Generated ${created.pairing?.code} & copied Property Owner MCP Prompt.`);
-                    }}
-                  >
-                    <XeroIcon emoji="🔑" size={14} /> New Robust Code &amp; Copy MCP Prompt
-                  </button>
-                  {mcpState.activePairing && (
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      onClick={async () => {
-                        await api.disconnectMcpPairing(mcpState.activePairing.code);
-                        const updated = await api.listMcpPairings();
-                        setMcpState(updated);
-                        setMcpNotice('Disconnected MCP pairing.');
-                      }}
-                    >
-                      Disconnect
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            <PairWorkbench3D inModal />
+              )}
+            </div>
           </div>
         </div>
       )}

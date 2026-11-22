@@ -10,6 +10,7 @@ import {
 } from '../utils/landPreviewHelpers.js';
 import { hasWebGLSupport, loadMapLibre } from '../utils/loadMapLibre.js';
 import { computePrismScreenGeometry } from '../utils/map3dProjection.js';
+import { drawFloatingLandLabel } from '../utils/map3dLabelOverlay.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import InfoTip from './InfoTip.jsx';
@@ -81,10 +82,10 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
 function drawPreviewPrism(
   ctx,
   geom,
-  { outerColor, innerColor, lineWidth = 2.1, glowBlur = 12, label = '', dashed = false, showGroundHalo = false }
+  { outerColor, innerColor, lineWidth = 2.1, glowBlur = 12, dashed = false, showGroundHalo = false }
 ) {
   if (!geom) return;
-  const { bottom, top, topCenter } = geom;
+  const { bottom, top } = geom;
 
   if (showGroundHalo) {
     const cx = (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4;
@@ -140,33 +141,6 @@ function drawPreviewPrism(
   }
   drawEdges(outerColor, lineWidth + 1.1, glowBlur);
   drawEdges(innerColor, Math.max(1, lineWidth - 0.5), 0);
-
-  if (label && topCenter?.visible) {
-    ctx.save();
-    ctx.font = '600 10.5px "JetBrains Mono", ui-monospace, monospace';
-    const textW = ctx.measureText(label).width;
-    const padX = 7;
-    const boxW = textW + padX * 2;
-    const boxH = 19;
-    const bx = topCenter.x - boxW / 2;
-    const by = Math.max(8, topCenter.y - boxH - 9);
-    ctx.fillStyle = 'rgba(6, 10, 20, 0.9)';
-    ctx.strokeStyle = outerColor;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(bx, by, boxW, boxH, 5);
-    } else {
-      ctx.rect(bx, by, boxW, boxH);
-    }
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = innerColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, topCenter.x, by + boxH / 2 + 0.5);
-    ctx.restore();
-  }
 }
 
 /**
@@ -439,17 +413,29 @@ export default function LandIsometricPreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
+    // Pass 1: Draw all wireframes first so floating labels sit strictly on top
+    const pendingLabels = [];
+
     // 1) Other owned lands in subtle dashed amber so user sees spatial relationships
     for (const entry of otherEntriesRef.current || []) {
       const geom = computePrismScreenGeometry(map, maplibregl, entry.volume);
       if (!geom) continue;
+      const outerColor = 'rgba(255, 183, 3, 0.85)';
+      const innerColor = '#fff3c4';
       drawPreviewPrism(ctx, geom, {
-        outerColor: 'rgba(255, 183, 3, 0.8)',
-        innerColor: '#fff3c4',
+        outerColor,
+        innerColor,
         lineWidth: 1.4,
         glowBlur: 6,
-        dashed: true,
-        label: entry.parcel?.customName || entry.parcel?.parcelId || ''
+        dashed: true
+      });
+      pendingLabels.push({
+        geom,
+        outerColor,
+        innerColor,
+        label: entry.parcel?.customName || entry.parcel?.parcelId || '',
+        liftPx: 18,
+        minY: 10
       });
     }
 
@@ -462,15 +448,29 @@ export default function LandIsometricPreview({
         const shortName = displayNameRef.current || curVol.parcelId;
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
         const heightTag = `${Math.round(curVol.heightMeters)}m`;
+        const outerColor = isFrozenNow ? '#7dd3fc' : '#00f5d4';
+        const innerColor = isFrozenNow ? '#e0f2fe' : '#eafffc';
         drawPreviewPrism(ctx, geom, {
-          outerColor: isFrozenNow ? '#7dd3fc' : '#00f5d4',
-          innerColor: isFrozenNow ? '#e0f2fe' : '#eafffc',
+          outerColor,
+          innerColor,
           lineWidth: 2.3,
           glowBlur: 14,
-          showGroundHalo: true,
-          label: `${isFrozenNow ? '❄️ ' : ''}${trimmed} · ${heightTag}`
+          showGroundHalo: true
+        });
+        pendingLabels.push({
+          geom,
+          outerColor,
+          innerColor,
+          label: `${isFrozenNow ? '❄️ ' : ''}${trimmed} · ${heightTag}`,
+          liftPx: 22,
+          minY: 10
         });
       }
+    }
+
+    // Pass 2: Floating labels on top of all wireframes with thin arrow from land center
+    for (const item of pendingLabels) {
+      drawFloatingLandLabel(ctx, item.geom, item);
     }
   }, []);
 

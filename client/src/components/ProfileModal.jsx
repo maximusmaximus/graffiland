@@ -395,13 +395,35 @@ export default function ProfileModal({
     ? localAvatarValidation.ok
       ? localAvatarValidation.value
       : ''
-    : profile?.avatarImage || profile?.picture || '';
+    : profile?.avatarImage || '';
 
   const liveHeaderValue = editing && headerDirty
     ? localHeaderValidation.ok
       ? localHeaderValidation.value
       : ''
     : profile?.headerImage || '';
+
+  const hasCustomAvatar = Boolean(liveAvatarSrc);
+  const hasCustomHeader = Boolean(liveHeaderValue);
+
+  function openEditMode(triggerPicker = '') {
+    if (!editing) {
+      setUsernameInput(profile?.username || '');
+      setBioInput(profile?.bio || '');
+      setAvatarInput(profile?.avatarImage || '');
+      setHeaderInput(profile?.headerImage || '');
+      setAvatarDirty(false);
+      setHeaderDirty(false);
+      setMediaError('');
+      setSaveError('');
+      setEditing(true);
+    }
+    if (triggerPicker === 'avatar') {
+      avatarFileInputRef.current?.click();
+    } else if (triggerPicker === 'header') {
+      headerFileInputRef.current?.click();
+    }
+  }
 
   const headerPreset = liveHeaderValue.startsWith('preset:') || !liveHeaderValue
     ? findHeaderPreset(liveHeaderValue)
@@ -430,17 +452,7 @@ export default function ProfileModal({
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
-                onClick={() => {
-                  setUsernameInput(profile?.username || '');
-                  setBioInput(profile?.bio || '');
-                  setAvatarInput(profile?.avatarImage || '');
-                  setHeaderInput(profile?.headerImage || '');
-                  setAvatarDirty(false);
-                  setHeaderDirty(false);
-                  setMediaError('');
-                  setSaveError('');
-                  setEditing(true);
-                }}
+                onClick={() => openEditMode()}
                 data-testid="profile-edit-btn"
               >
                 <XeroIcon emoji="✏️" size={13} /> Edit Profile
@@ -462,6 +474,28 @@ export default function ProfileModal({
           </div>
         ) : (
           <div className="profile-modal-body">
+            {/* Hidden file inputs always mounted for owner so banner/avatar + buttons work immediately */}
+            {isOwner && (
+              <>
+                <input
+                  ref={avatarFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  data-testid="profile-avatar-file-input"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleImageUpload(e, 'avatar')}
+                />
+                <input
+                  ref={headerFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  data-testid="profile-header-file-input"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleImageUpload(e, 'header')}
+                />
+              </>
+            )}
+
             {/* Clean Public Profile Banner & Identity Card */}
             <div className="card profile-hero-card">
               <div
@@ -498,6 +532,19 @@ export default function ProfileModal({
                         USER {userNumberLabel}
                       </span>
                     )}
+                    {isOwner && !editing && !hasCustomHeader && (
+                      <button
+                        type="button"
+                        className="profile-banner-add-plus-btn"
+                        data-testid="profile-add-header-btn"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => openEditMode('header')}
+                        title="Add a custom header banner image"
+                      >
+                        <span className="profile-plus-glyph" aria-hidden="true">+</span>
+                        <span>{mediaBusy === 'header' ? 'Optimizing…' : 'Add Banner'}</span>
+                      </button>
+                    )}
                     {isOwner && editing && (
                       <button
                         type="button"
@@ -524,9 +571,58 @@ export default function ProfileModal({
                           data-testid="profile-banner-avatar-img"
                         />
                       ) : (
-                        <span>{monogram}</span>
+                        <div
+                          className="profile-default-emblem"
+                          data-testid="profile-default-avatar"
+                          aria-label="Default GRAFFILAND creator icon"
+                        >
+                          <svg
+                            viewBox="0 0 48 48"
+                            width="42"
+                            height="42"
+                            aria-hidden="true"
+                            className="profile-default-emblem-svg"
+                          >
+                            <polygon
+                              points="24,6 40,15 40,33 24,42 8,33 8,15"
+                              fill="rgba(0,245,212,0.14)"
+                              stroke="#00f5d4"
+                              strokeWidth="2.2"
+                              strokeLinejoin="round"
+                            />
+                            <polyline
+                              points="8,15 24,24 40,15"
+                              fill="none"
+                              stroke="#00f5d4"
+                              strokeWidth="1.8"
+                              strokeLinejoin="round"
+                            />
+                            <line
+                              x1="24"
+                              y1="24"
+                              x2="24"
+                              y2="42"
+                              stroke="#00f5d4"
+                              strokeWidth="1.8"
+                            />
+                          </svg>
+                          <span className="profile-default-emblem-monogram">{monogram}</span>
+                        </div>
                       )}
                     </div>
+                    {isOwner && !editing && !hasCustomAvatar && (
+                      <button
+                        type="button"
+                        className="profile-avatar-add-plus-btn"
+                        data-testid="profile-add-avatar-btn"
+                        aria-label="Add bio image"
+                        title="Add your profile bio image"
+                        disabled={Boolean(mediaBusy)}
+                        onClick={() => openEditMode('avatar')}
+                      >
+                        +
+                      </button>
+                    )}
                     {isOwner && editing && (
                       <button
                         type="button"
@@ -664,24 +760,6 @@ export default function ProfileModal({
                     an HTTPS image URL, or pick a curated header background preset.
                   </InfoTip>
                 </div>
-
-                {/* Hidden file inputs triggered by banner buttons & form controls */}
-                <input
-                  ref={avatarFileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  data-testid="profile-avatar-file-input"
-                  style={{ display: 'none' }}
-                  onChange={(e) => handleImageUpload(e, 'avatar')}
-                />
-                <input
-                  ref={headerFileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  data-testid="profile-header-file-input"
-                  style={{ display: 'none' }}
-                  onChange={(e) => handleImageUpload(e, 'header')}
-                />
 
                 {/* Bio Image (Profile Icon) Controls */}
                 <div className="profile-media-block">

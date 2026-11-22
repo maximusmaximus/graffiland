@@ -1,12 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
   buildParcelShareUrl,
   computeMaxHeightForFootprint,
   normalizeRotationDeg,
-  scaleFootprintToLimit
+  scaleFootprintToLimit,
+  validateLandTitle
 } from '../../../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
+import { api } from '../utils/api.js';
+import { getMobileLaunchUrl } from '../utils/device.js';
 import { EmojiInput } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 
@@ -51,9 +54,33 @@ function normalizeDeg(value) {
   return ((n % 360) + 360) % 360;
 }
 
+function formatLocationCopyLine(parcel, origin, pathname) {
+  const title = parcel.customName || parcel.parcelId;
+  const vol = parcel.volume || parcel;
+  const lat = Number(vol?.centerLat ?? parcel.centerLat ?? parcel.lat);
+  const lng = Number(vol?.centerLng ?? parcel.centerLng ?? parcel.lng);
+  const coords =
+    Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(6)}, ${lng.toFixed(6)}` : '';
+  const dims =
+    Number.isFinite(Number(vol?.widthMeters)) && Number.isFinite(Number(vol?.depthMeters))
+      ? `${Math.round(vol.widthMeters)}×${Math.round(vol.depthMeters)}×${Math.round(
+          vol.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters
+        )}m`
+      : '';
+  const shareUrl = buildParcelShareUrl({
+    origin,
+    pathname,
+    parcelId: parcel.parcelId,
+    customName: parcel.customName || '',
+    compact: true
+  });
+  return [title, coords ? `(${coords})` : '', dims, shareUrl].filter(Boolean).join(' · ');
+}
+
 export function DesktopLandBuilderPanel({
   draftParcels = [],
   ownedParcels = [],
+  recentlyMintedParcels = [],
   selectedDraftId = '',
   drawMode = false,
   onToggleDrawMode,
@@ -66,11 +93,14 @@ export function DesktopLandBuilderPanel({
   onMintAll,
   onUpdateOwnedVolume,
   onOpenAddLandItem = null,
-  onOpenTitleDraft = null,
   onOpenTitleOwned = null,
   onCopyOwnedShareLink = null,
   onToggleFreezeParcel = null,
   onOpenLandManagement = null,
+  onOpenPairMobile = null,
+  mintLimitError = null,
+  onDismissMintLimitError = null,
+  checkLandNameFn = null,
   mintBusy = false,
   landStatus = '',
   cameraBearingDeg = 315,
@@ -81,13 +111,18 @@ export function DesktopLandBuilderPanel({
   config = null,
   onSignIn
 }) {
-  const limits = useMemo(() => ({
-    ...LAND_VOLUME_LIMITS,
-    ...(config?.landVolumeLimits || config?.policy?.landVolumeLimits || {})
-  }), [config]);
+  const limits = useMemo(
+    () => ({
+      ...LAND_VOLUME_LIMITS,
+      ...(config?.landVolumeLimits || config?.policy?.landVolumeLimits || {})
+    }),
+    [config]
+  );
 
   const [copyBanner, setCopyBanner] = useState('');
-  const [showAgentPreview, setShowAgentPreview] = useState(false);
+  const [showManualDims, setShowManualDims] = useState(false);
+  const [showMintedAgentPreview, setShowMintedAgentPreview] = useState(false);
+  const [nameAvailabilityByDraft, setNameAvailabilityByDraft] = useState({});
 
   const origin = useMemo(() => {
     if (typeof window !== 'undefined' && window.location?.origin) {
@@ -123,9 +158,123 @@ export function DesktopLandBuilderPanel({
     setOwnedDraftVol({ ...(activeOwned.volume || {}) });
   }, [activeOwned]);
 
+  // Live uniqueness check for active draft land title
+  const activeDraftId = activeDraft?.id || '';
+  const activeDraftTitleRaw = activeDraft?.customName || '';
+  useEffect(() => {
+    if (!activeDraftId) return undefined;
+    const local = validateLandTitle(activeDraftTitleRaw);
+    if (!local.ok) {
+      setNameAvailabilityByDraft((prev) => ({
+        ...prev,
+        [activeDraftId]: {
+          state: activeDraftTitleRaw.trim() ? 'invalid' : 'empty',
+          name: local.normalized,
+          message: local.error
+        }
+      }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    setNameAvailabilityByDraft((prev) => ({
+      ...prev,
+      [activeDraftId]: { state: 'checking', name: local.normalized, message: 'Checking availability…' }
+    }));
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const checker = checkLandNameFn || ((name) => api.checkLandName(name));
+        const res = await checker(local.normalized);
+        if (cancelled) return;
+        if (res?.available) {
+          setNameAvailabilityByDraft((prev) => ({
+            ...prev,
+            [activeDraftId]: {
+              state: 'available',
+              name: local.normalized,
+              message: 'Title is available'
+            }
+          }));
+        } else {
+          setNameAvailabilityByDraft((prev) => ({
+            ...prev,
+            [activeDraftId]: {
+              state: 'taken',
+              name: local.normalized,
+              message: res?.reason || `"${local.normalized}" is already taken.`
+            }
+          }));
+        }
+      } catch {
+        if (cancelled) return;
+        // Offline/mock fallback: treat locally valid titles as mintable (server still validates on submit)
+        setNameAvailabilityByDraft((prev) => ({
+          ...prev,
+          [activeDraftId]: { state: 'available', name: local.normalized, message: '' }
+        }));
+      }
+    }, 240);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeDraftId, activeDraftTitleRaw, checkLandNameFn]);
+
+  // Detect duplicate titles across drafts in the same batch
+  const batchDuplicateIds = useMemo(() => {
+    const seen = new Map();
+    const dupes = new Set();
+    for (const d of draftParcels) {
+      const norm = String(d.customName || '').trim().toLowerCase();
+      if (!norm) continue;
+      if (seen.has(norm)) {
+        dupes.add(seen.get(norm));
+        dupes.add(d.id);
+      } else {
+        seen.set(norm, d.id);
+      }
+    }
+    return dupes;
+  }, [draftParcels]);
+
+  const getDraftTitleState = useCallback(
+    (draft) => {
+      if (!draft) return { ok: false, state: 'empty', message: 'Enter a unique land title.' };
+      const local = validateLandTitle(draft.customName || '');
+      if (!local.ok) {
+        return {
+          ok: false,
+          state: String(draft.customName || '').trim() ? 'invalid' : 'empty',
+          message: local.error
+        };
+      }
+      if (batchDuplicateIds.has(draft.id)) {
+        return {
+          ok: false,
+          state: 'taken',
+          message: 'Duplicate title inside your current batch — each land needs a unique name.'
+        };
+      }
+      const asyncState = nameAvailabilityByDraft[draft.id];
+      if (asyncState && asyncState.name === local.normalized) {
+        if (asyncState.state === 'taken' || asyncState.state === 'invalid') {
+          return { ok: false, state: asyncState.state, message: asyncState.message };
+        }
+        if (asyncState.state === 'checking') {
+          return { ok: false, state: 'checking', message: 'Checking availability…' };
+        }
+        return { ok: true, state: 'available', message: asyncState.message || 'Title is available' };
+      }
+      return { ok: true, state: 'valid', message: '' };
+    },
+    [batchDuplicateIds, nameAvailabilityByDraft]
+  );
+
   const activeMode = activeOwned ? 'owned' : activeDraft ? 'draft' : null;
   const activeItem = activeOwned || activeDraft || null;
-  const activeVolume = activeOwned ? (ownedDraftVol || activeOwned.volume || {}) : activeDraft || {};
+  const activeVolume = activeOwned ? ownedDraftVol || activeOwned.volume || {} : activeDraft || {};
 
   const activeWidth = clampNum(
     activeVolume.widthMeters,
@@ -185,57 +334,79 @@ export function DesktopLandBuilderPanel({
   const volLimitPct = Math.min(100, Math.round((activeCubic / limits.maxVolumeCubicM) * 100));
 
   const readyDrafts = useMemo(
-    () => draftParcels.filter((item) => item.valid !== false && !item.hasOverlap),
-    [draftParcels]
+    () =>
+      draftParcels.filter((item) => {
+        if (item.valid === false || item.hasOverlap) return false;
+        const t = getDraftTitleState(item);
+        return t.ok;
+      }),
+    [draftParcels, getDraftTitleState]
   );
 
-  const enrichedProperties = useMemo(() => {
-    return draftParcels.map((draft, idx) => ({
-      ...draft,
-      customName: draft.customName || `Land Plot #${idx + 1}`,
-      shareUrl: buildParcelShareUrl({
-        origin,
-        pathname,
-        parcelId: draft.parcelId,
-        lat: draft.centerLat ?? draft.lat,
-        lng: draft.centerLng ?? draft.lng,
-        volume: draft,
-        customName: draft.customName
-      })
-    }));
-  }, [draftParcels, origin, pathname]);
+  const untitledOrInvalidDrafts = useMemo(
+    () =>
+      draftParcels.filter((item) => {
+        if (item.valid === false || item.hasOverlap) return false;
+        return !getDraftTitleState(item).ok;
+      }),
+    [draftParcels, getDraftTitleState]
+  );
 
-  const agentPromptText = useMemo(() => {
+  // Combine freshly minted lands & owned lands for post-mint copy options
+  const copyableMintedParcels = useMemo(() => {
+    const byId = new Map();
+    for (const p of recentlyMintedParcels || []) {
+      if (p?.parcelId) byId.set(p.parcelId, p);
+    }
+    for (const p of ownedParcels || []) {
+      if (p?.parcelId && !byId.has(p.parcelId)) {
+        byId.set(p.parcelId, p);
+      }
+    }
+    return Array.from(byId.values());
+  }, [recentlyMintedParcels, ownedParcels]);
+
+  const enrichedMintedProperties = useMemo(() => {
+    return copyableMintedParcels.map((parcel) => {
+      const vol = parcel.volume || parcel;
+      return {
+        ...parcel,
+        centerLat: Number(vol?.centerLat ?? parcel.centerLat ?? parcel.lat ?? 0),
+        centerLng: Number(vol?.centerLng ?? parcel.centerLng ?? parcel.lng ?? 0),
+        widthMeters: Number(vol?.widthMeters || limits.defaultWidthMeters),
+        depthMeters: Number(vol?.depthMeters || limits.defaultDepthMeters),
+        heightMeters: Number(vol?.heightMeters || limits.defaultHeightMeters),
+        rotationDeg: Number(vol?.rotationDeg || 0),
+        customName: parcel.customName || parcel.parcelId,
+        shareUrl: buildParcelShareUrl({
+          origin,
+          pathname,
+          parcelId: parcel.parcelId,
+          customName: parcel.customName || '',
+          compact: true
+        })
+      };
+    });
+  }, [copyableMintedParcels, origin, pathname, limits]);
+
+  const mintedAgentPromptText = useMemo(() => {
+    if (!enrichedMintedProperties.length) return '';
     return buildLandAcquisitionAgentPrompt({
-      properties: enrichedProperties,
+      properties: enrichedMintedProperties,
       apiOrigin: apiOrigin || origin,
       publicUrl: publicUrl || `${origin}${pathname}`,
       pairingCode: pairingCode || undefined,
       ownerAddress: user?.walletAddress || user?.address || undefined
     });
-  }, [enrichedProperties, apiOrigin, origin, publicUrl, pathname, pairingCode, user]);
+  }, [enrichedMintedProperties, apiOrigin, origin, publicUrl, pathname, pairingCode, user]);
 
-  const allLinksText = useMemo(() => {
-    return enrichedProperties.map((prop) => `${prop.customName || prop.parcelId}: ${prop.shareUrl}`).join('\n');
-  }, [enrichedProperties]);
+  const mintedAllLocationsText = useMemo(() => {
+    return copyableMintedParcels
+      .map((parcel) => formatLocationCopyLine(parcel, origin, pathname))
+      .join('\n');
+  }, [copyableMintedParcels, origin, pathname]);
 
   const flashCopy = (msg) => setCopyBanner(msg);
-
-  const handleCopySingleLink = async () => {
-    if (!activeItem) return;
-    const shareUrl = buildParcelShareUrl({
-      origin,
-      pathname,
-      parcelId: activeItem.parcelId,
-      lat: activeVolume.centerLat ?? activeItem.lat,
-      lng: activeVolume.centerLng ?? activeItem.lng,
-      volume: activeVolume,
-      customName: activeItem.customName,
-      compact: activeMode === 'owned'
-    });
-    const ok = await copyTextSafe(shareUrl);
-    flashCopy(ok ? `Copied parcel link for ${activeItem.parcelId}` : shareUrl);
-  };
 
   const handleCopyMintedParcelLink = async (parcel) => {
     if (!parcel?.parcelId) return;
@@ -251,24 +422,35 @@ export function DesktopLandBuilderPanel({
       compact: true
     });
     const ok = await copyTextSafe(shareUrl);
-    flashCopy(ok ? `Copied share link for ${parcel.customName || parcel.parcelId}` : shareUrl);
+    flashCopy(ok ? `Copied link for "${parcel.customName || parcel.parcelId}"` : shareUrl);
   };
 
-  const handleCopyAllForAgent = async () => {
-    if (!enrichedProperties.length) return;
-    setShowAgentPreview(true);
-    const ok = await copyTextSafe(agentPromptText);
+  const handleCopyMintedParcelLocation = async (parcel) => {
+    if (!parcel?.parcelId) return;
+    const text = formatLocationCopyLine(parcel, origin, pathname);
+    const ok = await copyTextSafe(text);
+    flashCopy(ok ? `Copied location for "${parcel.customName || parcel.parcelId}"` : text);
+  };
+
+  const handleCopyAllMintedLocations = async () => {
+    if (!copyableMintedParcels.length) return;
+    const ok = await copyTextSafe(mintedAllLocationsText);
     flashCopy(
       ok
-        ? `Copied ${enrichedProperties.length} propert${enrichedProperties.length === 1 ? 'y' : 'ies'} for your agent`
-        : 'Prepared agent acquisition text below'
+        ? `Copied all ${copyableMintedParcels.length} minted location(s)`
+        : mintedAllLocationsText
     );
   };
 
-  const handleCopyAllLinks = async () => {
-    if (!enrichedProperties.length) return;
-    const ok = await copyTextSafe(allLinksText);
-    flashCopy(ok ? `Copied ${enrichedProperties.length} parcel share link(s)` : allLinksText);
+  const handleCopyAllMintedForAgent = async () => {
+    if (!enrichedMintedProperties.length) return;
+    setShowMintedAgentPreview(true);
+    const ok = await copyTextSafe(mintedAgentPromptText);
+    flashCopy(
+      ok
+        ? `Copied AI agent prompt for all ${enrichedMintedProperties.length} minted land(s)`
+        : 'Prepared AI agent prompt below'
+    );
   };
 
   const patchActiveDimensions = (patch) => {
@@ -280,9 +462,19 @@ export function DesktopLandBuilderPanel({
     }
   };
 
+  const activeDraftTitleState = activeMode === 'draft' ? getDraftTitleState(activeDraft) : null;
+  const canMintActiveDraft =
+    activeMode === 'draft' &&
+    activeDraft &&
+    activeDraft.valid !== false &&
+    !activeDraft.hasOverlap &&
+    Boolean(activeDraftTitleState?.ok) &&
+    !mintBusy;
+
   const statusText = typeof landStatus === 'string' ? landStatus : landStatus?.text || '';
   const statusIsError = typeof landStatus === 'object' ? Boolean(landStatus?.isError) : false;
   const isDrawActive = drawMode === true || drawMode === 'draw';
+  const mobileDirectUrl = useMemo(() => getMobileLaunchUrl(), []);
 
   return (
     <div className="land-builder-panel" data-testid="desktop-land-builder-panel">
@@ -323,15 +515,105 @@ export function DesktopLandBuilderPanel({
           <b>{limits.starterFreeHumanClaims} free human claims</b>
         </span>
         <InfoTip title="3D Land Limits & Rules" align="right">
-          <div>Width / Depth: {limits.minWidthMeters}–{limits.maxWidthMeters}m (max {limits.maxFootprintAreaSqM.toLocaleString()} m²)</div>
-          <div>Height (Z): {limits.minHeightMeters}–{limits.maxHeightMeters}m (max {limits.maxVolumeCubicM.toLocaleString()} m³)</div>
-          <div>Rotation: {limits.rotationMinDeg}°–{limits.rotationMaxDeg}° · Batch: up to {limits.maxSelectionBatch} plots</div>
-          <div>Humans get {limits.starterFreeHumanClaims} gas-free starter claims. AI agents pay own gas.</div>
+          <div>
+            Width / Depth: {limits.minWidthMeters}–{limits.maxWidthMeters}m (max{' '}
+            {limits.maxFootprintAreaSqM.toLocaleString()} m²)
+          </div>
+          <div>
+            Height (Z): {limits.minHeightMeters}–{limits.maxHeightMeters}m (max{' '}
+            {limits.maxVolumeCubicM.toLocaleString()} m³)
+          </div>
+          <div>
+            Rotation: {limits.rotationMinDeg}°–{limits.rotationMaxDeg}° · Batch: up to{' '}
+            {limits.maxSelectionBatch} plots
+          </div>
+          <div>
+            Humans get {limits.starterFreeHumanClaims} free starter Desktop lands. Build a sculpture
+            on one to unlock another Desktop slot, or sculpt IRL on mobile anytime!
+          </div>
         </InfoTip>
       </div>
 
+      {/* Rich 3-Free-Lands Limit Notification Card */}
+      {mintLimitError && (
+        <div className="land-limit-alert-card" role="alert" data-testid="mint-limit-notification">
+          <div className="land-limit-alert-head">
+            <strong>
+              🛑 Free Desktop Land Limit Reached ({mintLimitError.usedSlots ?? limits.starterFreeHumanClaims}/
+              {mintLimitError.maxSlots ?? limits.starterFreeHumanClaims})
+            </strong>
+            {onDismissMintLimitError && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                aria-label="Dismiss limit notice"
+                onClick={onDismissMintLimitError}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <p className="land-limit-alert-copy">
+            You already have{' '}
+            <strong>
+              {mintLimitError.usedSlots ?? limits.starterFreeHumanClaims} unbuilt starter lands
+            </strong>
+            . To unlock more Desktop minting slots, place or publish a sculpture on one of your
+            existing lands first:
+          </p>
+          {Array.isArray(mintLimitError.unbuiltParcels) &&
+            mintLimitError.unbuiltParcels.length > 0 && (
+              <div className="land-limit-unbuilt-list">
+                {mintLimitError.unbuiltParcels.map((p) => (
+                  <button
+                    key={p.parcelId}
+                    type="button"
+                    className="btn btn-xs btn-outline"
+                    onClick={() => onSelectDraft?.(`owned:${p.parcelId}`)}
+                  >
+                    🏗️ {p.displayName || p.customName || p.parcelId}
+                  </button>
+                ))}
+              </div>
+            )}
+          <div className="land-limit-mobile-callout">
+            <div className="land-limit-mobile-copy">
+              <strong>📱 Want to claim land right now?</strong>
+              <span>
+                You can still make sculptures in person on Mobile AR — every IRL sculpture
+                automatically claims land with no Desktop slot wait!
+              </span>
+            </div>
+            <div className="land-limit-mobile-actions">
+              {onOpenPairMobile && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary btn-pair-glow"
+                  data-testid="mint-limit-pair-mobile-btn"
+                  onClick={onOpenPairMobile}
+                >
+                  🔗 Pair Phone via QR
+                </button>
+              )}
+              <a
+                href={mobileDirectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-sm btn-outline"
+                data-testid="mint-limit-mobile-link"
+              >
+                📱 Open Mobile Studio ↗
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       {statusText && (
-        <div className={`status-banner ${statusIsError ? 'status-banner-error' : ''}`} role="status">
+        <div
+          className={`status-banner ${statusIsError ? 'status-banner-error' : ''}`}
+          role="status"
+        >
           {statusText}
         </div>
       )}
@@ -352,32 +634,56 @@ export function DesktopLandBuilderPanel({
         </div>
       )}
 
+      {/* Draft Plots Queue */}
       <div className="land-section-header">
         <strong>
-          Plots ({draftParcels.length}/{limits.maxSelectionBatch})
+          Draft Plots ({draftParcels.length}/{limits.maxSelectionBatch})
         </strong>
         <div className="land-builder-legend" aria-label="Wireframe color key">
-          <span><i className="legend-dot legend-cyan" /> Draft</span>
-          <span><i className="legend-dot legend-amber" /> Owned</span>
-          <span><i className="legend-dot legend-crimson" /> Conflict</span>
+          <span>
+            <i className="legend-dot legend-cyan" /> Draft
+          </span>
+          <span>
+            <i className="legend-dot legend-amber" /> Minted
+          </span>
+          <span>
+            <i className="legend-dot legend-crimson" /> Conflict
+          </span>
         </div>
       </div>
 
       {draftParcels.length === 0 ? (
-        <div className="empty-state" style={{ padding: '10px 12px', textAlign: 'left', fontSize: 12 }}>
-          Click <strong>✏️ Draw Land</strong> and drag on the map, or press <strong>+ Add Square</strong>.
+        <div
+          className="empty-state"
+          style={{ padding: '10px 12px', textAlign: 'left', fontSize: 12 }}
+        >
+          {isDrawActive ? (
+            <>
+              <strong>Draw mode active!</strong> Click or drag anywhere on the map to place a 3D
+              plot, or press <strong>+ Add Square</strong>.
+            </>
+          ) : (
+            <>
+              Click <strong>✏️ Draw Land</strong> and drag on the map, or press{' '}
+              <strong>+ Add Square</strong>.
+            </>
+          )}
         </div>
       ) : (
         <div className="land-draft-list" role="list">
           {draftParcels.map((draft, idx) => {
             const isSelected = activeMode === 'draft' && activeDraft?.id === draft.id;
-            const hasIssue = draft.valid === false || draft.hasOverlap;
-            const label = draft.customName?.trim() || draft.parcelId;
+            const titleState = getDraftTitleState(draft);
+            const hasGeomIssue = draft.valid === false || draft.hasOverlap;
+            const hasTitleIssue = !titleState.ok;
+            const label = draft.customName?.trim() || `Plot #${idx + 1}`;
             return (
               <div
                 key={draft.id}
                 role="listitem"
-                className={`land-draft-item ${isSelected ? 'selected' : ''} ${hasIssue ? 'has-issue' : ''}`}
+                className={`land-draft-item ${isSelected ? 'selected' : ''} ${
+                  hasGeomIssue ? 'has-issue' : ''
+                }`}
                 onClick={() => onSelectDraft?.(draft.id)}
               >
                 <div className="land-draft-main">
@@ -386,39 +692,39 @@ export function DesktopLandBuilderPanel({
                     <EmojiInput
                       type="text"
                       className="land-draft-inline-title"
-                      wrapperStyle={{ flex: '1 1 auto', minWidth: 80, maxWidth: 160 }}
+                      wrapperStyle={{ flex: '1 1 auto', minWidth: 96, maxWidth: 180 }}
                       aria-label={`Title for plot #${idx + 1}`}
                       maxLength={48}
                       value={draft.customName || ''}
-                      placeholder={`Title ${draft.parcelId}…`}
+                      placeholder="Name this land (required)…"
                       onFocus={() => onSelectDraft?.(draft.id)}
-                      onChange={(e) =>
-                        onUpdateDraft?.(draft.id, { customName: e.target.value })
-                      }
+                      onChange={(e) => onUpdateDraft?.(draft.id, { customName: e.target.value })}
                     />
                   </div>
                   <div className="land-draft-meta">
-                    {Math.round(draft.widthMeters)}×{Math.round(draft.depthMeters)}×{Math.round(draft.heightMeters)}m · {Math.round(draft.rotationDeg || 0)}° · {Math.round(draft.footprintAreaSqM || 0)} m²
+                    {Math.round(draft.widthMeters)}×{Math.round(draft.depthMeters)}×
+                    {Math.round(draft.heightMeters)}m · {Math.round(draft.rotationDeg || 0)}° ·{' '}
+                    {Math.round(draft.footprintAreaSqM || 0)} m²
                   </div>
                 </div>
                 <div className="land-draft-badges">
-                  <span className={`badge ${hasIssue ? 'badge-error' : 'badge-cyan'}`}>
-                    {draft.hasOverlap ? 'Overlap' : draft.valid === false ? 'Limit' : 'Ready'}
+                  <span
+                    className={`badge ${
+                      hasGeomIssue ? 'badge-error' : hasTitleIssue ? 'gold' : 'badge-cyan'
+                    }`}
+                  >
+                    {draft.hasOverlap
+                      ? 'Overlap'
+                      : draft.valid === false
+                      ? 'Limit'
+                      : titleState.state === 'taken'
+                      ? 'Taken'
+                      : titleState.state === 'checking'
+                      ? 'Checking…'
+                      : hasTitleIssue
+                      ? 'Name Req.'
+                      : 'Ready'}
                   </span>
-                  {onOpenTitleDraft && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs land-icon-btn"
-                      aria-label={`Title popup for ${label}`}
-                      title="Title & describe land in popup"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenTitleDraft(draft);
-                      }}
-                    >
-                      ✎
-                    </button>
-                  )}
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
@@ -437,83 +743,23 @@ export function DesktopLandBuilderPanel({
         </div>
       )}
 
-      {ownedParcels.length > 0 && (
-        <div className="land-owned-strip">
-          <div className="land-section-header">
-            <strong>Your Owned Plots ({ownedParcels.length})</strong>
-            <InfoTip title="Add 3D Items & Manage Minted Land" align="right">
-              Click <strong>+</strong> next to any minted land to copy an AI agent prompt for adding
-              a custom 3D item (voxels or .glb/.gltf/.obj/.stl/.ply), modifying artworks, or freezing
-              placements.
-            </InfoTip>
-          </div>
-          <div className="land-owned-pills">
-            {ownedParcels.slice(0, 8).map((parcel) => {
-              const ownedKey = `owned:${parcel.parcelId}`;
-              const isSelected = selectedDraftId === ownedKey;
-              const isFrozen = Boolean(parcel.frozen || parcel.settings?.frozen);
-              return (
-                <div key={parcel.parcelId} className="land-owned-pill-group">
-                  <button
-                    type="button"
-                    className={`btn btn-xs ${isSelected ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => onSelectDraft?.(ownedKey)}
-                  >
-                    {isFrozen ? '❄️ ' : ''}
-                    {parcel.customName || parcel.parcelId}
-                  </button>
-                  {onOpenAddLandItem && (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-primary land-owned-plus-btn"
-                      aria-label={`Add 3D item to ${parcel.parcelId}`}
-                      title={`Add 3D item to ${parcel.parcelId} (Model Link or Agent Prompt)`}
-                      onClick={() => onOpenAddLandItem(parcel)}
-                    >
-                      +
-                    </button>
-                  )}
-                  {onOpenTitleOwned && (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-outline land-icon-btn"
-                      aria-label={`Rename ${parcel.parcelId}`}
-                      title="Edit land name & description"
-                      onClick={() => onOpenTitleOwned(parcel)}
-                    >
-                      ✎
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline land-icon-btn"
-                    aria-label={`Copy share link for ${parcel.parcelId}`}
-                    title="Copy shareable visit link for this minted parcel"
-                    onClick={() => handleCopyMintedParcelLink(parcel)}
-                  >
-                    🔗
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
+      {/* Selected Draft or Owned Land Editor */}
       {activeItem && (
         <div className="land-selected-editor" data-testid="land-selected-editor">
           <div className="land-editor-header">
             <div className="land-editor-title-row">
               <div className="land-editor-title">
-                {activeMode === 'owned' ? 'Owned 3D Volume' : 'Selected Plot'}
+                {activeMode === 'owned'
+                  ? activeOwned?.customName || 'Minted 3D Volume'
+                  : 'Mint New Land'}
               </div>
               <InfoTip title="Shape Controls" align="right">
-                Use sliders below or drag handles directly on the map: corner balls scale, edge bars
-                stretch one side, vertical corner bars rotate, center moves.
+                Drag handles directly on the 3D map (corner balls scale, edge bars stretch one side,
+                vertical bars rotate, center moves) or expand the manual sliders below.
               </InfoTip>
             </div>
             <div className="land-editor-id">
-              <code>{activeItem.parcelId}</code> · {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
+              {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
             </div>
           </div>
 
@@ -529,30 +775,32 @@ export function DesktopLandBuilderPanel({
           {activeMode === 'draft' && (
             <>
               <label className="land-name-field" htmlFor="land-square-name-input">
-                <span>Land Title</span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <EmojiInput
-                    id="land-square-name-input"
-                    type="text"
-                    wrapperStyle={{ flex: 1, minWidth: 0 }}
-                    maxLength={48}
-                    placeholder="e.g., Corner Plaza (: for emojis)"
-                    value={activeDraft.customName || ''}
-                    onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
-                  />
-                  {onOpenTitleDraft && (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-outline"
-                      aria-label="Open title popup for selected plot"
-                      title="Edit title & description in popup"
-                      onClick={() => onOpenTitleDraft(activeDraft)}
-                    >
-                      ✎
-                    </button>
-                  )}
-                </div>
+                <span className="land-name-field-label">
+                  Land Title <em className="req-star">*</em>
+                </span>
+                <EmojiInput
+                  id="land-square-name-input"
+                  type="text"
+                  maxLength={48}
+                  required
+                  placeholder="Enter a unique land name (e.g., Sunset Courtyard)"
+                  value={activeDraft.customName || ''}
+                  onChange={(e) => onUpdateDraft?.(activeDraft.id, { customName: e.target.value })}
+                />
+                {activeDraftTitleState && (
+                  <span
+                    className={`land-title-validation is-${activeDraftTitleState.state}`}
+                    data-testid="land-title-validation"
+                  >
+                    {activeDraftTitleState.state === 'available'
+                      ? '✓ Title is available'
+                      : activeDraftTitleState.state === 'checking'
+                      ? '⏳ Checking title availability…'
+                      : activeDraftTitleState.message}
+                  </span>
+                )}
               </label>
+
               <label className="land-name-field" htmlFor="land-square-desc-input">
                 <span>Description (optional)</span>
                 <EmojiInput
@@ -567,222 +815,248 @@ export function DesktopLandBuilderPanel({
             </>
           )}
 
-          <div className="land-slider-row">
-            <div className="land-slider-label">
-              <span>
-                Scale ({areaLimitPct}% max)
-                <InfoTip title="Proportional Scale">
-                  Scales width &amp; depth together up to the {limits.maxFootprintAreaSqM.toLocaleString()} m² limit while keeping your orientation and aspect ratio.
-                </InfoTip>
+          {/* Compact Expandable Manual Sliders Section */}
+          <div className="land-dims-accordion">
+            <button
+              type="button"
+              className="land-dims-toggle"
+              data-testid="land-sliders-toggle"
+              aria-expanded={showManualDims}
+              onClick={() => setShowManualDims((prev) => !prev)}
+            >
+              <span className="land-dims-summary mono">
+                📐 {Math.round(activeWidth)}×{Math.round(activeDepth)}×{Math.round(activeHeight)}m ·{' '}
+                {activeRotation}° ({areaLimitPct}% max)
               </span>
-              <strong>{activeWidth}×{activeDepth} m</strong>
-            </div>
-            <input
-              type="range"
-              aria-label="Scale Footprint to Limit"
-              min={0}
-              max={100}
-              step={1}
-              value={Math.round(footprintScaleRatio * 100)}
-              onChange={(e) => {
-                const scaled = scaleFootprintToLimit({
-                  widthMeters: activeWidth,
-                  depthMeters: activeDepth,
-                  heightMeters: activeHeight,
-                  ratio: Number(e.target.value) / 100,
-                  limits
-                });
-                patchActiveDimensions({
-                  widthMeters: scaled.widthMeters,
-                  depthMeters: scaled.depthMeters,
-                  heightMeters: scaled.heightMeters,
-                  zScale: scaled.zScale
-                });
-              }}
-            />
-            <div className="land-nudge-row">
-              <button
-                type="button"
-                className="btn btn-outline btn-xs"
-                onClick={() =>
-                  patchActiveDimensions({
-                    widthMeters: maxFootprintFit.widthMeters,
-                    depthMeters: maxFootprintFit.depthMeters,
-                    heightMeters: maxFootprintFit.heightMeters,
-                    zScale: maxFootprintFit.zScale
-                  })
-                }
-              >
-                Max Limit Size ({maxFootprintFit.widthMeters}×{maxFootprintFit.depthMeters}m)
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() =>
-                  patchActiveDimensions({
-                    rotationDeg: normalizeRotationDeg(cameraBearingDeg)
-                  })
-                }
-              >
-                Match Map Angle ({Math.round(normalizeRotationDeg(cameraBearingDeg))}°)
-              </button>
-            </div>
-          </div>
-
-          <div className="land-slider-row">
-            <div className="land-slider-label">
-              <span>Width (m)</span>
-              <strong>{Number(activeWidth.toFixed(1))} m</strong>
-            </div>
-            <input
-              type="range"
-              aria-label="Width (m)"
-              min={limits.minWidthMeters}
-              max={limits.maxWidthMeters}
-              step={1}
-              value={activeWidth}
-              onChange={(e) => patchActiveDimensions({ widthMeters: Number(e.target.value) })}
-            />
-          </div>
-
-          <div className="land-slider-row">
-            <div className="land-slider-label">
-              <span>Depth (m)</span>
-              <strong>{Number(activeDepth.toFixed(1))} m</strong>
-            </div>
-            <input
-              type="range"
-              aria-label="Depth (m)"
-              min={limits.minDepthMeters}
-              max={limits.maxDepthMeters}
-              step={1}
-              value={activeDepth}
-              onChange={(e) => patchActiveDimensions({ depthMeters: Number(e.target.value) })}
-            />
-          </div>
-
-          <div className="land-slider-row">
-            <div className="land-slider-label">
-              <span>
-                Rotate (°)
-                <InfoTip title="Rotate Plot">
-                  Hold and move any vertical corner bar on the 3D box on the map to rotate freely,
-                  or use the slider below.
-                </InfoTip>
+              <span className="land-dims-caret">
+                {showManualDims ? 'Hide Sliders ▴' : 'Manual Sliders ▾'}
               </span>
-              <strong>{activeRotation}°</strong>
-            </div>
-            <input
-              type="range"
-              aria-label="Rotate (°)"
-              min={limits.rotationMinDeg}
-              max={limits.rotationMaxDeg}
-              step={1}
-              value={activeRotation}
-              onChange={(e) => patchActiveDimensions({ rotationDeg: Number(e.target.value) })}
-            />
-            <div className="land-nudge-row">
-              {[-15, 0, 15, 45].map((delta) => (
-                <button
-                  key={delta}
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  onClick={() => patchActiveDimensions({
-                    rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
-                  })}
-                >
-                  {delta === 0 ? '0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
-                </button>
-              ))}
-            </div>
-          </div>
+            </button>
 
-          <div className="land-slider-row">
-            <div className="land-slider-label">
-              <span>
-                Z-Axis Scale ({volLimitPct}% vol)
-                <InfoTip title="3D Height & Volume">
-                  Adjusts vertical height from {limits.minHeightMeters}m up to {maxHeightInfo.heightMeters}m
-                  within the {limits.maxVolumeCubicM.toLocaleString()} m³ volume cap.
-                </InfoTip>
-              </span>
-              <strong>{activeZScale.toFixed(2)}× ({Math.round(activeHeight)} m)</strong>
-            </div>
-            <input
-              type="range"
-              aria-label="Z-Axis Scale"
-              min={limits.minZScale}
-              max={Math.max(limits.minZScale, maxHeightInfo.zScale)}
-              step={0.05}
-              value={Math.min(activeZScale, Math.max(limits.minZScale, maxHeightInfo.zScale))}
-              onChange={(e) => {
-                const nextScale = Number(e.target.value);
-                const nextHeight = clampNum(
-                  Math.round(limits.defaultHeightMeters * nextScale),
-                  limits.minHeightMeters,
-                  maxHeightInfo.heightMeters,
-                  limits.defaultHeightMeters
-                );
-                patchActiveDimensions({ zScale: nextScale, heightMeters: nextHeight });
-              }}
-            />
-            <div className="land-nudge-row">
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() =>
-                  patchActiveDimensions({
-                    zScale: maxHeightInfo.zScale,
-                    heightMeters: maxHeightInfo.heightMeters
-                  })
-                }
-              >
-                Max Height ({maxHeightInfo.heightMeters}m)
-              </button>
-            </div>
+            {showManualDims && (
+              <div className="land-dims-sliders-body" data-testid="land-sliders-body">
+                <div className="land-slider-row">
+                  <div className="land-slider-label">
+                    <span>
+                      Scale ({areaLimitPct}% max)
+                      <InfoTip title="Proportional Scale">
+                        Scales width &amp; depth together up to the{' '}
+                        {limits.maxFootprintAreaSqM.toLocaleString()} m² limit while keeping your
+                        orientation and aspect ratio.
+                      </InfoTip>
+                    </span>
+                    <strong>
+                      {activeWidth}×{activeDepth} m
+                    </strong>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Scale Footprint to Limit"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={Math.round(footprintScaleRatio * 100)}
+                    onChange={(e) => {
+                      const scaled = scaleFootprintToLimit({
+                        widthMeters: activeWidth,
+                        depthMeters: activeDepth,
+                        heightMeters: activeHeight,
+                        ratio: Number(e.target.value) / 100,
+                        limits
+                      });
+                      patchActiveDimensions({
+                        widthMeters: scaled.widthMeters,
+                        depthMeters: scaled.depthMeters,
+                        heightMeters: scaled.heightMeters,
+                        zScale: scaled.zScale
+                      });
+                    }}
+                  />
+                  <div className="land-nudge-row">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      onClick={() =>
+                        patchActiveDimensions({
+                          widthMeters: maxFootprintFit.widthMeters,
+                          depthMeters: maxFootprintFit.depthMeters,
+                          heightMeters: maxFootprintFit.heightMeters,
+                          zScale: maxFootprintFit.zScale
+                        })
+                      }
+                    >
+                      Max Limit Size ({maxFootprintFit.widthMeters}×{maxFootprintFit.depthMeters}m)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() =>
+                        patchActiveDimensions({
+                          rotationDeg: normalizeRotationDeg(cameraBearingDeg)
+                        })
+                      }
+                    >
+                      Match Map Angle ({Math.round(normalizeRotationDeg(cameraBearingDeg))}°)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="land-slider-row">
+                  <div className="land-slider-label">
+                    <span>Width (m)</span>
+                    <strong>{Number(activeWidth.toFixed(1))} m</strong>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Width (m)"
+                    min={limits.minWidthMeters}
+                    max={limits.maxWidthMeters}
+                    step={1}
+                    value={activeWidth}
+                    onChange={(e) => patchActiveDimensions({ widthMeters: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div className="land-slider-row">
+                  <div className="land-slider-label">
+                    <span>Depth (m)</span>
+                    <strong>{Number(activeDepth.toFixed(1))} m</strong>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Depth (m)"
+                    min={limits.minDepthMeters}
+                    max={limits.maxDepthMeters}
+                    step={1}
+                    value={activeDepth}
+                    onChange={(e) => patchActiveDimensions({ depthMeters: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div className="land-slider-row">
+                  <div className="land-slider-label">
+                    <span>
+                      Rotate (°)
+                      <InfoTip title="Rotate Plot">
+                        Hold and move any vertical corner bar on the 3D box on the map to rotate
+                        freely, or use the slider below.
+                      </InfoTip>
+                    </span>
+                    <strong>{activeRotation}°</strong>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Rotate (°)"
+                    min={limits.rotationMinDeg}
+                    max={limits.rotationMaxDeg}
+                    step={1}
+                    value={activeRotation}
+                    onChange={(e) => patchActiveDimensions({ rotationDeg: Number(e.target.value) })}
+                  />
+                  <div className="land-nudge-row">
+                    {[-15, 0, 15, 45].map((delta) => (
+                      <button
+                        key={delta}
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() =>
+                          patchActiveDimensions({
+                            rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
+                          })
+                        }
+                      >
+                        {delta === 0 ? '0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="land-slider-row">
+                  <div className="land-slider-label">
+                    <span>
+                      Z-Axis Scale ({volLimitPct}% vol)
+                      <InfoTip title="3D Height & Volume">
+                        Adjusts vertical height from {limits.minHeightMeters}m up to{' '}
+                        {maxHeightInfo.heightMeters}m within the{' '}
+                        {limits.maxVolumeCubicM.toLocaleString()} m³ volume cap.
+                      </InfoTip>
+                    </span>
+                    <strong>
+                      {activeZScale.toFixed(2)}× ({Math.round(activeHeight)} m)
+                    </strong>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Z-Axis Scale"
+                    min={limits.minZScale}
+                    max={Math.max(limits.minZScale, maxHeightInfo.zScale)}
+                    step={0.05}
+                    value={Math.min(activeZScale, Math.max(limits.minZScale, maxHeightInfo.zScale))}
+                    onChange={(e) => {
+                      const nextScale = Number(e.target.value);
+                      const nextHeight = clampNum(
+                        Math.round(limits.defaultHeightMeters * nextScale),
+                        limits.minHeightMeters,
+                        maxHeightInfo.heightMeters,
+                        limits.defaultHeightMeters
+                      );
+                      patchActiveDimensions({ zScale: nextScale, heightMeters: nextHeight });
+                    }}
+                  />
+                  <div className="land-nudge-row">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() =>
+                        patchActiveDimensions({
+                          zScale: maxHeightInfo.zScale,
+                          heightMeters: maxHeightInfo.heightMeters
+                        })
+                      }
+                    >
+                      Max Height ({maxHeightInfo.heightMeters}m)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="land-editor-actions">
-            <button type="button" className="btn btn-sm btn-outline" onClick={handleCopySingleLink}>
-              Copy Parcel Link
-            </button>
             {activeMode === 'draft' ? (
-              <>
-                {onOpenTitleDraft && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-outline"
-                    aria-label="Title and mint selected land"
-                    title="Open title popup before minting"
-                    onClick={() => onOpenTitleDraft(activeDraft)}
-                  >
-                    🏷️ Title
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={activeDraft.valid === false || activeDraft.hasOverlap || Boolean(mintBusy)}
-                  onClick={() => onMintDraft?.(activeDraft)}
-                >
-                  {mintBusy ? 'Minting…' : 'Mint This Land'}
-                </button>
-              </>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                style={{ flex: 1 }}
+                disabled={!canMintActiveDraft}
+                onClick={() => onMintDraft?.(activeDraft)}
+              >
+                {mintBusy ? 'Minting…' : 'Mint This Land'}
+              </button>
             ) : (
               <>
                 <button
                   type="button"
+                  className="btn btn-sm btn-outline"
+                  onClick={() => handleCopyMintedParcelLink(activeOwned)}
+                >
+                  🔗 Copy Link
+                </button>
+                <button
+                  type="button"
                   className="btn btn-sm btn-primary"
                   disabled={Boolean(mintBusy)}
-                  onClick={() => onUpdateOwnedVolume?.(activeOwned.parcelId, {
-                    centerLat: activeVolume.centerLat,
-                    centerLng: activeVolume.centerLng,
-                    widthMeters: activeWidth,
-                    depthMeters: activeDepth,
-                    heightMeters: activeHeight,
-                    zScale: activeZScale,
-                    rotationDeg: activeRotation
-                  })}
+                  onClick={() =>
+                    onUpdateOwnedVolume?.(activeOwned.parcelId, {
+                      centerLat: activeVolume.centerLat,
+                      centerLng: activeVolume.centerLng,
+                      widthMeters: activeWidth,
+                      depthMeters: activeDepth,
+                      heightMeters: activeHeight,
+                      zScale: activeZScale,
+                      rotationDeg: activeRotation
+                    })
+                  }
                 >
                   {mintBusy ? 'Saving…' : 'Save 3D Volume'}
                 </button>
@@ -792,7 +1066,7 @@ export function DesktopLandBuilderPanel({
                     className="btn btn-sm btn-primary"
                     onClick={() => onOpenAddLandItem(activeOwned)}
                   >
-                    + Add 3D Item (Prompt)
+                    + Add 3D Item
                   </button>
                 )}
                 {onToggleFreezeParcel && (
@@ -808,8 +1082,8 @@ export function DesktopLandBuilderPanel({
                     }
                   >
                     {activeOwned.frozen || activeOwned.settings?.frozen
-                      ? '🔓 Unfreeze Land'
-                      : '❄️ Freeze Land'}
+                      ? '🔓 Unfreeze'
+                      : '❄️ Freeze'}
                   </button>
                 )}
                 {onOpenLandManagement && (
@@ -827,31 +1101,16 @@ export function DesktopLandBuilderPanel({
         </div>
       )}
 
-      {draftParcels.length > 0 && (
-        <div className="land-agent-export" data-testid="land-agent-export">
-          <div className="land-section-header">
-            <strong>
-              Agent Export &amp; Batch Mint
-              <InfoTip title="Paste Into Your AI Agent" align="right">
-                Copies every selected plot&apos;s GPS center, corners, 3D dimensions, share links,
-                and exact API/MCP payload so your AI agent can acquire them.
-              </InfoTip>
-            </strong>
-          </div>
-          <div className="land-agent-export-actions">
-            <button type="button" className="btn btn-sm btn-outline" onClick={handleCopyAllForAgent}>
-              Copy All Properties for Agent
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() => setShowAgentPreview((prev) => !prev)}
-            >
-              {showAgentPreview ? 'Hide Text' : 'Preview Text'}
-            </button>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={handleCopyAllLinks}>
-              Copy Links
-            </button>
+      {/* Clean Batch Mint Window (shown when queueing 2+ draft plots) */}
+      {draftParcels.length >= 2 && (
+        <div className="land-batch-card" data-testid="land-batch-mint">
+          <div className="land-batch-head">
+            <div>
+              <strong>⚡ Batch Mint</strong>
+              <span className="land-batch-sub">
+                {readyDrafts.length} of {draftParcels.length} plots titled &amp; ready
+              </span>
+            </div>
             <button
               type="button"
               className="btn btn-sm btn-primary"
@@ -861,15 +1120,129 @@ export function DesktopLandBuilderPanel({
               {mintBusy ? 'Minting…' : `Mint All (${readyDrafts.length})`}
             </button>
           </div>
-          {showAgentPreview && (
+          {untitledOrInvalidDrafts.length > 0 && (
+            <div className="land-batch-hint">
+              Add a unique Land Title to every plot above before batch minting.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Post-Mint Locations & Copy Tools (Only available after lands are minted!) */}
+      {copyableMintedParcels.length > 0 && (
+        <div className="land-minted-panel" data-testid="minted-lands-copy-panel">
+          <div className="land-section-header">
+            <strong>Your Minted Lands ({copyableMintedParcels.length})</strong>
+            <InfoTip title="Share & Export Minted Lands" align="right">
+              Copy an individual land link or location with its icons, or copy all minted locations
+              at once — including AI agent prompt format!
+            </InfoTip>
+          </div>
+
+          <div className="land-minted-bulk-actions">
+            <button
+              type="button"
+              className="btn btn-xs btn-outline"
+              data-testid="copy-all-minted-locations-btn"
+              onClick={handleCopyAllMintedLocations}
+            >
+              📍 Copy All Locations
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              data-testid="copy-all-minted-prompt-btn"
+              onClick={handleCopyAllMintedForAgent}
+            >
+              🤖 Copy Prompt (All)
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost"
+              onClick={() => setShowMintedAgentPreview((prev) => !prev)}
+            >
+              {showMintedAgentPreview ? 'Hide' : 'Preview'}
+            </button>
+          </div>
+
+          {showMintedAgentPreview && (
             <textarea
               readOnly
               className="land-agent-preview"
-              aria-label="Agent properties prompt preview"
-              value={agentPromptText}
-              rows={8}
+              aria-label="Minted lands AI agent prompt preview"
+              value={mintedAgentPromptText}
+              rows={7}
             />
           )}
+
+          <div className="land-minted-list">
+            {copyableMintedParcels.slice(0, 10).map((parcel) => {
+              const ownedKey = `owned:${parcel.parcelId}`;
+              const isSelected = selectedDraftId === ownedKey;
+              const isFrozen = Boolean(parcel.frozen || parcel.settings?.frozen);
+              const displayTitle = parcel.customName || parcel.parcelId;
+              return (
+                <div
+                  key={parcel.parcelId}
+                  className={`land-minted-row ${isSelected ? 'selected' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="land-minted-name-btn"
+                    onClick={() => onSelectDraft?.(ownedKey)}
+                    title={`Select ${displayTitle}`}
+                  >
+                    <span>
+                      {isFrozen ? '❄️ ' : '📍 '}
+                      {displayTitle}
+                    </span>
+                  </button>
+                  <div className="land-minted-row-icons">
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline land-icon-btn"
+                      aria-label={`Copy share link for ${displayTitle}`}
+                      title="Copy share link"
+                      onClick={() => handleCopyMintedParcelLink(parcel)}
+                    >
+                      🔗
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline land-icon-btn"
+                      aria-label={`Copy location coordinates for ${displayTitle}`}
+                      title="Copy location & coordinates"
+                      onClick={() => handleCopyMintedParcelLocation(parcel)}
+                    >
+                      📋
+                    </button>
+                    {onOpenAddLandItem && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary land-owned-plus-btn"
+                        aria-label={`Add 3D item to ${displayTitle}`}
+                        title="Add 3D item or open AI agent prompt"
+                        onClick={() => onOpenAddLandItem(parcel)}
+                      >
+                        +
+                      </button>
+                    )}
+                    {onOpenTitleOwned && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-outline land-icon-btn"
+                        aria-label={`Rename ${displayTitle}`}
+                        title="Edit land title & description"
+                        onClick={() => onOpenTitleOwned(parcel)}
+                      >
+                        ✎
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

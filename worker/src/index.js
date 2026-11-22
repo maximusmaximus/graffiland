@@ -12,6 +12,7 @@ import {
 } from '../../shared/agentAuthService.mjs';
 import {
   awakenParcelByHumanVisit,
+  checkLandTitleAvailability,
   claimDormantLand,
   createArtQuest,
   getLandTelemetry,
@@ -19,6 +20,12 @@ import {
   scoutLands,
   updateLandVolume
 } from '../../shared/agentQuestService.mjs';
+import {
+  deleteNotification,
+  listUserNotifications,
+  markNotificationsRead,
+  updateNotificationPreferences
+} from '../../shared/notificationService.mjs';
 import { buildObjectFittedLandVolume } from '../../shared/landVolume.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../../shared/geocodeService.mjs';
 import {
@@ -1612,6 +1619,95 @@ export default {
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Scout failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/lands/check-name' && request.method === 'GET') {
+      try {
+        const out = await checkLandTitleAvailability(d1Adapter, {
+          name: url.searchParams.get('name') || '',
+          excludeParcelId: url.searchParams.get('excludeParcelId') || ''
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not check land title' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/notifications' && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const limitParam = url.searchParams.get('limit');
+        const out = await listUserNotifications(d1Adapter, user.id, {
+          limit: limitParam ? Number(limitParam) : 40
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not load notifications' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/notifications/read' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await markNotificationsRead(d1Adapter, user.id, {
+          ids: Array.isArray(body?.ids) ? body.ids : null,
+          markAll: Boolean(body?.markAll)
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not mark notifications read' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/notifications/preferences' && request.method === 'PATCH') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const preferences = await updateNotificationPreferences(d1Adapter, user.id, body || {});
+        return jsonResponse({ preferences }, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not update notification preferences' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const notifDeleteMatch = pathname.match(/^\/api\/notifications\/([^/]+)$/);
+    if (notifDeleteMatch && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const out = await deleteNotification(
+          d1Adapter,
+          user.id,
+          decodeURIComponent(notifDeleteMatch[1])
+        );
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not delete notification' },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 

@@ -12,6 +12,7 @@ import {
 } from '../../utils/landPreviewHelpers.js';
 import { hasWebGLSupport, loadMapLibre } from '../../utils/loadMapLibre.js';
 import { computePrismScreenGeometry } from '../../utils/map3dProjection.js';
+import { drawFloatingLandLabel } from '../../utils/map3dLabelOverlay.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -92,10 +93,10 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
 function drawMobilePrismWireframe(
   ctx,
   geom,
-  { outerColor, innerColor, lineWidth = 2, glowBlur = 10, label = '', dashed = false, showGroundHalo = false }
+  { outerColor, innerColor, lineWidth = 2, glowBlur = 10, dashed = false, showGroundHalo = false }
 ) {
   if (!geom) return;
-  const { bottom, top, topCenter } = geom;
+  const { bottom, top } = geom;
 
   if (showGroundHalo) {
     ctx.save();
@@ -143,33 +144,6 @@ function drawMobilePrismWireframe(
   }
   strokeEdges(outerColor, lineWidth + 1.0, glowBlur);
   strokeEdges(innerColor, Math.max(1, lineWidth - 0.5), 0);
-
-  if (label && topCenter?.visible) {
-    ctx.save();
-    ctx.font = '700 10.5px "JetBrains Mono", ui-monospace, monospace';
-    const textW = ctx.measureText(label).width;
-    const padX = 7;
-    const boxW = textW + padX * 2;
-    const boxH = 19;
-    const bx = topCenter.x - boxW / 2;
-    const by = Math.max(48, topCenter.y - boxH - 8);
-    ctx.fillStyle = 'rgba(6, 10, 20, 0.9)';
-    ctx.strokeStyle = outerColor;
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(bx, by, boxW, boxH, 6);
-    } else {
-      ctx.rect(bx, by, boxW, boxH);
-    }
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = innerColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, topCenter.x, by + boxH / 2 + 0.5);
-    ctx.restore();
-  }
 }
 
 /**
@@ -494,12 +468,13 @@ export default function MobileIsometricMap({
     const activeId = effectiveSelectedIdRef.current;
     const list = entriesRef.current || [];
 
-    // Draw non-selected parcels first, then focused parcel on top
+    // Pass 1: Draw all prism wireframes first (non-selected then focused)
     const ordered = [
       ...list.filter((e) => e.parcel.parcelId !== activeId),
       ...list.filter((e) => e.parcel.parcelId === activeId)
     ];
 
+    const pendingLabels = [];
     for (const entry of ordered) {
       const geom = computePrismScreenGeometry(map, maplibregl, entry.volume);
       if (!geom) continue;
@@ -510,26 +485,41 @@ export default function MobileIsometricMap({
       const dims = `${formatCompactMeter(entry.volume.widthMeters)}×${formatCompactMeter(
         entry.volume.depthMeters
       )}×${formatCompactMeter(entry.volume.heightMeters)}m`;
+      const outerColor = isFocused
+        ? isFrozen
+          ? '#7dd3fc'
+          : '#00f5d4'
+        : isDormant
+          ? 'rgba(255, 62, 127, 0.85)'
+          : 'rgba(255, 183, 3, 0.85)';
+      const innerColor = isFocused
+        ? isFrozen
+          ? '#e0f2fe'
+          : '#eafffc'
+        : '#fff3c4';
 
       drawMobilePrismWireframe(ctx, geom, {
-        outerColor: isFocused
-          ? isFrozen
-            ? '#7dd3fc'
-            : '#00f5d4'
-          : isDormant
-            ? 'rgba(255, 62, 127, 0.85)'
-            : 'rgba(255, 183, 3, 0.85)',
-        innerColor: isFocused
-          ? isFrozen
-            ? '#e0f2fe'
-            : '#eafffc'
-          : '#fff3c4',
+        outerColor,
+        innerColor,
         lineWidth: isFocused ? 2.2 : 1.4,
         glowBlur: isFocused ? 13 : 6,
         dashed: !isFocused,
-        showGroundHalo: isFocused,
-        label: isFocused ? `${simpleLabel} · ${dims}` : simpleLabel
+        showGroundHalo: isFocused
       });
+
+      pendingLabels.push({
+        geom,
+        outerColor,
+        innerColor,
+        label: isFocused ? `${simpleLabel} · ${dims}` : simpleLabel,
+        liftPx: isFocused ? 20 : 16,
+        minY: 48
+      });
+    }
+
+    // Pass 2: Floating labels strictly ON TOP of all wireframes with thin arrow from land center
+    for (const item of pendingLabels) {
+      drawFloatingLandLabel(ctx, item.geom, item);
     }
   }, []);
 

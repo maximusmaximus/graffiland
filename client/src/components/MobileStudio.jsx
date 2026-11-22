@@ -918,6 +918,20 @@ export default function MobileStudio({
           nearbyCameraLandCount={ar.immediateCameraLands.length}
           onInspectArLand={handleInspectArLand}
           onExitArLand={() => ar.setArSelectedLandId('')}
+          notifRefreshSignal={lands.ownedLandCount}
+          onNotificationAction={(item) => {
+            if (!item) return;
+            if (item.actionType === 'open_land' && item.parcelId) {
+              if (lands.hasOwnedLand) {
+                lands.setLandManageParcelId(item.parcelId);
+                lands.setLandManageOpen(true);
+              } else {
+                ar.openAreaMap();
+              }
+            } else if (item.actionType === 'open_mint') {
+              ar.openAreaMap();
+            }
+          }}
         />
 
         {!isInteractingWithLand && (

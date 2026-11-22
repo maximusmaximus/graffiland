@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import NotificationCenter from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobilePairApprovalDropdown from './MobilePairApprovalDropdown.jsx';
 
@@ -75,7 +76,9 @@ export default function StudioHudTopBar({
   nearbyCameraLand = null,
   nearbyCameraLandCount = 0,
   onInspectArLand = null,
-  onExitArLand = null
+  onExitArLand = null,
+  notifRefreshSignal = 0,
+  onNotificationAction = null
 }) {
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
@@ -122,10 +125,12 @@ export default function StudioHudTopBar({
             aria-label={user.username ? `Open profile @${user.username}` : 'Open profile'}
             title="Open Profile, edit @username, bio, icon & header banner"
           >
-            {user.picture ? (
-              <img className="nav-profile-avatar is-sm" src={user.picture} alt="" />
+            {user.avatarImage ? (
+              <img className="nav-profile-avatar is-sm" src={user.avatarImage} alt="" />
             ) : (
-              <XeroIcon emoji="👤" size={13} />
+              <span className="nav-profile-default-badge is-sm" aria-hidden="true">
+                {String(user.username || user.name || 'G').replace(/^@/, '').slice(0, 1).toUpperCase()}
+              </span>
             )}
             <span className="mobile-profile-pill-label">
               {user.username ? `@${user.username}` : user.name}
@@ -178,6 +183,12 @@ export default function StudioHudTopBar({
       {!isInteractingWithLand && (
       <div className="mobile-top-hud-right hud-interactive">
         <div className="mobile-top-hud-row">
+          <NotificationCenter
+            user={user}
+            variant="mobile"
+            refreshSignal={notifRefreshSignal}
+            onAction={onNotificationAction}
+          />
           <button
             type="button"
             data-pair-hub-trigger="1"

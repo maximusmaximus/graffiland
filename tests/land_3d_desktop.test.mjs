@@ -445,10 +445,58 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(found.volume.rotationDeg, 90);
   });
 
-  test('Enforces 3 free starter human claims per user (4th -> 429)', async () => {
-    for (const [lat, lng] of [
-      [37.791, -122.411],
-      [37.796, -122.406]
+  test('Requires unique human land titles, enforces 3 free starter claims (4th -> 429 + notification), and manages notification APIs', async () => {
+    // Missing title rejected (400)
+    const missingTitleRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        lat: 37.791,
+        lng: -122.411,
+        volume: { centerLat: 37.791, centerLng: -122.411, widthMeters: 12, depthMeters: 12 }
+      })
+    });
+    const missingBody = await missingTitleRes.json();
+    assert.equal(missingTitleRes.status, 400);
+    assert.equal(missingBody.code, 'LAND_TITLE_REQUIRED');
+
+    // Duplicate title rejected (409) & check-name reports unavailable
+    const dupCheck = await fetch(
+      `${baseUrl}/api/lands/check-name?name=${encodeURIComponent('civic 3d prism')}`
+    ).then((r) => r.json());
+    assert.equal(dupCheck.ok, true);
+    assert.equal(dupCheck.available, false);
+
+    const dupRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        lat: 37.791,
+        lng: -122.411,
+        customName: 'civic 3d prism',
+        volume: { centerLat: 37.791, centerLng: -122.411, widthMeters: 12, depthMeters: 12 }
+      })
+    });
+    const dupBody = await dupRes.json();
+    assert.equal(dupRes.status, 409);
+    assert.equal(dupBody.code, 'LAND_TITLE_TAKEN');
+
+    // Available title check passes
+    const availCheck = await fetch(
+      `${baseUrl}/api/lands/check-name?name=${encodeURIComponent('Harbor Sculpture Deck')}`
+    ).then((r) => r.json());
+    assert.equal(availCheck.ok, true);
+    assert.equal(availCheck.available, true);
+
+    for (const [lat, lng, customName] of [
+      [37.791, -122.411, 'Harbor Sculpture Deck'],
+      [37.796, -122.406, 'Skyline Mosaic Roof']
     ]) {
       const okRes = await fetch(`${baseUrl}/api/lands/claim`, {
         method: 'POST',
@@ -456,11 +504,17 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
           'Content-Type': 'application/json',
           Authorization: `Bearer ${humanToken}`
         },
-        body: JSON.stringify({ lat, lng, volume: { centerLat: lat, centerLng: lng, widthMeters: 12, depthMeters: 12 } })
+        body: JSON.stringify({
+          lat,
+          lng,
+          customName,
+          volume: { centerLat: lat, centerLng: lng, widthMeters: 12, depthMeters: 12 }
+        })
       });
       assert.equal(okRes.status, 201);
     }
 
+    // 4th free Desktop claim -> 429 with structured guidance + unbuilt parcels + mobile IRL option + persisted notification
     const fourthRes = await fetch(`${baseUrl}/api/lands/claim`, {
       method: 'POST',
       headers: {
@@ -470,10 +524,116 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       body: JSON.stringify({
         lat: 37.801,
         lng: -122.401,
+        customName: 'Fourth Plot Denied',
         volume: { centerLat: 37.801, centerLng: -122.401, widthMeters: 12, depthMeters: 12 }
       })
     });
+    const fourthBody = await fourthRes.json();
     assert.equal(fourthRes.status, 429);
+    assert.equal(fourthBody.code, 'STARTER_FREE_LAND_LIMIT_REACHED');
+    assert.equal(fourthBody.usedSlots, 3);
+    assert.equal(fourthBody.maxSlots, 3);
+    assert.equal(fourthBody.canClaimInPersonMobile, true);
+    assert.ok(Array.isArray(fourthBody.unbuiltParcels) && fourthBody.unbuiltParcels.length === 3);
+
+    // Notifications inbox contains the mint_limit_reached alert & live mintStatus
+    const notifRes = await fetch(`${baseUrl}/api/notifications`, {
+      headers: { Authorization: `Bearer ${humanToken}` }
+    });
+    const notifBody = await notifRes.json();
+    assert.equal(notifRes.status, 200);
+    assert.ok(notifBody.unreadCount >= 1);
+    assert.equal(notifBody.mintStatus.canMintDesktop, false);
+    assert.equal(notifBody.mintStatus.remainingSlots, 0);
+    const limitAlert = notifBody.notifications.find((n) => n.category === 'mint_limit_reached');
+    assert.ok(limitAlert, 'Expected mint_limit_reached notification in inbox');
+    assert.equal(limitAlert.actionType, 'open_pair_mobile');
+
+    // Notification preferences & browser push toggle persist cleanly
+    const prefRes = await fetch(`${baseUrl}/api/notifications/preferences`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ browser_push_enabled: true, land_expiring: false })
+    });
+    const prefBody = await prefRes.json();
+    assert.equal(prefRes.status, 200);
+    assert.equal(prefBody.preferences.browser_push_enabled, true);
+    assert.equal(prefBody.preferences.land_expiring, false);
+
+    // Mark all read & delete notification
+    const readRes = await fetch(`${baseUrl}/api/notifications/read`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({ markAll: true })
+    });
+    assert.equal((await readRes.json()).unreadCount, 0);
+
+    const delRes = await fetch(`${baseUrl}/api/notifications/${encodeURIComponent(limitAlert.id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${humanToken}` }
+    });
+    assert.equal(delRes.status, 200);
+
+    // Another user publishes a sculpture on human's first land -> fires sculpture_on_land + mint_slots_unlocked!
+    const nowPub = Date.now();
+    const pubRes = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${otherHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'
+      },
+      body: JSON.stringify({
+        title: 'Awakening Beacon',
+        description: 'IRL beacon on Civic 3D Prism',
+        termsAccepted: true,
+        location: { lat: 37.7749, lng: -122.4194, accuracy: 5, altitude: 10 },
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 1, y: 0, z: 0, color: '#ff3e7f', material: 'neon' },
+          { x: 0, y: 1, z: 0, color: '#ffd166', material: 'neon' }
+        ],
+        proofOfLocation: {
+          gpsSamples: [
+            { lat: 37.7749, lng: -122.4194, t: nowPub - 4000 },
+            { lat: 37.774905, lng: -122.419395, t: nowPub - 1000 }
+          ],
+          gyroSamples: 20,
+          cameraFrames: 10,
+          opticalFlowCorrelation: 0.9,
+          horizonLuminance: 140,
+          ambientPalette: ['#00f5d4', '#1a2b4c'],
+          visualDHash: 'a1b2c3d4e5f60718',
+          cameraFacingMode: 'environment',
+          cameraResolution: '1920x1080',
+          sculptDurationMs: 12000,
+          sceneCoveragePct: 100
+        },
+        deviceProfile: { isMobile: true, screenWidth: 390, screenHeight: 844, hasCamera: true }
+      })
+    });
+    const pubBody = await pubRes.json();
+    assert.equal(pubRes.status, 201, JSON.stringify(pubBody));
+
+    const afterPubNotifs = await fetch(`${baseUrl}/api/notifications`, {
+      headers: { Authorization: `Bearer ${humanToken}` }
+    }).then((r) => r.json());
+    assert.equal(afterPubNotifs.mintStatus.canMintDesktop, true);
+    assert.equal(afterPubNotifs.mintStatus.remainingSlots, 1);
+    assert.ok(
+      afterPubNotifs.notifications.some((n) => n.category === 'sculpture_on_land'),
+      'Expected sculpture_on_land notification for land owner'
+    );
+    assert.ok(
+      afterPubNotifs.notifications.some((n) => n.category === 'mint_slots_unlocked'),
+      'Expected mint_slots_unlocked notification when unbuilt land gets first sculpture'
+    );
   });
 
   test('Location search supports coords, GLAND parcel IDs, and query validation', async () => {
