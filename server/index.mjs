@@ -65,7 +65,12 @@ import {
   getChainStatus,
   mintOnRobinhoodChain
 } from './services/blockchain.mjs';
-import { pinJsonDocumentToIpfs, pinSculptureToIpfs, readLocalIpfsCid } from './services/ipfs.mjs';
+import {
+  cacheLocalIpfsCid,
+  pinJsonDocumentToIpfs,
+  pinSculptureToIpfs,
+  readLocalIpfsCid
+} from './services/ipfs.mjs';
 import { validatePublishPayload } from './services/moderation.mjs';
 import {
   assessTravelFeasibility,
@@ -152,7 +157,14 @@ import {
   updateLandSettings,
   upsertAnchorAndRevision
 } from '../shared/mcpService.mjs';
-import { b64ToModelBytes, validate3dModelUrl, validateAnchorOffset } from '../shared/model3d.mjs';
+import {
+  b64ToModelBytes,
+  CUSTOM_MODEL_MAX_BYTES,
+  fetchModelBytesFromGateways,
+  FORMAT_MIME_TYPES,
+  validate3dModelUrl,
+  validateAnchorOffset
+} from '../shared/model3d.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -671,7 +683,7 @@ export function createAppServer(serverOptions = {}) {
     });
   });
 
-  function handleSculptureModelDownload(req, res) {
+  async function handleSculptureModelDownload(req, res) {
     const row = db.prepare('SELECT * FROM sculptures WHERE id = ?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Sculpture not found' });
     const caller = getAuthUserFromRequest(req);
@@ -683,25 +695,58 @@ export function createAppServer(serverOptions = {}) {
       .get(row.id);
     if (custom) {
       let bytesBuf = null;
+      let modelSource = '';
+      const cid = custom.model_cid || row.ipfs_model_cid || '';
+      const fmt = String(custom.model_format || 'glb').toLowerCase();
+      const resolvedMime =
+        custom.mime_type || FORMAT_MIME_TYPES[fmt] || 'application/octet-stream';
+
       if (custom.inline_b64) {
         bytesBuf = Buffer.from(b64ToModelBytes(custom.inline_b64));
-      } else {
-        const cid = custom.model_cid || row.ipfs_model_cid;
-        const local = cid ? readLocalIpfsCid(cid) : null;
-        if (local?.buffer) bytesBuf = local.buffer;
+        modelSource = 'db-inline';
+      }
+      if (!bytesBuf && cid) {
+        const local = readLocalIpfsCid(cid);
+        if (local?.buffer) {
+          bytesBuf = local.buffer;
+          modelSource = 'local-ipfs';
+        }
+      }
+      if (!bytesBuf && (cid || custom.model_url)) {
+        const fetched = await fetchModelBytesFromGateways({
+          cid,
+          gatewayBase: CONFIG.ipfsGateway,
+          gatewayUrl: custom.gateway_url || '',
+          externalUrl: custom.model_url || '',
+          format: fmt,
+          maxBytes: CUSTOM_MODEL_MAX_BYTES
+        });
+        if (fetched?.bytes && fetched.bytes.length > 0) {
+          bytesBuf = Buffer.from(fetched.bytes);
+          modelSource = 'ipfs-gateway';
+          if (cid) {
+            cacheLocalIpfsCid(cid, bytesBuf, fmt);
+          }
+        }
       }
       if (bytesBuf) {
-        res.setHeader('Content-Type', custom.mime_type || 'application/octet-stream');
+        res.setHeader('Content-Type', resolvedMime);
         res.setHeader(
           'Content-Disposition',
-          `inline; filename="graffiland-${row.id}.${custom.model_format || 'glb'}"`
+          `inline; filename="graffiland-${row.id}.${fmt}"`
         );
         res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-Model-Source', modelSource);
         return res.send(bytesBuf);
       }
       if (custom.model_url) {
         return res.redirect(302, custom.model_url);
       }
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(502).json({
+        error: `3D .${fmt.toUpperCase()} model asset is temporarily unreachable from IPFS.`,
+        cid
+      });
     }
     const voxels = JSON.parse(row.voxels_json || '[]');
     const glb = buildSculptureGlb(voxels, {

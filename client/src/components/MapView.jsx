@@ -1,14 +1,21 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import xeroemoji from 'xeroemoji';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   computeClosestLandsPerimeterFit,
   extractParcelPerimeterPoints,
   formatSimpleLandLabel
 } from '../utils/landMapHelpers.js';
+import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
+import {
+  buildNeighborArrowsSignature,
+  computeNeighborEdgeArrows
+} from '../utils/neighborEdgeArrows.js';
+import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 function escapeHtml(raw) {
@@ -57,6 +64,45 @@ export default function MapView({
   const suppressViewSaveRef = useRef(false);
   const lastAutoBoundsRef = useRef(null);
   const lastFilterSignatureRef = useRef('');
+  const [neighborArrows, setNeighborArrows] = useState([]);
+  const neighborArrowsSigRef = useRef('');
+  const focusedArrowsContextRef = useRef({ focusedEntry: null, otherEntries: [] });
+
+  const recomputeFocusedNeighborArrows = useCallback(() => {
+    const map = mapRef.current;
+    const host = mapHostRef.current;
+    const { focusedEntry, otherEntries } = focusedArrowsContextRef.current;
+    if (!focusedEntry || !otherEntries || otherEntries.length === 0 || !host) {
+      if (neighborArrowsSigRef.current !== '') {
+        neighborArrowsSigRef.current = '';
+        setNeighborArrows([]);
+      }
+      return;
+    }
+    const vw = host.clientWidth || 360;
+    const vh = host.clientHeight || 220;
+    const reservedRects = buildDefaultHudReservedRects({ stageWidth: vw, stageHeight: vh });
+    const nextArrows = computeNeighborEdgeArrows({
+      focusedEntry,
+      otherEntries,
+      projectLngLat:
+        map && typeof map.latLngToContainerPoint === 'function'
+          ? (lng, lat) => {
+              const pt = map.latLngToContainerPoint([lat, lng]);
+              return { x: pt.x, y: pt.y };
+            }
+          : null,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      bearingDeg: 0,
+      reservedRects
+    });
+    const nextSig = buildNeighborArrowsSignature(nextArrows);
+    if (nextSig !== neighborArrowsSigRef.current) {
+      neighborArrowsSigRef.current = nextSig;
+      setNeighborArrows(nextArrows);
+    }
+  }, []);
 
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
@@ -237,8 +283,30 @@ export default function MapView({
     }
     lastFilterSignatureRef.current = filterSig;
 
-    for (let idx = 0; idx < parcelList.length; idx++) {
-      const p = parcelList[idx];
+    const isFocusedSingleLand = Boolean(compact && selectedParcelId && parcelMap.has(selectedParcelId));
+
+    // When focused on a specific land in compact 2D view, hide other lands' polygons/lines
+    // and show clickable directional edge-arrow labels pointing to selectable neighboring lands.
+    if (isFocusedSingleLand) {
+      const focusedParcel = parcelMap.get(selectedParcelId);
+      const focusedVol = resolveParcelVolume(focusedParcel);
+      const otherEntries = parcelList
+        .filter((p) => p.parcelId !== selectedParcelId)
+        .map((p) => ({ parcel: p, volume: resolveParcelVolume(p) }))
+        .filter((e) => e.volume);
+      focusedArrowsContextRef.current = focusedVol
+        ? { focusedEntry: { parcel: focusedParcel, volume: focusedVol }, otherEntries }
+        : { focusedEntry: null, otherEntries: [] };
+    } else {
+      focusedArrowsContextRef.current = { focusedEntry: null, otherEntries: [] };
+    }
+
+    const renderedParcels = isFocusedSingleLand
+      ? parcelList.filter((p) => p.parcelId === selectedParcelId)
+      : parcelList;
+
+    for (let idx = 0; idx < renderedParcels.length; idx++) {
+      const p = renderedParcels[idx];
       const parcelSculptures = sculptures.filter((s) => s.parcelId === p.parcelId);
       const isSelectedParcel =
         Boolean(effectiveSelectedParcelId) && p.parcelId === effectiveSelectedParcelId;
@@ -336,7 +404,11 @@ export default function MapView({
       iconAnchor: [13, 24]
     });
 
-    for (const sc of sculptures) {
+    const renderedSculptures = isFocusedSingleLand
+      ? sculptures.filter((sc) => !sc?.parcelId || sc.parcelId === selectedParcelId)
+      : sculptures;
+
+    for (const sc of renderedSculptures) {
       if (!Number.isFinite(Number(sc.lat)) || !Number.isFinite(Number(sc.lng))) continue;
       const chainLinks = getSculptureChainLinks(sc, config);
       const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : 'n/a';
@@ -359,6 +431,7 @@ export default function MapView({
     }
 
     lastAutoBoundsRef.current = closestFit.boundsLatLng;
+    recomputeFocusedNeighborArrows();
 
     if (!userAdjustedViewRef.current) {
       suppressViewSaveRef.current = true;
@@ -388,11 +461,24 @@ export default function MapView({
     userLocation,
     focusArea,
     areaRadiusMeters,
+    compact,
     selectedSculptureId,
     selectedParcelId,
     config,
-    onSelectSculpture
+    onSelectSculpture,
+    recomputeFocusedNeighborArrows
   ]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+    map.on('move', recomputeFocusedNeighborArrows);
+    map.on('zoomend', recomputeFocusedNeighborArrows);
+    return () => {
+      map.off('move', recomputeFocusedNeighborArrows);
+      map.off('zoomend', recomputeFocusedNeighborArrows);
+    };
+  }, [recomputeFocusedNeighborArrows]);
 
   useEffect(() => {
     if (!focusParcelTick || !selectedParcelId) return;
@@ -442,6 +528,7 @@ export default function MapView({
     if (closestFit.boundsLatLng) {
       userAdjustedViewRef.current = false;
       lastAutoBoundsRef.current = closestFit.boundsLatLng;
+    recomputeFocusedNeighborArrows();
       suppressViewSaveRef.current = true;
       try {
         map.fitBounds(closestFit.boundsLatLng, {
@@ -524,6 +611,10 @@ export default function MapView({
 
       <div className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d">
         <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
+        <NeighborEdgeArrowsOverlay
+          arrows={neighborArrows}
+          onSelectParcel={(p) => onSelectParcelRef.current?.(p)}
+        />
         {compact && (onToggle3D || onToggleFullMap || parcels.length > 0 || userLocation) && (
           <div
             className="map-compact-fab-row"

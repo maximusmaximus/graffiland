@@ -50,7 +50,7 @@ export function inferFormatFromHint(rawFormat = '', urlOrName = '', mime = '') {
   return '';
 }
 
-function validateModelBytesByFormat(format, bytes) {
+export function validateModelBytesByFormat(format, bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
     return '3D model payload is empty.';
   }
@@ -101,7 +101,8 @@ function validateModelBytesByFormat(format, bytes) {
     if (bytes.length >= 134) {
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       const triCount = view.getUint32(80, true);
-      if (triCount >= 1 && bytes.length === 84 + triCount * 50) {
+      const expectedLen = 84 + triCount * 50;
+      if (triCount >= 1 && bytes.length >= expectedLen && bytes.length <= expectedLen + 64) {
         return null;
       }
     }
@@ -622,4 +623,141 @@ export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 
       externalUrl: trimmed
     }
   };
+}
+
+function isLikelyHtmlErrorBytes(bytes) {
+  if (!bytes || bytes.length < 6) return false;
+  const head = new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes.subarray(0, Math.min(bytes.length, 96)))
+    .trimStart()
+    .toLowerCase();
+  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<head');
+}
+
+function resolveSafeExternalModelUrl(rawUrl) {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed || !/^(https?:\/\/|ipfs:\/\/)/i.test(trimmed)) return '';
+  let fetchUrl = trimmed;
+  if (/^ipfs:\/\//i.test(trimmed)) {
+    const cidPath = trimmed.slice(7).replace(/^ipfs\//i, '').trim();
+    if (!cidPath) return '';
+    fetchUrl = `https://gateway.pinata.cloud/ipfs/${cidPath}`;
+  }
+  try {
+    const parsedUrl = new URL(fetchUrl);
+    if (!/^https?:$/.test(parsedUrl.protocol)) return '';
+    const allowPrivate = globalThis.process?.env?.GRAFFILAND_ALLOW_PRIVATE_MODEL_HOSTS === '1';
+    if (!allowPrivate && isBlockedModelHost(parsedUrl.hostname)) return '';
+    return parsedUrl.toString();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Fetches custom 3D model bytes from IPFS gateways (and optional safe external URL)
+ * whenever the asset exceeds `INLINE_MODEL_DB_MAX_BYTES` and is not yet in edge KV / local cache.
+ * Validates binary integrity (e.g. GLB magic header, non-HTML payload, size cap) before returning.
+ * @param {{
+ *   cid?: string,
+ *   gatewayBase?: string,
+ *   gatewayUrl?: string,
+ *   externalUrl?: string,
+ *   format?: string,
+ *   maxBytes?: number,
+ *   timeoutMs?: number,
+ *   fetchImpl?: typeof fetch
+ * }} [options]
+ */
+export async function fetchModelBytesFromGateways({
+  cid = '',
+  gatewayBase = 'https://gateway.pinata.cloud/ipfs',
+  gatewayUrl = '',
+  externalUrl = '',
+  format = '',
+  maxBytes = CUSTOM_MODEL_MAX_BYTES,
+  timeoutMs = 12000,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  if (typeof fetchImpl !== 'function') return null;
+  const cleanCid = String(cid || '')
+    .trim()
+    .replace(/^ipfs:\/\//i, '');
+  const cleanFormat = String(format || '').trim().toLowerCase();
+
+  const candidateUrls = [];
+  const pushUrl = (u) => {
+    const s = String(u || '').trim();
+    if (!s || !/^https?:\/\//i.test(s)) return;
+    if (!candidateUrls.includes(s)) candidateUrls.push(s);
+  };
+
+  if (cleanCid && /^[a-zA-Z0-9_-]{16,128}$/.test(cleanCid)) {
+    const base = String(gatewayBase || '').trim().replace(/\/+$/, '');
+    if (base && /^https?:\/\//i.test(base)) {
+      pushUrl(`${base}/${cleanCid}`);
+    }
+    if (gatewayUrl && String(gatewayUrl).includes(cleanCid)) {
+      pushUrl(gatewayUrl);
+    }
+    pushUrl(`https://gateway.pinata.cloud/ipfs/${cleanCid}`);
+    pushUrl(`https://dweb.link/ipfs/${cleanCid}`);
+    pushUrl(`https://ipfs.io/ipfs/${cleanCid}`);
+  }
+
+  if (externalUrl) {
+    const resolvedExt = resolveSafeExternalModelUrl(externalUrl);
+    if (resolvedExt) {
+      pushUrl(resolvedExt);
+    }
+  }
+
+  for (const targetUrl of candidateUrls) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+      const res = await fetchImpl(targetUrl, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller?.signal,
+        headers: {
+          Accept: 'model/gltf-binary,model/gltf+json,application/octet-stream,*/*;q=0.8'
+        }
+      });
+      if (!res || !res.ok) continue;
+      const cl = Number(res.headers?.get?.('content-length') || 0);
+      if (cl > maxBytes) continue;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > maxBytes) continue;
+      if (isLikelyHtmlErrorBytes(bytes)) continue;
+      if (
+        cleanFormat === 'glb' &&
+        (bytes.length < 20 ||
+          bytes[0] !== 0x67 ||
+          bytes[1] !== 0x6c ||
+          bytes[2] !== 0x54 ||
+          bytes[3] !== 0x46)
+      ) {
+        continue;
+      }
+      if (cleanFormat) {
+        const formatErr = validateModelBytesByFormat(cleanFormat, bytes);
+        if (formatErr) continue;
+      }
+      return {
+        bytes,
+        contentType:
+          res.headers?.get?.('content-type') ||
+          FORMAT_MIME_TYPES[cleanFormat] ||
+          'application/octet-stream',
+        sourceUrl: targetUrl
+      };
+    } catch {
+      // Try next gateway cleanly
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  return null;
 }

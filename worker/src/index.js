@@ -125,7 +125,15 @@ import {
   updateLandSettings,
   upsertAnchorAndRevision
 } from '../../shared/mcpService.mjs';
-import { b64ToModelBytes, validate3dModelUrl, validateAnchorOffset } from '../../shared/model3d.mjs';
+import {
+  b64ToModelBytes,
+  CUSTOM_MODEL_MAX_BYTES,
+  fetchModelBytesFromGateways,
+  FORMAT_MIME_TYPES,
+  modelBytesToB64,
+  validate3dModelUrl,
+  validateAnchorOffset
+} from '../../shared/model3d.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -559,6 +567,13 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
       env,
       cfg
     );
+    // Mirror custom 3D model binaries (up to 4 MB) into edge KV so /api/sculptures/:id/model
+    // serves every format (.glb/.gltf/.obj/.stl/.ply) instantly without waiting on external IPFS gateways.
+    if (hasCustomBytes && modelPin?.cid && env.IPFS_KV && glbBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+      await env.IPFS_KV.put(`cid:${modelPin.cid}`, modelBytesToB64(glbBytes), {
+        metadata: { contentType: modelMime }
+      }).catch(() => {});
+    }
   } else {
     imagePin = await pinToKv(preview.bytes, preview.mime, requestOrigin, env);
     modelPin = await pinToKv(glbBytes, modelMime, requestOrigin, env);
@@ -923,7 +938,7 @@ export class PairCoordinator {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
@@ -3130,22 +3145,58 @@ export default {
         .first();
       if (custom) {
         let modelBytes = null;
+        let modelSource = '';
+        const cid = custom.model_cid || row.ipfs_model_cid || '';
+        const fmt = String(custom.model_format || 'glb').toLowerCase();
+        const resolvedMime =
+          custom.mime_type || FORMAT_MIME_TYPES[fmt] || 'application/octet-stream';
+
         if (custom.inline_b64) {
           modelBytes = b64ToModelBytes(custom.inline_b64);
-        } else {
-          const cid = custom.model_cid || row.ipfs_model_cid;
-          if (cid && env.IPFS_KV) {
-            const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
-            if (value) modelBytes = b64ToModelBytes(value);
+          modelSource = 'db-inline';
+        }
+        if (!modelBytes && cid && env.IPFS_KV) {
+          const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
+          if (value) {
+            modelBytes = b64ToModelBytes(value);
+            modelSource = 'kv-cache';
+          }
+        }
+        if (!modelBytes && (cid || custom.model_url)) {
+          const fetched = await fetchModelBytesFromGateways({
+            cid,
+            gatewayBase: cfg.ipfsGateway,
+            gatewayUrl: custom.gateway_url || '',
+            externalUrl: custom.model_url || '',
+            format: fmt,
+            maxBytes: CUSTOM_MODEL_MAX_BYTES
+          });
+          if (fetched?.bytes && fetched.bytes.length > 0) {
+            modelBytes = fetched.bytes;
+            modelSource = 'ipfs-gateway';
+            // Backfill edge KV cache so subsequent loads are instant and never hit gateway rate limits
+            if (cid && env.IPFS_KV && fetched.bytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+              const cacheWrite = env.IPFS_KV.put(
+                `cid:${cid}`,
+                modelBytesToB64(fetched.bytes),
+                { metadata: { contentType: resolvedMime } }
+              ).catch(() => {});
+              if (ctx && typeof ctx.waitUntil === 'function') {
+                ctx.waitUntil(cacheWrite);
+              } else {
+                await cacheWrite;
+              }
+            }
           }
         }
         if (modelBytes) {
           return new Response(modelBytes, {
             status: 200,
             headers: {
-              'Content-Type': custom.mime_type || 'application/octet-stream',
-              'Content-Disposition': `inline; filename="graffiland-${row.id}.${custom.model_format || 'glb'}"`,
+              'Content-Type': resolvedMime,
+              'Content-Disposition': `inline; filename="graffiland-${row.id}.${fmt}"`,
               'Cache-Control': 'public, max-age=86400',
+              'X-Model-Source': modelSource,
               ...corsHeaders(request)
             }
           });
@@ -3153,6 +3204,21 @@ export default {
         if (custom.model_url) {
           return Response.redirect(custom.model_url, 302);
         }
+        // NEVER silently fall through to a 1-voxel placeholder box for a custom 3D model!
+        return new Response(
+          JSON.stringify({
+            error: `3D .${fmt.toUpperCase()} model asset is temporarily unreachable from IPFS.`,
+            cid
+          }),
+          {
+            status: 502,
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-store',
+              ...corsHeaders(request)
+            }
+          }
+        );
       }
       const voxels = JSON.parse(row.voxels_json || '[]');
       const glb = buildSculptureGlb(voxels, {

@@ -10,9 +10,10 @@ let sharedDracoLoader = null;
 function getSharedDracoLoader() {
   if (!sharedDracoLoader) {
     sharedDracoLoader = new DRACOLoader();
-    const baseUrl = import.meta.env.BASE_URL || '/';
-    sharedDracoLoader.setDecoderPath(`${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}draco/gltf/`);
-    sharedDracoLoader.preload();
+    const baseUrl = import.meta.env?.BASE_URL || '/';
+    sharedDracoLoader.setDecoderPath(
+      `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}draco/gltf/`
+    );
   }
   return sharedDracoLoader;
 }
@@ -38,8 +39,13 @@ export function enforceCrispTexturesAndShading(root, maxAnisotropy = 8) {
   const aniso = Math.max(1, Math.min(16, Number(maxAnisotropy) || 8));
 
   root.traverse((obj) => {
-    if (!obj?.isMesh) return;
-    if (obj.geometry && !obj.geometry.attributes?.normal && typeof obj.geometry.computeVertexNormals === 'function') {
+    if (!obj?.isMesh && !obj?.isPoints && !obj?.isLine) return;
+    if (
+      obj.isMesh &&
+      obj.geometry &&
+      !obj.geometry.attributes?.normal &&
+      typeof obj.geometry.computeVertexNormals === 'function'
+    ) {
       obj.geometry.computeVertexNormals();
     }
     const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
@@ -71,8 +77,13 @@ function normalizeLoadedObject(
   const initialBox = new THREE.Box3().setFromObject(wrapper);
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
-  initialBox.getSize(size);
-  initialBox.getCenter(center);
+  if (!initialBox.isEmpty()) {
+    initialBox.getSize(size);
+    initialBox.getCenter(center);
+  } else {
+    size.set(1, 1, 1);
+    center.set(0, 0.5, 0);
+  }
 
   const maxDim = Math.max(size.x, size.y, size.z, 0.001);
   // Fit overly tiny or huge external 3D assets cleanly into ~1.4m showcase scale before custom scale
@@ -92,11 +103,8 @@ function normalizeLoadedObject(
   const finalScale = autoFit * userScale;
 
   root.scale.multiplyScalar(finalScale);
-  root.position.set(
-    -center.x * finalScale,
-    -initialBox.min.y * finalScale,
-    -center.z * finalScale
-  );
+  const minY = Number.isFinite(initialBox.min.y) ? initialBox.min.y : 0;
+  root.position.set(-center.x * finalScale, -minY * finalScale, -center.z * finalScale);
 
   if (Number.isFinite(Number(customModel?.rotationY)) && Number(customModel.rotationY) !== 0) {
     wrapper.rotation.y = Number(customModel.rotationY);
@@ -115,6 +123,185 @@ function normalizeLoadedObject(
   return { object3d: wrapper, bounds, baseSize };
 }
 
+function toArrayBuffer(bytesOrBuf) {
+  if (bytesOrBuf instanceof ArrayBuffer) return bytesOrBuf;
+  if (ArrayBuffer.isView(bytesOrBuf)) {
+    return bytesOrBuf.buffer.slice(
+      bytesOrBuf.byteOffset,
+      bytesOrBuf.byteOffset + bytesOrBuf.byteLength
+    );
+  }
+  throw new Error('Invalid 3D model binary buffer.');
+}
+
+function isDefaultUntexturedObjMat(mat) {
+  if (!mat) return true;
+  const hasMap = Boolean(mat.map || mat.normalMap || mat.roughnessMap || mat.metalnessMap);
+  if (hasMap) return false;
+  // OBJLoader creates a plain unnamed white MeshPhongMaterial when no MTL is present
+  return mat.isMeshPhongMaterial && (!mat.name || mat.name === '');
+}
+
+/**
+ * Pure format parser supporting ALL 5 GRAFFILAND 3D formats:
+ * - `.glb` (Binary glTF 2.0, including Draco & Meshopt)
+ * - `.gltf` (Self-contained JSON glTF 2.0)
+ * - `.obj` (Wavefront OBJ — supports vertex colors, upgrades default Phong to PBR, double-sided)
+ * - `.stl` (ASCII & Binary STL — honors binary per-facet RGB colors, double-sided)
+ * - `.ply` (ASCII & Binary PLY — supports BOTH triangle meshes AND vertex-only point clouds)
+ */
+export async function parseCustomModelBytes(
+  bytesOrBuf,
+  formatRaw,
+  customModel = {},
+  { maxAnisotropy = 8, applyCustomScale = true, basePath = '' } = {}
+) {
+  const format = String(formatRaw || customModel?.format || '').trim().toLowerCase();
+  const arrayBuffer = toArrayBuffer(bytesOrBuf);
+  const byteView = new Uint8Array(arrayBuffer);
+  if (byteView.length === 0) {
+    throw new Error(`Empty .${format || '3d'} model payload.`);
+  }
+
+  let root;
+  if (format === 'glb' || format === 'gltf') {
+    const loader = new GLTFLoader();
+    try {
+      loader.setDRACOLoader(getSharedDracoLoader());
+    } catch {
+      // Draco optional in non-browser unit environments
+    }
+    loader.setMeshoptDecoder(MeshoptDecoder);
+
+    const isGlbMagic =
+      byteView.length >= 4 &&
+      byteView[0] === 0x67 &&
+      byteView[1] === 0x6c &&
+      byteView[2] === 0x54 &&
+      byteView[3] === 0x46;
+
+    const payload =
+      format === 'glb' || isGlbMagic
+        ? arrayBuffer
+        : new TextDecoder('utf-8').decode(byteView);
+    const gltf = await loader.parseAsync(payload, basePath);
+    root = gltf.scene || (gltf.scenes && gltf.scenes[0]) || new THREE.Group();
+  } else if (format === 'obj') {
+    const text = new TextDecoder('utf-8').decode(byteView);
+    const loader = new OBJLoader();
+    root = loader.parse(text);
+    root.traverse((obj) => {
+      if (!obj.isMesh) return;
+      if (obj.geometry && !obj.geometry.attributes?.normal) {
+        obj.geometry.computeVertexNormals();
+      }
+      const hasVertexColors = Boolean(obj.geometry?.attributes?.color);
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      const upgraded = mats.map((m) =>
+        isDefaultUntexturedObjMat(m)
+          ? new THREE.MeshStandardMaterial({
+              color: hasVertexColors ? 0xffffff : 0x56f5e0,
+              vertexColors: hasVertexColors,
+              roughness: 0.34,
+              metalness: 0.22,
+              side: THREE.DoubleSide
+            })
+          : m
+      );
+      obj.material = upgraded.length === 1 ? upgraded[0] : upgraded;
+    });
+  } else if (format === 'stl') {
+    const loader = new STLLoader();
+    const geo = loader.parse(arrayBuffer);
+    geo.computeVertexNormals();
+    const hasVertexColors = Boolean(geo.attributes?.color);
+    const mat = new THREE.MeshStandardMaterial({
+      color: hasVertexColors ? 0xffffff : 0x70f8ff,
+      vertexColors: hasVertexColors,
+      roughness: 0.28,
+      metalness: 0.32,
+      side: THREE.DoubleSide
+    });
+    root = new THREE.Mesh(geo, mat);
+  } else if (format === 'ply') {
+    const loader = new PLYLoader();
+    const geo = loader.parse(arrayBuffer);
+    const hasVertexColors = Boolean(geo.attributes?.color);
+    const hasIndexedFaces = Boolean(geo.index && geo.index.count >= 3);
+    // Check header for face element to distinguish non-indexed triangle meshes from vertex-only point clouds
+    const headerHead = new TextDecoder('utf-8', { fatal: false }).decode(
+      byteView.subarray(0, Math.min(byteView.length, 1024))
+    );
+    const declaredFaces = /element\s+face\s+[1-9]\d*/i.test(headerHead);
+
+    if (hasIndexedFaces || declaredFaces) {
+      if (!geo.attributes?.normal) geo.computeVertexNormals();
+      const mat = new THREE.MeshStandardMaterial({
+        color: hasVertexColors ? 0xffffff : 0xffd166,
+        vertexColors: hasVertexColors,
+        roughness: 0.34,
+        metalness: 0.22,
+        side: THREE.DoubleSide
+      });
+      root = new THREE.Mesh(geo, mat);
+    } else {
+      // Vertex-only PLY point cloud: render as crisp sized points instead of an invisible 0-face Mesh
+      geo.computeBoundingBox();
+      const span = new THREE.Vector3();
+      if (geo.boundingBox && !geo.boundingBox.isEmpty()) {
+        geo.boundingBox.getSize(span);
+      }
+      const maxSpan = Math.max(span.x, span.y, span.z, 0.5);
+      const ptMat = new THREE.PointsMaterial({
+        color: hasVertexColors ? 0xffffff : 0xffd166,
+        vertexColors: hasVertexColors,
+        size: Math.max(0.02, Math.min(0.08, maxSpan * 0.025)),
+        sizeAttenuation: true
+      });
+      root = new THREE.Points(geo, ptMat);
+    }
+  } else {
+    throw new Error(`Unsupported 3D model format: ${format}`);
+  }
+
+  return normalizeLoadedObject(root, customModel, { maxAnisotropy, applyCustomScale });
+}
+
+async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
+  const cm = sculpture?.customModel || {};
+  const primaryRaw = cm.downloadUrl || sculpture?.modelGlbUrl || '';
+  const primaryUrl = primaryRaw ? resolveUrlFn(primaryRaw) : '';
+
+  const candidates = [];
+  if (primaryUrl) candidates.push(primaryUrl);
+  const cid = String(cm.ipfsCid || sculpture?.ipfs?.modelCid || '').trim();
+  if (cid && /^[a-zA-Z0-9_-]{16,128}$/.test(cid)) {
+    candidates.push(`https://gateway.pinata.cloud/ipfs/${cid}`);
+    candidates.push(`https://dweb.link/ipfs/${cid}`);
+  }
+
+  let lastErr = null;
+  for (const candidateUrl of candidates) {
+    try {
+      const res = await fetch(candidateUrl, { mode: 'cors' });
+      if (!res.ok) {
+        lastErr = new Error(`Model fetch failed (${res.status}) for ${candidateUrl}`);
+        continue;
+      }
+      const buf = await res.arrayBuffer();
+      if (!buf || buf.byteLength === 0) {
+        lastErr = new Error(`Empty model response from ${candidateUrl}`);
+        continue;
+      }
+      return { arrayBuffer: buf, resolvedUrl: candidateUrl };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error('Could not download 3D model asset.');
+}
+
 export async function loadCustomModelObject(
   sculpture,
   resolveUrlFn = (u) => u,
@@ -123,57 +310,23 @@ export async function loadCustomModelObject(
   const cm = sculpture?.customModel;
   if (!cm?.format) return null;
 
-  const rawUrl = cm.downloadUrl || sculpture.modelGlbUrl;
-  const url = resolveUrlFn(rawUrl);
   const format = String(cm.format || '').toLowerCase();
+  const { arrayBuffer, resolvedUrl } = await fetchModelArrayBufferWithFallback(
+    sculpture,
+    resolveUrlFn
+  );
+  const basePath = resolvedUrl.includes('/')
+    ? resolvedUrl.slice(0, resolvedUrl.lastIndexOf('/') + 1)
+    : '';
 
-  let root;
-  if (format === 'glb' || format === 'gltf') {
-    const loader = new GLTFLoader();
-    loader.setDRACOLoader(getSharedDracoLoader());
-    loader.setMeshoptDecoder(MeshoptDecoder);
-    const gltf = await loader.loadAsync(url);
-    root = gltf.scene || (gltf.scenes && gltf.scenes[0]) || new THREE.Group();
-  } else if (format === 'obj') {
-    const loader = new OBJLoader();
-    root = await loader.loadAsync(url);
-    root.traverse((obj) => {
-      if (obj.isMesh && !obj.material) {
-        obj.material = new THREE.MeshStandardMaterial({
-          color: 0x00f5d4,
-          roughness: 0.32,
-          metalness: 0.25
-        });
-      }
-    });
-  } else if (format === 'stl') {
-    const loader = new STLLoader();
-    const geo = await loader.loadAsync(url);
-    geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x70f8ff,
-      roughness: 0.28,
-      metalness: 0.35
-    });
-    root = new THREE.Mesh(geo, mat);
-  } else if (format === 'ply') {
-    const loader = new PLYLoader();
-    const geo = await loader.loadAsync(url);
-    geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({
-      color: geo.attributes?.color ? 0xffffff : 0xffd166,
-      vertexColors: Boolean(geo.attributes?.color),
-      roughness: 0.34,
-      metalness: 0.22
-    });
-    root = new THREE.Mesh(geo, mat);
-  } else {
-    throw new Error(`Unsupported 3D model format: ${format}`);
-  }
+  const normalized = await parseCustomModelBytes(arrayBuffer, format, cm, {
+    maxAnisotropy,
+    applyCustomScale,
+    basePath
+  });
 
-  const normalized = normalizeLoadedObject(root, cm, { maxAnisotropy, applyCustomScale });
   normalized.object3d.traverse((obj) => {
-    if (obj.isMesh) {
+    if (obj.isMesh || obj.isPoints || obj.isLine) {
       obj.userData.sculpture = sculpture;
     }
   });

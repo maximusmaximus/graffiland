@@ -70,6 +70,8 @@ export default function SculptureViewer3D({
   const framedLandKeyRef = useRef('');
   const [gizmoStatusText, setGizmoStatusText] = useState('');
   const [modelBoundsVersion, setModelBoundsVersion] = useState(0);
+  const [modelStatus, setModelStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'error'
+  const [modelErrorMsg, setModelErrorMsg] = useState('');
 
   const onModelBoundsMeasuredRef = useRef(onModelBoundsMeasured);
   onModelBoundsMeasuredRef.current = onModelBoundsMeasured;
@@ -480,6 +482,8 @@ export default function SculptureViewer3D({
 
     if (scFormat && sculpture) {
       let cancelled = false;
+      setModelStatus('loading');
+      setModelErrorMsg('');
       loadCustomModelObject(sculpture, resolveApiUrl, {
         maxAnisotropy: maxAnisotropyRef.current,
         applyCustomScale: false
@@ -496,6 +500,8 @@ export default function SculptureViewer3D({
           const baseDims = loaded.baseSize || { width: 1.4, height: 1.4, depth: 1.4 };
           modelBaseSizeRef.current = baseDims;
           setModelBoundsVersion((v) => v + 1);
+          setModelStatus('ready');
+          setModelErrorMsg('');
           onModelBoundsMeasuredRef.current?.(baseDims);
 
           const curScale = Number(liveTransform?.scale || extractSculptureScale(sculpture) || 1);
@@ -506,11 +512,18 @@ export default function SculptureViewer3D({
           center.multiplyScalar(curScale);
           frameSoloCamera(center, Math.max(0.8, sphere.radius * curScale), 0);
         })
-        .catch(() => {});
+        .catch((err) => {
+          if (cancelled) return;
+          setModelStatus('error');
+          setModelErrorMsg(err?.message || `Unable to load ${scFormat.toUpperCase()} 3D model`);
+        });
       return () => {
         cancelled = true;
       };
     }
+
+    setModelStatus('ready');
+    setModelErrorMsg('');
 
     const meshGroup = buildVoxelGroup(voxels);
     const rawBox = new THREE.Box3().setFromObject(meshGroup);
@@ -886,6 +899,8 @@ export default function SculptureViewer3D({
       data-testid="sculpture-viewer-3d"
       data-land-bounds-preview={showLandBounds ? 'on' : 'off'}
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
+      data-model-status={modelStatus}
+      data-model-format={scFormat || 'voxel'}
       style={{
         position: 'relative',
         width: '100%',
@@ -902,6 +917,24 @@ export default function SculptureViewer3D({
       }}
     >
       <div ref={hostRef} style={{ width: '100%', height: '100%' }} />
+      {scFormat && modelStatus === 'loading' && (
+        <div
+          className="sculpture-viewer-status-pill"
+          data-testid="sculpture-viewer-loading"
+          role="status"
+        >
+          Loading {scFormat.toUpperCase()} 3D model…
+        </div>
+      )}
+      {scFormat && modelStatus === 'error' && (
+        <div
+          className="sculpture-viewer-status-pill is-error"
+          data-testid="sculpture-viewer-error"
+          role="alert"
+        >
+          {modelErrorMsg || `Could not load ${scFormat.toUpperCase()} 3D model`}
+        </div>
+      )}
       {showEditGizmo && (
         <div
           className={`sculpture-gizmo-hud-chip ${gizmoStatusText ? 'is-dragging' : ''}`}

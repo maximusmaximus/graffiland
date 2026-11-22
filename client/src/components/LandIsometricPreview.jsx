@@ -14,9 +14,14 @@ import { computePrismScreenGeometry } from '../utils/map3dProjection.js';
 import { drawFloatingLandLabel } from '../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
+import {
+  buildNeighborArrowsSignature,
+  computeNeighborEdgeArrows
+} from '../utils/neighborEdgeArrows.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import InfoTip from './InfoTip.jsx';
+import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const OPENFREEMAP_LIBERTY_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -300,6 +305,8 @@ export default function LandIsometricPreview({
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
   const threeLayerRef = useRef(null);
   const [stageSize, setStageSize] = useState({ width: 600, height: 260 });
+  const [neighborArrows, setNeighborArrows] = useState([]);
+  const neighborArrowsSigRef = useRef('');
 
   const volume = useMemo(() => resolveParcelVolume(parcel), [parcel]);
 
@@ -351,14 +358,6 @@ export default function LandIsometricPreview({
         raw.push(sc);
       }
     }
-    for (const entry of otherParcelEntries || []) {
-      for (const sc of entry?.parcel?.sculptures || []) {
-        if (sc?.id && !seen.has(sc.id)) {
-          seen.add(sc.id);
-          raw.push(sc);
-        }
-      }
-    }
     return raw.map((sc) => {
       if (sc.modelType === 'custom-3d' || (Array.isArray(sc.voxels) && sc.voxels.length > 0)) {
         return sc;
@@ -367,7 +366,7 @@ export default function LandIsometricPreview({
       return cached ? { ...sc, ...cached } : sc;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otherParcelEntries, parcel?.sculptures, hydrationVersion]);
+  }, [parcel?.sculptures, hydrationVersion]);
 
   const hydratedPreviewSculpturesRef = useRef(hydratedPreviewSculptures);
   useEffect(() => {
@@ -493,35 +492,8 @@ export default function LandIsometricPreview({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    // Pass 1: Draw all wireframes first so floating labels sit strictly on top
-    const secondaryLabels = [];
+    // Pass 1: Draw ONLY the focused land wireframe (never show other lands' lines when focused)
     let primaryLabel = null;
-
-    // 1) Other owned lands in subtle dashed amber so user sees spatial relationships
-    for (const entry of otherEntriesRef.current || []) {
-      const geom = computePrismScreenGeometry(map, maplibregl, entry.volume);
-      if (!geom) continue;
-      const outerColor = 'rgba(255, 183, 3, 0.85)';
-      const innerColor = '#fff3c4';
-      drawPreviewPrism(ctx, geom, {
-        outerColor,
-        innerColor,
-        lineWidth: 1.4,
-        glowBlur: 6,
-        dashed: true
-      });
-      secondaryLabels.push({
-        geom,
-        outerColor,
-        innerColor,
-        label: resolveLandDisplayName(entry.parcel, { defaultName: 'Virtual Land' }),
-        liftPx: 18,
-        minY: 48,
-        isPrimary: false
-      });
-    }
-
-    // 2) Active selected land in crisp glowing isometric wireframe
     const curVol = volumeRef.current;
     if (curVol) {
       const geom = computePrismScreenGeometry(map, maplibregl, curVol);
@@ -551,8 +523,7 @@ export default function LandIsometricPreview({
       }
     }
 
-    // Measure actual HUD control boxes inside the map stage so floating labels NEVER overlap
-    // mode switchers, compass pills, 90° orbit chips, scale bar, or refit chip.
+    // Measure actual HUD control boxes inside the map stage so floating labels & neighbor arrows NEVER overlap
     const measuredHudRects = [];
     const stageEl = stageRef.current;
     if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
@@ -579,7 +550,7 @@ export default function LandIsometricPreview({
     });
     const placedRects = [];
 
-    // Pass 2: Primary land label placed first, then non-colliding secondary neighbor labels
+    // Pass 2: Focused land floating label on top of its wireframe
     if (primaryLabel) {
       drawFloatingLandLabel(ctx, primaryLabel.geom, {
         ...primaryLabel,
@@ -589,14 +560,35 @@ export default function LandIsometricPreview({
         placedRects
       });
     }
-    for (const item of secondaryLabels) {
-      drawFloatingLandLabel(ctx, item.geom, {
-        ...item,
-        stageWidth: w,
-        stageHeight: h,
-        reservedRects,
-        placedRects
-      });
+
+    // Pass 3: Edge-of-label directional arrows pointing toward selectable neighboring lands
+    const prismAvoidRects = [];
+    if (primaryLabel?.geom) {
+      const pts = [...primaryLabel.geom.bottom, ...primaryLabel.geom.top];
+      const minX = Math.min(...pts.map((p) => p.x));
+      const maxX = Math.max(...pts.map((p) => p.x));
+      const minY = Math.min(...pts.map((p) => p.y));
+      const maxY = Math.max(...pts.map((p) => p.y));
+      if (Number.isFinite(minX) && Number.isFinite(maxX) && maxX > minX && maxY > minY) {
+        prismAvoidRects.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+      }
+    }
+    const nextArrows = curVol
+      ? computeNeighborEdgeArrows({
+          focusedEntry: { parcel: parcelRef.current, volume: curVol },
+          otherEntries: otherEntriesRef.current || [],
+          projectLngLat: (lng, lat) => map.project([lng, lat]),
+          viewportWidth: w,
+          viewportHeight: h,
+          bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
+          reservedRects: [...reservedRects, ...placedRects],
+          avoidRects: prismAvoidRects
+        })
+      : [];
+    const nextSig = buildNeighborArrowsSignature(nextArrows);
+    if (nextSig !== neighborArrowsSigRef.current) {
+      neighborArrowsSigRef.current = nextSig;
+      setNeighborArrows(nextArrows);
     }
   }, []);
 
@@ -614,13 +606,7 @@ export default function LandIsometricPreview({
           { isSelected: true }
         )
       : null;
-    const otherFeats = (otherEntriesRef.current || [])
-      .map((entry) => volumeToFeature(entry.parcel, entry.volume, { isSelected: false }))
-      .filter(Boolean);
-    const previewParcelsWithVolumes = [
-      ...(curVol ? [{ ...curParcel, volume: curVol }] : []),
-      ...(otherEntriesRef.current || []).map((entry) => ({ ...entry.parcel, volume: entry.volume }))
-    ];
+    const previewParcelsWithVolumes = curVol ? [{ ...curParcel, volume: curVol }] : [];
     const previewSculptures = hydratedPreviewSculpturesRef.current || curParcel?.sculptures || [];
     const sc3d = buildSculptures3DGeoJson(
       previewSculptures,
@@ -632,9 +618,10 @@ export default function LandIsometricPreview({
     if (selSrc && typeof selSrc.setData === 'function') {
       selSrc.setData({ type: 'FeatureCollection', features: selectedFeat ? [selectedFeat] : [] });
     }
+    // Never render extrusion boxes/lines of other lands when focused on a land
     const othSrc = map.getSource('preview-other-lands');
     if (othSrc && typeof othSrc.setData === 'function') {
-      othSrc.setData({ type: 'FeatureCollection', features: otherFeats });
+      othSrc.setData(EMPTY_FC);
     }
     const scSrc = map.getSource('preview-sculptures-3d');
     if (scSrc && typeof scSrc.setData === 'function') {
@@ -943,6 +930,34 @@ export default function LandIsometricPreview({
     syncMapData();
   }, [parcel, effectiveDisplayName, effectiveFrozen, otherParcelEntries, hydratedPreviewSculptures, syncMapData]);
 
+  // Compute neighbor edge arrows immediately for SVG fallback mode (or before WebGL finishes initial paint)
+  useEffect(() => {
+    if (webglAvailable && mapReady) return;
+    if (!volume || !parcel) {
+      if (neighborArrowsSigRef.current !== '') {
+        neighborArrowsSigRef.current = '';
+        setNeighborArrows([]);
+      }
+      return;
+    }
+    const vw = stageSize.width || 360;
+    const vh = stageSize.height || 240;
+    const reservedRects = buildDefaultHudReservedRects({ stageWidth: vw, stageHeight: vh });
+    const nextArrows = computeNeighborEdgeArrows({
+      focusedEntry: { parcel, volume },
+      otherEntries: otherParcelEntries,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      bearingDeg: liveBearing,
+      reservedRects
+    });
+    const nextSig = buildNeighborArrowsSignature(nextArrows);
+    if (nextSig !== neighborArrowsSigRef.current) {
+      neighborArrowsSigRef.current = nextSig;
+      setNeighborArrows(nextArrows);
+    }
+  }, [webglAvailable, mapReady, parcel, volume, otherParcelEntries, stageSize.width, stageSize.height, liveBearing]);
+
   useEffect(() => {
     if (!volume) return;
     const isSameParcel = lastCenteredParcelRef.current.parcelId === volume.parcelId;
@@ -1047,7 +1062,7 @@ export default function LandIsometricPreview({
               <strong>Area</strong> (neighborhood context), and <strong>2D</strong> (North-up site
               plan), or click <strong>↻ 90°</strong> to inspect all sides.
               {otherParcelEntries.length > 0
-                ? ' Amber outlines show your other owned lands — click one to switch to it.'
+                ? ' Edge arrows point toward your neighboring lands — click any arrow label to jump to it.'
                 : ''}
             </InfoTip>
           </div>
@@ -1165,6 +1180,12 @@ export default function LandIsometricPreview({
         >
           🎯 Fit
         </button>
+
+        {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
+        <NeighborEdgeArrowsOverlay
+          arrows={neighborArrows}
+          onSelectParcel={onSelectParcel}
+        />
       </div>
 
       {/* 3) Structured Geographic Quick-Facts Strip */}

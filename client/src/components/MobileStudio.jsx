@@ -1232,12 +1232,37 @@ export default function MobileStudio({
         <MobileParcelVisitView
           parcel={parcelVisit.parcel}
           sculptures={parcelVisit.sculptures}
+          allParcels={ar.mapParcels?.length > 0 ? ar.mapParcels : ar.nearbyParcels || []}
           user={user}
           ownedParcelIds={(lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean)}
           config={config}
           userLocation={pol.location}
           loading={parcelVisit.loading}
           error={parcelVisit.error}
+          onSelectNeighborParcel={async (neighborParcel) => {
+            if (!neighborParcel?.parcelId) return;
+            setParcelVisit({
+              loading: true,
+              parcel: neighborParcel,
+              sculptures: [],
+              error: ''
+            });
+            try {
+              const res = await api.getLandDetail(neighborParcel.parcelId);
+              if (res?.parcel) {
+                setParcelVisit({
+                  loading: false,
+                  parcel: res.parcel,
+                  sculptures: res.sculptures || [],
+                  error: ''
+                });
+              }
+            } catch {
+              setParcelVisit((prev) =>
+                prev ? { ...prev, loading: false, error: 'Could not load neighboring land.' } : null
+              );
+            }
+          }}
           onRefreshLocation={() => {
             navigator.geolocation?.getCurrentPosition?.(
               (pos) => {

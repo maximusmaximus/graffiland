@@ -45,6 +45,7 @@ export default function PlotVisitView({
   variant = 'mobile', // 'mobile' | 'desktop'
   parcel,
   sculptures = [],
+  allParcels = [],
   user = null,
   ownedParcelIds = [],
   config = null,
@@ -55,6 +56,7 @@ export default function PlotVisitView({
   onViewInAR = null,
   onMakeArt = null,
   onSelectSculpture = null,
+  onSelectNeighborParcel = null,
   onOpenManageLand = null,
   onOpenAddLandItem = null,
   onOpenProfile = null,
@@ -79,6 +81,7 @@ export default function PlotVisitView({
   // Local optimistic copies so inline management edits update labels & details instantaneously
   const [localParcel, setLocalParcel] = useState(parcel);
   const [localSculptures, setLocalSculptures] = useState(sculptures);
+  const [fetchedNeighbors, setFetchedNeighbors] = useState([]);
 
   // Inline land management states
   const [editingLand, setEditingLand] = useState(false);
@@ -105,6 +108,72 @@ export default function PlotVisitView({
   }, [sculptures]);
 
   const activeParcel = localParcel || parcel;
+
+  // Ensure neighboring lands are available for clickable directional edge arrows on direct plot visits
+  useEffect(() => {
+    if (Array.isArray(allParcels) && allParcels.length > 1) return undefined;
+    let cancelled = false;
+    api
+      .listParcels()
+      .then((res) => {
+        if (!cancelled && Array.isArray(res?.parcels)) {
+          setFetchedNeighbors(res.parcels);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [allParcels]);
+
+  const stageParcels = useMemo(() => {
+    if (!activeParcel?.parcelId) return [];
+    const out = [activeParcel];
+    const seen = new Set([activeParcel.parcelId]);
+    const pool = Array.isArray(allParcels) && allParcels.length > 0 ? allParcels : fetchedNeighbors;
+    for (const p of pool || []) {
+      if (p?.parcelId && !seen.has(p.parcelId)) {
+        seen.add(p.parcelId);
+        out.push(p);
+      }
+    }
+    return out;
+  }, [activeParcel, allParcels, fetchedNeighbors]);
+
+  const handleSelectNeighborOnMap = useCallback(
+    async (targetParcel) => {
+      if (!targetParcel?.parcelId) return;
+      if (targetParcel.parcelId === activeParcel?.parcelId) {
+        setSelectedTarget('land');
+        setSelectedSculptureId('');
+        setEditingArtworkId('');
+        setConfirmRemoveId('');
+        setDetailsExpanded(true);
+        setIsMapFull(false);
+        return;
+      }
+      if (typeof onSelectNeighborParcel === 'function') {
+        onSelectNeighborParcel(targetParcel);
+        return;
+      }
+      try {
+        const res = await api.getLandDetail(targetParcel.parcelId);
+        if (res?.parcel) {
+          setLocalParcel(res.parcel);
+          setLocalSculptures(res.sculptures || []);
+          setSelectedTarget('land');
+          setSelectedSculptureId('');
+          setEditingLand(false);
+          setEditingArtworkId('');
+          setConfirmRemoveId('');
+          setDetailsExpanded(true);
+        }
+      } catch {
+        // ignore transient error
+      }
+    },
+    [activeParcel?.parcelId, onSelectNeighborParcel]
+  );
   const activeSculptures = useMemo(
     () => (localSculptures || []).filter((s) => s && s.id),
     [localSculptures]
@@ -671,7 +740,7 @@ export default function PlotVisitView({
           >
             {mapDimensionMode === '3d' ? (
               <MobileIsometricMap
-                parcels={[activeParcel]}
+                parcels={stageParcels}
                 sculptures={visibleSculptures}
                 userLocation={userLocation}
                 selectedParcelId={activeParcel.parcelId}
@@ -682,7 +751,7 @@ export default function PlotVisitView({
                 onToggle2D={() => setMapDimensionMode('2d')}
                 onToggleFullMap={() => setIsMapFull((v) => !v)}
                 onSelectLand={handleSelectLandTarget}
-                onSelectParcel={handleSelectLandTarget}
+                onSelectParcel={handleSelectNeighborOnMap}
                 onSelectSculpture={handleSelectArtworkTarget}
               />
             ) : (
