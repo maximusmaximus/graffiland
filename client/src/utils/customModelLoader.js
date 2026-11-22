@@ -60,7 +60,11 @@ export function enforceCrispTexturesAndShading(root, maxAnisotropy = 8) {
   return root;
 }
 
-function normalizeLoadedObject(root, customModel = {}, { maxAnisotropy = 8 } = {}) {
+function normalizeLoadedObject(
+  root,
+  customModel = {},
+  { maxAnisotropy = 8, applyCustomScale = true } = {}
+) {
   const wrapper = new THREE.Group();
   wrapper.add(root);
 
@@ -76,7 +80,15 @@ function normalizeLoadedObject(root, customModel = {}, { maxAnisotropy = 8 } = {
   if (maxDim > 3.2 || maxDim < 0.28) {
     autoFit = 1.4 / maxDim;
   }
-  const userScale = Number.isFinite(Number(customModel?.scale)) ? Number(customModel.scale) : 1;
+  const baseSize = {
+    width: Math.max(0.05, Math.round(size.x * autoFit * 10000) / 10000),
+    height: Math.max(0.05, Math.round(size.y * autoFit * 10000) / 10000),
+    depth: Math.max(0.05, Math.round(size.z * autoFit * 10000) / 10000)
+  };
+  const userScale =
+    applyCustomScale && Number.isFinite(Number(customModel?.scale)) && Number(customModel.scale) > 0
+      ? Number(customModel.scale)
+      : 1;
   const finalScale = autoFit * userScale;
 
   root.scale.multiplyScalar(finalScale);
@@ -100,13 +112,13 @@ function normalizeLoadedObject(root, customModel = {}, { maxAnisotropy = 8 } = {
   enforceCrispTexturesAndShading(wrapper, maxAnisotropy);
 
   const bounds = new THREE.Box3().setFromObject(wrapper);
-  return { object3d: wrapper, bounds };
+  return { object3d: wrapper, bounds, baseSize };
 }
 
 export async function loadCustomModelObject(
   sculpture,
   resolveUrlFn = (u) => u,
-  { maxAnisotropy = 8 } = {}
+  { maxAnisotropy = 8, applyCustomScale = true } = {}
 ) {
   const cm = sculpture?.customModel;
   if (!cm?.format) return null;
@@ -159,7 +171,7 @@ export async function loadCustomModelObject(
     throw new Error(`Unsupported 3D model format: ${format}`);
   }
 
-  const normalized = normalizeLoadedObject(root, cm, { maxAnisotropy });
+  const normalized = normalizeLoadedObject(root, cm, { maxAnisotropy, applyCustomScale });
   normalized.object3d.traverse((obj) => {
     if (obj.isMesh) {
       obj.userData.sculpture = sculpture;

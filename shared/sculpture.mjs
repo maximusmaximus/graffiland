@@ -119,6 +119,26 @@ export function serializeSculptureRow(
   };
   const customFormat = row.custom_model_format || '';
   const isCustom3d = Boolean(customFormat);
+  const parsedMeshStats = row.mesh_stats_json
+    ? (() => {
+        try {
+          const parsed = JSON.parse(row.mesh_stats_json);
+          return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const rawTransformScale =
+    parsedMeshStats?.transformScale !== undefined && parsedMeshStats?.transformScale !== null
+      ? Number(parsedMeshStats.transformScale)
+      : isCustom3d && row.custom_model_scale !== undefined && row.custom_model_scale !== null
+      ? Number(row.custom_model_scale)
+      : 1;
+  const effectiveScale =
+    Number.isFinite(rawTransformScale) && rawTransformScale > 0
+      ? Math.max(0.1, Math.min(60, Math.round(rawTransformScale * 10000) / 10000))
+      : 1;
 
   return {
     id: row.id,
@@ -130,6 +150,7 @@ export function serializeSculptureRow(
     recipientAddress: row.recipient_address,
     ownerAddress: row.recipient_address,
     modelType: isCustom3d ? 'custom-3d' : 'voxel',
+    scale: effectiveScale,
     ...(isCustom3d
       ? {
           customModel: {
@@ -140,7 +161,7 @@ export function serializeSculptureRow(
             ipfsCid: row.custom_model_cid || row.ipfs_model_cid || '',
             ipfsUri: row.custom_model_uri || `ipfs://${row.ipfs_model_cid}`,
             downloadUrl: `/api/sculptures/${row.id}/model`,
-            scale: Number(row.custom_model_scale || 1),
+            scale: effectiveScale,
             rotationY: Number(row.custom_model_rotation_y || 0),
             byteLength: Number(row.custom_model_bytes || 0)
           }
@@ -170,7 +191,8 @@ export function serializeSculptureRow(
       dx: Number(row.anchor_dx || 0),
       dy: Number(row.anchor_dy || 0),
       dz: Number(row.anchor_dz || 0),
-      yaw: Number(row.anchor_yaw || 0)
+      yaw: Number(row.anchor_yaw || 0),
+      scale: effectiveScale
     },
     currentRev: Number(row.current_rev || 1),
     lastErc4906TxHash: row.last_erc4906_tx_hash || '',
@@ -179,17 +201,7 @@ export function serializeSculptureRow(
     plinthSlotId: row.layer_plinth_slot_id || '',
     qualifiesForContributorPool:
       row.qual_contributor !== undefined ? Boolean(row.qual_contributor) : true,
-    ...(row.mesh_stats_json
-      ? {
-          meshStats: (() => {
-            try {
-              return JSON.parse(row.mesh_stats_json);
-            } catch {
-              return null;
-            }
-          })()
-        }
-      : {}),
+    ...(parsedMeshStats ? { meshStats: parsedMeshStats } : {}),
     placeName: row.place_name,
     country: row.country,
     timezone: row.timezone,

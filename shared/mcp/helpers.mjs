@@ -360,7 +360,12 @@ export async function upsertAnchorAndRevision(
     sculptureId,
     parcelId,
     revNum,
-    anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 },
+    anchorOffset = /** @type {{ dx: number, dy: number, dz: number, yaw: number, scale?: number }} */ ({
+      dx: 0,
+      dy: 0,
+      dz: 0,
+      yaw: 0
+    }),
     erc4906TxHash = '',
     meshStats = null,
     editorUser,

@@ -1339,21 +1339,52 @@ export default function MobileStudio({
           user={user}
           config={config}
           userLocation={pol.location}
-          onSculptureUpdated={(updated) => {
+          onRequestLogin={() => setLoginOpen(true)}
+          onSculptureUpdated={(updated, extra = {}) => {
             ar.setMapSelectedSculpture(updated);
-            ar.setMapSculptures((prev) =>
-              prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+            const pushedMap = new Map(
+              (Array.isArray(extra?.pushedSiblings) ? extra.pushedSiblings : []).map((p) => [
+                p.id,
+                p
+              ])
             );
+            const applyRowUpdate = (item) => {
+              if (item.id === updated.id) return { ...item, ...updated };
+              const pushed = pushedMap.get(item.id);
+              if (!pushed) return item;
+              return {
+                ...item,
+                anchorOffset: {
+                  ...(item.anchorOffset || {}),
+                  dx: pushed.dx,
+                  dy: pushed.dy,
+                  dz: pushed.dz
+                }
+              };
+            };
+            ar.setMapSculptures((prev) => prev.map(applyRowUpdate));
             setParcelVisit((prev) =>
               prev
                 ? {
                     ...prev,
-                    sculptures: (prev.sculptures || []).map((item) =>
-                      item.id === updated.id ? { ...item, ...updated } : item
-                    )
+                    sculptures: (prev.sculptures || []).map(applyRowUpdate)
                   }
                 : prev
             );
+            ar.loadPublicMapData();
+            lands.refreshMyLands();
+          }}
+          onSculptureDeleted={(deletedId) => {
+            ar.setMapSculptures((prev) => prev.filter((item) => item.id !== deletedId));
+            setParcelVisit((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    sculptures: (prev.sculptures || []).filter((item) => item.id !== deletedId)
+                  }
+                : prev
+            );
+            ar.loadPublicMapData();
             lands.refreshMyLands();
           }}
           onModifyInCanvas={lands.startCanvasModification}

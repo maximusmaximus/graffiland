@@ -1294,4 +1294,87 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(flatTex.magFilter, THREE.LinearFilter);
     assert.equal(flatTex.minFilter, THREE.LinearFilter);
   });
+
+  test('PUT /api/sculptures/:id persists scale & move, atomically pushes neighboring artworks inside land bounds, and rejects out-of-bounds scale with 409', async () => {
+    const authRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devProfile: { email: 'scale-push-owner@graffiland.test', name: 'Scale Push Owner' } })
+    }).then((r) => r.json());
+    const tok = authRes.token;
+    assert.ok(tok);
+
+    const claim = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        lat: 37.7815,
+        lng: -122.4125,
+        customName: 'Collision Push Plaza',
+        volume: {
+          centerLat: 37.7815,
+          centerLng: -122.4125,
+          widthMeters: 10,
+          depthMeters: 10,
+          heightMeters: 12,
+          rotationDeg: 0
+        }
+      })
+    }).then((r) => r.json());
+    const pid = claim.parcelId;
+    assert.ok(pid);
+
+    const mkSc = async (title, dx) => {
+      const r = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(pid)}/sculptures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({
+          title,
+          description: `${title} placed on Collision Push Plaza`,
+          anchorOffset: { dx, dy: 0, dz: 0, yaw: 0 },
+          voxels: [
+            { x: -0.5, y: 0, z: -0.5, color: '#00f5d4', material: 'matte' },
+            { x: 0.5, y: 1.0, z: 0.5, color: '#ffd166', material: 'neon' }
+          ]
+        })
+      }).then((res) => res.json());
+      return r.sculpture;
+    };
+
+    const artA = await mkSc('Centerpiece Tree', 0);
+    const artB = await mkSc('Adjacent Gift', 1.4);
+    assert.ok(artA?.id && artB?.id);
+
+    // Scale Art A up to 3.2x (~3.4m wide -> spans -1.7..+1.7m) -> pushes Adjacent Gift cleanly inside [-5, +5]m bounds
+    const scaleRes = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(artA.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        scale: 3.2,
+        anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, scale: 3.2 }
+      })
+    });
+    const scaleBody = await scaleRes.json();
+    assert.equal(scaleRes.status, 200, JSON.stringify(scaleBody));
+    assert.equal(scaleBody.sculpture.scale, 3.2);
+    assert.equal(scaleBody.sculpture.anchorOffset.scale, 3.2);
+    assert.equal(scaleBody.pushedSiblings.length, 1);
+    assert.equal(scaleBody.pushedSiblings[0].id, artB.id);
+    assert.ok(scaleBody.pushedSiblings[0].dx > 2.0, `Expected sibling pushed right, got dx=${scaleBody.pushedSiblings[0].dx}`);
+    assert.ok(scaleBody.pushedSiblings[0].dx <= 4.5, 'Pushed sibling must remain strictly inside land bounds');
+
+    // Verify sibling persistence in DB
+    const sibAfter = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(artB.id)}`).then((r) => r.json());
+    assert.equal(sibAfter.sculpture.anchorOffset.dx, scaleBody.pushedSiblings[0].dx);
+
+    // Trying to scale Art A beyond land bounds (15x on a 10m plot) is rejected with 409 + maxSafeScale
+    const badRes = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(artA.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ scale: 15, anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, scale: 15 } })
+    });
+    const badBody = await badRes.json();
+    assert.equal(badRes.status, 409, JSON.stringify(badBody));
+    assert.ok(Number(badBody.maxSafeScale) > 0 && Number(badBody.maxSafeScale) < 15);
+  });
 });

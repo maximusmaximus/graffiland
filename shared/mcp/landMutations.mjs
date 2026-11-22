@@ -23,6 +23,14 @@ import {
   validate3dModelUrl,
   validateAnchorOffset
 } from '../model3d.mjs';
+import {
+  buildPlacementItemFromSculpture,
+  computeMaxFeasibleScale,
+  extractSculptureScale,
+  normalizeBaseDimensions,
+  resolveParcelVolumeForPlacement,
+  resolveSculpturePlacement
+} from '../sculpturePlacement.mjs';
 import { getLandSecurityPolicy } from '../landmarkService.mjs';
 import {
   McpServiceError,
@@ -558,17 +566,102 @@ export async function applyUpdateSculpture(
     }
   }
 
+  const existingMeshStats = (() => {
+    try {
+      const parsed = JSON.parse(existingAnchor?.mesh_stats_json || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const existingModelForScale = await db.get(
+    'SELECT scale FROM sculpture_models WHERE sculpture_id = ?',
+    [sculptureRow.id]
+  );
+
+  // Load parcel 3D volume so anchorOffset validation and collision-push math respect real land bounds
+  let parcelVolume = null;
+  if (sculptureRow.parcel_id) {
+    const vr = await db
+      .get('SELECT * FROM land_volumes WHERE parcel_id = ?', [sculptureRow.parcel_id])
+      .catch(() => null);
+    if (vr) {
+      parcelVolume = {
+        parcelId: sculptureRow.parcel_id,
+        geohash: sculptureRow.geohash || '',
+        centerLat: Number(vr.center_lat),
+        centerLng: Number(vr.center_lng),
+        widthMeters: Number(vr.width_meters),
+        depthMeters: Number(vr.depth_meters),
+        heightMeters: Number(vr.height_meters),
+        rotationDeg: Number(vr.rotation_deg || 0),
+        baseAltitudeM: Number(vr.base_altitude_m || 0)
+      };
+    } else {
+      parcelVolume = resolveParcelVolumeForPlacement({
+        sculpture: {
+          parcelId: sculptureRow.parcel_id,
+          geohash: sculptureRow.geohash,
+          lat: sculptureRow.lat,
+          lng: sculptureRow.lng
+        }
+      });
+    }
+  }
+
   let anchorOffset = {
     dx: Number(existingAnchor?.dx || 0),
     dy: Number(existingAnchor?.dy || 0),
     dz: Number(existingAnchor?.dz || 0),
     yaw: Number(existingAnchor?.yaw || 0)
   };
+  let targetScale = extractSculptureScale({
+    meshStats: existingMeshStats,
+    customModel: existingModelForScale ? { scale: existingModelForScale.scale } : null
+  });
+  const requestedBaseDims = normalizeBaseDimensions(payload.baseDimensions);
+
+  const rawRequestedScale =
+    payload.scale !== undefined
+      ? payload.scale
+      : payload.anchorOffset?.scale !== undefined
+      ? payload.anchorOffset.scale
+      : payload.modelScale !== undefined
+      ? payload.modelScale
+      : undefined;
+
   if (payload.anchorOffset !== undefined) {
-    const offRes = validateAnchorOffset(payload.anchorOffset);
+    const offRes = validateAnchorOffset(
+      {
+        ...payload.anchorOffset,
+        ...(rawRequestedScale !== undefined ? { scale: rawRequestedScale } : {})
+      },
+      { parcelVolume }
+    );
     if (offRes.error) throw new McpServiceError(offRes.error, 400);
-    anchorOffset = offRes.offset;
+    anchorOffset = {
+      dx: offRes.offset.dx,
+      dy: offRes.offset.dy,
+      dz: offRes.offset.dz,
+      yaw: offRes.offset.yaw
+    };
+    if (offRes.offset.scale !== undefined) {
+      targetScale = offRes.offset.scale;
+    }
+  } else if (rawRequestedScale !== undefined) {
+    const offRes = validateAnchorOffset(
+      { ...anchorOffset, scale: rawRequestedScale },
+      { parcelVolume }
+    );
+    if (offRes.error) throw new McpServiceError(offRes.error, 400);
+    targetScale = offRes.offset.scale;
   }
+
+  const transformProvided =
+    payload.anchorOffset !== undefined ||
+    rawRequestedScale !== undefined ||
+    Boolean(requestedBaseDims);
 
   const nextTitle = payload.title !== undefined ? payload.title : sculptureRow.title;
   const nextDescription =
@@ -611,9 +704,155 @@ export async function applyUpdateSculpture(
         bytes: existingModelRow.inline_b64 ? b64ToModelBytes(existingModelRow.inline_b64) : null,
         byteLength: Number(existingModelRow.byte_length || 0),
         externalUrl: existingModelRow.model_url || '',
-        scale: Number(existingModelRow.scale || 1),
+        scale: targetScale,
         rotationY: Number(existingModelRow.rotation_y || 0)
       };
+    }
+  }
+
+  if (activeCustomModel && rawRequestedScale !== undefined) {
+    activeCustomModel.scale = targetScale;
+  }
+
+  // Enforce land bounds + non-intersecting collision-push against other placed artworks on this parcel
+  let pushedSiblings = [];
+  let resolvedPlacement = null;
+  if (transformProvided && sculptureRow.parcel_id && parcelVolume) {
+    const siblingRows = await db
+      .all(
+        `SELECT s.id, s.title, s.lat, s.lng, s.voxels_json, s.voxel_count,
+          m.model_format AS custom_model_format, m.scale AS custom_model_scale,
+          a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+          a.mesh_stats_json AS mesh_stats_json
+         FROM sculptures s
+         LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+         LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+         WHERE s.parcel_id = ? AND s.hidden = 0`,
+        [sculptureRow.parcel_id]
+      )
+      .catch(() => []);
+
+    const effectiveTargetDims =
+      requestedBaseDims ||
+      normalizeBaseDimensions(activeCustomModel?.stats?.bbox) ||
+      normalizeBaseDimensions(existingMeshStats?.bbox) ||
+      null;
+
+    const placementItems = (siblingRows || []).map((row) => {
+      const parsedStats = (() => {
+        try {
+          const p = JSON.parse(row.mesh_stats_json || '{}');
+          return p && typeof p === 'object' ? p : {};
+        } catch {
+          return {};
+        }
+      })();
+      const isTarget = row.id === sculptureRow.id;
+      const scObj = {
+        id: row.id,
+        title: isTarget ? title : row.title,
+        lat: row.lat,
+        lng: row.lng,
+        modelType: (isTarget ? Boolean(activeCustomModel) : Boolean(row.custom_model_format))
+          ? 'custom-3d'
+          : 'voxel',
+        customModel:
+          isTarget && activeCustomModel
+            ? { format: activeCustomModel.format, scale: targetScale }
+            : row.custom_model_format
+            ? { format: row.custom_model_format, scale: Number(row.custom_model_scale || 1) }
+            : null,
+        voxels: isTarget ? cleanVoxels : JSON.parse(row.voxels_json || '[]'),
+        voxelCount: isTarget ? cleanVoxels.length : Number(row.voxel_count || 0),
+        meshStats: parsedStats,
+        anchorOffset: {
+          dx: Number(row.anchor_dx || 0),
+          dy: Number(row.anchor_dy || 0),
+          dz: Number(row.anchor_dz || 0),
+          yaw: Number(row.anchor_yaw || 0)
+        }
+      };
+      return buildPlacementItemFromSculpture(
+        scObj,
+        parcelVolume,
+        isTarget ? effectiveTargetDims : null
+      );
+    });
+
+    if (!placementItems.some((it) => it.id === sculptureRow.id)) {
+      placementItems.push(
+        buildPlacementItemFromSculpture(
+          {
+            id: sculptureRow.id,
+            title,
+            lat: sculptureRow.lat,
+            lng: sculptureRow.lng,
+            modelType: activeCustomModel ? 'custom-3d' : 'voxel',
+            customModel: activeCustomModel
+              ? { format: activeCustomModel.format, scale: targetScale }
+              : null,
+            voxels: cleanVoxels,
+            voxelCount: cleanVoxels.length,
+            meshStats: existingMeshStats,
+            anchorOffset
+          },
+          parcelVolume,
+          effectiveTargetDims
+        )
+      );
+    }
+
+    const siblingCount = placementItems.filter((it) => it.id !== sculptureRow.id).length;
+    const isMicroSoloAutoParcel =
+      siblingCount === 0 &&
+      rawRequestedScale === undefined &&
+      (Number(parcelVolume.widthMeters || 0) < 3 || Number(parcelVolume.depthMeters || 0) < 3);
+
+    if (!isMicroSoloAutoParcel) {
+      const placement = resolveSculpturePlacement({
+        parcelVolume,
+        targetId: sculptureRow.id,
+        targetTransform: {
+          dx: anchorOffset.dx,
+          dy: anchorOffset.dy,
+          dz: anchorOffset.dz,
+          yaw: anchorOffset.yaw,
+          scale: targetScale
+        },
+        items: placementItems
+      });
+
+      if (!placement.ok) {
+        const maxSafeScale = computeMaxFeasibleScale({
+          parcelVolume,
+          targetId: sculptureRow.id,
+          targetTransform: {
+            dx: anchorOffset.dx,
+            dy: anchorOffset.dy,
+            dz: anchorOffset.dz,
+            yaw: anchorOffset.yaw
+          },
+          items: placementItems
+        });
+        throw new McpServiceError(placement.message, 409, {
+          code: placement.reason,
+          maxSafeScale,
+          collidingIds: placement.collidingIds || []
+        });
+      }
+
+      anchorOffset = {
+        dx: placement.target.dx,
+        dy: placement.target.dy,
+        dz: placement.target.dz,
+        yaw: placement.target.yaw
+      };
+      targetScale = placement.target.scale;
+      if (activeCustomModel) {
+        activeCustomModel.scale = targetScale;
+      }
+      pushedSiblings = placement.pushedSiblings || [];
+      resolvedPlacement = placement;
     }
   }
 
@@ -686,6 +925,12 @@ export async function applyUpdateSculpture(
       customModel: activeCustomModel,
       ipfsResult: null
     });
+  } else if (activeCustomModel && rawRequestedScale !== undefined) {
+    // Persist custom-3D scale even when raw model bytes live in IPFS/KV rather than inline_b64
+    await db.run(
+      'UPDATE sculpture_models SET scale = ?, updated_at = ? WHERE sculpture_id = ?',
+      [targetScale, new Date().toISOString(), sculptureRow.id]
+    );
   }
 
   await db.run(
@@ -762,13 +1007,20 @@ export async function applyUpdateSculpture(
       }
     : null;
 
+  const mergedMeshStats = {
+    ...existingMeshStats,
+    ...(activeCustomModel?.stats || {}),
+    ...(requestedBaseDims ? { bbox: requestedBaseDims } : {}),
+    transformScale: targetScale
+  };
+
   await upsertAnchorAndRevision(db, {
     sculptureId: sculptureRow.id,
     parcelId: sculptureRow.parcel_id,
     revNum: nextRev,
-    anchorOffset,
+    anchorOffset: { ...anchorOffset, scale: targetScale },
     erc4906TxHash,
-    meshStats: activeCustomModel?.stats || null,
+    meshStats: mergedMeshStats,
     editorUser: editorUser || { id: sculptureRow.creator_sub, name: sculptureRow.creator_name },
     editorRole,
     modelType: activeCustomModel ? 'custom-3d' : 'voxel',
@@ -784,11 +1036,39 @@ export async function applyUpdateSculpture(
     customModelSnapshot: customSnap
   });
 
+  // Atomically persist any neighboring artworks that were gently pushed within the land bounds
+  if (pushedSiblings.length > 0) {
+    const pushNow = new Date().toISOString();
+    for (const sib of pushedSiblings) {
+      await db.run(
+        `INSERT INTO sculpture_anchors (
+          sculpture_id, parcel_id, dx, dy, dz, yaw, current_rev, last_erc4906_tx_hash, mesh_stats_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, '', '{}', ?)
+        ON CONFLICT(sculpture_id) DO UPDATE SET
+          dx = excluded.dx,
+          dy = excluded.dy,
+          dz = excluded.dz,
+          updated_at = excluded.updated_at`,
+        [
+          sib.id,
+          sculptureRow.parcel_id,
+          Number(sib.dx || 0),
+          Number(sib.dy || 0),
+          Number(sib.dz || 0),
+          Number(sib.yaw || 0),
+          pushNow
+        ]
+      );
+    }
+  }
+
   const updated = await fetchSculptureWithModelRow(db, sculptureRow.id);
   return {
     sculpture: serializeSculptureRow(updated, { includeVoxels: true }),
     revNum: nextRev,
-    erc4906TxHash
+    erc4906TxHash,
+    pushedSiblings,
+    ...(resolvedPlacement ? { placement: resolvedPlacement } : {})
   };
 }
 
@@ -853,14 +1133,34 @@ export async function applyCreateSculptureOnLand(
     cleanVoxels = validation.cleanVoxels;
   }
 
-  const lat =
-    Number.isFinite(Number(payload.lat)) && Math.abs(Number(payload.lat)) <= 90
-      ? Number(payload.lat)
+  const parcelVolRow = await db
+    .get('SELECT center_lat, center_lng FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId])
+    .catch(() => null);
+  const defaultLat =
+    parcelVolRow &&
+    Number.isFinite(Number(parcelVolRow.center_lat)) &&
+    encodeGeohash(Number(parcelVolRow.center_lat), Number(parcelVolRow.center_lng), 8).toUpperCase() ===
+      parcelCtx.geohash.toUpperCase()
+      ? Number(parcelVolRow.center_lat)
       : parcelCtx.bounds.center[0];
-  const lng =
-    Number.isFinite(Number(payload.lng)) && Math.abs(Number(payload.lng)) <= 180
-      ? Number(payload.lng)
+  const defaultLng =
+    parcelVolRow &&
+    Number.isFinite(Number(parcelVolRow.center_lng)) &&
+    encodeGeohash(Number(parcelVolRow.center_lat), Number(parcelVolRow.center_lng), 8).toUpperCase() ===
+      parcelCtx.geohash.toUpperCase()
+      ? Number(parcelVolRow.center_lng)
       : parcelCtx.bounds.center[1];
+
+  const hasPayloadLat = payload.lat !== undefined && payload.lat !== null && payload.lat !== '';
+  const hasPayloadLng = payload.lng !== undefined && payload.lng !== null && payload.lng !== '';
+  const lat =
+    hasPayloadLat && Number.isFinite(Number(payload.lat)) && Math.abs(Number(payload.lat)) <= 90
+      ? Number(payload.lat)
+      : defaultLat;
+  const lng =
+    hasPayloadLng && Number.isFinite(Number(payload.lng)) && Math.abs(Number(payload.lng)) <= 180
+      ? Number(payload.lng)
+      : defaultLng;
 
   const coordHash = encodeGeohash(lat, lng, 8);
   if (coordHash.toUpperCase() !== parcelCtx.geohash.toUpperCase()) {

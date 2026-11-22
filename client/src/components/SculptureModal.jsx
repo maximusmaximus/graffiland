@@ -1,10 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { BrowserProvider, Contract, isAddress } from 'ethers';
 import xeroemoji from 'xeroemoji';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import {
+  buildPlacementItemFromSculpture,
+  computeMaxFeasibleScale,
+  computeMaxScaleForParcel,
+  extractSculptureBaseDimensions,
+  extractSculptureScale,
+  MIN_ARTWORK_SCALE,
+  resolveParcelVolumeForPlacement,
+  resolveSculpturePlacement,
+  yawToDegrees
+} from '../../../shared/sculpturePlacement.mjs';
 import {
   buildTransferAuthMessage,
   ERC721_TRANSFER_ABI
@@ -61,9 +72,11 @@ export default function SculptureModal({
   config,
   userLocation = null,
   onSculptureUpdated,
+  onSculptureDeleted = null,
   onModifyInCanvas = null,
   onOpenLandManagement = null,
   onOpenAddLandItem = null,
+  onRequestLogin = null,
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
@@ -82,8 +95,15 @@ export default function SculptureModal({
     dx: Number(initialSculpture?.anchorOffset?.dx || 0),
     dy: Number(initialSculpture?.anchorOffset?.dy || 0),
     dz: Number(initialSculpture?.anchorOffset?.dz || 0),
-    yaw: Number(initialSculpture?.anchorOffset?.yaw || 0)
+    yaw: yawToDegrees(initialSculpture?.anchorOffset?.yaw || 0)
   });
+  const [editScale, setEditScale] = useState(() => extractSculptureScale(initialSculpture));
+  const [measuredBaseDims, setMeasuredBaseDims] = useState(null);
+  const [parcelDetail, setParcelDetail] = useState(null);
+  const [parcelSculptures, setParcelSculptures] = useState([]);
+  const [studioOpen, setStudioOpen] = useState(true);
+  const [showLandBoundsPreview, setShowLandBoundsPreview] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
   const [showAllMetadata, setShowAllMetadata] = useState(false);
   const [metadataCopied, setMetadataCopied] = useState(false);
@@ -107,8 +127,11 @@ export default function SculptureModal({
       dx: Number(initialSculpture?.anchorOffset?.dx || 0),
       dy: Number(initialSculpture?.anchorOffset?.dy || 0),
       dz: Number(initialSculpture?.anchorOffset?.dz || 0),
-      yaw: Number(initialSculpture?.anchorOffset?.yaw || 0)
+      yaw: yawToDegrees(initialSculpture?.anchorOffset?.yaw || 0)
     });
+    setEditScale(extractSculptureScale(initialSculpture));
+    setMeasuredBaseDims(null);
+    setConfirmRemove(false);
     setParcelFrozen(Boolean(initialSculpture?.parcelFrozen));
     setLandCustomName(initialSculpture?.parcelName || '');
     setMetadataCopied(false);
@@ -134,8 +157,9 @@ export default function SculptureModal({
             dx: Number(res.sculpture.anchorOffset?.dx || 0),
             dy: Number(res.sculpture.anchorOffset?.dy || 0),
             dz: Number(res.sculpture.anchorOffset?.dz || 0),
-            yaw: Number(res.sculpture.anchorOffset?.yaw || 0)
+            yaw: yawToDegrees(res.sculpture.anchorOffset?.yaw || 0)
           });
+          setEditScale(extractSculptureScale(res.sculpture));
           setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
           if (res.sculpture.parcelName !== undefined) {
             setLandCustomName(res.sculpture.parcelName || '');
@@ -149,7 +173,39 @@ export default function SculptureModal({
     return () => {
       cancelled = true;
     };
-  }, [initialSculpture]);
+  }, [initialSculpture, user?.id]);
+
+  // Load parent Virtual Land 3D volume + sibling artworks for live bounds & non-intersecting push preview
+  const scParcelId = sculpture?.parcelId || '';
+  useEffect(() => {
+    if (!scParcelId) {
+      setParcelDetail(null);
+      setParcelSculptures([]);
+      return undefined;
+    }
+    let cancelled = false;
+    api
+      .getLandDetail(scParcelId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res?.parcel) {
+          setParcelDetail(res.parcel);
+          if (res.parcel.customName) {
+            setLandCustomName((prev) => prev || res.parcel.customName);
+          }
+          if (res.parcel.frozen !== undefined) {
+            setParcelFrozen(Boolean(res.parcel.frozen));
+          }
+        }
+        if (Array.isArray(res?.sculptures)) {
+          setParcelSculptures(res.sculptures);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [scParcelId, user?.id]);
 
   const scMapId = sculpture?.id;
   const scMapLat = sculpture?.lat;
@@ -157,13 +213,100 @@ export default function SculptureModal({
   const scMapBounds = sculpture?.parcelBounds;
   const scLandDisplayName = resolveLandDisplayName(
     {
-      customName: landCustomName || sculpture?.parcelName || '',
-      displayName: sculpture?.landDisplayName || '',
+      customName: landCustomName || parcelDetail?.customName || sculpture?.parcelName || '',
+      displayName: parcelDetail?.displayName || sculpture?.landDisplayName || '',
       firstSculptureTitle: sculpture?.title || '',
       placeName: sculpture?.placeName || ''
     },
     { defaultName: 'Virtual Land' }
   );
+
+  // Live 3D land bounds & non-intersecting collision-push solver state
+  const placementVolume = useMemo(
+    () => resolveParcelVolumeForPlacement({ parcel: parcelDetail, sculpture }),
+    [parcelDetail, sculpture]
+  );
+
+  const effectiveBaseDims = useMemo(
+    () => extractSculptureBaseDimensions(sculpture, measuredBaseDims),
+    [sculpture, measuredBaseDims]
+  );
+
+  const placementItems = useMemo(() => {
+    if (!sculpture?.id) return [];
+    const byId = new Map();
+    for (const sc of parcelSculptures || []) {
+      if (!sc?.id || sc.hidden) continue;
+      byId.set(sc.id, sc);
+    }
+    byId.set(sculpture.id, sculpture);
+    return Array.from(byId.values()).map((sc) =>
+      buildPlacementItemFromSculpture(
+        sc,
+        placementVolume,
+        sc.id === sculpture.id ? effectiveBaseDims : null
+      )
+    );
+  }, [effectiveBaseDims, parcelSculptures, placementVolume, sculpture]);
+
+  const targetBaseItem = useMemo(
+    () => placementItems.find((it) => it.id === sculpture?.id) || null,
+    [placementItems, sculpture?.id]
+  );
+
+  const livePlacement = useMemo(() => {
+    if (!sculpture?.id || placementItems.length === 0) return null;
+    return resolveSculpturePlacement({
+      parcelVolume: placementVolume,
+      targetId: sculpture.id,
+      targetTransform: {
+        dx: Number(editOffset.dx || 0),
+        dy: Math.max(0, Number(editOffset.dy || 0)),
+        dz: Number(editOffset.dz || 0),
+        yaw: Number(editOffset.yaw || 0),
+        scale: Number(editScale || 1)
+      },
+      items: placementItems
+    });
+  }, [editOffset, editScale, placementItems, placementVolume, sculpture?.id]);
+
+  const maxScaleForLand = useMemo(() => {
+    if (!targetBaseItem) return 10;
+    return computeMaxScaleForParcel(
+      { ...targetBaseItem, yaw: Number(editOffset.yaw || 0) },
+      placementVolume
+    );
+  }, [editOffset.yaw, placementVolume, targetBaseItem]);
+
+  const maxSafeScale = useMemo(() => {
+    if (!sculpture?.id || placementItems.length === 0) return maxScaleForLand;
+    return computeMaxFeasibleScale({
+      parcelVolume: placementVolume,
+      targetId: sculpture.id,
+      targetTransform: {
+        dx: Number(editOffset.dx || 0),
+        dy: Math.max(0, Number(editOffset.dy || 0)),
+        dz: Number(editOffset.dz || 0),
+        yaw: Number(editOffset.yaw || 0)
+      },
+      items: placementItems
+    });
+  }, [editOffset, maxScaleForLand, placementItems, placementVolume, sculpture?.id]);
+
+  const handleMeasuredBounds = useCallback((dims) => {
+    if (!dims) return;
+    setMeasuredBaseDims((prev) => {
+      if (
+        prev &&
+        Math.abs(prev.width - dims.width) < 0.005 &&
+        Math.abs(prev.height - dims.height) < 0.005 &&
+        Math.abs(prev.depth - dims.depth) < 0.005
+      ) {
+        return prev;
+      }
+      return dims;
+    });
+  }, []);
 
   useEffect(() => {
     const host = landMapHostRef.current;
@@ -220,14 +363,26 @@ export default function SculptureModal({
   const solar = pol.solar || {};
   const elevation = sculpture?.elevation || pol.elevation || {};
   const ownerAddr = sculpture?.recipientAddress || sculpture?.ownerAddress || '';
-  const ownerWallets = [user?.walletAddress, user?.customPayoutAddress]
+  const ownerWallets = [
+    user?.walletAddress,
+    user?.customPayoutAddress,
+    user?.activeMintRecipient
+  ]
     .filter(Boolean)
     .map((a) => a.toLowerCase());
-  const isPropertyOwner = Boolean(ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()));
-  const isLandOwner = Boolean(sculpture?.viewerIsLandOwner);
-  const canModerateLand = isPropertyOwner || isLandOwner;
-  const isContributor = !canModerateLand && Boolean(sculpture?.viewerCanContribute);
-  const canModifySculpture = canModerateLand || isContributor;
+  const isCreatorOwner = Boolean(
+    user?.id && sculpture?.creatorSub && String(sculpture.creatorSub) === String(user.id)
+  );
+  const isPropertyOwner = Boolean(
+    isCreatorOwner || (ownerAddr && ownerWallets.includes(ownerAddr.toLowerCase()))
+  );
+  const isLandOwner = Boolean(
+    sculpture?.viewerIsLandOwner ||
+      (user?.id && parcelDetail?.ownerSub && String(parcelDetail.ownerSub) === String(user.id))
+  );
+  const canModerateLand = Boolean(user && (isPropertyOwner || isLandOwner));
+  const isContributor = Boolean(user && !canModerateLand && sculpture?.viewerCanContribute);
+  const canModifySculpture = Boolean(user && (canModerateLand || isContributor));
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
       ownerAddr &&
@@ -258,6 +413,87 @@ export default function SculptureModal({
       cancelled = true;
     };
   }, [isPropertyOwner, sculpture?.geohash, sculpture?.id, sculpture?.parcelId, user?.id]);
+
+  const viewerLiveTransform = useMemo(() => {
+    const resolved = livePlacement?.ok ? livePlacement.target : null;
+    return {
+      baseX: Number(targetBaseItem?.baseX || 0),
+      baseZ: Number(targetBaseItem?.baseZ || 0),
+      dx: resolved ? resolved.dx : Number(editOffset.dx || 0),
+      dy: resolved ? resolved.dy : Math.max(0, Number(editOffset.dy || 0)),
+      dz: resolved ? resolved.dz : Number(editOffset.dz || 0),
+      yaw: resolved ? resolved.yaw : Number(editOffset.yaw || 0),
+      scale: resolved ? resolved.scale : Number(editScale || 1)
+    };
+  }, [editOffset, editScale, livePlacement, targetBaseItem?.baseX, targetBaseItem?.baseZ]);
+
+  const viewerSiblingBoxes = useMemo(() => {
+    if (!sculpture?.id) return [];
+    if (livePlacement?.ok && Array.isArray(livePlacement.allItems)) {
+      return livePlacement.allItems
+        .filter((it) => it.id !== sculpture.id)
+        .map((it) => ({
+          id: it.id,
+          title: it.title,
+          box: it.box,
+          wasPushed: Boolean(it.wasPushed),
+          isColliding: false
+        }));
+    }
+    const collidingSet = new Set(livePlacement?.collidingIds || []);
+    return placementItems
+      .filter((it) => it.id !== sculpture.id)
+      .map((it) => {
+        const halfW = (it.baseWidth * it.scale) / 2;
+        const halfD = (it.baseDepth * it.scale) / 2;
+        const effH = it.baseHeight * it.scale;
+        return {
+          id: it.id,
+          title: it.title,
+          box: {
+            cx: it.baseX + it.dx,
+            cy: Math.max(0, it.dy) + effH / 2,
+            cz: it.baseZ + it.dz,
+            effW: halfW * 2,
+            effD: halfD * 2,
+            effH
+          },
+          wasPushed: false,
+          isColliding: collidingSet.has(it.id)
+        };
+      });
+  }, [livePlacement, placementItems, sculpture?.id]);
+
+  const activeScaleDims = useMemo(() => {
+    const s = Math.max(MIN_ARTWORK_SCALE, Number(editScale || 1));
+    return {
+      w: Math.round(effectiveBaseDims.width * s * 100) / 100,
+      h: Math.round(effectiveBaseDims.height * s * 100) / 100,
+      d: Math.round(effectiveBaseDims.depth * s * 100) / 100
+    };
+  }, [editScale, effectiveBaseDims]);
+
+  const moveRanges = useMemo(() => {
+    const halfW = Math.max(0.5, Number(placementVolume.widthMeters || 14) / 2);
+    const halfD = Math.max(0.5, Number(placementVolume.depthMeters || 14) / 2);
+    const volH = Math.max(1, Number(placementVolume.heightMeters || 18));
+    const bx = Number(targetBaseItem?.baseX || 0);
+    const bz = Number(targetBaseItem?.baseZ || 0);
+    const halfItemW = activeScaleDims.w / 2;
+    const halfItemD = activeScaleDims.d / 2;
+    const minDx = Math.round((-halfW + halfItemW - bx + 0.02) * 100) / 100;
+    const maxDx = Math.round((halfW - halfItemW - bx - 0.02) * 100) / 100;
+    const minDz = Math.round((-halfD + halfItemD - bz + 0.02) * 100) / 100;
+    const maxDz = Math.round((halfD - halfItemD - bz - 0.02) * 100) / 100;
+    const maxDy = Math.max(0, Math.round((volH - activeScaleDims.h - 0.02) * 100) / 100);
+    return {
+      minDx: Math.min(minDx, maxDx),
+      maxDx: Math.max(minDx, maxDx),
+      minDz: Math.min(minDz, maxDz),
+      maxDz: Math.max(minDz, maxDz),
+      maxDy
+    };
+  }, [activeScaleDims, placementVolume, targetBaseItem?.baseX, targetBaseItem?.baseZ]);
 
   if (!sculpture) return null;
 
@@ -300,25 +536,76 @@ export default function SculptureModal({
   }
 
   async function handleSaveSculptureEdit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
+    if (livePlacement && !livePlacement.ok) {
+      setPropError(livePlacement.message || 'Artwork position or scale violates land bounds.');
+      return;
+    }
     setPropBusy('save');
     setPropNotice('');
     setPropError('');
     try {
+      const targetDx = livePlacement?.ok ? livePlacement.target.dx : Number(editOffset.dx || 0);
+      const targetDy = livePlacement?.ok ? livePlacement.target.dy : Math.max(0, Number(editOffset.dy || 0));
+      const targetDz = livePlacement?.ok ? livePlacement.target.dz : Number(editOffset.dz || 0);
+      const targetYaw = livePlacement?.ok ? livePlacement.target.yaw : Number(editOffset.yaw || 0);
+      const targetScaleVal = livePlacement?.ok ? livePlacement.target.scale : Number(editScale || 1);
+
       const res = await api.updateSculpture(sculpture.id, {
         title: editTitle,
         description: editDesc,
+        scale: targetScaleVal,
+        baseDimensions: effectiveBaseDims,
         anchorOffset: {
-          dx: Number(editOffset.dx || 0),
-          dy: Number(editOffset.dy || 0),
-          dz: Number(editOffset.dz || 0),
-          yaw: Number(editOffset.yaw || 0)
+          dx: targetDx,
+          dy: targetDy,
+          dz: targetDz,
+          yaw: targetYaw,
+          scale: targetScaleVal
         }
       });
       if (res?.sculpture) {
-        setSculpture((prev) => ({ ...prev, ...res.sculpture }));
-        onSculptureUpdated?.({ ...sculpture, ...res.sculpture });
-        setPropNotice('Sculpture metadata, position & IPFS bundle updated.');
+        const merged = { ...sculpture, ...res.sculpture };
+        setSculpture(merged);
+        setEditOffset({
+          dx: Number(res.sculpture.anchorOffset?.dx || 0),
+          dy: Number(res.sculpture.anchorOffset?.dy || 0),
+          dz: Number(res.sculpture.anchorOffset?.dz || 0),
+          yaw: yawToDegrees(res.sculpture.anchorOffset?.yaw || 0)
+        });
+        setEditScale(extractSculptureScale(res.sculpture));
+
+        // Keep local sibling positions in sync with any gently pushed neighbors
+        const pushedList = Array.isArray(res.pushedSiblings) ? res.pushedSiblings : [];
+        const pushedMap = new Map(pushedList.map((p) => [p.id, p]));
+        setParcelSculptures((prev) =>
+          (prev || []).map((item) => {
+            if (item.id === res.sculpture.id) return { ...item, ...res.sculpture };
+            const pushed = pushedMap.get(item.id);
+            if (!pushed) return item;
+            return {
+              ...item,
+              anchorOffset: {
+                ...(item.anchorOffset || {}),
+                dx: pushed.dx,
+                dy: pushed.dy,
+                dz: pushed.dz
+              }
+            };
+          })
+        );
+
+        onSculptureUpdated?.(merged, { pushedSiblings: pushedList });
+        if (pushedList.length > 0) {
+          const names = pushedList.map((p) => `"${p.title}"`).join(', ');
+          setPropNotice(
+            `Saved transform & updated IPFS bundle! Safely shifted ${pushedList.length} neighboring artwork${
+              pushedList.length === 1 ? '' : 's'
+            } (${names}) inside "${scLandDisplayName}".`
+          );
+        } else {
+          setPropNotice('Sculpture metadata, scale, position & IPFS bundle updated.');
+        }
       }
     } catch (err) {
       setPropError(err.message || 'Update failed');
@@ -418,6 +705,7 @@ export default function SculptureModal({
     setPropError('');
     try {
       await api.deleteSculpture(sculpture.id);
+      onSculptureDeleted?.(sculpture.id);
       onClose?.();
     } catch (err) {
       setPropError(err.message || 'Delete failed');
@@ -637,9 +925,17 @@ export default function SculptureModal({
     }
   };
 
+  const siblingCount = Math.max(0, placementItems.length - 1);
+  const currentSavedScale = extractSculptureScale(sculpture);
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" style={{ maxWidth: 780 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-card"
+        style={{ maxWidth: 800 }}
+        data-testid="sculpture-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <h2 className="modal-title">
             <XeroIcon emoji="🧊" size={24} />
@@ -653,9 +949,437 @@ export default function SculptureModal({
         <SculptureViewer3D
           sculpture={sculpture}
           voxels={sculpture.voxels || []}
-          height={300}
+          height={310}
           autoRotate
+          liveTransform={canModifySculpture ? viewerLiveTransform : null}
+          parcelVolume={placementVolume}
+          siblingBoxes={viewerSiblingBoxes}
+          showLandBounds={canModifySculpture && showLandBoundsPreview}
+          placementBlocked={Boolean(canModifySculpture && livePlacement && !livePlacement.ok)}
+          onModelBoundsMeasured={handleMeasuredBounds}
         />
+
+        {/* Immediate Logged-In Artwork Studio (Modify, Scale, Move, Rotate, Hide & Remove) */}
+        {canModifySculpture ? (
+          <div className="card sculpture-transform-studio" data-testid="sculpture-transform-studio">
+            <div className="sculpture-studio-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <XeroIcon emoji="🎛️" size={15} /> Modify, Scale &amp; Move Artwork
+                </strong>
+                <span className="badge gold" style={{ fontSize: 10 }}>
+                  {isPropertyOwner ? 'Owner' : isLandOwner ? 'Land Owner' : 'Contributor'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className={`btn btn-xs ${showLandBoundsPreview ? 'btn-primary' : ''}`}
+                  data-testid="sculpture-land-preview-toggle"
+                  onClick={() => setShowLandBoundsPreview((v) => !v)}
+                  title="Toggle 3D Land Bounds & neighboring items preview"
+                >
+                  {showLandBoundsPreview ? '📦 Land Bounds: ON' : '📦 Land Bounds View'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  data-testid="sculpture-studio-toggle"
+                  aria-expanded={studioOpen}
+                  onClick={() => setStudioOpen((v) => !v)}
+                >
+                  {studioOpen ? '▾ Hide Studio' : '▴ Open Studio'}
+                </button>
+              </div>
+            </div>
+
+            {studioOpen && (
+              <form onSubmit={handleSaveSculptureEdit} noValidate className="sculpture-studio-form">
+                {/* Live Scale Controls */}
+                <div className="sculpture-transform-block">
+                  <div className="sculpture-transform-row-head">
+                    <label htmlFor="sculpture-scale-slider" style={{ fontWeight: 700, fontSize: 12 }}>
+                      📐 Scale ({Number(editScale || 1).toFixed(2)}×)
+                    </label>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m inside{' '}
+                      {Math.round(placementVolume.widthMeters * 10) / 10}×
+                      {Math.round(placementVolume.depthMeters * 10) / 10}×
+                      {Math.round(placementVolume.heightMeters * 10) / 10}m land (max safe{' '}
+                      {maxSafeScale.toFixed(2)}×)
+                    </span>
+                  </div>
+                  <div className="sculpture-slider-line">
+                    <input
+                      id="sculpture-scale-slider"
+                      type="range"
+                      data-testid="sculpture-scale-slider"
+                      aria-label="Scale artwork"
+                      min={MIN_ARTWORK_SCALE}
+                      max={Math.max(MIN_ARTWORK_SCALE + 0.1, maxSafeScale)}
+                      step="0.05"
+                      value={Math.min(Math.max(MIN_ARTWORK_SCALE, Number(editScale || 1)), Math.max(MIN_ARTWORK_SCALE + 0.1, maxSafeScale))}
+                      onChange={(e) => {
+                        setShowLandBoundsPreview(true);
+                        setEditScale(Number(e.target.value));
+                      }}
+                    />
+                    <input
+                      type="number"
+                      className="input mono sculpture-num-input"
+                      data-testid="sculpture-scale-input"
+                      aria-label="Scale multiplier"
+                      min={MIN_ARTWORK_SCALE}
+                      max={Math.max(60, maxScaleForLand)}
+                      step="any"
+                      value={editScale}
+                      onChange={(e) => {
+                        setShowLandBoundsPreview(true);
+                        setEditScale(Number(e.target.value || MIN_ARTWORK_SCALE));
+                      }}
+                    />
+                  </div>
+                  <div className="sculpture-scale-presets">
+                    {[0.5, 1, 1.5, 2].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={`btn btn-xs ${
+                          Math.abs(Number(editScale) - preset) < 0.03 ? 'btn-primary' : ''
+                        }`}
+                        disabled={preset > maxSafeScale + 0.001}
+                        onClick={() => {
+                          setShowLandBoundsPreview(true);
+                          setEditScale(preset);
+                        }}
+                      >
+                        {preset}×
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      data-testid="sculpture-fit-max-scale-btn"
+                      onClick={() => {
+                        setShowLandBoundsPreview(true);
+                        setEditScale(maxSafeScale);
+                      }}
+                    >
+                      ✨ Max Safe ({maxSafeScale.toFixed(2)}×)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Move Position (X, Z, Y) & Rotate Sliders */}
+                <div className="sculpture-move-grid">
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>↔ Move X (East/West)</span>
+                      <span className="mono">{Number(editOffset.dx || 0).toFixed(2)} m</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-move-dx"
+                        aria-label="Move X East West"
+                        min={moveRanges.minDx}
+                        max={moveRanges.maxDx}
+                        step="0.1"
+                        value={Math.min(moveRanges.maxDx, Math.max(moveRanges.minDx, Number(editOffset.dx || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dx: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        aria-label="dx (m)"
+                        step="any"
+                        value={editOffset.dx}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>↕ Move Z (North/South)</span>
+                      <span className="mono">{Number(editOffset.dz || 0).toFixed(2)} m</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-move-dz"
+                        aria-label="Move Z North South"
+                        min={moveRanges.minDz}
+                        max={moveRanges.maxDz}
+                        step="0.1"
+                        value={Math.min(moveRanges.maxDz, Math.max(moveRanges.minDz, Number(editOffset.dz || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dz: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        aria-label="dz (m)"
+                        step="any"
+                        value={editOffset.dz}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>⬆️ Height Y (Elevation)</span>
+                      <span className="mono">{Number(editOffset.dy || 0).toFixed(2)} m</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-move-dy"
+                        aria-label="Move Y Height"
+                        min={0}
+                        max={Math.max(0.5, moveRanges.maxDy)}
+                        step="0.1"
+                        value={Math.min(Math.max(0.5, moveRanges.maxDy), Math.max(0, Number(editOffset.dy || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dy: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        aria-label="dy (m)"
+                        step="any"
+                        value={editOffset.dy}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>↻ Rotate (Yaw)</span>
+                      <span className="mono">{Math.round(Number(editOffset.yaw || 0))}°</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-rotate-yaw"
+                        aria-label="Rotate Yaw Degrees"
+                        min={-180}
+                        max={180}
+                        step="5"
+                        value={Math.min(180, Math.max(-180, Number(editOffset.yaw || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, yaw: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        aria-label="yaw (°)"
+                        step="15"
+                        value={editOffset.yaw}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {/* Live Collision & Bounds Status Pill */}
+                {livePlacement && (
+                  <div
+                    className={`sculpture-placement-status ${
+                      !livePlacement.ok
+                        ? 'is-blocked'
+                        : livePlacement.pushedSiblings?.length > 0
+                        ? 'is-pushing'
+                        : 'is-clear'
+                    }`}
+                    data-testid={
+                      !livePlacement.ok
+                        ? 'sculpture-placement-blocked'
+                        : 'sculpture-placement-status'
+                    }
+                    role={!livePlacement.ok ? 'alert' : 'status'}
+                  >
+                    {!livePlacement.ok ? (
+                      <>
+                        <span>⛔ {livePlacement.message}</span>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          onClick={() => setEditScale(maxSafeScale)}
+                        >
+                          Fit Max Safe ({maxSafeScale.toFixed(2)}×)
+                        </button>
+                      </>
+                    ) : livePlacement.pushedSiblings?.length > 0 ? (
+                      <span>
+                        ↔️ Gently shifts {livePlacement.pushedSiblings.length} neighboring artwork
+                        {livePlacement.pushedSiblings.length === 1 ? '' : 's'} (
+                        {livePlacement.pushedSiblings.map((p) => p.title).join(', ')}) — zero
+                        overlap, all kept inside &ldquo;{scLandDisplayName}&rdquo;.
+                      </span>
+                    ) : (
+                      <span>
+                        ✅ Fits cleanly inside &ldquo;{scLandDisplayName}&rdquo;
+                        {siblingCount > 0
+                          ? ` — ${siblingCount} other placed item${siblingCount === 1 ? '' : 's'} untouched`
+                          : ''}
+                        .
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Title & Description Modification */}
+                <div className="sculpture-meta-edit-row">
+                  <EmojiInput
+                    className="input"
+                    aria-label="Artwork title"
+                    maxLength={48}
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Sculpture title (type : for emojis)"
+                  />
+                  <EmojiTextarea
+                    className="textarea"
+                    aria-label="Artwork description"
+                    rows={2}
+                    maxLength={240}
+                    value={editDesc}
+                    onChange={(e) => setEditDesc(e.target.value)}
+                    placeholder="Description (type : for emojis)"
+                  />
+                </div>
+
+                {/* Primary Studio Actions: Save, Reset, Modify Voxels, Hide, Remove */}
+                <div className="sculpture-studio-actions">
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    data-testid="sculpture-save-transform-btn"
+                    disabled={propBusy !== '' || Boolean(livePlacement && !livePlacement.ok)}
+                  >
+                    <XeroIcon emoji="💾" size={14} />{' '}
+                    {propBusy === 'save' ? 'Saving…' : 'Save Artwork Changes'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-testid="sculpture-reset-transform-btn"
+                    disabled={propBusy !== ''}
+                    onClick={() => {
+                      setEditOffset({ dx: 0, dy: 0, dz: 0, yaw: 0 });
+                      setEditScale(1);
+                    }}
+                  >
+                    ↺ Center &amp; 1×
+                  </button>
+                  {onModifyInCanvas && sculpture.modelType !== 'custom-3d' && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={propBusy !== ''}
+                      onClick={() => {
+                        onClose?.();
+                        onModifyInCanvas(sculpture);
+                      }}
+                    >
+                      <XeroIcon emoji="🖌️" size={14} /> Modify 3D Blocks on AR Canvas
+                    </button>
+                  )}
+                  {canModerateLand && (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-testid="sculpture-visibility-btn"
+                      disabled={propBusy !== ''}
+                      onClick={handleToggleSculptureVisibility}
+                    >
+                      {sculpture.hidden ? '👁️ Unhide Artwork' : '🙈 Hide Artwork'}
+                    </button>
+                  )}
+                  {canModerateLand &&
+                    (confirmRemove ? (
+                      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          data-testid="sculpture-confirm-remove-btn"
+                          disabled={propBusy !== ''}
+                          onClick={handleDeleteOwnedSculpture}
+                        >
+                          {propBusy === 'delete' ? 'Removing…' : 'Confirm Remove'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={propBusy !== ''}
+                          onClick={() => setConfirmRemove(false)}
+                        >
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        data-testid="sculpture-remove-btn"
+                        disabled={propBusy !== ''}
+                        onClick={() => setConfirmRemove(true)}
+                      >
+                        <XeroIcon emoji="🗑️" size={14} /> Remove Artwork
+                      </button>
+                    ))}
+                </div>
+
+                {propNotice && (
+                  <div className="mono" role="status" style={{ fontSize: 12, color: 'var(--accent)' }}>
+                    {propNotice}
+                  </div>
+                )}
+                {propError && (
+                  <div className="mono" role="alert" style={{ fontSize: 12, color: 'var(--danger, #ff5e7e)' }}>
+                    {propError}
+                  </div>
+                )}
+              </form>
+            )}
+          </div>
+        ) : !user && onRequestLogin ? (
+          <div className="sculpture-guest-signin-bar" data-testid="sculpture-guest-signin-bar">
+            <span>🔐 Sign in to modify, scale, move, or remove artworks you own.</span>
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              data-testid="sculpture-signin-btn"
+              onClick={onRequestLogin}
+            >
+              Sign In
+            </button>
+          </div>
+        ) : null}
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
           {googleMapsUrl && (
@@ -736,6 +1460,11 @@ export default function SculptureModal({
             </span>
           )}
           <span className="badge teal">v{sculpture.currentRev || 1}</span>
+          {Math.abs(currentSavedScale - 1) > 0.01 && (
+            <span className="badge gold" data-testid="sculpture-scale-badge">
+              📐 Scale {currentSavedScale.toFixed(2)}×
+            </span>
+          )}
           {(sculpture.anchorOffset?.dx || sculpture.anchorOffset?.dy || sculpture.anchorOffset?.dz || sculpture.anchorOffset?.yaw) ? (
             <span className="badge">
               <XeroIcon emoji="📌" size={12} /> Offset ({sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m)
@@ -1240,17 +1969,15 @@ export default function SculptureModal({
           </div>
         </div>
 
-        {canModifySculpture && (
+        {canModerateLand && (
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <XeroIcon emoji={canModerateLand ? '🏠' : '🤝'} size={18} />{' '}
-                {canModerateLand
-                  ? `Property & Land Owner Controls (${scLandDisplayName})`
-                  : `Contributor Sculpture Modification (${scLandDisplayName})`}
+                <XeroIcon emoji="🏠" size={18} />{' '}
+                Property &amp; Land Owner Controls ({scLandDisplayName})
               </span>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {onOpenAddLandItem && canModerateLand && (
+                {onOpenAddLandItem && (
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -1263,7 +1990,7 @@ export default function SculptureModal({
                     + Add 3D Item (Agent Prompt)
                   </button>
                 )}
-                {onOpenLandManagement && canModerateLand && (
+                {onOpenLandManagement && (
                   <button
                     type="button"
                     className="btn"
@@ -1276,127 +2003,27 @@ export default function SculptureModal({
                     <XeroIcon emoji="🗺️" size={14} /> Land Management
                   </button>
                 )}
-                {canModerateLand && (
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ fontSize: 12, padding: '6px 10px' }}
-                    disabled={propBusy !== ''}
-                    onClick={handleCopyOwnerPrompt}
-                  >
-                    <XeroIcon emoji="📋" size={14} />{' '}
-                    {promptCopied ? 'Copied MCP Prompt!' : 'Copy Property Owner MCP Prompt'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`btn ${parcelFrozen ? 'btn-primary' : ''}`}
+                  style={{ fontSize: 12, padding: '6px 10px' }}
+                  disabled={propBusy !== ''}
+                  onClick={handleToggleFreezeLand}
+                >
+                  {parcelFrozen ? '🔓 Unfreeze Land' : '❄️ Freeze Land'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ fontSize: 12, padding: '6px 10px' }}
+                  disabled={propBusy !== ''}
+                  onClick={handleCopyOwnerPrompt}
+                >
+                  <XeroIcon emoji="📋" size={14} />{' '}
+                  {promptCopied ? 'Copied MCP Prompt!' : 'Copy Property Owner MCP Prompt'}
+                </button>
               </div>
             </div>
-
-            <form onSubmit={handleSaveSculptureEdit} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
-                {canModerateLand ? 'Modify Artwork Placed on Your Land' : 'Modify Sculpture as Verified Contributor'}
-              </div>
-              <EmojiInput
-                className="input"
-                maxLength={48}
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="Sculpture title (type : for emojis)"
-              />
-              <EmojiTextarea
-                className="textarea"
-                rows={2}
-                maxLength={240}
-                value={editDesc}
-                onChange={(e) => setEditDesc(e.target.value)}
-                placeholder="Description (type : for emojis)"
-              />
-              <div className="add-item-offset-row">
-                <label>
-                  <span>dx (m)</span>
-                  <input
-                    type="number"
-                    step="0.2"
-                    value={editOffset.dx}
-                    onChange={(e) => setEditOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }))}
-                  />
-                </label>
-                <label>
-                  <span>dy (m)</span>
-                  <input
-                    type="number"
-                    step="0.2"
-                    value={editOffset.dy}
-                    onChange={(e) => setEditOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }))}
-                  />
-                </label>
-                <label>
-                  <span>dz (m)</span>
-                  <input
-                    type="number"
-                    step="0.2"
-                    value={editOffset.dz}
-                    onChange={(e) => setEditOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }))}
-                  />
-                </label>
-                <label>
-                  <span>yaw (°)</span>
-                  <input
-                    type="number"
-                    step="15"
-                    value={editOffset.yaw}
-                    onChange={(e) => setEditOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }))}
-                  />
-                </label>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button type="submit" className="btn btn-primary" disabled={propBusy !== ''}>
-                  <XeroIcon emoji="✏️" size={14} /> Save Sculpture Changes
-                </button>
-                {onModifyInCanvas && sculpture.modelType !== 'custom-3d' && (
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={propBusy !== ''}
-                    onClick={() => {
-                      onClose?.();
-                      onModifyInCanvas(sculpture);
-                    }}
-                  >
-                    <XeroIcon emoji="🖌️" size={14} /> Modify 3D Blocks on AR Canvas
-                  </button>
-                )}
-                {canModerateLand && (
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={propBusy !== ''}
-                    onClick={handleToggleSculptureVisibility}
-                  >
-                    {sculpture.hidden ? '👁️ Unhide Artwork' : '🙈 Hide Artwork'}
-                  </button>
-                )}
-                {canModerateLand && (
-                  <button
-                    type="button"
-                    className={`btn ${parcelFrozen ? 'btn-primary' : ''}`}
-                    disabled={propBusy !== ''}
-                    onClick={handleToggleFreezeLand}
-                  >
-                    {parcelFrozen ? '🔓 Unfreeze Land' : '❄️ Freeze Land'}
-                  </button>
-                )}
-                {canModerateLand && (
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    disabled={propBusy !== ''}
-                    onClick={handleDeleteOwnedSculpture}
-                  >
-                    <XeroIcon emoji="🗑️" size={14} /> Remove From Land
-                  </button>
-                )}
-              </div>
-            </form>
 
             {canModerateLand && (
               <>

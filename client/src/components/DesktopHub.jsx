@@ -1944,22 +1944,53 @@ export default function DesktopHub({
           user={user}
           config={config}
           userLocation={userLocation}
-          onSculptureUpdated={(updated) => {
+          onRequestLogin={() => setLoginOpen(true)}
+          onSculptureUpdated={(updated, extra = {}) => {
             setSelected(updated);
             setLastSculpture(updated);
-            setSculptures((prev) =>
-              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+            const pushedMap = new Map(
+              (Array.isArray(extra?.pushedSiblings) ? extra.pushedSiblings : []).map((p) => [
+                p.id,
+                p
+              ])
             );
+            const applyRowUpdate = (s) => {
+              if (s.id === updated.id) return { ...s, ...updated };
+              const pushed = pushedMap.get(s.id);
+              if (!pushed) return s;
+              return {
+                ...s,
+                anchorOffset: {
+                  ...(s.anchorOffset || {}),
+                  dx: pushed.dx,
+                  dy: pushed.dy,
+                  dz: pushed.dz
+                }
+              };
+            };
+            setSculptures((prev) => prev.map(applyRowUpdate));
             setVisitedParcel((prev) =>
               prev
                 ? {
                     ...prev,
-                    sculptures: (prev.sculptures || []).map((s) =>
-                      s.id === updated.id ? { ...s, ...updated } : s
-                    )
+                    sculptures: (prev.sculptures || []).map(applyRowUpdate)
                   }
                 : prev
             );
+            refreshData();
+            refreshMyLands();
+          }}
+          onSculptureDeleted={(deletedId) => {
+            setSculptures((prev) => prev.filter((s) => s.id !== deletedId));
+            setVisitedParcel((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    sculptures: (prev.sculptures || []).filter((s) => s.id !== deletedId)
+                  }
+                : prev
+            );
+            refreshData();
             refreshMyLands();
           }}
           onOpenLandManagement={(pid) => {
