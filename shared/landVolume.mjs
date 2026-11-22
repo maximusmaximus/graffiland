@@ -1165,3 +1165,84 @@ export function validateLandTitle(rawTitle = '') {
     error: ''
   };
 }
+
+const INTERNAL_PARCEL_CODE_RE = /^GLAND-[0-9A-Z]{6,10}$/i;
+
+/**
+ * Returns true if `value` is an internal geohash parcel ID (e.g. `GLAND-9R16561P`).
+ */
+export function isInternalParcelCode(value = '') {
+  return INTERNAL_PARCEL_CODE_RE.test(String(value || '').trim());
+}
+
+/**
+ * Resolves the latest human-friendly name for a Virtual Land set by its owner.
+ * NEVER returns internal `GLAND-...` codes as a user-facing land name.
+ *
+ * Priority:
+ *  1) Owner's latest customName / parcelName / custom_name (ignoring internal GLAND-* codes)
+ *  2) Clean fallback derived from the land's placeName or first sculpture title (for legacy unnamed parcels)
+ *  3) 'Unnamed Land'
+ */
+export function resolveLandDisplayName(parcelOrInput = null, fallbackOpts = {}) {
+  const candidates = [];
+  if (typeof parcelOrInput === 'string') {
+    candidates.push(parcelOrInput);
+  } else if (parcelOrInput && typeof parcelOrInput === 'object') {
+    candidates.push(
+      parcelOrInput.customName,
+      parcelOrInput.custom_name,
+      parcelOrInput.parcelName,
+      parcelOrInput.parcelCustomName,
+      parcelOrInput.parcel_custom_name,
+      parcelOrInput.landName,
+      parcelOrInput.displayName,
+      parcelOrInput.name
+    );
+  }
+
+  for (const raw of candidates) {
+    const clean = String(raw || '').trim();
+    if (clean && !isInternalParcelCode(clean)) {
+      return clean;
+    }
+  }
+
+  // Fallback for legacy lands that pre-date mandatory titles: derive friendly label without GLAND-*
+  const sculptures = Array.isArray(fallbackOpts?.sculptures)
+    ? fallbackOpts.sculptures
+    : Array.isArray(parcelOrInput?.sculptures)
+    ? parcelOrInput.sculptures
+    : [];
+  const firstSculptureTitle = String(
+    fallbackOpts?.sculptureTitle ||
+      parcelOrInput?.firstSculptureTitle ||
+      sculptures[0]?.title ||
+      ''
+  ).trim();
+  if (firstSculptureTitle && !isInternalParcelCode(firstSculptureTitle)) {
+    const shortTitle =
+      firstSculptureTitle.length > 34
+        ? `${firstSculptureTitle.slice(0, 33).trimEnd()}…`
+        : firstSculptureTitle;
+    return `${shortTitle} Land`;
+  }
+
+  const rawPlace = String(
+    fallbackOpts?.placeName ||
+      parcelOrInput?.placeName ||
+      parcelOrInput?.place_name ||
+      sculptures[0]?.placeName ||
+      ''
+  ).trim();
+  if (rawPlace && !isInternalParcelCode(rawPlace)) {
+    const firstPart = rawPlace.split(',')[0].trim();
+    if (firstPart && !isInternalParcelCode(firstPart)) {
+      const shortPlace =
+        firstPart.length > 34 ? `${firstPart.slice(0, 33).trimEnd()}…` : firstPart;
+      return `${shortPlace} Land`;
+    }
+  }
+
+  return String(fallbackOpts?.fallback || 'Unnamed Land');
+}

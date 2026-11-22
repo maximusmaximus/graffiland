@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { slugifyLandTitle } from '../../../shared/landVolume.mjs';
+import {
+  resolveLandDisplayName,
+  slugifyLandTitle
+} from '../../../shared/landVolume.mjs';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -25,8 +28,8 @@ export default function TitleLandModal({
 
   if (!parcel) return null;
 
-  const parcelId = String(parcel.parcelId || '').toUpperCase();
-  const previewSlug = slugifyLandTitle(title) || parcelId.toLowerCase();
+  const currentLandName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+  const previewSlug = slugifyLandTitle(title) || slugifyLandTitle(currentLandName) || 'land';
 
   async function handleSubmit(e, shouldMint = false) {
     e?.preventDefault?.();
@@ -52,13 +55,13 @@ export default function TitleLandModal({
         style={{ maxWidth: 480 }}
         role="dialog"
         aria-modal="true"
-        aria-label={`Title land ${parcelId}`}
+        aria-label={`Title land ${currentLandName}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
           <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <XeroIcon emoji="🏷️" size={20} />
-            <span>{mode === 'draft' ? 'Title Your Land Plot' : `Rename ${parcelId}`}</span>
+            <span>{mode === 'draft' ? 'Title Your Land Plot' : `Rename "${currentLandName}"`}</span>
           </h2>
           <button
             type="button"
@@ -74,10 +77,6 @@ export default function TitleLandModal({
           onSubmit={(e) => handleSubmit(e, false)}
           style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
         >
-          <div className="mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            Parcel: <strong style={{ color: 'var(--accent)' }}>{parcelId}</strong>
-          </div>
-
           <label className="land-name-field">
             <span>Land Title / Name</span>
             <EmojiInput
@@ -92,7 +91,7 @@ export default function TitleLandModal({
           </label>
 
           <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-            Share slug: <span style={{ color: 'var(--accent)' }}>?parcel={parcelId}&amp;slug={previewSlug}</span>
+            Share link slug: <span style={{ color: 'var(--accent)' }}>/{previewSlug}</span>
           </div>
 
           <label className="land-name-field">

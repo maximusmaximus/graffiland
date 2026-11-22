@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildParcelShareUrl } from '../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../shared/landVolume.mjs';
 import {
   BIO_MAX_LEN,
   PROFILE_HEADER_PRESETS,
@@ -1069,8 +1072,9 @@ export default function ProfileModal({
                       <div key={land.parcelId} className="profile-item-card" data-testid="profile-land-item">
                         <div className="profile-item-head">
                           <div style={{ minWidth: 0 }}>
-                            <div className="profile-item-title">{land.displayName}</div>
-                            <div className="profile-item-sub mono">{land.parcelId}</div>
+                            <div className="profile-item-title">
+                              {resolveLandDisplayName(land, { defaultName: 'Virtual Land' })}
+                            </div>
                           </div>
                           <span
                             className={`badge ${
@@ -1157,7 +1161,14 @@ export default function ProfileModal({
                           <div style={{ minWidth: 0 }}>
                             <div className="profile-item-title">{sc.title}</div>
                             <div className="profile-item-sub mono">
-                              {sc.parcelId} · {formatShortDate(sc.createdAt)}
+                              {resolveLandDisplayName(
+                                {
+                                  customName: sc.parcelName || sc.landDisplayName || '',
+                                  firstSculptureTitle: sc.title || ''
+                                },
+                                { defaultName: 'Virtual Land' }
+                              )}{' '}
+                              · {formatShortDate(sc.createdAt)}
                             </div>
                           </div>
                           <span className="badge" style={{ fontSize: 10 }}>

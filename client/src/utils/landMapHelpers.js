@@ -1,4 +1,5 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 
 /**
  * Resolve the geographic center coordinates for a land parcel record.
@@ -324,7 +325,13 @@ export function groupNearestLandsWithSculptures({
 
     const expiration = formatLandExpiration(rawParcel, nowMs);
     const isFrozen = Boolean(rawParcel.frozen || rawParcel.settings?.frozen);
-    const displayName = String(rawParcel.customName || '').trim() || pid;
+    const firstSc = sortedSculptures[0] || null;
+    const displayName = resolveLandDisplayName({
+      customName: rawParcel.customName || firstSc?.parcelName || '',
+      displayName: rawParcel.displayName || firstSc?.landDisplayName || '',
+      firstSculptureTitle: firstSc?.title || '',
+      placeName: firstSc?.placeName || ''
+    });
     const description = String(rawParcel.description || rawParcel.curationNote || '').trim();
     const googleMapsUrl = coords ? buildGoogleMapsLandUrl(coords.lat, coords.lng) : '';
 
@@ -452,10 +459,7 @@ export function extractParcelPerimeterPoints(parcel) {
  * @returns {string}
  */
 export function formatSimpleLandLabel(parcel, rankIndex = null) {
-  const custom = String(parcel?.customName || '').trim();
-  const pid = String(parcel?.parcelId || '').trim();
-  const shortId = pid.replace(/^GLAND-/i, '') || pid || 'Land';
-  let base = custom || shortId;
+  let base = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
   if (base.length > 20) {
     base = `${base.slice(0, 19).trimEnd()}…`;
   }

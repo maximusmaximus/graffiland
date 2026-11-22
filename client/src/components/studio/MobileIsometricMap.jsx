@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../../utils/api.js';
+import { api, resolveApiUrl } from '../../utils/api.js';
 import {
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
@@ -13,6 +13,7 @@ import {
 import { hasWebGLSupport, loadMapLibre } from '../../utils/loadMapLibre.js';
 import { computePrismScreenGeometry } from '../../utils/map3dProjection.js';
 import { drawFloatingLandLabel } from '../../utils/map3dLabelOverlay.js';
+import { createSculptureThreeLayer } from '../../utils/map3dSculptureLayer.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -317,6 +318,8 @@ export default function MobileIsometricMap({
   const [liveBearing, setLiveBearing] = useState(-45);
   const [liveZoom, setLiveZoom] = useState(19);
   const [hydrationVersion, setHydrationVersion] = useState(0);
+  const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
+  const threeLayerRef = useRef(null);
 
   // Resolve 3D volumes for all parcels
   const resolvedEntries = useMemo(() => {
@@ -553,6 +556,13 @@ export default function MobileIsometricMap({
     if (scSrc && typeof scSrc.setData === 'function') {
       scSrc.setData(sc3d.geojson);
     }
+    if (threeLayerRef.current && typeof threeLayerRef.current.setData === 'function') {
+      threeLayerRef.current.setData({
+        sculptures: hydratedSculpturesRef.current || [],
+        parcels: parcelsWithVolumes,
+        selectedSculptureId: selectedSculptureIdRef.current || ''
+      });
+    }
 
     const uLoc = userLocationRef.current;
     const userFeatures =
@@ -683,11 +693,33 @@ export default function MobileIsometricMap({
               'fill-extrusion-opacity': [
                 'case',
                 ['==', ['get', 'isSelected'], 1],
-                0.24,
-                0.18
+                0.08,
+                0.06
               ]
             }
           });
+        }
+
+        // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms
+        let threeMounted = Boolean(map.getLayer('mobile-iso-sculptures-three-3d'));
+        if (!threeMounted && maplibreRef.current) {
+          try {
+            const threeLayer = createSculptureThreeLayer({
+              id: 'mobile-iso-sculptures-three-3d',
+              maplibregl: maplibreRef.current,
+              resolveUrlFn: resolveApiUrl,
+              onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+            });
+            threeLayerRef.current = threeLayer;
+            map.addLayer(
+              threeLayer,
+              map.getLayer('mobile-iso-lands-extrusion') ? 'mobile-iso-lands-extrusion' : undefined
+            );
+            threeMounted = Boolean(map.getLayer('mobile-iso-sculptures-three-3d'));
+          } catch {
+            threeLayerRef.current = null;
+            threeMounted = false;
+          }
         }
 
         if (!map.getSource('mobile-iso-sculptures')) {
@@ -702,7 +734,7 @@ export default function MobileIsometricMap({
               'fill-extrusion-color': ['get', 'color'],
               'fill-extrusion-height': ['get', 'heightMeters'],
               'fill-extrusion-base': ['get', 'baseMeters'],
-              'fill-extrusion-opacity': 0.96,
+              'fill-extrusion-opacity': threeMounted ? 0.001 : 0.96,
               'fill-extrusion-vertical-gradient': true
             }
           });
@@ -990,6 +1022,7 @@ export default function MobileIsometricMap({
       className={`mobile-iso-map-root ${isFullExpanded ? 'is-fullscreen' : ''}`}
       data-testid="mobile-iso-3d-map"
       data-map-mode="3d"
+      data-three-3d-models={loadedThree3dCount}
     >
       {webglAvailable ? (
         <>

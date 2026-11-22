@@ -176,7 +176,7 @@ export function useARPreview({
       const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
       const sub = isCustom3d
         ? new THREE.Group()
-        : buildVoxelGroup(sc.voxels || [], { simplifyLod: dist > 25 });
+        : buildVoxelGroup(sc.voxels || [], { simplifyLod: false });
       sub.traverse((obj) => {
         if (obj.isMesh) {
           obj.userData.sculpture = sc;

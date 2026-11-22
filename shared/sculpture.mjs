@@ -1,4 +1,5 @@
 import { decodeGeohashBounds } from '../server/services/pol.mjs';
+import { resolveLandDisplayName } from './landVolume.mjs';
 
 /**
  * Shared SELECT column list omitting `voxels_json` on lightweight list/spatial queries
@@ -45,11 +46,13 @@ export function buildSculptureSelectSql({ includeVoxels = true } = {}) {
       COALESCE(l.layer_role, 'artist_work') AS layer_role,
       COALESCE(l.quest_id, '') AS layer_quest_id,
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
-      COALESCE(l.qual_contributor, 1) AS qual_contributor
+      COALESCE(l.qual_contributor, 1) AS qual_contributor,
+      COALESCE(pc.custom_name, '') AS parcel_custom_name
      FROM sculptures s
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
   `;
 }
 
@@ -155,6 +158,12 @@ export function serializeSculptureRow(
     accuracy: row.accuracy,
     heading: row.heading,
     parcelId: row.parcel_id,
+    parcelName: String(row.parcel_custom_name || '').trim(),
+    landDisplayName: resolveLandDisplayName({
+      customName: row.parcel_custom_name || '',
+      placeName: row.place_name || '',
+      firstSculptureTitle: row.title || ''
+    }),
     geohash: row.geohash,
     parcelBounds: decodeGeohashBounds(row.geohash),
     anchorOffset: {

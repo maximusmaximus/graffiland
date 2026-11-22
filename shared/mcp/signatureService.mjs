@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { verifyAndEnrichLocation } from '../../server/services/pol.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
+import { resolveLandDisplayName } from '../landVolume.mjs';
 import { computeVerticalBounds } from '../sculpture.mjs';
 import {
   buildAgentSignPublishPrompt,
@@ -32,13 +33,23 @@ import {
 } from './landMutations.mjs';
 import { updateLandVolume } from '../agentQuestService.mjs';
 
-export function describeSignatureAction({ action, parcelId = '', sculptureId = '', payload = {} }) {
+export function describeSignatureAction({
+  action,
+  parcelId = '',
+  landDisplayName = '',
+  sculptureId = '',
+  payload = {}
+}) {
   const p = /** @type {any} */ (payload && typeof payload === 'object' ? payload : {});
   const clip = (text, max = 110) => {
     const clean = String(text || '').trim().replace(/\s+/g, ' ').replace(/\.+$/, '');
     return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
   };
-  const target = parcelId ? `parcel ${parcelId}` : 'your land';
+  const resolvedLand = resolveLandDisplayName(
+    { customName: landDisplayName || p.customName || '' },
+    { defaultName: '' }
+  );
+  const target = resolvedLand ? `"${resolvedLand}"` : parcelId ? 'your Virtual Land' : 'your land';
 
   if (action === 'create_sculpture') {
     const title = clip(p.title || 'Untitled Artwork', 56);
@@ -147,9 +158,14 @@ export function formatSignatureRequestRow(row) {
   if (!row) return null;
   const expired = new Date(row.expires_at).getTime() < Date.now();
   const payload = JSON.parse(row.payload_json || '{}');
+  const parcelName = String(row.parcel_custom_name || '').trim();
+  const landDisplayName = resolveLandDisplayName({
+    customName: parcelName || payload?.customName || ''
+  });
   const summary = describeSignatureAction({
     action: row.action,
     parcelId: row.parcel_id,
+    landDisplayName,
     sculptureId: row.sculpture_id || '',
     payload
   });
@@ -160,6 +176,8 @@ export function formatSignatureRequestRow(row) {
     ownerAddress: row.owner_address,
     action: row.action,
     parcelId: row.parcel_id,
+    parcelName,
+    landDisplayName,
     sculptureId: row.sculpture_id || '',
     payload,
     payloadHash: row.payload_hash,
@@ -537,9 +555,11 @@ export async function listPendingSignaturesForUser(
   if (includeHistory) {
     const safeLimit = Math.max(1, Math.min(100, Number(historyLimit) || 30));
     const allRows = await db.all(
-      `SELECT * FROM land_signature_requests
-       WHERE owner_sub = ?
-       ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+       FROM land_signature_requests sr
+       LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+       WHERE sr.owner_sub = ?
+       ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
       [user.id, safeLimit + 25]
     );
     const formatted = (allRows || []).map(formatSignatureRequestRow);
@@ -551,9 +571,11 @@ export async function listPendingSignaturesForUser(
     };
   }
   const rows = await db.all(
-    `SELECT * FROM land_signature_requests
-     WHERE owner_sub = ? AND status = 'pending'
-     ORDER BY created_at DESC LIMIT 25`,
+    `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM land_signature_requests sr
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+     WHERE sr.owner_sub = ? AND sr.status = 'pending'
+     ORDER BY sr.created_at DESC LIMIT 25`,
     [user.id]
   );
   return {
@@ -567,9 +589,11 @@ export async function listSignatureHistoryForUser(db, { user, limit = 40 }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 40));
   const rows = await db.all(
-    `SELECT * FROM land_signature_requests
-     WHERE owner_sub = ?
-     ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+    `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM land_signature_requests sr
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+     WHERE sr.owner_sub = ?
+     ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
     [user.id, safeLimit]
   );
   const formatted = (rows || []).map(formatSignatureRequestRow);
@@ -583,7 +607,13 @@ export async function listSignatureHistoryForUser(db, { user, limit = 40 }) {
 }
 
 export async function getSignatureRequest(db, { requestId, user = null, pairingCode = '' }) {
-  const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
+  const row = await db.get(
+    `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM land_signature_requests sr
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+     WHERE sr.id = ?`,
+    [requestId]
+  );
   if (!row) throw new McpServiceError('Signature request not found.', 404);
   if (user && row.owner_sub === user.id) {
     return { request: formatSignatureRequestRow(row) };

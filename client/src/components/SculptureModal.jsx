@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { BrowserProvider, Contract, isAddress } from 'ethers';
 import xeroemoji from 'xeroemoji';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import {
   buildTransferAuthMessage,
   ERC721_TRANSFER_ABI
@@ -109,6 +110,7 @@ export default function SculptureModal({
       yaw: Number(initialSculpture?.anchorOffset?.yaw || 0)
     });
     setParcelFrozen(Boolean(initialSculpture?.parcelFrozen));
+    setLandCustomName(initialSculpture?.parcelName || '');
     setMetadataCopied(false);
     setNftNotice('');
     setNftError('');
@@ -135,6 +137,9 @@ export default function SculptureModal({
             yaw: Number(res.sculpture.anchorOffset?.yaw || 0)
           });
           setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
+          if (res.sculpture.parcelName !== undefined) {
+            setLandCustomName(res.sculpture.parcelName || '');
+          }
           if (res.sculpture.pinSummary) {
             setPinBatchInfo(res.sculpture.pinSummary);
           }
@@ -150,7 +155,15 @@ export default function SculptureModal({
   const scMapLat = sculpture?.lat;
   const scMapLng = sculpture?.lng;
   const scMapBounds = sculpture?.parcelBounds;
-  const scMapParcelId = sculpture?.parcelId;
+  const scLandDisplayName = resolveLandDisplayName(
+    {
+      customName: landCustomName || sculpture?.parcelName || '',
+      displayName: sculpture?.landDisplayName || '',
+      firstSculptureTitle: sculpture?.title || '',
+      placeName: sculpture?.placeName || ''
+    },
+    { defaultName: 'Virtual Land' }
+  );
 
   useEffect(() => {
     const host = landMapHostRef.current;
@@ -176,7 +189,7 @@ export default function SculptureModal({
         fillColor: '#00f5d4',
         fillOpacity: 0.25
       })
-        .bindTooltip(`Virtual Land ${scMapParcelId}`)
+        .bindTooltip(scLandDisplayName)
         .addTo(map);
     }
 
@@ -199,7 +212,7 @@ export default function SculptureModal({
       clearTimeout(timer);
       map.remove();
     };
-  }, [scMapId, scMapLat, scMapLng, scMapBounds, scMapParcelId]);
+  }, [scMapId, scMapLat, scMapLng, scMapBounds, scLandDisplayName]);
 
   const pol = sculpture?.proofOfLocation || {};
   const geo = pol.geoInfo || {};
@@ -353,8 +366,8 @@ export default function SculptureModal({
       onSculptureUpdated?.({ ...sculpture, parcelFrozen: actualFrozen });
       setPropNotice(
         actualFrozen
-          ? `Frozen ${sculpture.parcelId} — no new sculptures can be placed on this land.`
-          : `Unfrozen ${sculpture.parcelId} — new sculptures are allowed again.`
+          ? `Frozen "${scLandDisplayName}" — no new sculptures can be placed on this land.`
+          : `Unfrozen "${scLandDisplayName}" — new sculptures are allowed again.`
       );
     } catch (err) {
       setPropError(err.message || 'Could not update land freeze setting.');
@@ -373,7 +386,25 @@ export default function SculptureModal({
         customName: landCustomName,
         curationNote: landCurationNote
       });
-      setPropNotice(`Saved land curation for ${res?.parcel?.parcelId || sculpture.parcelId}.`);
+      const updatedName = resolveLandDisplayName(
+        {
+          customName: res?.parcel?.customName || landCustomName || '',
+          displayName: res?.parcel?.displayName || '',
+          firstSculptureTitle: sculpture.title || ''
+        },
+        { defaultName: 'Virtual Land' }
+      );
+      setSculpture((prev) => ({
+        ...prev,
+        parcelName: res?.parcel?.customName ?? landCustomName,
+        landDisplayName: updatedName
+      }));
+      onSculptureUpdated?.({
+        ...sculpture,
+        parcelName: res?.parcel?.customName ?? landCustomName,
+        landDisplayName: updatedName
+      });
+      setPropNotice(`Saved land curation for "${updatedName}".`);
     } catch (err) {
       setPropError(err.message || 'Land update failed');
     } finally {
@@ -655,6 +686,7 @@ export default function SculptureModal({
             className="btn"
             href={buildShareToXUrl({
               title: sculpture.title,
+              landName: scLandDisplayName,
               parcelId: sculpture.parcelId,
               sculptureId: sculpture.id
             })}
@@ -676,7 +708,7 @@ export default function SculptureModal({
             </span>
           ) : null}
           <span className="badge teal">
-            <XeroIcon emoji="📍" size={13} /> Land {sculpture.parcelId}
+            <XeroIcon emoji="📍" size={13} /> {scLandDisplayName}
           </span>
           <span className="badge gold">
             <XeroIcon emoji="✅" size={13} /> PoL Score {sculpture.polScore}/100
@@ -730,14 +762,14 @@ export default function SculptureModal({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land Parcel ({sculpture.parcelId})
+              <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land ({scLandDisplayName})
             </div>
             {hasCoords && (
               <div className="mini-land-map-wrap">
                 <div ref={landMapHostRef} className="mini-land-map" />
                 <div className="mini-land-map-caption">
                   <span>
-                    <XeroIcon emoji="🗺️" size={11} /> Land {sculpture.parcelId}
+                    <XeroIcon emoji="🗺️" size={11} /> {scLandDisplayName}
                   </span>
                   {sculpture.parcelBounds?.sw && (
                     <span className="mono">
@@ -758,8 +790,8 @@ export default function SculptureModal({
                   <td className="mono">{sculpture.lat}, {sculpture.lng}</td>
                 </tr>
                 <tr>
-                  <th>Geohash / Parcel</th>
-                  <td className="mono">{sculpture.geohash} / {sculpture.parcelId}</td>
+                  <th>Virtual Land</th>
+                  <td>{scLandDisplayName}</td>
                 </tr>
                 <tr>
                   <th>GPS Accuracy / Alt</th>
@@ -1214,8 +1246,8 @@ export default function SculptureModal({
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <XeroIcon emoji={canModerateLand ? '🏠' : '🤝'} size={18} />{' '}
                 {canModerateLand
-                  ? `Property & Land Owner Controls (${sculpture.parcelId})`
-                  : `Contributor Sculpture Modification (${sculpture.parcelId})`}
+                  ? `Property & Land Owner Controls (${scLandDisplayName})`
+                  : `Contributor Sculpture Modification (${scLandDisplayName})`}
               </span>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {onOpenAddLandItem && canModerateLand && (
@@ -1379,7 +1411,7 @@ export default function SculptureModal({
               }}
             >
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-gold)' }}>
-                Curate Virtual Land Parcel ({sculpture.parcelId})
+                Curate Virtual Land ({scLandDisplayName})
               </div>
               <input
                 className="input"

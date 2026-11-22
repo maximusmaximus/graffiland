@@ -12,7 +12,9 @@ import {
   computeMaxHeightForFootprint,
   computeObjectVoxelBoundsMeters,
   footprintsOverlap,
+  isInternalParcelCode,
   resizeDraftFromEdge,
+  resolveLandDisplayName,
   scaleDraftFromCorner,
   scaleFootprintToLimit,
   validateAndNormalizeLandVolume
@@ -22,6 +24,9 @@ import {
   buildLandAdd3DItemAgentPrompt
 } from '../shared/landSignatureMessage.mjs';
 import { buildSculptures3DGeoJson } from '../client/src/utils/sculpture3dGeoJson.js';
+import { computeSculptureMapTransform } from '../client/src/utils/map3dSculptureLayer.js';
+import { enforceCrispTexturesAndShading } from '../client/src/utils/customModelLoader.js';
+import * as THREE from 'three';
 
 const testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-3d-land-'));
 process.env.GRAFFILAND_DB_PATH = path.join(testTmpDir, 'land3d.sqlite');
@@ -1155,5 +1160,138 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(landBody.parcel.volume.widthMeters, 2.4);
     assert.equal(landBody.parcel.volume.depthMeters, 1.8);
     assert.equal(landBody.parcel.volume.heightMeters, 1.2);
+  });
+
+  test('Renaming a land immediately propagates the latest owner name across lands, sculptures, profiles, and notifications without GLAND codes', async () => {
+    assert.ok(firstClaimedParcelId);
+
+    // Rename the land via update endpoint
+    const renameRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${humanToken}`
+      },
+      body: JSON.stringify({
+        customName: 'Sunset Palm Sanctuary',
+        description: 'Latest owner-renamed virtual sculpture garden.'
+      })
+    });
+    const renameBody = await renameRes.json();
+    assert.equal(renameRes.status, 200, JSON.stringify(renameBody));
+    assert.equal(renameBody.parcel.customName, 'Sunset Palm Sanctuary');
+    assert.equal(renameBody.parcel.displayName, 'Sunset Palm Sanctuary');
+
+    // /api/parcels and /api/lands expose the latest name
+    const parcelsRes = await fetch(`${baseUrl}/api/parcels`).then((r) => r.json());
+    const foundParcel = (parcelsRes.parcels || []).find((p) => p.parcelId === firstClaimedParcelId);
+    assert.ok(foundParcel);
+    assert.equal(foundParcel.customName, 'Sunset Palm Sanctuary');
+    assert.equal(foundParcel.displayName, 'Sunset Palm Sanctuary');
+
+    // /api/sculptures joins parcel_curations so every sculpture carries the latest owner land name
+    const scListRes = await fetch(`${baseUrl}/api/sculptures?parcel=${firstClaimedParcelId}`).then((r) =>
+      r.json()
+    );
+    assert.ok((scListRes.sculptures || []).length >= 1);
+    for (const sc of scListRes.sculptures) {
+      assert.equal(sc.parcelName, 'Sunset Palm Sanctuary');
+      assert.equal(sc.landDisplayName, 'Sunset Palm Sanctuary');
+    }
+
+    // Pure helpers never treat GLAND-... as a display name
+    assert.equal(isInternalParcelCode('GLAND-9R16561P'), true);
+    assert.equal(isInternalParcelCode('Twin Palms'), false);
+    assert.equal(
+      resolveLandDisplayName({ parcelId: 'GLAND-9R16561P', customName: 'GLAND-9R16561P', firstSculptureTitle: 'Magnolia' }),
+      'Magnolia Land'
+    );
+  });
+
+  test('HD 3D map transform, full-resolution voxel GeoJSON, and crisp linear texture enforcement prevent pixelation for agent & human models', () => {
+    // 1) Custom 3D model (.glb) inside large land scales up to crisp visible centerpiece without exceeding inner 10%-padded volume
+    const glbTransform = computeSculptureMapTransform(
+      {
+        id: 'sc-tree',
+        lat: 39.728365,
+        lng: -121.838894,
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', scale: 1, rotationY: 0 }
+      },
+      {
+        centerLat: 39.728305,
+        centerLng: -121.838863,
+        widthMeters: 67.7,
+        depthMeters: 73.7,
+        heightMeters: 100.2,
+        baseAltitudeM: 0
+      },
+      { min: { x: -0.5, y: 0, z: -0.5 }, max: { x: 0.5, y: 1.4, z: 0.5 } }
+    );
+    assert.ok(glbTransform);
+    assert.ok(glbTransform.renderedSize.y >= 15 && glbTransform.renderedSize.y <= 24.1);
+    assert.ok(glbTransform.renderedSize.x < 67.7 / 1.2);
+    assert.equal(glbTransform.altitudeMeters, 0);
+
+    // 2) Small object-fitted parcel preserves exact 10%-padded centering on all axes
+    const tightTransform = computeSculptureMapTransform(
+      { id: 'sc-tight', lat: 37.78, lng: -122.4 },
+      {
+        centerLat: 37.78,
+        centerLng: -122.4,
+        widthMeters: 2.4,
+        depthMeters: 2.4,
+        heightMeters: 2.4,
+        baseAltitudeM: 0
+      },
+      { min: { x: -1, y: 0, z: -1 }, max: { x: 1, y: 2, z: 1 } }
+    );
+    assert.ok(tightTransform);
+    assert.equal(tightTransform.renderedSize.x, 2);
+    assert.equal(tightTransform.renderedSize.y, 2);
+    assert.equal(tightTransform.altitudeMeters, 0.2);
+
+    // 3) 268-block voxel sculpture is NOT downsampled/pixelated (stride stays 1, all unique XZ columns preserved)
+    const voxels268 = [];
+    for (let i = 0; i < 268; i++) {
+      voxels268.push({
+        x: (i % 19) * 0.05,
+        y: Math.floor(i / 19) * 0.05,
+        z: Math.floor(i / 14) * 0.05,
+        color: '#00f5d4',
+        material: 'matte'
+      });
+    }
+    const hdGeo = buildSculptures3DGeoJson(
+      [{ id: 'sc-268', parcelId: 'GLAND-9R16561P', lat: 39.7388, lng: -121.8479, voxels: voxels268 }],
+      '',
+      [{ parcelId: 'GLAND-9R16561P', volume: { widthMeters: 14, depthMeters: 14, heightMeters: 18 } }]
+    );
+    const voxelFeatureCount = hdGeo.geojson.features.filter((f) => f.properties.part === 'voxel').length;
+    assert.ok(
+      voxelFeatureCount >= 240,
+      `Expected full-resolution voxel columns (>=240) without pixelating downsampling, got ${voxelFeatureCount}`
+    );
+
+    // 4) enforceCrispTexturesAndShading overrides NearestFilter pixelation to smooth Linear / LinearMipmapLinear + anisotropy
+    const mipTex = new THREE.DataTexture(new Uint8Array([255, 0, 128, 255]), 1, 1);
+    mipTex.generateMipmaps = true;
+    mipTex.magFilter = THREE.NearestFilter;
+    mipTex.minFilter = THREE.NearestFilter;
+    mipTex.anisotropy = 1;
+    const flatTex = new THREE.DataTexture(new Uint8Array([0, 245, 212, 255]), 1, 1);
+    flatTex.generateMipmaps = false;
+    flatTex.magFilter = THREE.NearestFilter;
+    flatTex.minFilter = THREE.NearestFilter;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ map: mipTex, emissiveMap: flatTex })
+    );
+    enforceCrispTexturesAndShading(mesh, 8);
+    assert.equal(mipTex.magFilter, THREE.LinearFilter);
+    assert.equal(mipTex.minFilter, THREE.LinearMipmapLinearFilter);
+    assert.equal(mipTex.anisotropy, 8);
+    assert.equal(flatTex.magFilter, THREE.LinearFilter);
+    assert.equal(flatTex.minFilter, THREE.LinearFilter);
   });
 });

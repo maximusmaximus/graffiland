@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { POLICY } from '../constants.mjs';
+import { resolveLandDisplayName } from '../landVolume.mjs';
 import { decodeGeohashBounds } from '../../server/services/pol.mjs';
 
 export class McpServiceError extends Error {
@@ -298,9 +299,31 @@ export async function checkSculptureEditPermission(
   );
 }
 
+export async function getLatestParcelDisplayName(db, parcelId) {
+  const cleanId = normalizeParcelId(parcelId);
+  if (!cleanId) return 'Virtual Land';
+  const cur = await db
+    .get('SELECT custom_name FROM parcel_curations WHERE parcel_id = ?', [cleanId])
+    .catch(() => null);
+  const customName = String(cur?.custom_name || '').trim();
+  if (customName) return resolveLandDisplayName({ customName });
+  const firstSc = await db
+    .get(
+      'SELECT title, place_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+      [cleanId]
+    )
+    .catch(() => null);
+  return resolveLandDisplayName({
+    customName,
+    firstSculptureTitle: firstSc?.title || '',
+    placeName: firstSc?.place_name || ''
+  });
+}
+
 export async function fetchSculptureWithModelRow(db, sculptureId) {
   return db.get(
     `SELECT s.*,
+      COALESCE(pc.custom_name, '') AS parcel_custom_name,
       m.model_format AS custom_model_format,
       m.mime_type AS custom_model_mime,
       m.source_type AS custom_model_source_type,
@@ -322,6 +345,7 @@ export async function fetchSculptureWithModelRow(db, sculptureId) {
       COALESCE(l.plinth_slot_id, '') AS layer_plinth_slot_id,
       COALESCE(l.qual_contributor, 1) AS qual_contributor
      FROM sculptures s
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = s.parcel_id
      LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
      LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
      LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id

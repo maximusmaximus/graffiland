@@ -1,5 +1,6 @@
 import { sanitizeVoxels } from '../server/services/moderation.mjs';
 import { encodeGeohash } from '../server/services/pol.mjs';
+import { resolveLandDisplayName } from './landVolume.mjs';
 
 const MAX_DRAFTS_PER_USER = 30;
 const VALID_SOURCES = new Set(['auto', 'manual', 'agent', 'pair']);
@@ -57,6 +58,7 @@ function sanitizeSurfaceAnchor(anchor) {
 
 export function serializeDraftRow(row, { includeVoxels = true } = {}) {
   if (!row) return null;
+  const parcelName = String(row.parcel_custom_name || '').trim();
   return {
     id: row.id,
     ownerSub: row.owner_sub,
@@ -66,6 +68,8 @@ export function serializeDraftRow(row, { includeVoxels = true } = {}) {
     lng: row.lng ?? null,
     altitude: row.altitude ?? null,
     parcelId: row.parcel_id || '',
+    parcelName,
+    landDisplayName: row.parcel_id ? resolveLandDisplayName({ customName: parcelName }) : '',
     geohash: row.geohash || '',
     voxelCount: Number(row.voxel_count || 0),
     ...(includeVoxels ? { voxels: parseJsonSafe(row.voxels_json, []) || [] } : {}),
@@ -80,7 +84,12 @@ export function serializeDraftRow(row, { includeVoxels = true } = {}) {
 export async function listUserDrafts(db, { user }) {
   if (!user?.id) throw new DraftServiceError('Google sign-in required', 401);
   const rows = await db.all(
-    'SELECT * FROM sculpture_drafts WHERE owner_sub = ? ORDER BY updated_at DESC LIMIT ?',
+    `SELECT d.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM sculpture_drafts d
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = d.parcel_id
+     WHERE d.owner_sub = ?
+     ORDER BY d.updated_at DESC
+     LIMIT ?`,
     [user.id, MAX_DRAFTS_PER_USER]
   );
   return {
@@ -92,7 +101,13 @@ export async function getUserDraft(db, { draftId, user }) {
   if (!user?.id) throw new DraftServiceError('Google sign-in required', 401);
   const cleanId = String(draftId || '').trim();
   if (!cleanId) throw new DraftServiceError('Draft ID required', 400);
-  const row = await db.get('SELECT * FROM sculpture_drafts WHERE id = ?', [cleanId]);
+  const row = await db.get(
+    `SELECT d.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM sculpture_drafts d
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = d.parcel_id
+     WHERE d.id = ?`,
+    [cleanId]
+  );
   if (!row) throw new DraftServiceError('Draft not found', 404);
   if (row.owner_sub !== user.id) throw new DraftServiceError('Draft belongs to another account', 403);
   return { draft: serializeDraftRow(row, { includeVoxels: true }) };

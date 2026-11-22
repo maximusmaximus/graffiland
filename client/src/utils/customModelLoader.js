@@ -17,7 +17,50 @@ function getSharedDracoLoader() {
   return sharedDracoLoader;
 }
 
-function normalizeLoadedObject(root, customModel = {}) {
+const TEXTURE_SLOTS = [
+  'map',
+  'normalMap',
+  'roughnessMap',
+  'metalnessMap',
+  'emissiveMap',
+  'aoMap',
+  'bumpMap',
+  'specularMap',
+  'alphaMap'
+];
+
+/**
+ * Ensures every texture & geometry on a loaded 3D model uses smooth linear + anisotropic
+ * filtering and valid vertex normals so models never appear pixelated on maps, previews, or AR.
+ */
+export function enforceCrispTexturesAndShading(root, maxAnisotropy = 8) {
+  if (!root || typeof root.traverse !== 'function') return root;
+  const aniso = Math.max(1, Math.min(16, Number(maxAnisotropy) || 8));
+
+  root.traverse((obj) => {
+    if (!obj?.isMesh) return;
+    if (obj.geometry && !obj.geometry.attributes?.normal && typeof obj.geometry.computeVertexNormals === 'function') {
+      obj.geometry.computeVertexNormals();
+    }
+    const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+    for (const mat of mats) {
+      if (!mat) continue;
+      for (const slot of TEXTURE_SLOTS) {
+        const tex = mat[slot];
+        if (!tex) continue;
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter =
+          tex.generateMipmaps === false ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+        tex.anisotropy = Math.max(tex.anisotropy || 1, aniso);
+        tex.needsUpdate = true;
+      }
+      mat.needsUpdate = true;
+    }
+  });
+  return root;
+}
+
+function normalizeLoadedObject(root, customModel = {}, { maxAnisotropy = 8 } = {}) {
   const wrapper = new THREE.Group();
   wrapper.add(root);
 
@@ -54,11 +97,17 @@ function normalizeLoadedObject(root, customModel = {}) {
     }
   });
 
+  enforceCrispTexturesAndShading(wrapper, maxAnisotropy);
+
   const bounds = new THREE.Box3().setFromObject(wrapper);
   return { object3d: wrapper, bounds };
 }
 
-export async function loadCustomModelObject(sculpture, resolveUrlFn = (u) => u) {
+export async function loadCustomModelObject(
+  sculpture,
+  resolveUrlFn = (u) => u,
+  { maxAnisotropy = 8 } = {}
+) {
   const cm = sculpture?.customModel;
   if (!cm?.format) return null;
 
@@ -110,7 +159,7 @@ export async function loadCustomModelObject(sculpture, resolveUrlFn = (u) => u) 
     throw new Error(`Unsupported 3D model format: ${format}`);
   }
 
-  const normalized = normalizeLoadedObject(root, cm);
+  const normalized = normalizeLoadedObject(root, cm, { maxAnisotropy });
   normalized.object3d.traverse((obj) => {
     if (obj.isMesh) {
       obj.userData.sculpture = sculpture;
