@@ -384,6 +384,33 @@ export default function MobileStudio({
     }
   }, [setMapSelectedSculpture]);
 
+  // Refresh open plot showcase details when auth state changes (reveals owner/contributor permissions & hidden artworks)
+  const activeVisitParcelId = parcelVisit?.parcel?.parcelId || '';
+  useEffect(() => {
+    if (!activeVisitParcelId) return undefined;
+    let cancelled = false;
+    api
+      .getLandDetail(activeVisitParcelId)
+      .then((res) => {
+        if (cancelled || !res?.parcel) return;
+        setParcelVisit((prev) =>
+          prev?.parcel?.parcelId === activeVisitParcelId
+            ? {
+                ...prev,
+                loading: false,
+                parcel: res.parcel,
+                sculptures: res.sculptures || [],
+                error: ''
+              }
+            : prev
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeVisitParcelId, user?.id]);
+
   const chat = useChat({
     user,
     mode: brush.mode,
@@ -1205,6 +1232,9 @@ export default function MobileStudio({
         <MobileParcelVisitView
           parcel={parcelVisit.parcel}
           sculptures={parcelVisit.sculptures}
+          user={user}
+          ownedParcelIds={(lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean)}
+          config={config}
           userLocation={pol.location}
           loading={parcelVisit.loading}
           error={parcelVisit.error}
@@ -1244,6 +1274,28 @@ export default function MobileStudio({
             );
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
+          onOpenManageLand={(pid) => {
+            lands.setLandManageParcelId(pid || '');
+            lands.setLandManageOpen(true);
+          }}
+          onOpenProfile={(handle) => {
+            if (handle) setProfileHandle(handle);
+          }}
+          onModifyInCanvas={lands.startCanvasModification}
+          onRequestLogin={() => setLoginOpen(true)}
+          onPlotUpdated={({ parcel: nextParcel, sculptures: nextSculptures }) => {
+            setParcelVisit((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    parcel: nextParcel || prev.parcel,
+                    sculptures: Array.isArray(nextSculptures) ? nextSculptures : prev.sculptures
+                  }
+                : prev
+            );
+            ar.loadPublicMapData();
+            lands.refreshMyLands();
+          }}
           onClose={() => setParcelVisit(null)}
         />
       )}
@@ -1291,6 +1343,16 @@ export default function MobileStudio({
             ar.setMapSelectedSculpture(updated);
             ar.setMapSculptures((prev) =>
               prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+            );
+            setParcelVisit((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    sculptures: (prev.sculptures || []).map((item) =>
+                      item.id === updated.id ? { ...item, ...updated } : item
+                    )
+                  }
+                : prev
             );
             lands.refreshMyLands();
           }}
@@ -1361,6 +1423,7 @@ export default function MobileStudio({
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
           onOpenLand={(land) => {
             if (!land?.parcelId) return;
+            setProfileHandle('');
             setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
             api
               .getLandDetail(land.parcelId)

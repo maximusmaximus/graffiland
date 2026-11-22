@@ -1407,4 +1407,185 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(pubErrors, []);
     await pubCtx.close();
   });
+
+  test('Direct plot link auto-opens Isometric Showcase with floating land & side artwork labels and logged-in owner management on Desktop & Mobile', async () => {
+    // 1) Create an owner account, claim a named plot, and stage/publish an artwork on it
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: { email: 'iso-showcase-owner@graffiland.test', name: 'Iso Showcase Owner' }
+      })
+    }).then((r) => r.json());
+    assert.ok(ownerAuth.token);
+
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`
+      },
+      body: JSON.stringify({ username: 'iso_showcase_owner', bio: 'Isometric gallery curator' })
+    });
+
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`
+      },
+      body: JSON.stringify({
+        lat: 37.7772,
+        lng: -122.4165,
+        customName: 'Iso Showcase Plaza',
+        description: 'Open-air isometric sculpture showcase'
+      })
+    }).then((r) => r.json());
+    const parcelId = claimRes?.parcelId || claimRes?.parcel?.parcelId;
+    assert.ok(parcelId, `Expected parcelId from /api/lands/claim, got: ${JSON.stringify(claimRes)}`);
+
+    // Add a real 3D voxel artwork onto this plot via publish endpoint
+    const pubRes = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        title: 'Neon Obelisk',
+        description: 'Glowing cyan isometric pillar',
+        parcelId,
+        termsAccepted: true,
+        location: { lat: 37.7772, lng: -122.4165, altitude: 18, accuracy: 5 },
+        proofOfLocation: {
+          cameraFrames: 6,
+          gpsSamples: [
+            { lat: 37.7772, lng: -122.4165, t: Date.now() - 3000 },
+            { lat: 37.77721, lng: -122.41651, t: Date.now() - 500 }
+          ],
+          frameHashes: ['s1', 's2', 's3', 's4'],
+          gyroSamples: [
+            { alpha: 1, beta: 2, gamma: 3 },
+            { alpha: 11, beta: 5, gamma: 2 }
+          ],
+          flowCorrelation: 0.85,
+          skyPalette: ['#00f5d4'],
+          visualDHash: '1010101010101010',
+          frameCount: 6,
+          flowScore: 0.85
+        },
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 0, y: 0.05, z: 0, color: '#ffd166', material: 'matte' },
+          { x: 0, y: 0.1, z: 0, color: '#ff3e7f', material: 'neon' }
+        ]
+      })
+    }).then((r) => r.json());
+    assert.ok(pubRes?.sculpture?.id);
+
+    // 2) Logged-out Desktop visitor opens /?parcel=<parcelId> -> enters 3D isometric showcase automatically
+    const guestCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const guestPage = await guestCtx.newPage();
+    const guestErrors = [];
+    guestPage.on('pageerror', (err) => guestErrors.push(err.message));
+
+    await guestPage.goto(`${baseUrl}/?parcel=${encodeURIComponent(parcelId)}`, {
+      waitUntil: 'networkidle'
+    });
+    await guestPage.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    await guestPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-map-mode="3d"]', {
+      timeout: 10000
+    });
+    await guestPage.waitForSelector('[data-testid="plot-land-label"]', { timeout: 10000 });
+    await guestPage.waitForSelector('[data-testid="plot-artwork-label"]', { timeout: 10000 });
+    assert.ok(
+      (await guestPage.locator('[data-testid="plot-land-label"]').textContent()).includes(
+        'Iso Showcase Plaza'
+      )
+    );
+    assert.equal(await guestPage.locator('[data-testid="plot-land-management"]').count(), 0);
+
+    // Click side artwork label -> expands Neon Obelisk details cleanly below
+    await guestPage.locator('[data-testid="plot-artwork-label"]').first().click();
+    await guestPage.waitForSelector('[data-testid="plot-artwork-details"]');
+    assert.ok(
+      (await guestPage.locator('[data-testid="plot-artwork-details"]').textContent()).includes(
+        'Neon Obelisk'
+      )
+    );
+    assert.equal(await guestPage.locator('[data-testid="plot-artwork-management"]').count(), 0);
+
+    // Click floating Land Label -> switches cleanly back to Land details
+    await guestPage.locator('[data-testid="plot-land-label"]').click();
+    await guestPage.waitForSelector('[data-testid="plot-land-details"]');
+
+    // Collapse & re-expand details panel cleanly
+    await guestPage.locator('[data-testid="plot-details-toggle"]').click();
+    assert.equal(await guestPage.locator('[data-testid="plot-land-details"]').count(), 0);
+    await guestPage.locator('[data-testid="plot-details-toggle"]').click();
+    await guestPage.waitForSelector('[data-testid="plot-land-details"]');
+    assert.deepEqual(guestErrors, []);
+    await guestCtx.close();
+
+    // 3) Logged-in Desktop owner opens /?parcel=<parcelId> -> sees Land & Artwork Management controls
+    const ownerCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await ownerCtx.addInitScript((token) => {
+      globalThis.localStorage.setItem('graffiland_jwt', token);
+    }, ownerAuth.token);
+    const ownerPage = await ownerCtx.newPage();
+    const ownerErrors = [];
+    ownerPage.on('pageerror', (err) => ownerErrors.push(err.message));
+
+    await ownerPage.goto(`${baseUrl}/?parcel=${encodeURIComponent(parcelId)}`, {
+      waitUntil: 'networkidle'
+    });
+    await ownerPage.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    await ownerPage.waitForSelector('[data-testid="plot-owner-badge"]', { timeout: 10000 });
+    await ownerPage.waitForSelector('[data-testid="plot-land-management"]', { timeout: 10000 });
+
+    // Inline rename updates floating land label live
+    await ownerPage.locator('[data-testid="plot-land-edit-btn"]').click();
+    await ownerPage.getByLabel('Edit land name').fill('Aurora Isometric Plaza');
+    await ownerPage.locator('[data-testid="plot-land-save-btn"]').click();
+    await ownerPage.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="plot-land-label"]')
+          ?.textContent?.includes('Aurora Isometric Plaza'),
+      null,
+      { timeout: 10000 }
+    );
+
+    // Click side artwork label -> owner sees Artwork Management panel
+    await ownerPage.locator('[data-testid="plot-artwork-label"]').first().click();
+    await ownerPage.waitForSelector('[data-testid="plot-artwork-management"]', { timeout: 10000 });
+    assert.deepEqual(ownerErrors, []);
+    await ownerCtx.close();
+
+    // 4) Mobile visitor opens /?parcel=<parcelId> -> auto-opens in 3D isometric mode with clickable labels
+    const mobCtx = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile'
+    });
+    const mobPage = await mobCtx.newPage();
+    const mobErrors = [];
+    mobPage.on('pageerror', (err) => mobErrors.push(err.message));
+
+    await mobPage.goto(`${baseUrl}/?parcel=${encodeURIComponent(parcelId)}`, {
+      waitUntil: 'networkidle'
+    });
+    await mobPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]', { timeout: 10000 });
+    await mobPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-map-mode="3d"]', {
+      timeout: 10000
+    });
+    await mobPage.waitForSelector('[data-testid="plot-land-label"]', { timeout: 10000 });
+    await mobPage.waitForSelector('[data-testid="plot-artwork-label"]', { timeout: 10000 });
+    await mobPage.locator('[data-testid="plot-artwork-label"]').first().click();
+    await mobPage.waitForSelector('[data-testid="plot-artwork-details"]');
+    assert.deepEqual(mobErrors, []);
+    await mobCtx.close();
+  });
 });
