@@ -172,13 +172,15 @@ export default function ARLandInspectorPanel({
               👑 Your Land
             </span>
           )}
-          <span className={expBadgeClass} title={exp.detailText} data-testid="ar-land-expiry-badge">
-            <XeroIcon
-              emoji={exp.state === 'permanent' ? '♾️' : exp.state === 'expired' ? '⏱️' : '⏳'}
-              size={10}
-            />{' '}
-            {exp.badgeText}
-          </span>
+          {exp.state !== 'permanent' && (
+            <span className={expBadgeClass} title={exp.detailText} data-testid="ar-land-expiry-badge">
+              <XeroIcon
+                emoji={exp.state === 'expired' ? '⏱️' : '⏳'}
+                size={10}
+              />{' '}
+              {exp.badgeText}
+            </span>
+          )}
         </div>
 
         <div className="ar-land-top-right">

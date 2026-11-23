@@ -581,23 +581,19 @@ export default function MobileMapSheet({
                             {land.compactDimensionsLabel}
                           </span>
                         )}
-                        <span
-                          className={`mobile-land-compact-exp ${expBadgeClass}`}
-                          data-testid="land-expiration-badge"
-                          title={exp.detailText}
-                        >
-                          <XeroIcon
-                            emoji={
-                              exp.state === 'permanent'
-                                ? '♾️'
-                                : exp.state === 'expired'
-                                ? '⏱️'
-                                : '⏳'
-                            }
-                            size={10}
-                          />{' '}
-                          {exp.badgeText}
-                        </span>
+                        {exp.state !== 'permanent' && (
+                          <span
+                            className={`mobile-land-compact-exp ${expBadgeClass}`}
+                            data-testid="land-expiration-badge"
+                            title={exp.detailText}
+                          >
+                            <XeroIcon
+                              emoji={exp.state === 'expired' ? '⏱️' : '⏳'}
+                              size={10}
+                            />{' '}
+                            {exp.badgeText}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -649,7 +645,7 @@ export default function MobileMapSheet({
                       )}
 
                       <div className="mobile-land-meta-chips" data-testid="land-metadata">
-                        {land.dimensionsLabel && (
+                        {land.dimensionsLabel && !land.compactDimensionsLabel && (
                           <span className="mobile-meta-chip" title="3D land volume dimensions">
                             <XeroIcon emoji="📐" size={11} /> {land.dimensionsLabel}
                           </span>
