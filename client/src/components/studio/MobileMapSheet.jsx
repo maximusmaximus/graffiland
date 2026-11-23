@@ -240,7 +240,7 @@ export default function MobileMapSheet({
           <div style={{ minWidth: 0 }}>
             <div className="mobile-map-title">Nearest Lands</div>
             <div className="mobile-map-subtitle">
-              Closest parcels · Sculptures · Expiry · Google Maps
+              Closest parcels · Sculptures · Expiry · Navigate
             </div>
           </div>
         </div>
@@ -366,9 +366,9 @@ export default function MobileMapSheet({
                 href={focusedLand.googleMapsUrl}
                 target="_blank"
                 rel="noreferrer"
-                aria-label={`Open ${focusedLand.displayName} in Google Maps`}
+                aria-label={`Navigate to ${focusedLand.displayName}`}
               >
-                <XeroIcon emoji="🧭" size={12} /> Maps
+                <XeroIcon emoji="🧭" size={12} /> Navigate
               </a>
             )}
             <button
@@ -712,7 +712,7 @@ export default function MobileMapSheet({
                         )}
                       </div>
 
-                      {/* Land Action Row (Find in AR + Google Maps + 3D Map) */}
+                      {/* Land Action Row (Find in AR + Navigate + 3D Map) */}
                       <div className="mobile-land-actions">
                         {onFindLandInAR && location && (
                           <button
@@ -732,9 +732,9 @@ export default function MobileMapSheet({
                             target="_blank"
                             rel="noreferrer"
                             data-testid="land-google-maps-link"
-                            aria-label={`Open ${land.displayName} in Google Maps`}
+                            aria-label={`Navigate to ${land.displayName}`}
                           >
-                            <XeroIcon emoji="🧭" size={12} /> Google Maps
+                            <XeroIcon emoji="🧭" size={12} /> Navigate
                           </a>
                         )}
                         <button

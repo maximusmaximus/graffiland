@@ -1300,7 +1300,7 @@ export default function PlotVisitView({
                               rel="noreferrer"
                               className="btn btn-sm"
                             >
-                              <XeroIcon emoji="🧭" size={13} /> Google Maps
+                              <XeroIcon emoji="🧭" size={13} /> Navigate
                             </a>
                           )}
                           {distanceMeters !== null && (

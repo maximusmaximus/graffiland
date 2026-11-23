@@ -1314,9 +1314,11 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(cards[0].textContent.includes('2 open quests'));
     assert.ok(cards[1].textContent.includes('3 contributors'));
 
-    // Every expanded land card includes a Google Maps link pointing to its coordinates
+    // Every expanded land card includes a Navigate link pointing to its Google Maps directions URL
     const gmapsLinks = view.getAllByTestId('land-google-maps-link');
     assert.equal(gmapsLinks.length, 2);
+    assert.ok(gmapsLinks[0].textContent.includes('Navigate'));
+    assert.equal(gmapsLinks[0].textContent.includes('Google Maps'), false);
     assert.ok(gmapsLinks[0].getAttribute('href').startsWith('https://www.google.com/maps/dir/?api=1&destination=37.775500'));
     assert.ok(gmapsLinks[1].getAttribute('href').startsWith('https://www.google.com/maps/dir/?api=1&destination=37.795500'));
 
