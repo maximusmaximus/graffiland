@@ -4,6 +4,7 @@ export const LOCAL_DRAFT_KEY = 'graffiland_studio_draft_v1';
 export const TUTORIAL_SEEN_KEY = 'graffiland_studio_tutorial_v1';
 export const QUICK_SCULPT_KEY = 'graffiland_quick_sculpt_v1';
 export const WELCOME_OVERLAY_SEEN_KEY = 'graffiland_first_visit_welcome_seen_v1';
+export const DIRECT_LINK_INTRO_SEEN_KEY = 'graffiland_direct_link_intro_seen_v1';
 
 export function loadLocalDraft() {
   try {

@@ -3946,4 +3946,59 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('DirectLinkIntroOverlay shows ultra-clean <= 3-sentence intro and dismisses via close box, backdrop click, Escape, or Sign In', async () => {
+    const { default: DirectLinkIntroOverlay, DIRECT_LINK_INTRO_COPY } = await loadJsxModule(
+      'client/src/components/DirectLinkIntroOverlay.jsx'
+    );
+
+    // Copy must be strictly <= 3 sentences and cover seeing art, making art + minting land + forever, and signing in
+    const sentences = DIRECT_LINK_INTRO_COPY.trim()
+      .split(/(?<=[.!?])\s+/)
+      .filter(Boolean);
+    assert.ok(sentences.length >= 2 && sentences.length <= 3, `Expected <= 3 sentences, got ${sentences.length}`);
+    assert.match(DIRECT_LINK_INTRO_COPY, /see virtual art/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /make your own virtual art/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /minting land/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /preserve it forever/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /sign in/i);
+
+    let closeCount = 0;
+    let signInCount = 0;
+    const view = RTL.render(
+      React.createElement(DirectLinkIntroOverlay, {
+        onClose: () => {
+          closeCount += 1;
+        },
+        onSignIn: () => {
+          signInCount += 1;
+        }
+      })
+    );
+
+    assert.equal(view.getByTestId('direct-link-intro-text').textContent.trim(), DIRECT_LINK_INTRO_COPY);
+
+    // Clicking inside the card must NOT dismiss
+    RTL.fireEvent.click(view.getByTestId('direct-link-intro-card'));
+    assert.equal(closeCount, 0);
+
+    // Top-right close box closes cleanly
+    RTL.fireEvent.click(view.getByTestId('direct-link-intro-close-btn'));
+    assert.equal(closeCount, 1);
+
+    // Clicking off on the backdrop closes cleanly
+    const backdrop = view.getByTestId('direct-link-intro-backdrop');
+    RTL.fireEvent.pointerDown(backdrop, { target: backdrop });
+    RTL.fireEvent.click(backdrop, { target: backdrop });
+    assert.equal(closeCount, 2);
+
+    // Pressing Escape closes cleanly
+    RTL.fireEvent.keyDown(globalThis.window, { key: 'Escape' });
+    assert.equal(closeCount, 3);
+
+    // Sign In button fires onSignIn
+    RTL.fireEvent.click(view.getByTestId('direct-link-intro-signin-btn'));
+    assert.equal(signInCount, 1);
+    cleanup();
+  });
 });

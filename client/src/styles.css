@@ -2195,6 +2195,110 @@ select {
   }
 }
 
+/* First-Visit Direct-Link Simple Intro Overlay */
+.direct-link-intro-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(5, 8, 15, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.direct-link-intro-card {
+  width: min(100%, 400px);
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  background: linear-gradient(160deg, rgba(16, 22, 38, 0.98), rgba(10, 14, 24, 0.98));
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.62);
+  color: var(--text);
+}
+
+.direct-link-intro-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.direct-link-intro-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.direct-link-intro-close-box {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.direct-link-intro-close-box:hover,
+.direct-link-intro-close-box:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.direct-link-intro-copy {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(243, 246, 255, 0.92);
+}
+
+.direct-link-intro-actions {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+}
+
+.direct-link-intro-signin-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.direct-link-login-backdrop {
+  z-index: 3150;
+}
+
+@media (max-width: 720px) {
+  .direct-link-intro-card {
+    padding: 18px;
+  }
+
+  .direct-link-intro-title {
+    font-size: 17px;
+  }
+
+  .direct-link-intro-copy {
+    font-size: 14.5px;
+  }
+}
+
 /* 3D MapLibre Isometric Explorer & Land Builder */
 .map3d-stage {
   display: flex;

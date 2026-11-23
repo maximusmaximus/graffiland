@@ -453,11 +453,14 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Terms & Virtual Land/i }).click();
     await page.waitForSelector('text=Prohibited Content, Takedown & Virtual Land Dispute Process');
 
-    // Navigate via deep link ?sculpture=<id>
+    // Navigate via deep link ?sculpture=<id> (logged-out first visit shows clean direct-link intro)
     assert.ok(seededSculptureId);
     await page.goto(`${baseUrl}/?sculpture=${encodeURIComponent(seededSculptureId)}`, {
       waitUntil: 'networkidle'
     });
+    await page.waitForSelector('[data-testid="direct-link-intro-card"]');
+    await page.locator('[data-testid="direct-link-intro-close-btn"]').click();
+    await page.waitForSelector('[data-testid="direct-link-intro-card"]', { state: 'detached' });
     await page.waitForSelector('text=Copy Link');
     const modalText = await page.textContent('.modal-card');
     assert.ok(modalText.includes('E2E Lighthouse Cube'));
@@ -983,6 +986,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     });
     const farPage = await farCtx.newPage();
     await farPage.goto(`${baseUrl}/?parcel=GLAND-9Q8YYK8Y`, { waitUntil: 'networkidle' });
+    await farPage.waitForSelector('[data-testid="direct-link-intro-card"]');
+    await farPage.locator('[data-testid="direct-link-intro-close-btn"]').click();
     await farPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]');
     await farPage.waitForSelector('[data-testid="parcel-proximity-far"]');
     await farPage.getByRole('link', { name: /Navigate/i }).waitFor();
@@ -1006,6 +1011,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     });
     const nearPage = await nearCtx.newPage();
     await nearPage.goto(`${baseUrl}/?parcel=GLAND-9Q8YYK8Y`, { waitUntil: 'networkidle' });
+    await nearPage.waitForSelector('[data-testid="direct-link-intro-card"]');
+    await nearPage.locator('[data-testid="direct-link-intro-close-btn"]').click();
     await nearPage.waitForSelector('[data-testid="parcel-proximity-near"]');
     await nearPage.getByRole('button', { name: /View in AR/i }).waitFor();
     await nearPage.getByRole('button', { name: /Make Art on This Property/i }).waitFor();
@@ -1486,6 +1493,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const mayaPubCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const mayaPubPage = await mayaPubCtx.newPage();
     await mayaPubPage.goto(`${baseUrl}/?u=maya_cyber`, { waitUntil: 'networkidle' });
+    await mayaPubPage.waitForSelector('[data-testid="direct-link-intro-card"]');
+    await mayaPubPage.locator('[data-testid="direct-link-intro-close-btn"]').click();
     await mayaPubPage.waitForSelector('[data-testid="public-profile-banner"]', { timeout: 10000 });
     assert.ok(
       (await mayaPubPage.locator('[data-testid="profile-user-number"]').textContent()).includes(
@@ -1510,6 +1519,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     pubPage.on('pageerror', (err) => pubErrors.push(err.message));
 
     await pubPage.goto(`${baseUrl}/?u=mobile_owner`, { waitUntil: 'networkidle' });
+    await pubPage.waitForSelector('[data-testid="direct-link-intro-card"]');
+    await pubPage.locator('[data-testid="direct-link-intro-close-btn"]').click();
     await pubPage.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
     assert.equal(await pubPage.locator('[data-testid="profile-handle"]').textContent(), '@mobile_owner');
     assert.ok((await pubPage.locator('[data-testid="profile-bio"]').textContent()).includes('Mobile AR creator'));
@@ -1605,7 +1616,25 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await guestPage.goto(`${baseUrl}/?parcel=${encodeURIComponent(parcelId)}`, {
       waitUntil: 'networkidle'
     });
+    // First visit to direct link while not signed in shows ultra-clean <=3-sentence intro
+    await guestPage.waitForSelector('[data-testid="direct-link-intro-card"]', { timeout: 10000 });
+    const introCopy = (
+      await guestPage.locator('[data-testid="direct-link-intro-text"]').textContent()
+    ).trim();
+    const introSentences = introCopy.split(/(?<=[.!?])\s+/).filter(Boolean);
+    assert.ok(
+      introSentences.length >= 2 && introSentences.length <= 3,
+      `Expected <= 3 sentences in direct-link intro, got ${introSentences.length}: ${introCopy}`
+    );
+    await guestPage.locator('[data-testid="direct-link-intro-close-btn"]').click();
+    await guestPage.waitForSelector('[data-testid="direct-link-intro-card"]', {
+      state: 'detached',
+      timeout: 5000
+    });
+    // Reloading direct link must NOT re-show intro (first visit only)
+    await guestPage.reload({ waitUntil: 'networkidle' });
     await guestPage.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    assert.equal(await guestPage.locator('[data-testid="direct-link-intro-card"]').count(), 0);
     await guestPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-map-mode="3d"]', {
       timeout: 10000
     });
@@ -1653,6 +1682,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       waitUntil: 'networkidle'
     });
     await ownerPage.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    assert.equal(await ownerPage.locator('[data-testid="direct-link-intro-card"]').count(), 0);
     await ownerPage.waitForSelector('[data-testid="plot-owner-badge"]', { timeout: 10000 });
     await ownerPage.waitForSelector('[data-testid="plot-land-management"]', { timeout: 10000 });
 
@@ -1688,6 +1718,15 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     await mobPage.goto(`${baseUrl}/?parcel=${encodeURIComponent(parcelId)}`, {
       waitUntil: 'networkidle'
+    });
+    // First-time logged-out mobile visitor on direct link sees intro & can dismiss by clicking off
+    await mobPage.waitForSelector('[data-testid="direct-link-intro-card"]', { timeout: 10000 });
+    await mobPage.locator('[data-testid="direct-link-intro-backdrop"]').click({
+      position: { x: 10, y: 10 }
+    });
+    await mobPage.waitForSelector('[data-testid="direct-link-intro-card"]', {
+      state: 'detached',
+      timeout: 5000
     });
     await mobPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]', { timeout: 10000 });
     await mobPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-map-mode="3d"]', {
@@ -1770,6 +1809,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       waitUntil: 'networkidle'
     });
     await page.waitForSelector('[data-testid="sculpture-transform-studio"]', { timeout: 10000 });
+    assert.equal(await page.locator('[data-testid="direct-link-intro-card"]').count(), 0);
     await page.waitForSelector('[data-testid="sculpture-sticky-stage"]', { timeout: 10000 });
     await page.waitForSelector('[data-testid="sculpture-gizmo-hud"]', { timeout: 10000 });
 
