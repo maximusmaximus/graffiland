@@ -2,7 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, setStoredToken } from '../utils/api.js';
 import XeroIcon from './XeroIcon.jsx';
 
-export default function GoogleLoginGate({ config, onSuccess, onClose, inline = false }) {
+export default function GoogleLoginGate({
+  config,
+  onSuccess,
+  onClose,
+  inline = false,
+  backdropClassName = ''
+}) {
   const gsiRef = useRef(null);
   const [devEmail, setDevEmail] = useState('artist@graffiland.local');
   const [devName, setDevName] = useState('Street Voxel Artist');
@@ -170,5 +176,9 @@ export default function GoogleLoginGate({ config, onSuccess, onClose, inline = f
 
   if (inline) return card;
 
-  return <div className="modal-backdrop">{card}</div>;
+  return (
+    <div className={`modal-backdrop${backdropClassName ? ` ${backdropClassName}` : ''}`}>
+      {card}
+    </div>
+  );
 }
