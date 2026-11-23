@@ -3534,4 +3534,120 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Clickable artwork labels in PlotVisitView, LandIsometricPreview, and ARLandInspectorPanel navigate directly to the 3D art view', async () => {
+    const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
+    const { default: LandIsometricPreview } = await loadJsxModule(
+      'client/src/components/LandIsometricPreview.jsx'
+    );
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+
+    const boomBox = {
+      id: '3c7b2205-c842-4e15-8216-7017e554766d',
+      title: 'Boom Box',
+      description: '80s stereo boombox',
+      modelType: 'custom-3d',
+      customModel: { format: 'glb', ipfsCid: 'Qmf4oL8L9ZGbqDwgoY2fDgwzQ8JK1me55L2iy6kGxMiFfP' },
+      parcelId: 'GLAND-9R1652WM',
+      lat: 39.7302,
+      lng: -121.84067
+    };
+    const parcel = {
+      parcelId: 'GLAND-9R1652WM',
+      customName: 'Squiggle Bro Land',
+      geohash: '9r1652wm',
+      centerLat: 39.7302,
+      centerLng: -121.84067,
+      volume: {
+        parcelId: 'GLAND-9R1652WM',
+        centerLat: 39.7302,
+        centerLng: -121.84067,
+        widthMeters: 5,
+        depthMeters: 2.3,
+        heightMeters: 2,
+        rotationDeg: 0
+      },
+      sculptures: [boomBox]
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ parcels: [parcel], shortLabel: '112 W 2nd St, Chico, CA' })
+    });
+
+    try {
+      // 1) PlotVisitView: clicking the view button on the side artwork label (OR clicking label twice OR title) opens art view
+      const openedFromPlot = [];
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures: [boomBox],
+          allParcels: [parcel],
+          onSelectSculpture: (sc) => openedFromPlot.push(sc.id),
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(plotView.getByTestId('plot-artwork-view-btn'));
+      });
+      // Direct 1-click jump via view badge on the artwork label
+      RTL.fireEvent.click(plotView.getByTestId('plot-artwork-view-btn'));
+      assert.deepEqual(openedFromPlot, [boomBox.id]);
+
+      // First click on label expands details; clicking artwork title button opens art view
+      RTL.fireEvent.click(plotView.getByTestId('plot-artwork-label'));
+      await RTL.waitFor(() => {
+        assert.ok(plotView.getByTestId('plot-artwork-title-btn'));
+      });
+      RTL.fireEvent.click(plotView.getByTestId('plot-artwork-title-btn'));
+      assert.deepEqual(openedFromPlot, [boomBox.id, boomBox.id]);
+
+      // Second click on already-selected artwork label also opens art view
+      RTL.fireEvent.click(plotView.getByTestId('plot-artwork-label'));
+      assert.deepEqual(openedFromPlot, [boomBox.id, boomBox.id, boomBox.id]);
+      cleanup();
+
+      // 2) LandIsometricPreview: clickable artwork label pill opens art view directly
+      let openedFromPreview = '';
+      const preview = RTL.render(
+        React.createElement(LandIsometricPreview, {
+          parcel,
+          allParcels: [parcel],
+          onSelectSculpture: (sc) => {
+            openedFromPreview = sc.id;
+          }
+        })
+      );
+      const previewArtBtn = preview.getByTestId('preview-artwork-label');
+      assert.ok(previewArtBtn.textContent.includes('Boom Box'));
+      RTL.fireEvent.click(previewArtBtn);
+      assert.equal(openedFromPreview, boomBox.id);
+      cleanup();
+
+      // 3) ARLandInspectorPanel: clicking artwork title label opens art view directly
+      let openedFromAr = '';
+      const arInspector = RTL.render(
+        React.createElement(ARLandInspectorPanel, {
+          land: { ...parcel, isInside: true, isOwned: true },
+          onInspectSculpture: (sc) => {
+            openedFromAr = sc.id;
+          },
+          onClose: () => {}
+        })
+      );
+      const arArtBtn = arInspector.getByTestId('ar-land-artwork-label');
+      assert.ok(arArtBtn.textContent.includes('Boom Box'));
+      RTL.fireEvent.click(arArtBtn);
+      assert.equal(openedFromAr, boomBox.id);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

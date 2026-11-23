@@ -1232,7 +1232,31 @@ export default function ProfileModal({
                       <div key={sc.id} className="profile-item-card" data-testid="profile-sculpture-item">
                         <div className="profile-item-head">
                           <div style={{ minWidth: 0 }}>
-                            <div className="profile-item-title">{sc.title}</div>
+                            {onSelectSculpture ? (
+                              <button
+                                type="button"
+                                className="profile-item-title artwork-title-link-btn"
+                                data-testid="profile-artwork-label"
+                                title={`View "${sc.title || 'Artwork'}" in 3D`}
+                                onClick={() => {
+                                  onClose?.();
+                                  onSelectSculpture(sc);
+                                }}
+                              >
+                                <span>{sc.title}</span>
+                                <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
+                              </button>
+                            ) : (
+                              <a
+                                className="profile-item-title artwork-title-link-btn"
+                                data-testid="profile-artwork-label"
+                                href={scUrl}
+                                title={`View "${sc.title || 'Artwork'}" in 3D`}
+                              >
+                                <span>{sc.title}</span>
+                                <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
+                              </a>
+                            )}
                             <div className="profile-item-sub mono">
                               {resolveLandDisplayName(
                                 {

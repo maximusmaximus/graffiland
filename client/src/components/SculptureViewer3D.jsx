@@ -12,6 +12,10 @@ import {
   loadCustomModelObject
 } from '../utils/customModelLoader.js';
 import {
+  createDepthFadedThreeBoxWireframe,
+  updateThreeWireframeDepthFade
+} from '../utils/prismDepthFade.js';
+import {
   buildVoxelGroup,
   computeCenteredBounds,
   disposeObject3D,
@@ -401,6 +405,8 @@ export default function SculptureViewer3D({
     const loop = () => {
       rafId = requestAnimationFrame(loop);
       controls.update();
+      updateThreeWireframeDepthFade(landOverlay, camera.position);
+      updateThreeWireframeDepthFade(gizmoOverlay, camera.position);
       renderer.render(scene, camera);
     };
     loop();
@@ -621,12 +627,10 @@ export default function SculptureViewer3D({
       const hitPad = Math.max(0.12, knobR * 2.1);
 
       const frameColor = placementBlocked ? 0xff4d6d : 0x00f5d4;
-      const frameGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(footW, footH, footD));
-      const frameLine = new THREE.LineSegments(
-        frameGeo,
-        new THREE.LineBasicMaterial({ color: frameColor, transparent: true, opacity: 0.92 })
-      );
-      frameLine.position.set(0, footH / 2, 0);
+      const frameLine = createDepthFadedThreeBoxWireframe(footW, footH, footD, frameColor, {
+        nearOpacity: 0.96,
+        farOpacity: 0.42
+      });
       gizmoRoot.add(frameLine);
 
       const hitList = [];
@@ -765,15 +769,15 @@ export default function SculptureViewer3D({
       ? 0xffd166
       : 0x00f5d4;
 
-    const boxGeo = new THREE.BoxGeometry(volW, volH, volD);
-    const edges = new THREE.EdgesGeometry(boxGeo);
-    const wireLine = new THREE.LineSegments(
-      edges,
-      new THREE.LineBasicMaterial({ color: wireColor, transparent: true, opacity: 0.9 })
-    );
-    wireLine.position.set(0, volH / 2, 0);
+    const wireLine = createDepthFadedThreeBoxWireframe(volW, volH, volD, wireColor, {
+      nearOpacity: 0.96,
+      farOpacity: 0.4
+    });
     landOverlay.add(wireLine);
-    boxGeo.dispose();
+    if (cameraRef.current) {
+      updateThreeWireframeDepthFade(landOverlay, cameraRef.current.position);
+      updateThreeWireframeDepthFade(gizmoOverlay, cameraRef.current.position);
+    }
 
     const floorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(volW, volD),

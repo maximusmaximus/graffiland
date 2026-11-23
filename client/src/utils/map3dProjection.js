@@ -29,6 +29,7 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
         return {
           x: (ndcX + 1) * 0.5 * width,
           y: (1 - ndcY) * 0.5 * height,
+          depth: cw,
           visible: true
         };
       }
@@ -39,17 +40,19 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
 
   try {
     const pt = map.project([Number(lng), Number(lat)]);
+    const pitchDeg = Number(map.getPitch?.() || 0);
+    const fallbackDepth = pitchDeg > 1 ? -pt.y : 0;
     if (alt === 0) {
-      return { x: pt.x, y: pt.y, visible: true };
+      return { x: pt.x, y: pt.y, depth: fallbackDepth, visible: true };
     }
-    const pitchRad = ((map.getPitch?.() || 0) * Math.PI) / 180;
+    const pitchRad = (pitchDeg * Math.PI) / 180;
     const zoom = map.getZoom?.() || 14;
     const cosLat = Math.max(0.1, Math.cos((Number(lat) * Math.PI) / 180));
     const metersPerPixel = (40075016.686 * cosLat) / (512 * Math.pow(2, zoom));
     const pxLift = (alt / Math.max(0.01, metersPerPixel)) * Math.sin(pitchRad);
-    return { x: pt.x, y: pt.y - pxLift, visible: true };
+    return { x: pt.x, y: pt.y - pxLift, depth: fallbackDepth, visible: true };
   } catch {
-    return { x: 0, y: 0, visible: false };
+    return { x: 0, y: 0, depth: 0, visible: false };
   }
 }
 

@@ -29,6 +29,7 @@ import {
   buildNeighborArrowsSignature,
   computeNeighborEdgeArrows
 } from '../../utils/neighborEdgeArrows.js';
+import { drawDepthFadedPrismEdges } from '../../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
 import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -113,7 +114,7 @@ function drawMobilePrismWireframe(
   { outerColor, innerColor, lineWidth = 2, glowBlur = 10, dashed = false, showGroundHalo = false }
 ) {
   if (!geom) return;
-  const { bottom, top } = geom;
+  const { bottom } = geom;
 
   if (showGroundHalo) {
     ctx.save();
@@ -126,41 +127,17 @@ function drawMobilePrismWireframe(
     ctx.restore();
   }
 
-  const strokeEdges = (stroke, width, blur) => {
-    ctx.save();
-    if (dashed) ctx.setLineDash([5, 4]);
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = outerColor;
-    ctx.shadowBlur = blur;
-    ctx.beginPath();
-    for (let i = 0; i < 4; i++) {
-      const a = bottom[i];
-      const b = bottom[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      const a = top[i];
-      const b = top[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      ctx.moveTo(bottom[i].x, bottom[i].y);
-      ctx.lineTo(top[i].x, top[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  if (!dashed) {
-    strokeEdges('rgba(4, 10, 20, 0.72)', lineWidth + 2.6, 2);
-  }
-  strokeEdges(outerColor, lineWidth + 1.0, glowBlur);
-  strokeEdges(innerColor, Math.max(1, lineWidth - 0.5), 0);
+  // Depth-faded 3D boundary wireframe: lines closest to user stay crisp, far-side lines fade >=25%
+  drawDepthFadedPrismEdges(ctx, geom, {
+    outerColor,
+    innerColor,
+    lineWidth,
+    glowBlur,
+    dashed,
+    darkHalo: !dashed,
+    nearAlpha: 1.0,
+    farAlpha: 0.32
+  });
 }
 
 /**
@@ -175,7 +152,8 @@ function MobileIsoSvgFallback({
   selectedSculptureId = '',
   landSelected = false,
   onSelectLand = null,
-  onSelectSculpture = null
+  onSelectSculpture = null,
+  onOpenSculptureView = null
 }) {
   const vol = primaryEntry?.volume;
   const maxDim = vol
@@ -272,7 +250,13 @@ function MobileIsoSvgFallback({
           </pattern>
         </defs>
         <rect width="360" height="220" fill="url(#mobileIsoGrid)" />
-        <polygon points={pts(b)} fill={fill} stroke={stroke} strokeWidth="1.8" />
+        {/* Base polygon fill + far-side back edges faded >= 25% */}
+        <polygon points={pts(b)} fill={fill} stroke="none" />
+        <line x1={b[0][0]} y1={b[0][1]} x2={b[1][0]} y2={b[1][1]} stroke={stroke} strokeWidth="1.2" opacity="0.42" />
+        <line x1={b[0][0]} y1={b[0][1]} x2={b[3][0]} y2={b[3][1]} stroke={stroke} strokeWidth="1.2" opacity="0.42" />
+        <line x1={b[0][0]} y1={b[0][1]} x2={t[0][0]} y2={t[0][1]} stroke={stroke} strokeWidth="1.1" opacity="0.4" />
+        <line x1={t[0][0]} y1={t[0][1]} x2={t[1][0]} y2={t[1][1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
+        <line x1={t[0][0]} y1={t[0][1]} x2={t[3][0]} y2={t[3][1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
         {sculptureCount > 0 && (
           <>
             <polygon
@@ -301,31 +285,17 @@ function MobileIsoSvgFallback({
             />
           </>
         )}
-        <polygon
-          points={pts([b[1], b[2], t[2], t[1]])}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth="1.3"
-          opacity="0.82"
-        />
-        <polygon
-          points={pts([b[2], b[3], t[3], t[2]])}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth="1.3"
-          opacity="0.62"
-        />
-        <polygon points={pts(t)} fill={fill} stroke="#eafffc" strokeWidth="1.8" />
-        <line
-          x1={b[0][0]}
-          y1={b[0][1]}
-          x2={t[0][0]}
-          y2={t[0][1]}
-          stroke={stroke}
-          strokeWidth="1.1"
-          strokeDasharray="3 3"
-          opacity="0.7"
-        />
+        <polygon points={pts([b[1], b[2], t[2], t[1]])} fill={fill} stroke="none" opacity="0.68" />
+        <polygon points={pts([b[2], b[3], t[3], t[2]])} fill={fill} stroke="none" opacity="0.54" />
+        <polygon points={pts(t)} fill={fill} stroke="none" opacity="0.42" />
+        {/* Front-side boundary edges closest to viewer (crisp 100%) */}
+        <line x1={b[1][0]} y1={b[1][1]} x2={b[2][0]} y2={b[2][1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
+        <line x1={b[2][0]} y1={b[2][1]} x2={b[3][0]} y2={b[3][1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
+        <line x1={b[1][0]} y1={b[1][1]} x2={t[1][0]} y2={t[1][1]} stroke={stroke} strokeWidth="1.6" opacity="0.84" />
+        <line x1={b[3][0]} y1={b[3][1]} x2={t[3][0]} y2={t[3][1]} stroke={stroke} strokeWidth="1.6" opacity="0.84" />
+        <line x1={b[2][0]} y1={b[2][1]} x2={t[2][0]} y2={t[2][1]} stroke="#eafffc" strokeWidth="2.0" opacity="1" />
+        <line x1={t[1][0]} y1={t[1][1]} x2={t[2][0]} y2={t[2][1]} stroke="#eafffc" strokeWidth="1.9" opacity="1" />
+        <line x1={t[2][0]} y1={t[2][1]} x2={t[3][0]} y2={t[3][1]} stroke="#eafffc" strokeWidth="1.9" opacity="1" />
         {showcaseMode ? (
           <>
             <line
@@ -384,23 +354,49 @@ function MobileIsoSvgFallback({
             </button>
           )}
           {fallbackCallouts.map((c) => (
-            <button
+            <div
               key={c.sculptureId}
-              type="button"
               className={`plot-iso-artwork-callout is-${c.side} ${c.isSelected ? 'is-selected' : ''}`}
-              data-testid="plot-artwork-label"
-              data-sculpture-id={c.sculptureId}
               data-callout-side={c.side}
               style={{
                 left: c.side === 'left' ? 8 : undefined,
                 right: c.side === 'right' ? 8 : undefined,
                 top: `${Math.round((c.y / 220) * 100)}%`
               }}
-              onClick={() => onSelectSculpture?.(c.sculpture)}
             >
-              <span className="plot-iso-callout-title">{c.title}</span>
-              <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
-            </button>
+              <button
+                type="button"
+                className="plot-iso-callout-main"
+                data-testid="plot-artwork-label"
+                data-sculpture-id={c.sculptureId}
+                data-callout-side={c.side}
+                onClick={() => onSelectSculpture?.(c.sculpture)}
+                title={
+                  c.isSelected && onOpenSculptureView
+                    ? `Open 3D view of "${c.title}"`
+                    : `Inspect "${c.title}"`
+                }
+              >
+                <span className="plot-iso-callout-title">{c.title}</span>
+                <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
+              </button>
+              {onOpenSculptureView && (
+                <button
+                  type="button"
+                  className="plot-iso-callout-open-btn"
+                  data-testid="plot-artwork-view-btn"
+                  data-sculpture-id={c.sculptureId}
+                  aria-label={`Open 3D art view for ${c.title}`}
+                  title={`Go to 3D view of "${c.title}"`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenSculptureView(c.sculpture);
+                  }}
+                >
+                  ↗
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -422,7 +418,8 @@ export default function MobileIsometricMap({
   onToggleFullMap = null,
   onSelectParcel = null,
   onSelectLand = null,
-  onSelectSculpture = null
+  onSelectSculpture = null,
+  onOpenSculptureView = null
 }) {
   const rootRef = useRef(null);
   const mapHostRef = useRef(null);
@@ -681,7 +678,7 @@ export default function MobileIsometricMap({
       const stageRect = stageEl.getBoundingClientRect();
       stageEl
         .querySelectorAll(
-          '.mobile-iso-fab-row, .mobile-iso-hud-left, .mobile-iso-hud-right, .mobile-iso-hud-bottom, .mobile-map-top-controls'
+          '.mobile-iso-fab-row, .mobile-iso-hud-left, .mobile-iso-hud-right, .mobile-iso-hud-bottom, .mobile-map-top-controls, .mobile-iso-artwork-dock'
         )
         .forEach((node) => {
           const r = node.getBoundingClientRect();
@@ -1445,23 +1442,47 @@ export default function MobileIsometricMap({
                     ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
                     : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
                 return (
-                  <button
+                  <div
                     key={sc.id}
                     ref={(el) => {
                       if (el) calloutBtnMapRef.current.set(sc.id, el);
                       else calloutBtnMapRef.current.delete(sc.id);
                     }}
-                    type="button"
                     className={`plot-iso-artwork-callout ${isSel ? 'is-selected' : ''}`}
-                    data-testid="plot-artwork-label"
-                    data-sculpture-id={sc.id}
                     style={{ display: 'none' }}
-                    onClick={() => onSelectSculpture?.(sc)}
-                    title={`Inspect "${sc.title || '3D Artwork'}"`}
                   >
-                    <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
-                    <span className="plot-iso-callout-meta mono">{sub}</span>
-                  </button>
+                    <button
+                      type="button"
+                      className="plot-iso-callout-main"
+                      data-testid="plot-artwork-label"
+                      data-sculpture-id={sc.id}
+                      onClick={() => onSelectSculpture?.(sc)}
+                      title={
+                        isSel && onOpenSculptureView
+                          ? `Open 3D view of "${sc.title || '3D Artwork'}"`
+                          : `Inspect "${sc.title || '3D Artwork'}"`
+                      }
+                    >
+                      <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
+                      <span className="plot-iso-callout-meta mono">{sub}</span>
+                    </button>
+                    {onOpenSculptureView && (
+                      <button
+                        type="button"
+                        className="plot-iso-callout-open-btn"
+                        data-testid="plot-artwork-view-btn"
+                        data-sculpture-id={sc.id}
+                        aria-label={`Open 3D art view for ${sc.title || '3D Artwork'}`}
+                        title={`Go to 3D view of "${sc.title || '3D Artwork'}"`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenSculptureView(sc);
+                        }}
+                      >
+                        ↗
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1481,6 +1502,7 @@ export default function MobileIsometricMap({
           landSelected={landSelected}
           onSelectLand={onSelectLand}
           onSelectSculpture={onSelectSculpture}
+          onOpenSculptureView={onOpenSculptureView}
         />
       )}
 
@@ -1565,6 +1587,40 @@ export default function MobileIsometricMap({
           <span>{scaleBar.label}</span>
         </span>
       </div>
+
+      {/* Clickable Artwork Labels in Non-Showcase 3D Map Mode -> Jump Straight to Art View */}
+      {!showcaseMode && onSelectSculpture && (() => {
+        const focusedPid = primaryEntry?.parcel?.parcelId || '';
+        const focusedArts = visibleShowcaseSculptures
+          .filter((sc) => !focusedPid || !sc.parcelId || sc.parcelId === focusedPid)
+          .slice(0, 3);
+        if (focusedArts.length === 0) return null;
+        return (
+          <div
+            className="mobile-iso-artwork-dock"
+            data-testid="mobile-iso-artwork-dock"
+            onPointerDown={stopMapGestureLeak}
+            onTouchStart={stopMapGestureLeak}
+            onMouseDown={stopMapGestureLeak}
+          >
+            {focusedArts.map((sc) => (
+              <button
+                key={sc.id}
+                type="button"
+                className="land-preview-artwork-pill"
+                data-testid="map-artwork-label"
+                data-sculpture-id={sc.id}
+                title={`View "${sc.title || 'Artwork'}" in 3D`}
+                onClick={() => onSelectSculpture(sc)}
+              >
+                <span aria-hidden="true">{sc.modelType === 'custom-3d' ? '🧊' : '🎨'}</span>
+                <span className="land-preview-artwork-pill-name">{sc.title || '3D Artwork'}</span>
+                <span className="land-preview-artwork-pill-arrow" aria-hidden="true">↗</span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
       <NeighborEdgeArrowsOverlay

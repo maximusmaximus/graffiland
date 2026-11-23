@@ -33,6 +33,7 @@ import {
 } from '../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
+import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -169,38 +170,16 @@ function drawGlowingPrism(
   if (!geom) return;
   const { bottom, top, topCenter } = geom;
 
-  const drawEdgeList = (stroke, width, blur) => {
-    ctx.save();
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = outerColor;
-    ctx.shadowBlur = blur;
-    ctx.beginPath();
-    for (let i = 0; i < 4; i++) {
-      const a = bottom[i];
-      const b = bottom[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      const a = top[i];
-      const b = top[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      ctx.moveTo(bottom[i].x, bottom[i].y);
-      ctx.lineTo(top[i].x, top[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  drawEdgeList('rgba(4, 10, 20, 0.72)', lineWidth + 3.4, 2);
-  drawEdgeList(outerColor, lineWidth + 1.8, glowBlur);
-  drawEdgeList(innerColor, Math.max(1, lineWidth - 0.3), 0);
+  // Depth-faded 3D boundary wireframe: lines closest to user stay crisp, far-side lines fade >=25%
+  drawDepthFadedPrismEdges(ctx, geom, {
+    outerColor,
+    innerColor,
+    lineWidth,
+    glowBlur,
+    darkHalo: true,
+    nearAlpha: 1.0,
+    farAlpha: 0.32
+  });
 
   if (showGizmo) {
     // 1) Side Segment Move/Scale Bars along the middle of all 4 bottom & top edges
@@ -1294,21 +1273,32 @@ export default function MapView3D({
       el.type = 'button';
       el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''}`;
       el.dataset.sculptureId = sc.id;
-      el.setAttribute('aria-label', `Inspect 3D artwork: ${sc.title || sc.id}`);
-      el.title = `${sc.title} · Click for 3D & full metadata`;
+      el.dataset.testid = 'map3d-artwork-label';
+      el.setAttribute('aria-label', `View 3D artwork: ${sc.title || sc.id}`);
+      el.title = `View "${sc.title || '3D Artwork'}" in 3D`;
+      const iconWrap = document.createElement('span');
+      iconWrap.className = 'map3d-sculpture-icon';
       if (emojiEntry?.svgUrl) {
         const img = document.createElement('img');
         img.src = emojiEntry.svgUrl;
-        img.alt = sc.title || '';
+        img.alt = '';
         img.width = iconSize;
         img.height = iconSize;
         img.style.display = 'block';
         img.onerror = () => {
-          el.textContent = iconEmoji;
+          iconWrap.textContent = iconEmoji;
         };
-        el.appendChild(img);
+        iconWrap.appendChild(img);
       } else {
-        el.textContent = iconEmoji;
+        iconWrap.textContent = iconEmoji;
+      }
+      el.appendChild(iconWrap);
+      if (sc.title) {
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'map3d-sculpture-label';
+        const rawTitle = String(sc.title).trim();
+        labelSpan.textContent = rawTitle.length > 20 ? `${rawTitle.slice(0, 19).trimEnd()}…` : rawTitle;
+        el.appendChild(labelSpan);
       }
 
       const chainLinks = getSculptureChainLinks(sc, config);
