@@ -63,7 +63,7 @@ export function useARPreview({
   const selectedLandApiDoneRef = useRef({ parcelId: '', done: true });
 
   const [mapOpen, setMapOpen] = useState(false);
-  const [mapInitialDimensionMode, setMapInitialDimensionMode] = useState('2d');
+  const [mapInitialDimensionMode, setMapInitialDimensionMode] = useState('3d');
   const [areaFilterMode, setAreaFilterMode] = useState('nearby');
   const [mapSculptures, setMapSculptures] = useState([]);
   const [mapParcels, setMapParcels] = useState([]);
@@ -821,7 +821,7 @@ export function useARPreview({
 
   const openAreaMap = useCallback(
     (opts = {}) => {
-      const initialMode = opts?.initialDimensionMode === '3d' ? '3d' : '2d';
+      const initialMode = opts?.initialDimensionMode === '2d' ? '2d' : '3d';
       const targetParcelId = String(opts?.focusParcelId || '').trim();
       stopBrushPainting();
       if (modeRef.current === 'transform') {

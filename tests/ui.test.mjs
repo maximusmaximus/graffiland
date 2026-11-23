@@ -2162,18 +2162,22 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     // 1) Compact dimensions show decimal precision for <10m fitted lands (2.8×2.9×1.9 m · 8.3 m²)
     assert.ok(view.container.textContent.includes('2.8×2.9×1.9 m · 8.3 m²'));
 
-    // 2) Starts in 2D map with 3D toggle & Full Map buttons active
-    assert.ok(view.getByTestId('mobile-map-3d-toggle-btn'));
-    assert.equal(view.queryByTestId('mobile-iso-3d-map'), null);
-
-    // 3) Clicking 3D switches to isometric 3D map with 2D toggle, 90° orbit, Fit, Me & Full buttons
-    RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
+    // 2) Defaults to 3D isometric map immediately with 2D toggle, 90° orbit, Fit, Me & Full buttons
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
     assert.ok(view.getByTestId('mobile-map-2d-toggle-btn'));
+    assert.equal(view.queryByTestId('mobile-map-3d-toggle-btn'), null);
     assert.ok(view.getByTestId('mobile-map-orbit-btn'));
     assert.ok(view.getByTestId('mobile-map-fit-btn'));
     assert.ok(view.getByTestId('mobile-map-me-btn'));
     assert.ok(view.getByTestId('mobile-map-fullscreen-btn'));
+
+    // 3) Switching 3D -> 2D -> 3D toggles cleanly in compact mode
+    RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
+    assert.equal(view.queryByTestId('mobile-iso-3d-map'), null);
+    assert.ok(view.getByTestId('mobile-map-3d-toggle-btn'));
+    RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.ok(view.getByTestId('mobile-iso-3d-map'));
+    assert.ok(view.getByTestId('mobile-map-2d-toggle-btn'));
 
     // Orbit 90° updates compass bearing cleanly
     const beforeOrbitText = view.getByTestId('mobile-iso-3d-map').textContent;
@@ -2210,6 +2214,25 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.click(card3dBtns[1]);
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
     assert.ok(selectedParcels.includes('GLAND-SECOND02'));
+    cleanup();
+
+    // 4b) Explicit initialDimensionMode="2d" override still opens in 2D cleanly
+    const explicit2dView = RTL.render(
+      React.createElement(MobileMapSheet, {
+        config: {},
+        location: { lat: 39.7389, lng: -121.8479 },
+        areaFilterMode: 'nearby',
+        initialDimensionMode: '2d',
+        mapParcels: parcels,
+        displayedMapSculptures: sculptures,
+        areaSculpturesSorted: sculptures,
+        onSelectParcel: () => {},
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.ok(explicit2dView.getByTestId('mobile-map-3d-toggle-btn'));
+    assert.equal(explicit2dView.queryByTestId('mobile-iso-3d-map'), null);
     cleanup();
 
     // 5) MobileParcelVisitView auto-opens in 3D isometric mode and supports full-screen + 2D <-> 3D toggle cleanly
@@ -2700,8 +2723,8 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    assert.ok(sheetView.getByText('Twin Palms'));
-    assert.ok(sheetView.getByText('DRUGDEN'));
+    assert.ok(sheetView.getAllByText('Twin Palms').length >= 1);
+    assert.ok(sheetView.getAllByText('DRUGDEN').length >= 1);
     assert.equal(sheetView.queryByText(/GLAND-9R16561P/i), null);
     assert.equal(sheetView.queryByText(/GLAND-9R1652RD/i), null);
     assert.equal(sheetView.queryByText(/9R16561P/i), null);
