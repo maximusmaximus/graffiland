@@ -913,7 +913,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(firstPreviewParcelId && firstPreviewParcelId.startsWith('GLAND-'));
     assert.equal(await isoPreview.getAttribute('data-view-mode'), 'isometric');
     assert.ok((await page.getByTestId('land-preview-coords').textContent()).includes('°'));
-    assert.ok((await page.getByTestId('land-preview-scale').textContent()).includes('m'));
+    assert.match(await page.getByTestId('land-preview-scale').textContent(), /\b(ft|mi)\b/);
 
     // Switch preview to Area context, then select the other owned land and confirm it reloads in isometric view
     await isoPreview.getByRole('button', { name: /Area/i }).click();
@@ -1157,13 +1157,42 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const landCardCount = await landCards.count();
     assert.ok(landCardCount >= 2, `Expected >= 2 nearest land cards, got ${landCardCount}`);
 
-    // Verify Google Maps link exists on every rendered land card
-    const gmapsLinks = hubPage.locator('[data-testid="land-google-maps-link"]');
-    assert.equal(await gmapsLinks.count(), landCardCount);
-    const firstHref = await gmapsLinks.first().getAttribute('href');
-    assert.ok(firstHref && firstHref.startsWith('https://www.google.com/maps/dir/?api=1&destination='));
+    // Verify cards start compact/closed with Share button on the right top and US imperial units (ft/mi)
+    const closedCardMetrics = await hubPage.evaluate(() => {
+      const cards = Array.from(globalThis.document.querySelectorAll('[data-testid="mobile-land-card"]'));
+      return cards.map((card) => {
+        const cardRect = card.getBoundingClientRect();
+        const shareBtn = card.querySelector('[data-testid="land-card-share-btn"]');
+        const shareRect = shareBtn?.getBoundingClientRect();
+        return {
+          expanded: card.getAttribute('data-expanded'),
+          height: Math.round(cardRect.height),
+          hasShareAtTopRight:
+            Boolean(shareRect) &&
+            shareRect.right >= cardRect.right - 20 &&
+            shareRect.top <= cardRect.top + 24,
+          distText: card.querySelector('[data-testid="land-distance-badge"]')?.textContent || ''
+        };
+      });
+    });
+    assert.ok(
+      closedCardMetrics.every((m) => m.expanded === 'false'),
+      `Expected all nearest land cards to start compact/closed, got: ${JSON.stringify(closedCardMetrics)}`
+    );
+    assert.ok(
+      closedCardMetrics.every((m) => m.height <= 96),
+      `Expected compact closed land cards <= 96px tall, got: ${JSON.stringify(closedCardMetrics)}`
+    );
+    assert.ok(
+      closedCardMetrics.every((m) => m.hasShareAtTopRight),
+      `Expected Share button at top-right of every closed card, got: ${JSON.stringify(closedCardMetrics)}`
+    );
+    assert.ok(
+      closedCardMetrics.some((m) => /\b(ft|mi)\b/i.test(m.distText)),
+      `Expected US location to default to feet/miles, got: ${JSON.stringify(closedCardMetrics)}`
+    );
 
-    // Verify expiration badges render (both dormant countdown "left" and Permanent lands exist from seeded data)
+    // Verify expiration badges render in compact cards (both dormant countdown "left" and Permanent lands)
     const expTexts = await hubPage.locator('[data-testid="land-expiration-badge"]').allTextContents();
     assert.ok(
       expTexts.some((t) => /\bleft\b/i.test(t)),
@@ -1174,7 +1203,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       `Expected a permanent land badge, got: ${JSON.stringify(expTexts)}`
     );
 
-    // Verify nested sculptures render under lands with metadata and tapping 3D opens SculptureModal above the map
+    // Clicking the rank number (#1) focuses that land on top map AND opens the card
+    await landCards.first().getByTestId('land-card-rank-btn').click();
+    assert.equal(await landCards.first().getAttribute('data-expanded'), 'true');
+    const firstHref = await landCards.first().getByTestId('land-google-maps-link').getAttribute('href');
+    assert.ok(firstHref && firstHref.startsWith('https://www.google.com/maps/dir/?api=1&destination='));
+
+    // Clicking the triangle on card #2 opens it separately (and clicking again closes it)
+    await landCards.nth(1).getByTestId('land-card-expand-toggle').click();
+    assert.equal(await landCards.nth(1).getAttribute('data-expanded'), 'true');
+    const secondHref = await landCards.nth(1).getByTestId('land-google-maps-link').getAttribute('href');
+    assert.ok(secondHref && secondHref.startsWith('https://www.google.com/maps/dir/?api=1&destination='));
+
+    // Verify nested sculptures render under expanded lands with metadata and tapping 3D opens SculptureModal above the map
     const sculptureItems = hubPage.locator('[data-testid="land-sculpture-item"]');
     assert.ok((await sculptureItems.count()) >= 1, 'Expected at least 1 nested sculpture under a land');
     const firstScText = await sculptureItems.first().textContent();
@@ -1205,7 +1246,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     );
     await hubPage.getByTestId('mobile-map-orbit-btn').click();
 
-    // Switch 3D -> 2D in compact mode -> verify square Leaflet map & simple land labels, then back to 3D
+    // Switch 3D -> 2D in compact mode -> verify square Leaflet map focused on #1 with neighbor edge arrows, then back to 3D
     await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
     await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
     const mapMetrics = await hubPage.evaluate(() => {
@@ -1215,7 +1256,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
         scrollWidth: globalThis.document.documentElement.scrollWidth,
         leafletWidth: Math.round(rect?.width || 0),
         leafletHeight: Math.round(rect?.height || 0),
-        landLabelCount: globalThis.document.querySelectorAll('[data-testid="map-land-label"]').length
+        landLabelCount: globalThis.document.querySelectorAll('[data-testid="map-land-label"]').length,
+        neighborArrowCount: globalThis.document.querySelectorAll('[data-testid="neighbor-edge-arrow"]').length
       };
     });
     assert.ok(
@@ -1229,8 +1271,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       `Expected compact 2D mobile Leaflet map to stay square, got ${mapMetrics.leafletWidth}x${mapMetrics.leafletHeight}`
     );
     assert.ok(
-      mapMetrics.landLabelCount >= 2,
-      `Expected >= 2 simple land labels on mobile 2D map, got ${mapMetrics.landLabelCount}`
+      mapMetrics.landLabelCount === 1 && mapMetrics.neighborArrowCount >= 1,
+      `Expected focused 2D map (1 focused land label + >=1 neighbor edge arrow after clicking #1), got labels=${mapMetrics.landLabelCount}, arrows=${mapMetrics.neighborArrowCount}`
     );
     await hubPage.getByTestId('mobile-map-3d-toggle-btn').click();
     await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 10000 });

@@ -1,15 +1,25 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { rectsOverlap } from './canvasLabelLayout.js';
+import { FEET_PER_METER, METERS_PER_MILE, normalizeUnitSystem } from './measurementUnits.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 
 /**
  * Formats a compact geographic distance string for neighbor edge-arrow labels.
+ * @param {number} meters
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
  */
-export function formatCompactNeighborDistance(meters) {
+export function formatCompactNeighborDistance(meters, unitSystem = 'metric') {
   if (!Number.isFinite(meters) || meters < 0) return '';
+  if (normalizeUnitSystem(unitSystem) === 'imperial') {
+    const feet = meters * FEET_PER_METER;
+    if (feet < 1000) return `${Math.max(1, Math.round(feet))}ft`;
+    const miles = meters / METERS_PER_MILE;
+    if (miles < 10) return `${miles.toFixed(1)}mi`;
+    return `${Math.round(miles).toLocaleString()}mi`;
+  }
   if (meters < 1000) return `${Math.max(1, Math.round(meters))}m`;
   if (meters < 10000) return `${(meters / 1000).toFixed(1)}km`;
   if (meters < 100000) return `${Math.round(meters / 1000)}km`;
@@ -202,7 +212,8 @@ export function computeNeighborEdgeArrows({
   maxArrows = null,
   edgeInsetX = 6,
   topInsetY = 42,
-  bottomInsetY = 38
+  bottomInsetY = 38,
+  unitSystem = 'metric'
 } = {}) {
   if (!focusedEntry?.volume || !Array.isArray(otherEntries) || otherEntries.length === 0) {
     return [];
@@ -317,7 +328,7 @@ export function computeNeighborEdgeArrows({
     const maxChars = compact ? 13 : 19;
     const label =
       rawName.length > maxChars ? `${rawName.slice(0, maxChars - 1).trimEnd()}…` : rawName;
-    const distanceLabel = formatCompactNeighborDistance(cand.distanceMeters);
+    const distanceLabel = formatCompactNeighborDistance(cand.distanceMeters, unitSystem);
     const { w: pillW, h: pillH } = estimateArrowPillSize(label, distanceLabel, compact);
 
     const minCenterX = edgeInsetX + pillW / 2;

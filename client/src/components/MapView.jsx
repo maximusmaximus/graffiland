@@ -15,6 +15,7 @@ import {
   buildNeighborArrowsSignature,
   computeNeighborEdgeArrows
 } from '../utils/neighborEdgeArrows.js';
+import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -67,6 +68,11 @@ export default function MapView({
   const [neighborArrows, setNeighborArrows] = useState([]);
   const neighborArrowsSigRef = useRef('');
   const focusedArrowsContextRef = useRef({ focusedEntry: null, otherEntries: [] });
+  const { unitSystem } = useMeasurementUnits(userLocation);
+  const unitSystemRef = useRef(unitSystem);
+  useEffect(() => {
+    unitSystemRef.current = unitSystem;
+  }, [unitSystem]);
 
   const recomputeFocusedNeighborArrows = useCallback(() => {
     const map = mapRef.current;
@@ -95,7 +101,8 @@ export default function MapView({
       viewportWidth: vw,
       viewportHeight: vh,
       bearingDeg: 0,
-      reservedRects
+      reservedRects,
+      unitSystem: unitSystemRef.current
     });
     const nextSig = buildNeighborArrowsSignature(nextArrows);
     if (nextSig !== neighborArrowsSigRef.current) {

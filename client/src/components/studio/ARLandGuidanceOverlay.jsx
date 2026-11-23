@@ -1,5 +1,6 @@
 import React from 'react';
-import { formatDistanceMeters } from '../../utils/landMapHelpers.js';
+import { formatDistanceMeters, resolveLandCoords } from '../../utils/landMapHelpers.js';
+import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 
 function ChevronSvg({ direction = 'right' }) {
   const rotation =
@@ -44,13 +45,14 @@ export default function ARLandGuidanceOverlay({
   loadState = null,
   hasBottomInspector = true
 }) {
+  const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
   if (!land || !guidance) return null;
 
   const displayName = guidance.displayName || land.displayName || 'Nearby Land';
   const distText = land.isInside
     ? 'Inside'
     : Number.isFinite(Number(guidance.distanceMeters))
-    ? formatDistanceMeters(guidance.distanceMeters)
+    ? formatDistanceMeters(guidance.distanceMeters, unitSystem)
     : land.distanceLabel || 'Nearby';
 
   const isLoading =

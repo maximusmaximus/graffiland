@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
+import {
+  formatDistance,
+  formatShortLength,
+  useMeasurementUnits
+} from '../../utils/measurementUnits.js';
 import NotificationCenter from '../NotificationCenter.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -86,6 +91,7 @@ export default function StudioHudTopBar({
 }) {
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
+  const { unitSystem } = useMeasurementUnits(location);
 
   const pendingCount = pendingSignatures.length;
   const isPaired = Boolean(pairedCode || mcpPairingsState?.mcpActive);
@@ -344,7 +350,7 @@ export default function StudioHudTopBar({
                 </span>
                 {!nearbyCameraLand.isInside && nearbyCameraLand.edgeDistanceMeters !== undefined && (
                   <span className="ar-nearby-land-pill-dist mono">
-                    {nearbyCameraLand.edgeDistanceMeters}m
+                    {formatDistance(nearbyCameraLand.edgeDistanceMeters, unitSystem, { compact: true })}
                   </span>
                 )}
                 {nearbyCameraLand.isOwned && (
@@ -398,7 +404,7 @@ export default function StudioHudTopBar({
               <>
                 <XeroIcon emoji="📌" size={13} />
                 <span className="surface-pill-label">
-                  {surfaceAnchor.label} · {surfaceAnchor.depthM.toFixed(1)}m
+                  {surfaceAnchor.label} · {formatShortLength(surfaceAnchor.depthM, unitSystem, { decimals: 1, compact: true })}
                 </span>
                 <button
                   type="button"

@@ -1,5 +1,10 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import {
+  formatDimensionTriple,
+  formatDistance,
+  formatLandDimensionsWithUnits
+} from './measurementUnits.js';
 
 /**
  * Resolve the geographic center coordinates for a land parcel record.
@@ -61,17 +66,13 @@ export function buildGoogleMapsLandUrl(lat, lng) {
 }
 
 /**
- * Format a distance in meters for compact mobile pills.
+ * Format a distance in meters for compact mobile pills in the target unit system.
  * @param {number | null | undefined} meters
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
  * @returns {string}
  */
-export function formatDistanceMeters(meters) {
-  if (meters === null || meters === undefined) return '';
-  const val = Number(meters);
-  if (!Number.isFinite(val) || val < 0) return '';
-  if (val < 1000) return `${Math.round(val)} m`;
-  if (val < 10000) return `${(val / 1000).toFixed(1)} km`;
-  return `${Math.round(val / 1000)} km`;
+export function formatDistanceMeters(meters, unitSystem = 'metric') {
+  return formatDistance(meters, unitSystem);
 }
 
 /**
@@ -166,39 +167,26 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
   };
 }
 
-function formatCompactDimensionMeters(val) {
-  if (val < 10) {
-    const rounded = Number(val.toFixed(1));
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-  }
-  return String(Math.round(val));
-}
-
 /**
  * Format 3D parcel volume dimensions into a crisp single-line summary.
  * @param {any} parcel
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
  * @returns {string}
  */
-export function formatLandDimensions(parcel) {
+export function formatLandDimensions(parcel, unitSystem = 'metric') {
+  return formatLandDimensionsWithUnits(parcel, unitSystem);
+}
+
+/**
+ * Format compact W×D×H dimensions without area for dense inline card headers.
+ * @param {any} parcel
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @returns {string}
+ */
+export function formatCompactLandSize(parcel, unitSystem = 'metric') {
   const vol = parcel?.volume;
   if (!vol) return '';
-  const w = Number(vol.widthMeters);
-  const d = Number(vol.depthMeters);
-  const h = Number(vol.heightMeters);
-  if (!Number.isFinite(w) || !Number.isFinite(d)) return '';
-  const rawArea = Number.isFinite(Number(vol.footprintAreaSqM))
-    ? Number(vol.footprintAreaSqM)
-    : w * d;
-  const areaLabel =
-    rawArea < 10
-      ? Number.isInteger(Number(rawArea.toFixed(1)))
-        ? String(Math.round(rawArea))
-        : rawArea.toFixed(1)
-      : String(Math.round(rawArea));
-  const dimPart = Number.isFinite(h)
-    ? `${formatCompactDimensionMeters(w)}×${formatCompactDimensionMeters(d)}×${formatCompactDimensionMeters(h)} m`
-    : `${formatCompactDimensionMeters(w)}×${formatCompactDimensionMeters(d)} m`;
-  return rawArea > 0 ? `${dimPart} · ${areaLabel} m²` : dimPart;
+  return formatDimensionTriple(vol.widthMeters, vol.depthMeters, vol.heightMeters, unitSystem);
 }
 
 /**
@@ -238,7 +226,8 @@ export function formatShortDate(iso) {
  *   location?: { lat: number, lng: number } | null,
  *   filterMode?: 'nearby' | 'all',
  *   radiusMeters?: number,
- *   nowMs?: number
+ *   nowMs?: number,
+ *   unitSystem?: 'imperial' | 'metric'
  * }} options
  */
 export function groupNearestLandsWithSculptures({
@@ -247,7 +236,8 @@ export function groupNearestLandsWithSculptures({
   location = null,
   filterMode = 'nearby',
   radiusMeters = 5000,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  unitSystem = 'metric'
 } = {}) {
   const hasLocation =
     Boolean(location) &&
@@ -343,10 +333,11 @@ export function groupNearestLandsWithSculptures({
       centerLat: coords ? coords.lat : null,
       centerLng: coords ? coords.lng : null,
       distanceMeters,
-      distanceLabel: formatDistanceMeters(distanceMeters),
+      distanceLabel: formatDistanceMeters(distanceMeters, unitSystem),
       googleMapsUrl,
       expiration,
-      dimensionsLabel: formatLandDimensions(rawParcel),
+      dimensionsLabel: formatLandDimensions(rawParcel, unitSystem),
+      compactDimensionsLabel: formatCompactLandSize(rawParcel, unitSystem),
       isFrozen,
       sculptures: sortedSculptures,
       sculptureCount: sortedSculptures.length > 0

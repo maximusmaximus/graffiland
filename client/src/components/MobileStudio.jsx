@@ -6,6 +6,7 @@ import {
 } from '../../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
+import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
 import {
   loadBoolPreference,
   loadLocalDraft,
@@ -163,6 +164,12 @@ export default function MobileStudio({
     onCameraRefreshed: (meta) => onCameraRefreshedBridgeRef.current?.(meta),
     onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.()
   });
+
+  useEffect(() => {
+    if (pol.location) {
+      setLastKnownUnitLocation(pol.location);
+    }
+  }, [pol.location]);
 
   // Refs bridging actions between circularly-related hooks cleanly
   const recenterAimRef = useRef(null);

@@ -346,6 +346,8 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
       })
     );
 
+    // Expand compact card via triangle toggle, then tap Find in AR
+    RTL.fireEvent.click(view.getByTestId('land-card-expand-toggle'));
     const findBtn = view.getByTestId('land-card-find-ar-btn');
     RTL.fireEvent.click(findBtn);
     assert.ok(guidedLand);

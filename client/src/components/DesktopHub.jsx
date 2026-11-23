@@ -18,6 +18,11 @@ import {
   buildShareToXUrl,
   copyToClipboard
 } from '../utils/clipboard.js';
+import {
+  formatDistance,
+  formatRadiusLabel,
+  useMeasurementUnits
+} from '../utils/measurementUnits.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
@@ -90,10 +95,9 @@ function summarizeSculptureSnapshot(sc) {
   };
 }
 
-function formatDistanceLabel(meters) {
+function formatDistanceLabel(meters, unitSystem = 'metric') {
   if (!Number.isFinite(meters)) return '';
-  if (meters < 1000) return `${Math.round(meters)}m away`;
-  return `${(meters / 1000).toFixed(1)}km away`;
+  return `${formatDistance(meters, unitSystem, { compact: true })} away`;
 }
 
 export default function DesktopHub({
@@ -114,6 +118,8 @@ export default function DesktopHub({
   const [marketBusyId, setMarketBusyId] = useState('');
   const [marketNotice, setMarketNotice] = useState('');
   const [userLocation, setUserLocation] = useState(null);
+  const { unitSystem } = useMeasurementUnits(userLocation);
+  const nearbyRadiusLabel = formatRadiusLabel(NEARBY_RADIUS_METERS, unitSystem);
   const [areaFilter, setAreaFilter] = useState(() =>
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
@@ -1325,7 +1331,7 @@ export default function DesktopHub({
 
             {sidebarTab === 'list' && areaFilter === 'nearby' && userLocation && nearbyMatches.length === 0 && sculptures.length > 0 && (
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                No sculptures within 5km yet — showing all {sculptures.length} global sculptures sorted closest first.
+                No sculptures within {nearbyRadiusLabel} yet — showing all {sculptures.length} global sculptures sorted closest first.
               </div>
             )}
 
@@ -1715,7 +1721,7 @@ export default function DesktopHub({
                         <strong style={{ fontSize: 13, textAlign: 'left' }}>{sc.title}</strong>
                         {sc.distanceMeters !== null && (
                           <span className="badge teal" style={{ fontSize: 10 }}>
-                            {formatDistanceLabel(sc.distanceMeters)}
+                            {formatDistanceLabel(sc.distanceMeters, unitSystem)}
                           </span>
                         )}
                       </div>

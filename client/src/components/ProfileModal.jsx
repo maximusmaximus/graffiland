@@ -24,8 +24,10 @@ import {
   formatShortDate
 } from '../utils/landMapHelpers.js';
 import { prepareProfileImageFile } from '../utils/profileImageHelper.js';
+import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -118,6 +120,7 @@ export default function ProfileModal({
   const actions = useMemo(() => data?.actions || [], [data?.actions]);
 
   const isOwner = Boolean(user?.id && profile?.id && String(user.id) === String(profile.id));
+  const { unitSystem } = useMeasurementUnits();
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
@@ -802,6 +805,8 @@ export default function ProfileModal({
                     <XeroIcon emoji="✅" size={13} /> {saveNotice}
                   </div>
                 )}
+
+                {isOwner && <MeasurementUnitSetting compact />}
               </div>
             </div>
 
@@ -1139,7 +1144,7 @@ export default function ProfileModal({
                 ) : (
                   lands.map((land) => {
                     const landUrl = resolveLandUrl(land);
-                    const dims = formatLandDimensions(land);
+                    const dims = formatLandDimensions(land, unitSystem);
                     const exp = formatLandExpiration(land);
                     return (
                       <div key={land.parcelId} className="profile-item-card" data-testid="profile-land-item">

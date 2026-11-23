@@ -5386,24 +5386,29 @@ select {
 .mobile-land-stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   padding-bottom: 12px;
 }
 
 .mobile-land-card {
-  padding: 12px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  border-radius: 14px;
+  gap: 6px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(16, 22, 36, 0.94), rgba(11, 16, 28, 0.96));
   border: 1px solid rgba(255, 255, 255, 0.1);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
+.mobile-land-card.is-open {
+  padding: 10px 11px;
+  gap: 8px;
+}
+
 .mobile-land-card.is-selected {
   border-color: rgba(255, 209, 102, 0.7);
-  box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.28), 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.28), 0 6px 18px rgba(0, 0, 0, 0.36);
 }
 
 .mobile-land-card.is-owned {
@@ -5423,44 +5428,219 @@ select {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mobile-land-title-col {
   min-width: 0;
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .mobile-land-name-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
+}
+
+.mobile-land-triangle-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.mobile-land-triangle-btn:hover,
+.mobile-land-triangle-btn:focus-visible,
+.mobile-land-triangle-btn.is-open {
+  background: rgba(0, 245, 212, 0.14);
+  border-color: rgba(0, 245, 212, 0.45);
+  color: var(--accent);
+  outline: none;
 }
 
 .mobile-land-rank {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 800;
   background: rgba(0, 245, 212, 0.14);
   color: var(--accent);
-  border: 1px solid rgba(0, 245, 212, 0.3);
+  border: 1px solid rgba(0, 245, 212, 0.34);
   flex-shrink: 0;
+}
+
+.mobile-land-rank-btn {
+  appearance: none;
+  cursor: pointer;
+  line-height: 1.15;
+  min-height: 22px;
+  transition: background 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+
+.mobile-land-rank-btn:hover,
+.mobile-land-rank-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.28);
+  border-color: var(--accent);
+  color: #eafffc;
+  outline: none;
+}
+
+.mobile-land-rank-btn:active {
+  transform: scale(0.95);
 }
 
 .mobile-land-name {
   margin: 0;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 800;
-  line-height: 1.25;
+  line-height: 1.2;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mobile-land-compact-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 27px;
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--muted);
+}
+
+.mobile-land-compact-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  color: #cbd5e1;
+}
+
+.mobile-land-compact-stat.is-accent {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.mobile-land-compact-exp.badge {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.mobile-land-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mobile-land-share-btn {
+  padding: 3px 6px;
+  min-height: 24px;
+  min-width: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.mobile-land-share-btn:hover,
+.mobile-land-share-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.16);
+  border-color: rgba(0, 245, 212, 0.5);
+  outline: none;
+}
+
+.mobile-land-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Measurement Unit Preference Card (Profile, Notification Settings, Account & Settings) */
+.unit-setting-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: rgba(12, 18, 32, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.unit-setting-card.is-compact {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.unit-setting-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.unit-setting-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.unit-setting-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.unit-setting-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.unit-setting-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.unit-setting-btn {
+  justify-content: center;
+  white-space: nowrap;
+  font-size: 11px;
 }
 
 .mobile-land-name-btn {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../utils/api';
+import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 
 const CATEGORY_META = [
   {
@@ -501,6 +502,7 @@ export default function NotificationCenter({
             </div>
           ) : (
             <div className="notif-settings-body">
+              <MeasurementUnitSetting compact />
               <div className="notif-push-card">
                 <div className="notif-push-info">
                   <strong>🔔 Browser Notifications</strong>
