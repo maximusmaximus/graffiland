@@ -7,9 +7,12 @@ import { api } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import {
   formatDistanceMeters,
+  formatLandDimensions,
   formatSculptureAssetMeta,
-  formatShortDate
+  formatShortDate,
+  resolveLandCoords
 } from '../../utils/landMapHelpers.js';
+import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -39,6 +42,7 @@ export default function ARLandInspectorPanel({
   const [renameSaving, setRenameSaving] = useState(false);
   const [renameError, setRenameError] = useState('');
   const [localDisplayName, setLocalDisplayName] = useState('');
+  const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
 
   // Reset inline rename state when switching to a different nearby land
   useEffect(() => {
@@ -137,8 +141,11 @@ export default function ARLandInspectorPanel({
   const proximityText = land.isInside
     ? 'Inside Land'
     : land.edgeDistanceMeters !== undefined && Number.isFinite(Number(land.edgeDistanceMeters))
-    ? `${formatDistanceMeters(land.edgeDistanceMeters)} away`
+    ? `${formatDistanceMeters(land.edgeDistanceMeters, unitSystem)} away`
     : land.distanceLabel || 'Nearby';
+  const resolvedDimsLabel = land.volume
+    ? formatLandDimensions(land, unitSystem)
+    : land.dimensionsLabel;
 
   return (
     <section
@@ -304,9 +311,9 @@ export default function ARLandInspectorPanel({
 
       {/* Compact Structured Land Metadata */}
       <div className="ar-land-meta-chips" data-testid="ar-land-meta-chips">
-        {land.dimensionsLabel && (
+        {resolvedDimsLabel && (
           <span className="mobile-meta-chip">
-            <XeroIcon emoji="📐" size={11} /> {land.dimensionsLabel}
+            <XeroIcon emoji="📐" size={11} /> {resolvedDimsLabel}
           </span>
         )}
         {onOpenProfile && stewardHandle ? (

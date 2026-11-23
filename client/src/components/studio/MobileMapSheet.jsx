@@ -10,8 +10,13 @@ import {
   formatSculptureAssetMeta,
   formatShortDate,
   groupNearestLandsWithSculptures,
-  isLandOwnedByUser
+  isLandOwnedByUser,
+  resolveLandCoords
 } from '../../utils/landMapHelpers.js';
+import {
+  formatRadiusLabel,
+  useMeasurementUnits
+} from '../../utils/measurementUnits.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
@@ -49,6 +54,7 @@ export default function MobileMapSheet({
     initialDimensionMode === '2d' ? '2d' : '3d'
   ); // '3d' | '2d'
   const [localFocusTick, setLocalFocusTick] = useState(0);
+  const [expandedLandIds, setExpandedLandIds] = useState({});
   const [collapsedLandIds, setCollapsedLandIds] = useState({});
   const [nowMs, setNowMs] = useState(() => (nowMsOverride ?? Date.now()));
   const [editingParcelId, setEditingParcelId] = useState('');
@@ -57,6 +63,17 @@ export default function MobileMapSheet({
   const [renameError, setRenameError] = useState('');
   const [renamedNames, setRenamedNames] = useState({});
   const cardRefs = useRef(new Map());
+  const mapCanvasRef = useRef(null);
+
+  const fallbackParcelCoords = useMemo(() => {
+    for (const p of mapParcels || []) {
+      const c = resolveLandCoords(p);
+      if (c) return c;
+    }
+    return null;
+  }, [mapParcels]);
+  const { unitSystem } = useMeasurementUnits(location, fallbackParcelCoords);
+  const nearbyRadiusLabel = formatRadiusLabel(5000, unitSystem);
 
   useEffect(() => {
     if (nowMsOverride !== null) {
@@ -90,9 +107,10 @@ export default function MobileMapSheet({
         location,
         filterMode: areaFilterMode,
         radiusMeters: 5000,
-        nowMs
+        nowMs,
+        unitSystem
       }),
-    [effectiveParcels, effectiveSculptures, location, areaFilterMode, nowMs]
+    [effectiveParcels, effectiveSculptures, location, areaFilterMode, nowMs, unitSystem]
   );
 
   const displayedLands = grouped.displayedLands;
@@ -106,6 +124,22 @@ export default function MobileMapSheet({
     [displayedLands, selectedParcelId]
   );
 
+  function toggleCardExpanded(parcelId) {
+    if (!parcelId) return;
+    setExpandedLandIds((prev) => ({
+      ...prev,
+      [parcelId]: !prev[parcelId]
+    }));
+  }
+
+  function handleClickLandRank(parcelId) {
+    if (!parcelId) return;
+    onSelectParcel?.(parcelId);
+    setLocalFocusTick((t) => t + 1);
+    setExpandedLandIds((prev) => ({ ...prev, [parcelId]: true }));
+    setCollapsedLandIds((prev) => ({ ...prev, [parcelId]: false }));
+  }
+
   function toggleLandSculptures(parcelId) {
     setCollapsedLandIds((prev) => ({
       ...prev,
@@ -117,6 +151,7 @@ export default function MobileMapSheet({
     const pid = parcel?.parcelId || '';
     if (!pid) return;
     onSelectParcel?.(pid);
+    setExpandedLandIds((prev) => ({ ...prev, [pid]: true }));
     setCollapsedLandIds((prev) => ({ ...prev, [pid]: false }));
     const node = cardRefs.current.get(pid);
     if (node && typeof node.scrollIntoView === 'function') {
@@ -239,7 +274,7 @@ export default function MobileMapSheet({
             className={`btn btn-xs ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
             onClick={() => setAreaFilterMode?.('nearby')}
           >
-            Nearest{grouped.nearbyLands.length > 0 ? ` (${grouped.nearbyLands.length})` : ' (5km)'}
+            Nearest{grouped.nearbyLands.length > 0 ? ` (${grouped.nearbyLands.length})` : ` (${nearbyRadiusLabel})`}
           </button>
           <button
             type="button"
@@ -262,6 +297,7 @@ export default function MobileMapSheet({
       </div>
 
       <div
+        ref={mapCanvasRef}
         className={`mobile-map-canvas ${
           isFullMap ? 'is-fullscreen' : 'is-compact'
         }`}
@@ -358,7 +394,9 @@ export default function MobileMapSheet({
                 : `All Lands (${displayedLands.length})`}
             </strong>
             {grouped.autoFallbackToAll && (
-              <span className="mobile-map-fallback-note">None within 5 km · sorted closest</span>
+              <span className="mobile-map-fallback-note">
+                None within {nearbyRadiusLabel} · sorted closest
+              </span>
             )}
           </div>
           <div className="mobile-map-summary-stats">
@@ -385,6 +423,7 @@ export default function MobileMapSheet({
               const isSelected = Boolean(selectedParcelId) && selectedParcelId === land.parcelId;
               const isOwned = isLandOwnedByUser(land, { user, ownedParcelIds });
               const isRenaming = isOwned && editingParcelId === land.parcelId;
+              const isExpanded = Boolean(expandedLandIds[land.parcelId]);
               const isCollapsed = Boolean(collapsedLandIds[land.parcelId]);
               const exp = land.expiration;
               const expBadgeClass =
@@ -409,18 +448,43 @@ export default function MobileMapSheet({
                     if (el) cardRefs.current.set(land.parcelId, el);
                     else cardRefs.current.delete(land.parcelId);
                   }}
-                  className={`card mobile-land-card ${isSelected ? 'is-selected' : ''} ${
-                    isOwned ? 'is-owned' : ''
-                  } ${exp.urgent ? 'is-urgent-expiry' : ''}`}
+                  className={`card mobile-land-card ${isExpanded ? 'is-open' : 'is-closed'} ${
+                    isSelected ? 'is-selected' : ''
+                  } ${isOwned ? 'is-owned' : ''} ${exp.urgent ? 'is-urgent-expiry' : ''}`}
                   data-testid="mobile-land-card"
                   data-parcel-id={land.parcelId}
                   data-owned={isOwned ? 'true' : 'false'}
+                  data-expanded={isExpanded ? 'true' : 'false'}
                 >
-                  {/* Band 1: Identity + Distance + Expiration + Owner Gear */}
+                  {/* Compact Header Row: Triangle + Clickable #Rank (Focus Map & Open) + Name + Top-Right Share */}
                   <div className="mobile-land-card-head">
                     <div className="mobile-land-title-col">
                       <div className="mobile-land-name-row">
-                        <span className="mobile-land-rank">#{index + 1}</span>
+                        <button
+                          type="button"
+                          className={`mobile-land-triangle-btn ${isExpanded ? 'is-open' : ''}`}
+                          data-testid="land-card-expand-toggle"
+                          aria-expanded={isExpanded}
+                          aria-label={
+                            isExpanded
+                              ? `Collapse details for ${land.displayName}`
+                              : `Expand details for ${land.displayName}`
+                          }
+                          title={isExpanded ? 'Hide details' : 'Show details'}
+                          onClick={() => toggleCardExpanded(land.parcelId)}
+                        >
+                          <span aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="mobile-land-rank mobile-land-rank-btn"
+                          data-testid="land-card-rank-btn"
+                          aria-label={`Focus ${land.displayName} on map and open details`}
+                          title="Jump map to this land & open details"
+                          onClick={() => handleClickLandRank(land.parcelId)}
+                        >
+                          #{index + 1}
+                        </button>
                         {isRenaming ? (
                           <form
                             className="mobile-land-rename-form"
@@ -492,16 +556,44 @@ export default function MobileMapSheet({
                           {renameError}
                         </div>
                       )}
-                      <div className="mobile-land-id-row">
-                        {land.centerLat !== null && land.centerLng !== null && (
-                          <span className="mobile-land-coords">
-                            {land.centerLat.toFixed(4)}, {land.centerLng.toFixed(4)}
+
+                      {/* Compact single-line summary strip so more lands fit inline */}
+                      <div className="mobile-land-compact-meta" data-testid="land-compact-meta">
+                        {land.distanceLabel && (
+                          <span className="mobile-land-compact-stat is-accent" data-testid="land-distance-badge">
+                            <XeroIcon emoji="📍" size={10} /> {land.distanceLabel}
                           </span>
                         )}
+                        <span className="mobile-land-compact-stat">
+                          <XeroIcon emoji="🎨" size={10} /> {land.sculptures.length}
+                        </span>
+                        {land.compactDimensionsLabel && (
+                          <span className="mobile-land-compact-stat mono">
+                            {land.compactDimensionsLabel}
+                          </span>
+                        )}
+                        <span
+                          className={`mobile-land-compact-exp ${expBadgeClass}`}
+                          data-testid="land-expiration-badge"
+                          title={exp.detailText}
+                        >
+                          <XeroIcon
+                            emoji={
+                              exp.state === 'permanent'
+                                ? '♾️'
+                                : exp.state === 'expired'
+                                ? '⏱️'
+                                : '⏳'
+                            }
+                            size={10}
+                          />{' '}
+                          {exp.badgeText}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="mobile-land-head-badges">
+                    {/* Top-Right Actions (Always visible on closed & open card, with Share at top-right) */}
+                    <div className="mobile-land-head-actions">
                       {isOwned && onManageLand && (
                         <button
                           type="button"
@@ -511,169 +603,152 @@ export default function MobileMapSheet({
                           title="Manage this land"
                           onClick={() => onManageLand(land.parcelId)}
                         >
-                          <XeroIcon emoji="⚙️" size={13} />
+                          <XeroIcon emoji="⚙️" size={12} />
                         </button>
                       )}
-                      {land.distanceLabel && (
-                        <span className="badge teal" data-testid="land-distance-badge">
-                          <XeroIcon emoji="📍" size={11} /> {land.distanceLabel}
-                        </span>
+                      <button
+                        type="button"
+                        className="btn btn-xs mobile-land-share-btn"
+                        data-testid="land-card-share-btn"
+                        onClick={() => handleCopyLandShare(land)}
+                        aria-label={`Copy share link for ${land.displayName}`}
+                        title="Share land link"
+                      >
+                        <XeroIcon emoji="📤" size={12} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded Land Details & Sculptures Drawer */}
+                  {isExpanded && (
+                    <div className="mobile-land-details-body" data-testid="mobile-land-card-details">
+                      {land.description && (
+                        <p className="mobile-land-description">{land.description}</p>
                       )}
-                      <span
-                        className={expBadgeClass}
-                        data-testid="land-expiration-badge"
-                        title={exp.detailText}
-                      >
-                        <XeroIcon
-                          emoji={
-                            exp.state === 'permanent'
-                              ? '♾️'
-                              : exp.state === 'expired'
-                              ? '⏱️'
-                              : '⏳'
-                          }
-                          size={11}
-                        />{' '}
-                        {exp.badgeText}
-                      </span>
-                    </div>
-                  </div>
 
-                  {/* Band 2: Description, Expiration Detail & Relevant Land Metadata */}
-                  {land.description && (
-                    <p className="mobile-land-description">{land.description}</p>
-                  )}
+                      {exp.state !== 'permanent' && (
+                        <div
+                          className={`mobile-land-expiry-banner ${exp.urgent ? 'is-urgent' : ''}`}
+                          data-testid="land-expiration-detail"
+                        >
+                          <XeroIcon emoji={exp.state === 'expired' ? '⚠️' : '⏳'} size={12} />
+                          <span>
+                            {exp.detailText}
+                            {land.firstSparkBoost && exp.state !== 'expired' ? ' · 🔥 2x First-Spark XP' : ''}
+                          </span>
+                        </div>
+                      )}
 
-                  {exp.state !== 'permanent' && (
-                    <div
-                      className={`mobile-land-expiry-banner ${exp.urgent ? 'is-urgent' : ''}`}
-                      data-testid="land-expiration-detail"
-                    >
-                      <XeroIcon emoji={exp.state === 'expired' ? '⚠️' : '⏳'} size={12} />
-                      <span>
-                        {exp.detailText}
-                        {land.firstSparkBoost && exp.state !== 'expired' ? ' · 🔥 2x First-Spark XP' : ''}
-                      </span>
-                    </div>
-                  )}
+                      <div className="mobile-land-meta-chips" data-testid="land-metadata">
+                        {land.dimensionsLabel && (
+                          <span className="mobile-meta-chip" title="3D land volume dimensions">
+                            <XeroIcon emoji="📐" size={11} /> {land.dimensionsLabel}
+                          </span>
+                        )}
+                        {onOpenProfile && stewardHandle ? (
+                          <button
+                            type="button"
+                            className="mobile-meta-chip is-clickable"
+                            onClick={() => onOpenProfile(stewardHandle)}
+                            title={`View public profile for ${stewardLabel}`}
+                          >
+                            <UserHandleBadge
+                              user={{
+                                id: land.ownerSub || land.stewardSub,
+                                username: land.stewardUsername,
+                                stewardName: land.stewardName,
+                                stewardType: land.stewardType,
+                                avatarImage: land.stewardAvatar
+                              }}
+                              fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+                              size="xs"
+                            />
+                          </button>
+                        ) : (
+                          <span className="mobile-meta-chip">
+                            <UserHandleBadge
+                              user={{
+                                id: land.ownerSub || land.stewardSub,
+                                username: land.stewardUsername,
+                                stewardName: land.stewardName,
+                                stewardType: land.stewardType,
+                                avatarImage: land.stewardAvatar
+                              }}
+                              fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
+                              size="xs"
+                            />
+                          </span>
+                        )}
+                        {land.centerLat !== null && land.centerLng !== null && (
+                          <span className="mobile-meta-chip mono mobile-land-coords">
+                            {land.centerLat.toFixed(4)}, {land.centerLng.toFixed(4)}
+                          </span>
+                        )}
+                        {Number(land.humanContributorCount || 0) > 0 && (
+                          <span className="mobile-meta-chip">
+                            <XeroIcon emoji="👥" size={11} /> {land.humanContributorCount} contributor
+                            {land.humanContributorCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {Number(land.openQuestCount || 0) > 0 && (
+                          <span className="mobile-meta-chip is-quest">
+                            <XeroIcon emoji="🎯" size={11} /> {land.openQuestCount} open quest
+                            {land.openQuestCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {land.isFrozen && (
+                          <span className="mobile-meta-chip is-frozen">
+                            <XeroIcon emoji="❄️" size={11} /> Frozen
+                          </span>
+                        )}
+                      </div>
 
-                  <div className="mobile-land-meta-chips" data-testid="land-metadata">
-                    {land.dimensionsLabel && (
-                      <span className="mobile-meta-chip" title="3D land volume dimensions">
-                        <XeroIcon emoji="📐" size={11} /> {land.dimensionsLabel}
-                      </span>
-                    )}
-                    {onOpenProfile && stewardHandle ? (
-                      <button
-                        type="button"
-                        className="mobile-meta-chip is-clickable"
-                        onClick={() => onOpenProfile(stewardHandle)}
-                        title={`View public profile for ${stewardLabel}`}
-                      >
-                        <UserHandleBadge
-                          user={{
-                            id: land.ownerSub || land.stewardSub,
-                            username: land.stewardUsername,
-                            stewardName: land.stewardName,
-                            stewardType: land.stewardType,
-                            avatarImage: land.stewardAvatar
-                          }}
-                          fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
-                          size="xs"
-                        />
-                      </button>
-                    ) : (
-                      <span className="mobile-meta-chip">
-                        <UserHandleBadge
-                          user={{
-                            id: land.ownerSub || land.stewardSub,
-                            username: land.stewardUsername,
-                            stewardName: land.stewardName,
-                            stewardType: land.stewardType,
-                            avatarImage: land.stewardAvatar
-                          }}
-                          fallback={land.stewardType === 'agent' ? 'AI Steward' : 'Land Holder'}
-                          size="xs"
-                        />
-                      </span>
-                    )}
-                    <span className="mobile-meta-chip">
-                      <XeroIcon emoji="🎨" size={11} /> {land.sculptures.length} sculpture
-                      {land.sculptures.length === 1 ? '' : 's'}
-                    </span>
-                    {Number(land.humanContributorCount || 0) > 0 && (
-                      <span className="mobile-meta-chip">
-                        <XeroIcon emoji="👥" size={11} /> {land.humanContributorCount} contributor
-                        {land.humanContributorCount === 1 ? '' : 's'}
-                      </span>
-                    )}
-                    {Number(land.openQuestCount || 0) > 0 && (
-                      <span className="mobile-meta-chip is-quest">
-                        <XeroIcon emoji="🎯" size={11} /> {land.openQuestCount} open quest
-                        {land.openQuestCount === 1 ? '' : 's'}
-                      </span>
-                    )}
-                    {land.isFrozen && (
-                      <span className="mobile-meta-chip is-frozen">
-                        <XeroIcon emoji="❄️" size={11} /> Frozen
-                      </span>
-                    )}
-                  </div>
+                      {/* Land Action Row (Find in AR + Google Maps + Focus Map + 3D Map) */}
+                      <div className="mobile-land-actions">
+                        {onFindLandInAR && location && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-primary"
+                            data-testid="land-card-find-ar-btn"
+                            onClick={() => onFindLandInAR(land)}
+                            aria-label={`Guide camera to ${land.displayName} in AR`}
+                          >
+                            <XeroIcon emoji="👁️" size={12} /> Find in AR
+                          </button>
+                        )}
+                        {land.googleMapsUrl && (
+                          <a
+                            className="btn btn-xs mobile-land-gmaps-btn"
+                            href={land.googleMapsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            data-testid="land-google-maps-link"
+                            aria-label={`Open ${land.displayName} in Google Maps`}
+                          >
+                            <XeroIcon emoji="🧭" size={12} /> Google Maps
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          onClick={() => handleFocusLandOnMap(land.parcelId)}
+                          aria-label={`Focus ${land.displayName} on map`}
+                        >
+                          <XeroIcon emoji="🎯" size={12} /> Focus Map
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-xs mobile-land-3d-btn"
+                          data-testid="land-card-3d-map-btn"
+                          onClick={() => handleOpenLandIn3D(land.parcelId)}
+                          aria-label={`View ${land.displayName} in 3D isometric map`}
+                        >
+                          <XeroIcon emoji="🧊" size={12} /> 3D Map
+                        </button>
+                      </div>
 
-                  {/* Band 3: Land Action Row (Find in AR + Google Maps + Focus Map + 3D Map + Share) */}
-                  <div className="mobile-land-actions">
-                    {onFindLandInAR && location && (
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-primary"
-                        data-testid="land-card-find-ar-btn"
-                        onClick={() => onFindLandInAR(land)}
-                        aria-label={`Guide camera to ${land.displayName} in AR`}
-                      >
-                        <XeroIcon emoji="👁️" size={12} /> Find in AR
-                      </button>
-                    )}
-                    {land.googleMapsUrl && (
-                      <a
-                        className="btn btn-xs mobile-land-gmaps-btn"
-                        href={land.googleMapsUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        data-testid="land-google-maps-link"
-                        aria-label={`Open ${land.displayName} in Google Maps`}
-                      >
-                        <XeroIcon emoji="🧭" size={12} /> Google Maps
-                      </a>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={() => handleFocusLandOnMap(land.parcelId)}
-                      aria-label={`Focus ${land.displayName} on map`}
-                    >
-                      <XeroIcon emoji="🎯" size={12} /> Focus Map
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs mobile-land-3d-btn"
-                      data-testid="land-card-3d-map-btn"
-                      onClick={() => handleOpenLandIn3D(land.parcelId)}
-                      aria-label={`View ${land.displayName} in 3D isometric map`}
-                    >
-                      <XeroIcon emoji="🧊" size={12} /> 3D Map
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={() => handleCopyLandShare(land)}
-                      aria-label={`Copy share link for ${land.displayName}`}
-                    >
-                      <XeroIcon emoji="📤" size={12} /> Share
-                    </button>
-                  </div>
-
-                  {/* Band 4: Nested Sculptures under this Land */}
-                  <div className="mobile-land-sculptures" data-testid="land-sculptures-section">
+                      {/* Nested Sculptures under this Land */}
+                      <div className="mobile-land-sculptures" data-testid="land-sculptures-section">
                     {land.sculptures.length > 0 ? (
                       <>
                         <button
@@ -853,7 +928,9 @@ export default function MobileMapSheet({
                           : 'No sculptures placed on this land yet.'}
                       </div>
                     )}
-                  </div>
+                      </div>
+                    </div>
+                  )}
                 </article>
               );
             })}

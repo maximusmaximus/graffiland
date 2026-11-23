@@ -1276,20 +1276,45 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(cards[0].getAttribute('data-parcel-id'), 'GLAND-NEAR');
     assert.equal(cards[1].getAttribute('data-parcel-id'), 'GLAND-FAR');
 
-    // Expiration countdown and Permanent badges render accurately
+    // Cards start compact/closed by default so multiple lands show inline, with Share on the right top
+    assert.equal(cards[0].getAttribute('data-expanded'), 'false');
+    assert.equal(cards[1].getAttribute('data-expanded'), 'false');
+    assert.equal(view.queryByTestId('mobile-land-card-details'), null);
+    assert.equal(view.getAllByTestId('land-card-share-btn').length, 2);
+
+    // US coordinates (San Francisco) default to Imperial (ft / mi) in compact card header!
+    const distBadges = view.getAllByTestId('land-distance-badge');
+    assert.match(distBadges[0].textContent, /\b(ft|mi)\b/);
+    assert.match(distBadges[1].textContent, /\b(ft|mi)\b/);
+
+    // Expiration countdown and Permanent badges render accurately in closed compact cards
     const expBadges = view.getAllByTestId('land-expiration-badge');
     assert.ok(expBadges[0].textContent.includes('1d 18h left'));
     assert.ok(expBadges[1].textContent.includes('Permanent'));
+
+    // Clicking the card's #1 number focuses that land on the top map AND opens the card
+    const rankBtns = view.getAllByTestId('land-card-rank-btn');
+    assert.equal(rankBtns[0].textContent.trim(), '#1');
+    RTL.fireEvent.click(rankBtns[0]);
+    assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
+    assert.equal(cards[0].getAttribute('data-expanded'), 'true');
+    assert.equal(cards[1].getAttribute('data-expanded'), 'false');
     assert.ok(view.getByTestId('land-expiration-detail').textContent.includes('2x First-Spark XP'));
 
-    // Land metadata (dimensions, steward with icon badge, quests, contributors) renders
-    assert.ok(cards[0].textContent.includes('24×16×36 m · 384 m²'));
+    // Clicking the triangle on card #2 opens/closes card #2 separately WITHOUT changing map focus!
+    const triangleBtns = view.getAllByTestId('land-card-expand-toggle');
+    RTL.fireEvent.click(triangleBtns[1]);
+    assert.equal(cards[1].getAttribute('data-expanded'), 'true');
+    assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
+
+    // Land metadata (US imperial dimensions, steward with icon badge, quests, contributors) renders inside expanded cards
+    assert.ok(cards[0].textContent.includes('79×52×118 ft · 4,133 ft²'));
     assert.ok(cards[0].textContent.includes('PainterBot'));
     assert.ok(cards[0].querySelector('[data-testid="user-handle-badge"]'));
     assert.ok(cards[0].textContent.includes('2 open quests'));
     assert.ok(cards[1].textContent.includes('3 contributors'));
 
-    // Every land card includes a Google Maps link pointing to its coordinates
+    // Every expanded land card includes a Google Maps link pointing to its coordinates
     const gmapsLinks = view.getAllByTestId('land-google-maps-link');
     assert.equal(gmapsLinks.length, 2);
     assert.ok(gmapsLinks[0].getAttribute('href').startsWith('https://www.google.com/maps/dir/?api=1&destination=37.775500'));
@@ -1304,10 +1329,14 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(nestedItems[1].textContent.includes('GLB 3D · 3,200 tris'));
 
     // Clicking Focus Map and 3D inspect fire callbacks cleanly
-    RTL.fireEvent.click(view.getByRole('button', { name: /Focus Civic Neon Plaza on map/i }));
-    assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
+    RTL.fireEvent.click(view.getByRole('button', { name: /^Focus Civic Neon Plaza on map$/i }));
+    assert.deepEqual(focusedParcels, ['GLAND-NEAR', 'GLAND-NEAR']);
     RTL.fireEvent.click(RTL.within(nestedItems[0]).getByRole('button', { name: /3D/i }));
     assert.deepEqual(selectedSculptures, ['sc-voxel-1']);
+
+    // Clicking triangle on card #2 again collapses it cleanly
+    RTL.fireEvent.click(triangleBtns[1]);
+    assert.equal(cards[1].getAttribute('data-expanded'), 'false');
 
     cleanup();
   });
@@ -1820,7 +1849,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         assert.ok(view.getByTestId('land-preview-place').textContent.includes('San Francisco'));
       });
       assert.ok(view.getByTestId('land-preview-coords').textContent.includes('37.77930° N'));
-      assert.ok(view.getByTestId('land-preview-scale').textContent.includes('m'));
+      assert.match(view.getByTestId('land-preview-scale').textContent, /\b(ft|mi)\b/);
 
       // Toggle view modes (Area Context -> 2D -> Iso)
       RTL.fireEvent.click(view.getByRole('button', { name: /Area/i }));
@@ -2159,8 +2188,12 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    // 1) Compact dimensions show decimal precision for <10m fitted lands (2.8×2.9×1.9 m · 8.3 m²)
-    assert.ok(view.container.textContent.includes('2.8×2.9×1.9 m · 8.3 m²'));
+    // 1) Compact dimensions show US imperial precision by default for Chico, CA (9.3×9.6×6.3 ft)
+    // and full area (89 ft²) when expanded via triangle
+    assert.ok(view.container.textContent.includes('9.3×9.6×6.3 ft'));
+    const toggleBtns = view.getAllByTestId('land-card-expand-toggle');
+    RTL.fireEvent.click(toggleBtns[0]);
+    assert.ok(view.container.textContent.includes('9.3×9.6×6.3 ft · 89 ft²'));
 
     // 2) Defaults to 3D isometric map immediately with 2D toggle, 90° orbit, Fit, Me & Full buttons
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
@@ -2207,8 +2240,10 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'compact');
     assert.ok(view.getByTestId('mobile-nearest-lands-list'));
 
-    // Switch back to 2D, then click "3D Map" button on Land Card #2 -> jumps to 3D focused on Land #2
+    // Switch back to 2D, expand Card #2 via triangle, then click "3D Map" button -> jumps to 3D focused on Land #2
     RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
+    const reopenedToggles = view.getAllByTestId('land-card-expand-toggle');
+    RTL.fireEvent.click(reopenedToggles[1]);
     const card3dBtns = view.getAllByTestId('land-card-3d-map-btn');
     assert.equal(card3dBtns.length, 2);
     RTL.fireEvent.click(card3dBtns[1]);
@@ -3787,6 +3822,99 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     } finally {
       globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('Location-based measurement units default to US feet/miles and update live across UI when changed in Settings', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const { default: InfoTermsModal } = await loadJsxModule(
+      'client/src/components/InfoTermsModal.jsx'
+    );
+    const { setStoredUnitPreference } = await import('../client/src/utils/measurementUnits.js');
+
+    setStoredUnitPreference('auto');
+    try {
+      const usParcel = {
+        parcelId: 'GLAND-CHICO01',
+        customName: 'Squiggle Bro Land',
+        centerLat: 39.7302,
+        centerLng: -121.84067,
+        volume: {
+          widthMeters: 10,
+          depthMeters: 10,
+          heightMeters: 10,
+          footprintAreaSqM: 100
+        },
+        stewardStatus: 'awakened',
+        sculptureCount: 1
+      };
+      const euParcel = {
+        parcelId: 'GLAND-PARIS01',
+        customName: 'Montmartre Plaza',
+        centerLat: 48.8867,
+        centerLng: 2.3431,
+        volume: {
+          widthMeters: 10,
+          depthMeters: 10,
+          heightMeters: 10,
+          footprintAreaSqM: 100
+        },
+        stewardStatus: 'awakened',
+        sculptureCount: 1
+      };
+
+      // 1) In USA (Chico, CA), Auto defaults to feet & miles (33×33×33 ft)
+      const combined = RTL.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(MobileMapSheet, {
+            location: { lat: 39.7311, lng: -121.84067 },
+            mapParcels: [usParcel],
+            displayedMapSculptures: [],
+            areaSculpturesSorted: [],
+            onClose: () => {}
+          }),
+          React.createElement(InfoTermsModal, {
+            config: {},
+            user: null,
+            initialTab: 'account',
+            onClose: () => {}
+          })
+        )
+      );
+
+      assert.match(combined.getByTestId('land-distance-badge').textContent, /\b(ft|mi)\b/);
+      assert.ok(combined.getByTestId('land-compact-meta').textContent.includes('33×33×33 ft'));
+
+      // 2) User switches to Metric in Settings -> live MobileMapSheet immediately switches to meters & km!
+      RTL.fireEvent.click(combined.getByTestId('unit-pref-btn-metric'));
+      assert.match(combined.getByTestId('land-distance-badge').textContent, /\b(m|km)\b/);
+      assert.ok(combined.getByTestId('land-compact-meta').textContent.includes('10×10×10 m'));
+
+      // 3) User switches back to Auto -> returns to US feet & miles immediately
+      RTL.fireEvent.click(combined.getByTestId('unit-pref-btn-auto'));
+      assert.match(combined.getByTestId('land-distance-badge').textContent, /\b(ft|mi)\b/);
+      cleanup();
+
+      // 4) In Europe (Paris), Auto defaults to Metric (m & km)
+      const parisView = RTL.render(
+        React.createElement(MobileMapSheet, {
+          location: { lat: 48.8876, lng: 2.3431 },
+          mapParcels: [euParcel],
+          displayedMapSculptures: [],
+          areaSculpturesSorted: [],
+          onClose: () => {}
+        })
+      );
+      assert.match(parisView.getByTestId('land-distance-badge').textContent, /\b(m|km)\b/);
+      assert.ok(parisView.getByTestId('land-compact-meta').textContent.includes('10×10×10 m'));
+      cleanup();
+    } finally {
+      setStoredUnitPreference('auto');
       cleanup();
     }
   });

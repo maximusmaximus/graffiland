@@ -31,6 +31,10 @@ import {
 } from '../../utils/neighborEdgeArrows.js';
 import { drawDepthFadedPrismEdges } from '../../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../../utils/sculpture3dGeoJson.js';
+import {
+  formatDimensionTriple,
+  useMeasurementUnits
+} from '../../utils/measurementUnits.js';
 import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -70,16 +74,6 @@ const FALLBACK_DARK_STYLE = {
 // Session cache for hydrated sculpture voxel arrays so switching 2D <-> 3D is instant
 const voxelHydrationCache = new Map();
 const voxelHydrationInFlight = new Set();
-
-function formatCompactMeter(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '0';
-  if (n < 10) {
-    const r = Number(n.toFixed(1));
-    return Number.isInteger(r) ? String(r) : r.toFixed(1);
-  }
-  return String(Math.round(n));
-}
 
 function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
@@ -153,7 +147,8 @@ function MobileIsoSvgFallback({
   landSelected = false,
   onSelectLand = null,
   onSelectSculpture = null,
-  onOpenSculptureView = null
+  onOpenSculptureView = null,
+  unitSystem = 'metric'
 }) {
   const vol = primaryEntry?.volume;
   const maxDim = vol
@@ -209,9 +204,13 @@ function MobileIsoSvgFallback({
       : formatSimpleLandLabel(primaryEntry.parcel)
     : '3D Isometric Land';
   const label = vol
-    ? `${landName} · ${formatCompactMeter(
-        vol.widthMeters
-      )}×${formatCompactMeter(vol.depthMeters)}×${formatCompactMeter(vol.heightMeters)}m`
+    ? `${landName} · ${formatDimensionTriple(
+        vol.widthMeters,
+        vol.depthMeters,
+        vol.heightMeters,
+        unitSystem,
+        { compact: true }
+      )}`
     : '3D Isometric Land View';
 
   const fallbackCallouts = showcaseMode
@@ -486,6 +485,15 @@ export default function MobileIsometricMap({
     [effectiveSelectedId, resolvedEntries]
   );
 
+  const primaryCoords = primaryEntry?.volume
+    ? { lat: primaryEntry.volume.centerLat, lng: primaryEntry.volume.centerLng }
+    : null;
+  const { unitSystem } = useMeasurementUnits(userLocation, primaryCoords);
+  const unitSystemRef = useRef(unitSystem);
+  useEffect(() => {
+    unitSystemRef.current = unitSystem;
+  }, [unitSystem]);
+
   const otherEntries = useMemo(
     () =>
       resolvedEntries.filter(
@@ -628,9 +636,13 @@ export default function MobileIsometricMap({
           primary.parcel,
           showcaseModeRef.current ? null : primary.rankIndex
         );
-        const dims = `${formatCompactMeter(primary.volume.widthMeters)}×${formatCompactMeter(
-          primary.volume.depthMeters
-        )}×${formatCompactMeter(primary.volume.heightMeters)}m`;
+        const dims = formatDimensionTriple(
+          primary.volume.widthMeters,
+          primary.volume.depthMeters,
+          primary.volume.heightMeters,
+          unitSystemRef.current,
+          { compact: true }
+        );
         const outerColor = isFrozen
           ? '#7dd3fc'
           : landSelectedRef.current && showcaseModeRef.current
@@ -814,7 +826,8 @@ export default function MobileIsometricMap({
           bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
           reservedRects: [...reservedRects, ...placedRects],
           avoidRects: prismAvoidRects,
-          maxArrows: showcaseModeRef.current ? 2 : null
+          maxArrows: showcaseModeRef.current ? 2 : null,
+          unitSystem: unitSystemRef.current
         })
       : [];
     const nextSig = buildNeighborArrowsSignature(nextArrows);
@@ -1250,7 +1263,7 @@ export default function MobileIsometricMap({
   // Keep GeoJSON sources & showcase callouts synced when parcels, sculptures, hydration, or selection change
   useEffect(() => {
     syncMapSources();
-  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, userLocation, syncMapSources]);
+  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, userLocation, unitSystem, syncMapSources]);
 
   // Smoothly re-frame whenever user picks a land or taps Focus Map / 3D on a land card
   useEffect(() => {
@@ -1302,14 +1315,15 @@ export default function MobileIsometricMap({
       viewportHeight: vh,
       bearingDeg: liveBearing,
       reservedRects,
-      maxArrows: showcaseMode ? 2 : null
+      maxArrows: showcaseMode ? 2 : null,
+      unitSystem
     });
     const nextSig = buildNeighborArrowsSignature(nextArrows);
     if (nextSig !== neighborArrowsSigRef.current) {
       neighborArrowsSigRef.current = nextSig;
       setNeighborArrows(nextArrows);
     }
-  }, [webglAvailable, mapReady, primaryEntry, otherEntries, stageDims.width, stageDims.height, liveBearing, showcaseMode]);
+  }, [webglAvailable, mapReady, primaryEntry, otherEntries, stageDims.width, stageDims.height, liveBearing, showcaseMode, unitSystem]);
 
   // Extra resize pulse when isFullExpanded toggles on mobile
   useEffect(() => {
@@ -1366,7 +1380,8 @@ export default function MobileIsometricMap({
   const scaleBar = computeScaleBarForZoom(
     primaryEntry?.volume?.centerLat ?? userLocation?.lat ?? 37.7749,
     liveZoom,
-    80
+    80,
+    unitSystem
   );
 
   const primarySculptureCount = useMemo(() => {
@@ -1385,9 +1400,13 @@ export default function MobileIsometricMap({
       : formatSimpleLandLabel(primaryEntry.parcel)
     : 'Virtual Land';
   const primaryLandDims = primaryEntry?.volume
-    ? `${formatCompactMeter(primaryEntry.volume.widthMeters)}×${formatCompactMeter(
-        primaryEntry.volume.depthMeters
-      )}×${formatCompactMeter(primaryEntry.volume.heightMeters)}m`
+    ? formatDimensionTriple(
+        primaryEntry.volume.widthMeters,
+        primaryEntry.volume.depthMeters,
+        primaryEntry.volume.heightMeters,
+        unitSystem,
+        { compact: true }
+      )
     : '';
 
   return (
@@ -1501,6 +1520,7 @@ export default function MobileIsometricMap({
           onSelectLand={onSelectLand}
           onSelectSculpture={onSelectSculpture}
           onOpenSculptureView={onOpenSculptureView}
+          unitSystem={unitSystem}
         />
       )}
 

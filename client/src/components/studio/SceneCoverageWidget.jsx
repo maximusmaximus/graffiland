@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatShortLength, useMeasurementUnits } from '../../utils/measurementUnits.js';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function SceneCoverageWidget({
@@ -10,6 +11,7 @@ export default function SceneCoverageWidget({
   mode,
   onRefreshOrbRescan
 }) {
+  const { unitSystem } = useMeasurementUnits();
   return (
     <div
       className={`scene-scan-box hud-interactive ${sceneScan.optimal ? 'optimal' : 'scanning'} ${scanBoxCollapsed ? 'collapsed' : ''} ${dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''}`}
@@ -58,7 +60,7 @@ export default function SceneCoverageWidget({
 
           <div className="scene-scan-hint">{sceneScan.hint}</div>
           <div className="scene-scan-precision mono">
-            ±{sceneScan.precisionMeters.toFixed(2)}m · {orbStatus.engine} ({orbStatus.keyframes}/3)
+            ±{formatShortLength(sceneScan.precisionMeters, unitSystem, { decimals: 2, compact: true })} · {orbStatus.engine} ({orbStatus.keyframes}/3)
             {orbStatus.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
           </div>
           {mode === 'preview' && onRefreshOrbRescan && (

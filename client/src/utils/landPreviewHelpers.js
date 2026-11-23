@@ -13,11 +13,19 @@ import {
   formatLandExpiration,
   resolveLandCoords
 } from './landMapHelpers.js';
+import {
+  FEET_PER_METER,
+  formatArea,
+  formatDimensionTriple,
+  formatVolume,
+  normalizeUnitSystem
+} from './measurementUnits.js';
 
 const METERS_PER_DEG_LAT = 111320;
 const EARTH_CIRCUMFERENCE_M = 40075016.686;
 const CARDINAL_DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const SCALE_STEPS_M = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
+const SCALE_STEPS_FT = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 1320, 2640, 5280, 10560, 26400];
 
 function metersPerDegLngAtLat(lat) {
   return METERS_PER_DEG_LAT * Math.max(0.08, Math.cos((Number(lat) * Math.PI) / 180));
@@ -285,20 +293,46 @@ export function computeIsometricCameraFit(
 }
 
 /**
- * Computes a clean cartographic metric scale bar for a given latitude and MapLibre zoom level.
+ * Computes a clean cartographic scale bar (metric or imperial) for a given latitude and MapLibre zoom level.
  * @param {number} lat
  * @param {number} zoom
  * @param {number} [maxWidthPx]
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
  */
-export function computeScaleBarForZoom(lat, zoom, maxWidthPx = 92) {
+export function computeScaleBarForZoom(lat, zoom, maxWidthPx = 92, unitSystem = 'metric') {
+  const isImp = normalizeUnitSystem(unitSystem) === 'imperial';
   const nLat = Number(lat);
   const nZoom = Number(zoom);
   if (!Number.isFinite(nLat) || !Number.isFinite(nZoom)) {
-    return { meters: 20, widthPx: 64, label: '20 m' };
+    return isImp
+      ? { meters: 15.24, widthPx: 64, label: '50 ft' }
+      : { meters: 20, widthPx: 64, label: '20 m' };
   }
   const cosLat = Math.max(0.1, Math.cos((nLat * Math.PI) / 180));
   const metersPerPx = (EARTH_CIRCUMFERENCE_M * cosLat) / (512 * Math.pow(2, nZoom));
   const maxMeters = metersPerPx * Math.max(40, maxWidthPx);
+
+  if (isImp) {
+    const maxFeet = maxMeters * FEET_PER_METER;
+    let chosenFt = SCALE_STEPS_FT[0];
+    for (const step of SCALE_STEPS_FT) {
+      if (step <= maxFeet) {
+        chosenFt = step;
+      } else {
+        break;
+      }
+    }
+    const chosenMeters = chosenFt / FEET_PER_METER;
+    const widthPx = Math.max(
+      28,
+      Math.min(maxWidthPx, Math.round(chosenMeters / Math.max(0.001, metersPerPx)))
+    );
+    let label = `${chosenFt} ft`;
+    if (chosenFt === 1320) label = '0.25 mi';
+    else if (chosenFt === 2640) label = '0.5 mi';
+    else if (chosenFt >= 5280) label = `${chosenFt / 5280} mi`;
+    return { meters: Number(chosenMeters.toFixed(2)), widthPx, label };
+  }
 
   let chosen = SCALE_STEPS_M[0];
   for (const step of SCALE_STEPS_M) {
@@ -353,7 +387,7 @@ export function computeBearingBetween(fromLat, fromLng, toLat, toLng) {
  */
 export function buildParcelGeoSummary(
   parcel,
-  { allParcels = [], userLocation = null, placeContext = null } = {}
+  { allParcels = [], userLocation = null, placeContext = null, unitSystem = 'metric' } = {}
 ) {
   const volume = resolveParcelVolume(parcel);
   if (!volume) return null;
@@ -362,33 +396,23 @@ export function buildParcelGeoSummary(
   const rawCoords = `${volume.centerLat.toFixed(6)}, ${volume.centerLng.toFixed(6)}`;
   const googleMapsUrl = buildGoogleMapsLandUrl(volume.centerLat, volume.centerLng);
 
-  const fmtDim = (v) =>
-    v < 10
-      ? Number.isInteger(Number(v.toFixed(1)))
-        ? String(Math.round(v))
-        : v.toFixed(1)
-      : String(Math.round(v));
   const rawArea = Number.isFinite(Number(volume.footprintAreaSqM))
     ? Number(volume.footprintAreaSqM)
     : volume.widthMeters * volume.depthMeters;
   const rawVolM3 = Number.isFinite(Number(volume.volumeCubicM))
     ? Number(volume.volumeCubicM)
     : rawArea * volume.heightMeters;
-  const areaStr =
-    rawArea < 10
-      ? Number.isInteger(Number(rawArea.toFixed(1)))
-        ? String(Math.round(rawArea))
-        : rawArea.toFixed(1)
-      : Math.round(rawArea).toLocaleString();
-  const volStr =
-    rawVolM3 < 10
-      ? Number.isInteger(Number(rawVolM3.toFixed(1)))
-        ? String(Math.round(rawVolM3))
-        : rawVolM3.toFixed(1)
-      : Math.round(rawVolM3).toLocaleString();
   const rot = Math.round(volume.rotationDeg || 0);
-  const dimensionsLabel = `${fmtDim(volume.widthMeters)}×${fmtDim(volume.depthMeters)}×${fmtDim(volume.heightMeters)} m · ${areaStr} m²`;
-  const volumeLabel = `${volStr} m³${rot ? ` · ${rot}° rot` : ''}`;
+  const tripleStr = formatDimensionTriple(
+    volume.widthMeters,
+    volume.depthMeters,
+    volume.heightMeters,
+    unitSystem
+  );
+  const areaStr = formatArea(rawArea, unitSystem);
+  const volStr = formatVolume(rawVolM3, unitSystem);
+  const dimensionsLabel = areaStr ? `${tripleStr} · ${areaStr}` : tripleStr;
+  const volumeLabel = `${volStr}${rot ? ` · ${rot}° rot` : ''}`;
 
   let distanceFromUserLabel = '';
   if (
@@ -409,7 +433,9 @@ export function buildParcelGeoSummary(
       volume.centerLng
     );
     distanceFromUserLabel =
-      distM < 30 ? 'At your location' : `${formatDistanceMeters(distM)} ${dir.label} of you`;
+      distM < 30
+        ? 'At your location'
+        : `${formatDistanceMeters(distM, unitSystem)} ${dir.label} of you`;
   }
 
   let nearestOwnedLand = null;
@@ -435,7 +461,7 @@ export function buildParcelGeoSummary(
         parcelId: other.parcelId,
         name: resolveLandDisplayName(other),
         distanceMeters: distM,
-        distanceLabel: formatDistanceMeters(distM),
+        distanceLabel: formatDistanceMeters(distM, unitSystem),
         cardinal: dir.label
       };
     }

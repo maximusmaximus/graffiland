@@ -8,6 +8,7 @@ import {
   requestPasskeyAssertion
 } from '../utils/passkeyClient.js';
 import InfoTip from './InfoTip.jsx';
+import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -149,7 +150,7 @@ export default function InfoTermsModal({
             className={`btn btn-sm ${tab === 'account' ? 'btn-primary' : ''}`}
             onClick={() => setTab('account')}
           >
-            <XeroIcon emoji="👤" size={14} /> Account &amp; Wallet
+            <XeroIcon emoji="⚙️" size={14} /> Account &amp; Settings
           </button>
         </div>
 
@@ -375,6 +376,8 @@ export default function InfoTermsModal({
 
         {tab === 'account' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>
+            <MeasurementUnitSetting />
+
             {!user ? (
               <div className="card" style={{ textAlign: 'center' }}>
                 <p style={{ color: 'var(--muted)', marginTop: 0 }}>

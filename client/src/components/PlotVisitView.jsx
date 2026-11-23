@@ -13,22 +13,22 @@ import {
   copyToClipboard
 } from '../utils/clipboard.js';
 import {
+  formatDistanceMeters,
   formatLandDimensions,
   formatLandExpiration,
   formatSculptureAssetMeta,
   formatShortDate,
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
+import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
 
-function formatDistance(meters) {
-  if (!Number.isFinite(meters)) return '';
-  if (meters < 1000) return `${Math.round(meters)} m`;
-  return `${(meters / 1000).toFixed(1)} km`;
+function formatDistance(meters, unitSystem = 'metric') {
+  return formatDistanceMeters(meters, unitSystem);
 }
 
 /**
@@ -204,6 +204,10 @@ export default function PlotVisitView({
   );
   const hasCenter = Number.isFinite(centerLat) && Number.isFinite(centerLng);
   const isFrozen = Boolean(activeParcel?.frozen || activeParcel?.settings?.frozen);
+  const { unitSystem } = useMeasurementUnits(
+    userLocation,
+    hasCenter ? { lat: centerLat, lng: centerLng } : null
+  );
 
   const landDisplayName = resolveLandDisplayName(
     {
@@ -212,7 +216,7 @@ export default function PlotVisitView({
     },
     { defaultName: 'Virtual Land' }
   );
-  const landDimensions = formatLandDimensions(activeParcel);
+  const landDimensions = formatLandDimensions(activeParcel, unitSystem);
   const landExpiration = formatLandExpiration(activeParcel);
 
   const userWallets = useMemo(() => {
@@ -1210,7 +1214,7 @@ export default function PlotVisitView({
                           {isNearProperty && (
                             <div className="mobile-parcel-distance-row">
                               <span className="badge teal" data-testid="parcel-proximity-near">
-                                📍 You are at this property ({formatDistance(distanceMeters)} away)
+                                📍 You are at this property ({formatDistance(distanceMeters, unitSystem)} away)
                               </span>
                             </div>
                           )}
@@ -1260,7 +1264,7 @@ export default function PlotVisitView({
                                     className="badge gold mobile-parcel-distance-badge"
                                     data-testid="parcel-proximity-far"
                                   >
-                                    📍 {formatDistance(distanceMeters)} away
+                                    📍 {formatDistance(distanceMeters, unitSystem)} away
                                   </span>
                                 ) : (
                                   <span
@@ -1304,7 +1308,7 @@ export default function PlotVisitView({
                               className="badge gold mobile-parcel-distance-badge"
                               data-testid="parcel-proximity-far"
                             >
-                              📍 {formatDistance(distanceMeters)} away
+                              📍 {formatDistance(distanceMeters, unitSystem)} away
                             </span>
                           )}
                           <button

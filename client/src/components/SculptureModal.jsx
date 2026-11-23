@@ -37,6 +37,11 @@ import {
   resolveAuthorHandleForStorage,
   resolveSafeUserAvatar
 } from '../../../shared/userDisplay.mjs';
+import {
+  formatDistance,
+  formatShortLength,
+  useMeasurementUnits
+} from '../utils/measurementUnits.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
@@ -85,6 +90,11 @@ export default function SculptureModal({
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
+  const scFallbackCoords =
+    Number.isFinite(Number(sculpture?.lat)) && Number.isFinite(Number(sculpture?.lng))
+      ? { lat: Number(sculpture.lat), lng: Number(sculpture.lng) }
+      : null;
+  const { unitSystem } = useMeasurementUnits(userLocation, scFallbackCoords);
   const landMapHostRef = useRef(null);
   const [toAddress, setToAddress] = useState('');
   const [busyAction, setBusyAction] = useState('');
@@ -787,11 +797,7 @@ export default function SculptureModal({
         )
       : null;
   const distanceLabel =
-    distanceMeters === null
-      ? ''
-      : distanceMeters >= 1000
-      ? `${(distanceMeters / 1000).toFixed(1)} km away`
-      : `${distanceMeters} m away`;
+    distanceMeters === null ? '' : `${formatDistance(distanceMeters, unitSystem)} away`;
 
   const handleAddToWallet = async () => {
     setNftNotice('');
@@ -1603,14 +1609,18 @@ export default function SculptureModal({
                 <tr>
                   <th>GPS Accuracy / Alt</th>
                   <td className="mono">
-                    ±{sculpture.accuracy ?? '—'}m ·{' '}
+                    ±
+                    {sculpture.accuracy != null
+                      ? formatShortLength(sculpture.accuracy, unitSystem, { decimals: 0, compact: true })
+                      : '—'}{' '}
+                    ·{' '}
                     {elevation.anchorAltitudeMeters != null
-                      ? `${Math.round(elevation.anchorAltitudeMeters * 10) / 10}m alt`
+                      ? `${formatShortLength(elevation.anchorAltitudeMeters, unitSystem, { decimals: 1, compact: true })} alt`
                       : sculpture.altitude != null
-                        ? `${Math.round(sculpture.altitude)}m alt`
+                        ? `${formatShortLength(sculpture.altitude, unitSystem, { decimals: 0, compact: true })} alt`
                         : 'n/a'}
                     {elevation.altitudeAccuracyMeters != null
-                      ? ` (±${Math.round(elevation.altitudeAccuracyMeters)}m)`
+                      ? ` (±${formatShortLength(elevation.altitudeAccuracyMeters, unitSystem, { decimals: 0, compact: true })})`
                       : ''}
                   </td>
                 </tr>

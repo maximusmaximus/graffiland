@@ -21,6 +21,10 @@ import {
 import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import {
+  formatShortLength,
+  useMeasurementUnits
+} from '../utils/measurementUnits.js';
 import InfoTip from './InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -302,6 +306,15 @@ export default function LandIsometricPreview({
 
   const volume = useMemo(() => resolveParcelVolume(parcel), [parcel]);
 
+  const parcelCoords = volume
+    ? { lat: volume.centerLat, lng: volume.centerLng }
+    : null;
+  const { unitSystem } = useMeasurementUnits(userLocation, parcelCoords);
+  const unitSystemRef = useRef(unitSystem);
+  useEffect(() => {
+    unitSystemRef.current = unitSystem;
+  }, [unitSystem]);
+
   const otherParcelEntries = useMemo(() => {
     const out = [];
     for (const p of allParcels || []) {
@@ -317,9 +330,10 @@ export default function LandIsometricPreview({
       buildParcelGeoSummary(parcel, {
         allParcels,
         userLocation,
-        placeContext
+        placeContext,
+        unitSystem
       }),
-    [allParcels, parcel, placeContext, userLocation]
+    [allParcels, parcel, placeContext, userLocation, unitSystem]
   );
 
   // Refs for synchronous MapLibre event handlers
@@ -495,7 +509,10 @@ export default function LandIsometricPreview({
         const isFrozenNow = isFrozenRef.current;
         const shortName = displayNameRef.current || 'Virtual Land';
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
-        const heightTag = `${Math.round(curVol.heightMeters)}m`;
+        const heightTag = formatShortLength(curVol.heightMeters, unitSystemRef.current, {
+          decimals: 0,
+          compact: true
+        });
         const outerColor = isFrozenNow ? '#7dd3fc' : '#ff1f8f';
         const innerColor = isFrozenNow ? '#e0f2fe' : '#ffd6ec';
         drawPreviewPrism(ctx, geom, {
@@ -576,7 +593,8 @@ export default function LandIsometricPreview({
           viewportHeight: h,
           bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
           reservedRects: [...reservedRects, ...placedRects],
-          avoidRects: prismAvoidRects
+          avoidRects: prismAvoidRects,
+          unitSystem: unitSystemRef.current
         })
       : [];
     const nextSig = buildNeighborArrowsSignature(nextArrows);
@@ -992,7 +1010,7 @@ export default function LandIsometricPreview({
   }
 
   const compass = formatBearingCardinal(liveBearing);
-  const scaleBar = computeScaleBarForZoom(volume.centerLat, liveZoom, 92);
+  const scaleBar = computeScaleBarForZoom(volume.centerLat, liveZoom, 92, unitSystem);
   const displayName = effectiveDisplayName;
   const isFrozen = effectiveFrozen;
   const sculptureCount = Number(parcel.sculptures?.length ?? parcel.sculptureCount ?? 0);
