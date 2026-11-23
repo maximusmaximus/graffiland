@@ -557,6 +557,18 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page2.getByRole('button', { name: 'Color Red' }).click();
     await page2.getByTestId('palette-select-pencil').click();
     await page2.waitForSelector('.key-tool-caption:has-text("Pencil")');
+    // Dock includes Eraser right next to Brush & Pencil
+    await page2.getByTestId('palette-select-erase').click();
+    await page2.waitForSelector('.key-tool-caption:has-text("Erase")');
+    // First time selecting Brush opens the Spray-Can Brush intro popup explaining how to use it
+    await page2.getByTestId('palette-select-brush').click();
+    await page2.waitForSelector('[data-testid="spray-brush-guide-modal"]', { timeout: 5000 });
+    await page2.getByTestId('spray-brush-guide-start-btn').click();
+    await page2.waitForSelector('[data-testid="spray-brush-guide-modal"]', { state: 'detached' });
+    // Selecting Brush a second time must NOT re-open the first-time guide popup
+    await page2.getByTestId('palette-select-pencil').click();
+    await page2.getByTestId('palette-select-brush').click();
+    assert.equal(await page2.locator('[data-testid="spray-brush-guide-modal"]').count(), 0);
     await page2.getByTestId('palette-options-toggle').click();
     await page2.waitForSelector('[data-testid="brush-options-popup"]', { state: 'detached' });
 

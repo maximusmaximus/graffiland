@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { VOXEL_STEP } from '../shared/constants.mjs';
 import {
+  advanceFluidSprayPoint,
   areVoxelsFaceConnected,
   BLOCK_SIZE_PRESETS,
   buildConnectedVoxelPath,
+  computeAdjacentCandidateSlots,
+  findBestAdjacentVoxelSlot,
   getVoxelCellStep,
   STANDARD_COLOR_PRESETS
 } from '../shared/voxelStroke.mjs';
@@ -103,5 +106,88 @@ describe('Connected 3D Voxel Stroke Interpolation & Presets', () => {
         prev = v;
       }
     }
+  });
+
+  test('computeAdjacentCandidateSlots & findBestAdjacentVoxelSlot let moving phone up/sideways select potential stacking spaces around placed blocks', () => {
+    const placed = [{ x: 0, y: 0, z: 0.4, scale: 1 }];
+    const slots = computeAdjacentCandidateSlots(placed, { step: VOXEL_STEP, blockScale: 1 });
+    assert.equal(slots.length, 6);
+    assert.ok(slots.some((s) => s.face === 'top' && s.y === VOXEL_STEP && s.x === 0 && s.z === 0.4));
+
+    // Camera at (0, 0, 2.2) tilting slightly UP to aim right above the placed block at (0, 0.05, 0.4)
+    const camPos = { x: 0, y: 0, z: 2.2 };
+    const upDir = { x: 0, y: VOXEL_STEP, z: 0.4 - 2.2 };
+    const topPick = findBestAdjacentVoxelSlot({
+      rayOrigin: camPos,
+      rayDir: upDir,
+      voxels: placed,
+      step: VOXEL_STEP,
+      blockScale: 1
+    });
+    assert.ok(topPick);
+    assert.equal(topPick.face, 'top');
+    assert.deepEqual({ x: topPick.x, y: topPick.y, z: topPick.z }, { x: 0, y: VOXEL_STEP, z: 0.4 });
+    assert.equal(topPick.nearbySlots.length, 5);
+
+    // Moving phone slightly right selects the right neighbor space
+    const rightDir = { x: VOXEL_STEP, y: 0, z: 0.4 - 2.2 };
+    const rightPick = findBestAdjacentVoxelSlot({
+      rayOrigin: camPos,
+      rayDir: rightDir,
+      voxels: placed,
+      step: VOXEL_STEP,
+      blockScale: 1
+    });
+    assert.ok(rightPick);
+    assert.equal(rightPick.face, 'right');
+    assert.deepEqual({ x: rightPick.x, y: rightPick.y, z: rightPick.z }, { x: VOXEL_STEP, y: 0, z: 0.4 });
+
+    // Once top slot is occupied, moving further up selects the next slot above block 2 (y = 0.10)
+    const stacked = [
+      { x: 0, y: 0, z: 0.4, scale: 1 },
+      { x: 0, y: VOXEL_STEP, z: 0.4, scale: 1 }
+    ];
+    const higherDir = { x: 0, y: VOXEL_STEP * 2, z: 0.4 - 2.2 };
+    const thirdPick = findBestAdjacentVoxelSlot({
+      rayOrigin: camPos,
+      rayDir: higherDir,
+      voxels: stacked,
+      step: VOXEL_STEP,
+      blockScale: 1
+    });
+    assert.ok(thirdPick);
+    assert.equal(thirdPick.face, 'top');
+    assert.equal(thirdPick.y, VOXEL_STEP * 2);
+
+    // Aiming far into open air returns null so free-space placement works normally
+    const farAway = findBestAdjacentVoxelSlot({
+      rayOrigin: camPos,
+      rayDir: { x: 1.5, y: 1.2, z: -1.8 },
+      voxels: stacked,
+      step: VOXEL_STEP,
+      blockScale: 1
+    });
+    assert.equal(farAway, null);
+  });
+
+  test('advanceFluidSprayPoint starts immediately, filters slow tremor, and tracks fast spray-can sweeps smoothly', () => {
+    const first = advanceFluidSprayPoint(null, { x: 0.1, y: 0.2, z: -1.5 });
+    assert.deepEqual(first, { x: 0.1, y: 0.2, z: -1.5 });
+
+    // Slow micro-movement is smoothed cleanly (< 50% step per 60Hz frame)
+    const slow = advanceFluidSprayPoint(
+      { x: 0, y: 0, z: 0 },
+      { x: VOXEL_STEP * 0.4, y: 0, z: 0 },
+      { dtMs: 16.67, cellStep: VOXEL_STEP }
+    );
+    assert.ok(slow.x > 0 && slow.x < VOXEL_STEP * 0.2);
+
+    // Fast spray-can sweep responds rapidly (> 75% catch-up per 60Hz frame)
+    const fast = advanceFluidSprayPoint(
+      { x: 0, y: 0, z: 0 },
+      { x: VOXEL_STEP * 4, y: 0, z: 0 },
+      { dtMs: 16.67, cellStep: VOXEL_STEP }
+    );
+    assert.ok(fast.x > VOXEL_STEP * 3.0 && fast.x <= VOXEL_STEP * 4);
   });
 });

@@ -2,9 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
 import {
+  advanceFluidSprayPoint,
   buildConnectedVoxelPath,
   getVoxelCellStep,
-  normalizeBlockScale
+  normalizeBlockScale,
+  snapPointToVoxelLattice
 } from '../../../../shared/voxelStroke.mjs';
 import SceneErrorBoundary from '../SceneErrorBoundary.jsx';
 import {
@@ -282,6 +284,39 @@ function ARViewportCanvasInner({
     const ghost = new THREE.Mesh(ghostGeo, ghostMat);
     scene.add(ghost);
 
+    // Pre-allocated pool of subtle open-space outlines around placed blocks (Pencil / Stack)
+    const neighborSlotEdgeGeo = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(VOXEL_STEP * 0.92, VOXEL_STEP * 0.92, VOXEL_STEP * 0.92)
+    );
+    const neighborSlotMat = new THREE.LineBasicMaterial({
+      color: 0x00f5d4,
+      transparent: true,
+      opacity: 0.32
+    });
+    const neighborSlotPool = Array.from({ length: 6 }, () => {
+      const seg = new THREE.LineSegments(neighborSlotEdgeGeo, neighborSlotMat);
+      seg.visible = false;
+      scene.add(seg);
+      return seg;
+    });
+
+    // Lightweight 3D spray-can mist stream while actively spraying with Brush
+    const SPRAY_MIST_COUNT = 18;
+    const sprayMistPositions = new Float32Array(SPRAY_MIST_COUNT * 3);
+    const sprayMistGeo = new THREE.BufferGeometry();
+    sprayMistGeo.setAttribute('position', new THREE.BufferAttribute(sprayMistPositions, 3));
+    const sprayMistMat = new THREE.PointsMaterial({
+      color: 0x00f5d4,
+      size: 0.026,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false
+    });
+    const sprayMist = new THREE.Points(sprayMistGeo, sprayMistMat);
+    sprayMist.visible = false;
+    sprayMist.frustumCulled = false;
+    scene.add(sprayMist);
+
     sceneRef.current = scene;
     cameraRef.current = camera;
     rendererRef.current = renderer;
@@ -311,6 +346,8 @@ function ARViewportCanvasInner({
     window.addEventListener('resize', handleResize);
 
     let rafId = 0;
+    let lastFrameAt = performance.now();
+    let spraySmoothPos = null;
     let lastWsPush = 0;
     let lastEnvPush = 0;
     let lastOcclusionPush = 0;
@@ -324,6 +361,10 @@ function ARViewportCanvasInner({
     let orbExtractBusy = false;
     const maxAnisotropy = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 8);
     const scanFwdVec = new THREE.Vector3();
+    const sprayFwdVec = new THREE.Vector3();
+    const sprayUpVec = new THREE.Vector3();
+    const sprayRightVec = new THREE.Vector3();
+    const sprayNozzleVec = new THREE.Vector3();
     const originProjVec = new THREE.Vector3();
     const guidanceTargetWorld = new THREE.Vector3();
     const targetRay = new THREE.Raycaster();
@@ -332,6 +373,8 @@ function ARViewportCanvasInner({
     const animate = () => {
       rafId = requestAnimationFrame(animate);
       const now = performance.now();
+      const dtMs = Math.max(4, Math.min(80, now - lastFrameAt));
+      lastFrameAt = now;
 
       if (rawOrientationRef.current) {
         const { alpha, beta, gamma } = rawOrientationRef.current;
@@ -366,16 +409,109 @@ function ARViewportCanvasInner({
       if (arViewOnly) {
         transformBox.visible = false;
       }
+      for (let i = 0; i < neighborSlotPool.length; i += 1) {
+        neighborSlotPool[i].visible = false;
+      }
+      sprayMist.visible = false;
       let latestTarget = null;
+
+      if (!paintingRef.current || toolRef.current !== 'brush') {
+        spraySmoothPos = null;
+      }
 
       if (showCursor) {
         const curBlockScale = normalizeBlockScale(blockSizeRef?.current ?? 1);
         const curCellStep = getVoxelCellStep(VOXEL_STEP, curBlockScale);
         const target = computeTargetVoxel(paintingRef.current);
         latestTarget = target;
-        if (target && target.action === 'add') {
+
+        // Render subtle outlines of potential empty spaces around placed blocks (Pencil & Stack)
+        if (
+          target &&
+          Array.isArray(target.nearbySlots) &&
+          target.nearbySlots.length > 0 &&
+          (toolRef.current === 'pencil' || toolRef.current === 'stack')
+        ) {
+          neighborSlotMat.color.set(colorRef.current);
+          const count = Math.min(neighborSlotPool.length, target.nearbySlots.length);
+          for (let i = 0; i < count; i += 1) {
+            const slot = target.nearbySlots[i];
+            const seg = neighborSlotPool[i];
+            seg.position.set(slot.x, slot.y, slot.z);
+            seg.scale.setScalar(normalizeBlockScale(slot.scale ?? curBlockScale));
+            seg.visible = true;
+          }
+        }
+
+        if (target && target.action === 'replace') {
+          const pulse = 1.07 + 0.04 * Math.sin(now * 0.012);
+          const repScale = Math.max(
+            curBlockScale,
+            normalizeBlockScale(target.replacedVoxel?.scale ?? curBlockScale)
+          );
           ghost.position.set(target.x, target.y, target.z);
-          ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
+          ghost.scale.setScalar(repScale * pulse);
+          ghost.material.color.set(
+            originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
+          );
+        } else if (target && target.action === 'add') {
+          const isActiveSprayBrush = paintingRef.current && toolRef.current === 'brush';
+          let strokeTarget = target;
+
+          if (isActiveSprayBrush) {
+            const rawPt = target.rawPoint || target;
+            spraySmoothPos = advanceFluidSprayPoint(spraySmoothPos, rawPt, {
+              dtMs,
+              cellStep: curCellStep
+            });
+            const snapped = snapPointToVoxelLattice(spraySmoothPos, VOXEL_STEP, curBlockScale);
+            strokeTarget = {
+              ...target,
+              x: snapped.x,
+              y: snapped.y,
+              z: snapped.z,
+              scale: snapped.scale
+            };
+            ghost.position.set(spraySmoothPos.x, spraySmoothPos.y, spraySmoothPos.z);
+
+            // Animate spray-can mist stream from nozzle toward live tip
+            sprayFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+            sprayUpVec.set(0, 1, 0).applyQuaternion(camera.quaternion);
+            sprayRightVec.set(1, 0, 0).applyQuaternion(camera.quaternion);
+            sprayNozzleVec
+              .copy(camera.position)
+              .addScaledVector(sprayFwdVec, 0.34)
+              .addScaledVector(sprayUpVec, -0.14);
+            const mistSpread = curCellStep * 0.68;
+            const phaseBase = (now * 0.0045) % 1;
+            for (let i = 0; i < SPRAY_MIST_COUNT; i += 1) {
+              const frac = (i / SPRAY_MIST_COUNT + phaseBase) % 1;
+              const cone = frac * mistSpread;
+              const ang = i * 2.39996 + now * 0.014;
+              const px =
+                sprayNozzleVec.x +
+                (spraySmoothPos.x - sprayNozzleVec.x) * frac +
+                (sprayRightVec.x * Math.cos(ang) + sprayUpVec.x * Math.sin(ang)) * cone;
+              const py =
+                sprayNozzleVec.y +
+                (spraySmoothPos.y - sprayNozzleVec.y) * frac +
+                (sprayRightVec.y * Math.cos(ang) + sprayUpVec.y * Math.sin(ang)) * cone;
+              const pz =
+                sprayNozzleVec.z +
+                (spraySmoothPos.z - sprayNozzleVec.z) * frac +
+                (sprayRightVec.z * Math.cos(ang) + sprayUpVec.z * Math.sin(ang)) * cone;
+              sprayMistPositions[i * 3] = px;
+              sprayMistPositions[i * 3 + 1] = py;
+              sprayMistPositions[i * 3 + 2] = pz;
+            }
+            sprayMistGeo.attributes.position.needsUpdate = true;
+            sprayMistMat.color.set(colorRef.current);
+            sprayMist.visible = true;
+          } else {
+            ghost.position.set(target.x, target.y, target.z);
+          }
+
+          ghost.scale.setScalar(normalizeBlockScale(strokeTarget.scale ?? curBlockScale));
           ghost.material.color.set(
             originStatusRef.current.originBlocked ? 0xff3e7f : colorRef.current
           );
@@ -396,7 +532,7 @@ function ARViewportCanvasInner({
 
             if (!selfStackBlocked) {
               if (!prev) {
-                const startStep = buildConnectedVoxelPath(null, target, {
+                const startStep = buildConnectedVoxelPath(null, strokeTarget, {
                   step: VOXEL_STEP,
                   blockScale: curBlockScale
                 });
@@ -406,10 +542,10 @@ function ARViewportCanvasInner({
                   applyVoxelBatch(startStep.path);
                 }
               } else {
-                const stroke = buildConnectedVoxelPath(prev, target, {
+                const stroke = buildConnectedVoxelPath(prev, strokeTarget, {
                   step: VOXEL_STEP,
                   blockScale: curBlockScale,
-                  maxSteps: 64
+                  maxSteps: 96
                 });
                 if (stroke.path.length > 0) {
                   lastPaintPosRef.current = stroke.lastPoint;
@@ -421,11 +557,13 @@ function ARViewportCanvasInner({
           }
         } else if (target && target.action === 'erase' && target.voxel) {
           ghost.position.set(target.voxel.x, target.voxel.y, target.voxel.z);
-          ghost.scale.setScalar(normalizeBlockScale(target.voxel.scale ?? 1));
+          ghost.scale.setScalar(normalizeBlockScale(target.voxel.scale ?? 1) * 1.06);
           ghost.material.color.set(0xff3e7f);
           if (paintingRef.current && toolRef.current === 'erase') {
             eraseTargetVoxel(target);
           }
+        } else if (toolRef.current === 'erase') {
+          ghost.visible = false;
         }
       }
 
@@ -821,6 +959,10 @@ function ARViewportCanvasInner({
       stemGeo.dispose();
       ghostGeo.dispose();
       ghostMat.dispose();
+      neighborSlotEdgeGeo.dispose();
+      neighborSlotMat.dispose();
+      sprayMistGeo.dispose();
+      sprayMistMat.dispose();
       transformBox.dispose?.();
       transformBoxRef.current = null;
       draftUnitGeoRef.current?.dispose();

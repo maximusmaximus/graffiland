@@ -4001,4 +4001,182 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(signInCount, 1);
     cleanup();
   });
+
+  test('Dock includes Eraser, SprayBrushIntroModal explains spray-can brush, and Pencil replaces hit blocks + moves up to select adjacent stacking spaces', async () => {
+    const THREE = await import('three');
+    const { default: StudioDockDrawer } = await loadJsxModule(
+      'client/src/components/studio/StudioDockDrawer.jsx'
+    );
+    const { default: SprayBrushIntroModal } = await loadJsxModule(
+      'client/src/components/studio/SprayBrushIntroModal.jsx'
+    );
+    const { useVoxelBrush } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
+
+    // 1) Dock exposes Brush, Pencil, and Eraser + brush guide help trigger
+    let selectedTool = 'brush';
+    let guideOpened = 0;
+    const renderDock = () =>
+      React.createElement(StudioDockDrawer, {
+        dockOpen: true,
+        onToggleDock: () => {},
+        mode: 'draw',
+        tool: selectedTool,
+        onSelectDrawTool: (t) => {
+          selectedTool = t;
+        },
+        onOpenBrushGuide: () => {
+          guideOpened += 1;
+        },
+        blockSize: 1,
+        setBlockSize: () => {},
+        color: '#00f5d4',
+        setColor: () => {},
+        material: 'matte',
+        setMaterial: () => {},
+        reachMeters: 1.8,
+        setReachMeters: () => {}
+      });
+    const dockView = RTL.render(renderDock());
+    assert.ok(dockView.getByTestId('palette-select-brush'));
+    assert.ok(dockView.getByTestId('palette-select-pencil'));
+    assert.ok(dockView.getByTestId('palette-select-erase'));
+    RTL.fireEvent.click(dockView.getByTestId('palette-brush-guide-btn'));
+    assert.equal(guideOpened, 1);
+    RTL.fireEvent.click(dockView.getByTestId('palette-select-erase'));
+    assert.equal(selectedTool, 'erase');
+    dockView.rerender(renderDock());
+    assert.ok(dockView.getByText(/Tap or hold on blocks to erase/i));
+    cleanup();
+
+    // 2) SprayBrushIntroModal explains how to use phone like a spray can & dismisses cleanly
+    let closedGuide = 0;
+    const guideView = RTL.render(
+      React.createElement(SprayBrushIntroModal, {
+        onClose: () => {
+          closedGuide += 1;
+        }
+      })
+    );
+    assert.ok(guideView.getByTestId('spray-brush-guide-modal'));
+    assert.match(guideView.getByTestId('spray-brush-guide-modal').textContent, /spray can/i);
+    assert.match(guideView.getByTestId('spray-brush-guide-modal').textContent, /Hold to spray/i);
+    RTL.fireEvent.click(guideView.getByTestId('spray-brush-guide-start-btn'));
+    assert.equal(closedGuide, 1);
+    RTL.fireEvent.click(guideView.getByTestId('spray-brush-guide-close-btn'));
+    assert.equal(closedGuide, 2);
+    RTL.fireEvent.keyDown(globalThis.window, { key: 'Escape' });
+    assert.equal(closedGuide, 3);
+    cleanup();
+
+    // 3) useVoxelBrush: Pencil replaces aimed block in-place & moving phone up selects open top slot for stacking
+    const CanvasCtor = globalThis.window.HTMLCanvasElement;
+    const origGetContext = CanvasCtor.prototype.getContext;
+    CanvasCtor.prototype.getContext = () => ({
+      createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
+      drawImage: () => {},
+      getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
+      putImageData: () => {},
+      clearRect: () => {},
+      fillRect: () => {}
+    });
+
+    try {
+      const camera = new THREE.PerspectiveCamera(68, 1, 0.05, 120);
+      camera.position.set(0, 0, 2.2);
+      camera.lookAt(0, 0, 0.4);
+      camera.updateMatrixWorld(true);
+      const draftGroup = new THREE.Group();
+
+      let hookApi = null;
+      function BrushHarness() {
+        const api = useVoxelBrush({
+          config: {},
+          initialDraft: {
+            voxels: [{ x: 0, y: 0, z: 0.4, color: '#ef4444', material: 'matte', scale: 1 }],
+            color: '#00f5d4',
+            material: 'neon'
+          },
+          user: null,
+          location: null,
+          locationRef: { current: null },
+          cameraReady: true,
+          sceneScan: { optimal: true, scannedCount: 9, targetCount: 9 },
+          polRef: { current: { analyzeSurfacePatch: () => null } },
+          rawOrientationRef: { current: null },
+          fallbackEulerRef: { current: { yaw: 0, pitch: 0 } },
+          enterFullscreen: () => {},
+          setSensorBanner: () => {},
+          showTemporaryHint: () => {},
+          canvasHostRef: { current: null },
+          cameraRef: { current: camera },
+          draftGroupRef: { current: draftGroup },
+          transformBoxRef: { current: null },
+          surfaceMarkerRef: { current: null },
+          shadowPlaneRef: { current: null },
+          gridHelperRef: { current: null },
+          nearbyGroupRef: { current: null },
+          arTargetedIdRef: { current: '' },
+          setArTargetedSculpture: () => {},
+          arPinPreview: null,
+          openCameraSelectedChat: () => {}
+        });
+        hookApi = api;
+        return null;
+      }
+
+      RTL.render(React.createElement(BrushHarness));
+      draftGroup.updateMatrixWorld(true);
+
+      // Switch to Pencil while aiming directly at the placed Red block at (0, 0, 0.4)
+      await RTL.act(async () => {
+        hookApi.selectKeyTool('pencil');
+      });
+      const replaceTarget = hookApi.computeTargetVoxel();
+      assert.ok(replaceTarget);
+      assert.equal(replaceTarget.action, 'replace');
+      assert.equal(replaceTarget.replaceExisting, true);
+      assert.deepEqual({ x: replaceTarget.x, y: replaceTarget.y, z: replaceTarget.z }, { x: 0, y: 0, z: 0.4 });
+      assert.equal(replaceTarget.nearbySlots.length, 6);
+
+      // Apply Pencil replace -> replaces color/material in place and updates Three.js mesh material!
+      const oldMeshMat = draftGroup.children[0].material;
+      await RTL.act(async () => {
+        hookApi.applyVoxelAction(replaceTarget);
+      });
+      assert.equal(hookApi.voxels.length, 1);
+      assert.equal(hookApi.voxels[0].color, '#00f5d4');
+      assert.equal(hookApi.voxels[0].material, 'neon');
+      assert.notEqual(draftGroup.children[0].material, oldMeshMat);
+
+      // Move phone UP slightly to aim above the block at (0, 0.05, 0.4) -> selects open top space!
+      camera.lookAt(0, 0.05, 0.4);
+      camera.updateMatrixWorld(true);
+      const stackTarget = hookApi.computeTargetVoxel();
+      assert.ok(stackTarget);
+      assert.equal(stackTarget.action, 'add');
+      assert.equal(stackTarget.adjacentFace, 'top');
+      assert.deepEqual({ x: stackTarget.x, y: stackTarget.y, z: stackTarget.z }, { x: 0, y: 0.05, z: 0.4 });
+
+      await RTL.act(async () => {
+        hookApi.applyVoxelAction(stackTarget);
+      });
+      assert.equal(hookApi.voxels.length, 2);
+      assert.equal(hookApi.voxels[1].y, 0.05);
+
+      // Switch to Eraser and erase the top block cleanly
+      await RTL.act(async () => {
+        hookApi.selectKeyTool('erase');
+      });
+      draftGroup.updateMatrixWorld(true);
+      const eraseTarget = hookApi.computeTargetVoxel(true);
+      assert.ok(eraseTarget && eraseTarget.action === 'erase');
+      await RTL.act(async () => {
+        hookApi.applyVoxelAction(eraseTarget);
+      });
+      assert.equal(hookApi.voxels.length, 1);
+    } finally {
+      CanvasCtor.prototype.getContext = origGetContext;
+      cleanup();
+    }
+  });
 });
