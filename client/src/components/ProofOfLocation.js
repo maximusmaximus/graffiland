@@ -298,12 +298,24 @@ export class ProofOfLocationTracker {
   }
 
   sampleCameraFrame(videoEl) {
-    if (!videoEl || videoEl.readyState < 2 || !this.ctx) return null;
+    if (
+      !videoEl ||
+      videoEl.readyState < 2 ||
+      !videoEl.videoWidth ||
+      !videoEl.videoHeight ||
+      !this.ctx
+    ) {
+      return null;
+    }
     const vw = videoEl.videoWidth || 640;
     const vh = videoEl.videoHeight || 480;
     this.cameraResolution = `${vw}x${vh}`;
 
-    this.ctx.drawImage(videoEl, 0, 0, 48, 36);
+    try {
+      this.ctx.drawImage(videoEl, 0, 0, 48, 36);
+    } catch {
+      return null;
+    }
     const imgData = this.ctx.getImageData(0, 0, 48, 36).data;
     this.cameraFrames += 1;
 

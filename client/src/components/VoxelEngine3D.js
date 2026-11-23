@@ -114,15 +114,21 @@ export function createLiveEnvUpdater(renderer) {
   let currentTarget = null;
 
   function update(videoEl) {
-    if (!videoEl || videoEl.readyState < 2 || !ctx) return null;
+    if (!videoEl || videoEl.readyState < 2 || !videoEl.videoWidth || !videoEl.videoHeight || !ctx) {
+      return null;
+    }
 
     // Upper hemisphere: live camera wrap (mirrored horizontally for 360 seamlessness, no CPU blur)
-    ctx.drawImage(videoEl, 0, 0, 128, 64);
-    ctx.save();
-    ctx.translate(256, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(videoEl, 0, 0, 128, 64);
-    ctx.restore();
+    try {
+      ctx.drawImage(videoEl, 0, 0, 128, 64);
+      ctx.save();
+      ctx.translate(256, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(videoEl, 0, 0, 128, 64);
+      ctx.restore();
+    } catch {
+      return null;
+    }
 
     // Lower hemisphere: fast flipped & tinted ground bounce
     ctx.save();

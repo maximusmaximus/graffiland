@@ -14,6 +14,7 @@ import DesktopQrScanner from './DesktopQrScanner.jsx';
 export function PairDesktopMcpModal({
   user,
   videoRef = null,
+  onCameraRefreshNeeded = null,
   pairCodeInput,
   setPairCodeInput,
   pairedCode,
@@ -79,6 +80,7 @@ export function PairDesktopMcpModal({
             <div style={{ marginBottom: 8 }}>
               <DesktopQrScanner
                 existingVideoRef={videoRef}
+                onCameraRefreshNeeded={onCameraRefreshNeeded}
                 onDetected={(parsed) => {
                   if (parsed?.kind === 'desktop') {
                     setPairCodeInput(parsed.code);

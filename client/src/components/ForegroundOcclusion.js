@@ -146,14 +146,19 @@ export class ForegroundOcclusionCompositor {
     const outCtx = outputCanvas.getContext('2d');
     if (!outCtx) return this.lastOriginStatus;
 
-    if (!videoEl || videoEl.readyState < 2) {
+    if (!videoEl || videoEl.readyState < 2 || !videoEl.videoWidth || !videoEl.videoHeight) {
       outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       return this.evaluateOriginVisibility(originScreen);
     }
 
     const { width: w, height: h } = this;
     const len = w * h;
-    this.sampleCtx.drawImage(videoEl, 0, 0, w, h);
+    try {
+      this.sampleCtx.drawImage(videoEl, 0, 0, w, h);
+    } catch {
+      outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+      return this.evaluateOriginVisibility(originScreen);
+    }
     const frame = this.sampleCtx.getImageData(0, 0, w, h).data;
     const luma = this.currLuma;
 

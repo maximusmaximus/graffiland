@@ -68,6 +68,7 @@ export default function MobilePairApprovalDropdown({
   user,
   onOpenLogin,
   videoRef = null,
+  onCameraRefreshNeeded = null,
   pairCodeInput,
   setPairCodeInput,
   pairedCode,
@@ -433,6 +434,7 @@ export default function MobilePairApprovalDropdown({
                   {scannerOpen && (
                     <DesktopQrScanner
                       existingVideoRef={videoRef}
+                      onCameraRefreshNeeded={onCameraRefreshNeeded}
                       onDetected={handleQrDetected}
                       onClose={() => setScannerOpen(false)}
                     />
