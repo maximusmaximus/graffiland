@@ -13,7 +13,11 @@ import {
 import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
-import { groupNearestLandsWithSculptures } from '../utils/landMapHelpers.js';
+import {
+  groupNearestLandsWithSculptures,
+  isLandOwnedByUser
+} from '../utils/landMapHelpers.js';
+import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
 import {
   buildVoxelGroup,
   disposeObject3D,
@@ -42,7 +46,9 @@ export function useARPreview({
   modeRef,
   commitTransformAndExit,
   stopBrushPainting,
-  showTemporaryHint
+  showTemporaryHint,
+  focusedLandId = '',
+  isArViewOnly = false
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arTargetedIdRef = useRef('');
@@ -53,6 +59,7 @@ export function useARPreview({
   const [nearbyParcels, setNearbyParcels] = useState([]);
   const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
   const [arSelectedLandId, setArSelectedLandIdState] = useState('');
+  const [selectedLandSnapshot, setSelectedLandSnapshot] = useState(null);
   const [arLandGuidance, setArLandGuidance] = useState(null);
   const [selectedLandLoadState, setSelectedLandLoadState] = useState({
     parcelId: '',
@@ -77,9 +84,26 @@ export function useARPreview({
     arSelectedLandIdRef.current = clean;
     setArSelectedLandIdState(clean);
     if (!clean) {
+      setSelectedLandSnapshot(null);
       setArLandGuidance(null);
       setSelectedLandLoadState({ parcelId: '', status: 'idle', loadedCount: 0, totalCount: 0 });
     }
+  }, []);
+
+  const selectArLand = useCallback((parcel, sculptures = []) => {
+    const clean = String(parcel?.parcelId || '').trim();
+    arSelectedLandIdRef.current = clean;
+    setArSelectedLandIdState(clean);
+    if (!clean) {
+      setSelectedLandSnapshot(null);
+      setArLandGuidance(null);
+      setSelectedLandLoadState({ parcelId: '', status: 'idle', loadedCount: 0, totalCount: 0 });
+      return;
+    }
+    setSelectedLandSnapshot({
+      parcel,
+      sculptures: Array.isArray(sculptures) ? sculptures : []
+    });
   }, []);
 
   const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
@@ -133,7 +157,7 @@ export function useARPreview({
     }
   }, []);
 
-  // Merge nearbyParcels with mapParcels so live camera AR always sees fresh parcel metadata & volumes
+  // Merge nearbyParcels with mapParcels (+ selected snapshot) so live camera AR always sees fresh parcel metadata & volumes
   const mergedCameraParcels = useMemo(() => {
     const byId = new Map();
     for (const p of mapParcels || []) {
@@ -142,8 +166,12 @@ export function useARPreview({
     for (const p of nearbyParcels || []) {
       if (p?.parcelId) byId.set(p.parcelId, { ...(byId.get(p.parcelId) || {}), ...p });
     }
+    if (selectedLandSnapshot?.parcel?.parcelId) {
+      const pid = selectedLandSnapshot.parcel.parcelId;
+      byId.set(pid, { ...(byId.get(pid) || {}), ...selectedLandSnapshot.parcel });
+    }
     return Array.from(byId.values());
-  }, [mapParcels, nearbyParcels]);
+  }, [mapParcels, nearbyParcels, selectedLandSnapshot]);
 
   const cameraLands = useMemo(
     () =>
@@ -188,8 +216,42 @@ export function useARPreview({
 
   const activeArLand = useMemo(() => {
     if (!arSelectedLandId) return null;
-    return renderedCameraLands.find((l) => l.parcelId === arSelectedLandId) || null;
-  }, [arSelectedLandId, renderedCameraLands]);
+    const matched = renderedCameraLands.find((l) => l.parcelId === arSelectedLandId);
+    if (matched) return matched;
+    const rawFallback =
+      mergedCameraParcels.find((p) => p?.parcelId === arSelectedLandId) ||
+      (selectedLandSnapshot?.parcel?.parcelId === arSelectedLandId
+        ? selectedLandSnapshot.parcel
+        : null);
+    if (!rawFallback) return null;
+    const fallbackSculptures =
+      selectedLandSnapshot?.parcel?.parcelId === arSelectedLandId &&
+      Array.isArray(selectedLandSnapshot.sculptures) &&
+      selectedLandSnapshot.sculptures.length > 0
+        ? selectedLandSnapshot.sculptures
+        : (nearbySculptures || []).filter((sc) => sc?.parcelId === arSelectedLandId);
+    const grouped = groupNearestLandsWithSculptures({
+      parcels: [rawFallback],
+      sculptures: fallbackSculptures,
+      location: location || null,
+      filterMode: 'all'
+    }).allLands[0];
+    if (!grouped) return null;
+    return {
+      ...grouped,
+      volume: resolveParcelVolume(grouped) || grouped.volume || null,
+      isOwned: isLandOwnedByUser(grouped, { user, ownedParcelIds })
+    };
+  }, [
+    arSelectedLandId,
+    location,
+    mergedCameraParcels,
+    nearbySculptures,
+    ownedParcelIds,
+    renderedCameraLands,
+    selectedLandSnapshot,
+    user
+  ]);
 
   // Eagerly fetch full land metadata + every sculpture's full voxel/3D payload whenever
   // the user selects a nearby land so when they turn their camera to see it, it renders
@@ -321,14 +383,41 @@ export function useARPreview({
         : null;
     let cancelled = false;
 
+    const cleanFocusedLandId = String(focusedLandId || '').trim();
+    const landsToRender = cleanFocusedLandId
+      ? renderedCameraLands.filter((land) => land?.parcelId === cleanFocusedLandId)
+      : renderedCameraLands;
     const landByParcelId = new Map();
-    for (const land of renderedCameraLands) {
+    for (const land of landsToRender) {
       if (land?.parcelId) landByParcelId.set(land.parcelId, land);
     }
+
+    const focusedSnapshotIds = new Set(
+      cleanFocusedLandId && selectedLandSnapshot?.parcel?.parcelId === cleanFocusedLandId
+        ? (selectedLandSnapshot.sculptures || []).map((s) => s?.id).filter(Boolean)
+        : []
+    );
+    const sculpturesPool = (() => {
+      if (!cleanFocusedLandId) return nearbySculptures;
+      const byId = new Map();
+      if (selectedLandSnapshot?.parcel?.parcelId === cleanFocusedLandId) {
+        for (const sc of selectedLandSnapshot.sculptures || []) {
+          if (sc?.id) byId.set(sc.id, sc);
+        }
+      }
+      for (const sc of nearbySculptures || []) {
+        if (!sc?.id) continue;
+        if (sc.parcelId === cleanFocusedLandId || focusedSnapshotIds.has(sc.id)) {
+          byId.set(sc.id, { ...(byId.get(sc.id) || {}), ...sc });
+        }
+      }
+      return Array.from(byId.values());
+    })();
+
     const parcelRenderedBoxes = new Map();
     let selectedCustomPending = 0;
 
-    for (const sc of nearbySculptures) {
+    for (const sc of sculpturesPool) {
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const isOnSelectedLand = Boolean(arSelectedLandId && sc?.parcelId === arSelectedLandId);
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
@@ -569,8 +658,8 @@ export function useARPreview({
       );
     }
 
-    // Render interactive 3D Holographic Virtual Land Volume Prisms for every visible/selected land
-    for (const land of renderedCameraLands) {
+    // Render interactive 3D Holographic Virtual Land Volume Prisms for visible/focused land(s)
+    for (const land of landsToRender) {
       const prism = computeArLandPrismLocalGeometry({
         location,
         volume: land.volume,
@@ -682,11 +771,22 @@ export function useARPreview({
     return () => {
       cancelled = true;
     };
-  }, [mode, location, nearbySculptures, renderedCameraLands, arSelectedLandId, nearbyGroupRef]);
+  }, [
+    mode,
+    location,
+    nearbySculptures,
+    renderedCameraLands,
+    arSelectedLandId,
+    focusedLandId,
+    selectedLandSnapshot,
+    nearbyGroupRef
+  ]);
 
-  // Live ORB visual landmark relocalization loop in AR Preview
+  // Live ORB visual landmark relocalization loop (skipped in clean AR View to prevent frame lag)
   useEffect(() => {
-    if (mode !== 'preview' || !location || !cameraReady) return undefined;
+    if (mode !== 'preview' || isArViewOnly || arSelectedLandId || !location || !cameraReady) {
+      return undefined;
+    }
     let cancelled = false;
     let busy = false;
 
@@ -753,8 +853,10 @@ export function useARPreview({
       clearInterval(timer);
     };
   }, [
+    arSelectedLandId,
     arTargetedSculpture?.sculpture,
     cameraReady,
+    isArViewOnly,
     latestOrbProofRef,
     location,
     locationRef,
@@ -894,6 +996,7 @@ export function useARPreview({
     arSelectedLandId,
     arSelectedLandIdRef,
     setArSelectedLandId,
+    selectArLand,
     activeArLand,
     arLandGuidance,
     setArLandGuidance,

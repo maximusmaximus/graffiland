@@ -1016,6 +1016,45 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await nearPage.waitForSelector('[data-testid="parcel-proximity-near"]');
     await nearPage.getByRole('button', { name: /View in AR/i }).waitFor();
     await nearPage.getByRole('button', { name: /Make Art on This Property/i }).waitFor();
+
+    // Clicking "View in AR" opens clean AR land view (ZERO greyscale mapping grid, ZERO occlusion canvas, ZERO mapping HUD)
+    await nearPage.getByRole('button', { name: /View in AR/i }).click();
+    await nearPage.waitForSelector('[data-testid="ar-land-inspector"]', { timeout: 10000 });
+    await nearPage.getByTestId('ar-land-exit-top-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const viewInArState = await nearPage.evaluate(() => ({
+      exitLabel: globalThis.document.querySelector('[data-testid="ar-land-exit-top-btn"]')?.textContent?.trim() || '',
+      arViewOnlyAttr: globalThis.document.querySelector('.webgl-overlay')?.getAttribute('data-ar-view-only'),
+      greyGridCount: globalThis.document.querySelectorAll('.mapping-grayscale-grid').length,
+      occlusionCount: globalThis.document.querySelectorAll('.occlusion-overlay').length,
+      scanBoxCount: globalThis.document.querySelectorAll('.scene-scan-box').length,
+      carouselCount: globalThis.document.querySelectorAll('.key-carousel').length,
+      dockToggleCount: globalThis.document.querySelectorAll('.floating-tools-toggle').length,
+      reticleCount: globalThis.document.querySelectorAll('.reticle').length,
+      surfacePillCount: globalThis.document.querySelectorAll('.surface-pill').length
+    }));
+    assert.equal(viewInArState.arViewOnlyAttr, 'true', 'AR viewport must be in clean arViewOnly mode');
+    assert.equal(viewInArState.greyGridCount, 0, 'Mapping greyscale grid must NOT render in View in AR');
+    assert.equal(viewInArState.occlusionCount, 0, 'Occlusion mapping canvas must NOT render in View in AR');
+    assert.equal(viewInArState.scanBoxCount, 0, 'SceneCoverageWidget must NOT render in View in AR');
+    assert.equal(viewInArState.carouselCount, 0, 'Drawing tool carousel must NOT render in View in AR');
+    assert.equal(viewInArState.dockToggleCount, 0, 'Drawing dock toggle must NOT render in View in AR');
+    assert.equal(viewInArState.reticleCount, 0, 'Drawing reticle must NOT render in View in AR');
+    assert.equal(viewInArState.surfacePillCount, 0, 'Surface mapping pill must NOT render in View in AR');
+    assert.ok(
+      viewInArState.exitLabel.includes('Back') && !viewInArState.exitLabel.includes('Draw'),
+      `Expected clean Back button label from View in AR, got "${viewInArState.exitLabel}"`
+    );
+
+    // Tapping empty sky during View in AR must NOT drop user into mapping camera
+    await nearPage.mouse.click(195, 110);
+    await nearPage.waitForTimeout(150);
+    assert.equal(await nearPage.locator('[data-testid="ar-land-inspector"]').count(), 1);
+    assert.equal(await nearPage.locator('.mapping-grayscale-grid').count(), 0);
+    assert.equal(await nearPage.locator('.scene-scan-box').count(), 0);
+
+    // Clicking Back returns cleanly to the Plot Visit View (never dumping into mapping camera)
+    await nearPage.getByTestId('ar-land-exit-top-btn').click();
+    await nearPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]', { timeout: 10000 });
     await nearCtx.close();
 
     // 4) Mobile Main Canvas Pair & Approvals Hub: notification pill, dropdown Yes/No approval, history & QR scanner

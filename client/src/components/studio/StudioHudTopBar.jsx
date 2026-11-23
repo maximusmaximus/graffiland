@@ -86,6 +86,7 @@ export default function StudioHudTopBar({
   nearbyCameraLandCount = 0,
   onInspectArLand = null,
   onExitArLand = null,
+  arExitLabel = 'Back to Draw',
   notifRefreshSignal = 0,
   onNotificationAction = null
 }) {
@@ -127,10 +128,10 @@ export default function StudioHudTopBar({
             className="top-mini-pill ar-land-exit-pill"
             data-testid="ar-land-exit-top-btn"
             onClick={onExitArLand}
-            aria-label="Back to camera drawing"
+            aria-label={arExitLabel}
           >
             <span aria-hidden="true">←</span>
-            <span>Back to Draw</span>
+            <span>{arExitLabel}</span>
           </button>
         ) : user ? (
           <button
@@ -481,7 +482,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {!isInteractingWithLand && cameraRecovering && (
+        {cameraRecovering && (
           <div
             className="mobile-hud-banner hud-interactive"
             data-testid="camera-recovering-banner"
@@ -559,12 +560,12 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {arSelectHint && (
+        {arSelectHint && !(isInteractingWithLand && arSelectHint.includes('Mapping complete')) && (
           <div
             className={`mobile-hud-banner hud-interactive ${
-              originStatus.originBlocked
+              !isInteractingWithLand && originStatus.originBlocked
                 ? 'is-error'
-                : sceneScan.optimal && arSelectHint.includes('Mapping complete')
+                : !isInteractingWithLand && sceneScan.optimal && arSelectHint.includes('Mapping complete')
                 ? 'is-success'
                 : ''
             }`}
@@ -573,7 +574,15 @@ export default function StudioHudTopBar({
           >
             <span className="mobile-hud-banner-text">
               <XeroIcon
-                emoji={originStatus.originBlocked ? '⚠️' : sceneScan.optimal ? '✅' : '🔒'}
+                emoji={
+                  isInteractingWithLand
+                    ? '👁️'
+                    : originStatus.originBlocked
+                    ? '⚠️'
+                    : sceneScan.optimal
+                    ? '✅'
+                    : '🔒'
+                }
                 size={14}
               />
               <span>{arSelectHint}</span>
@@ -617,7 +626,7 @@ export default function StudioHudTopBar({
         )}
       </div>
 
-      {!isInteractingWithLand && needsGyroTap && (
+      {needsGyroTap && (
         <button
           className="btn btn-primary"
           style={{
@@ -629,7 +638,8 @@ export default function StudioHudTopBar({
           }}
           onClick={onEnableIosGyro}
         >
-          <XeroIcon emoji="🧭" size={18} /> Enable Gyroscope 3D Brush
+          <XeroIcon emoji="🧭" size={18} />{' '}
+          {isInteractingWithLand ? 'Enable Compass' : 'Enable Gyroscope 3D Brush'}
         </button>
       )}
 

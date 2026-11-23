@@ -28,7 +28,8 @@ export function useProofOfLocation({
   dirLightRef,
   onLocationUpdate,
   onCameraRefreshed = null,
-  onNetworkReconnect = null
+  onNetworkReconnect = null,
+  mappingPausedRef = null
 }) {
   const videoRef = useRef(null);
   const polRef = useRef(new ProofOfLocationTracker());
@@ -46,6 +47,7 @@ export function useProofOfLocation({
   const onLocationUpdateRef = useRef(onLocationUpdate);
   const onCameraRefreshedRef = useRef(onCameraRefreshed);
   const onNetworkReconnectRef = useRef(onNetworkReconnect);
+  const mappingPausedBridgeRef = useRef(mappingPausedRef);
 
   const cameraOpIdRef = useRef(0);
   const unmountedRef = useRef(false);
@@ -77,7 +79,8 @@ export function useProofOfLocation({
     onLocationUpdateRef.current = onLocationUpdate;
     onCameraRefreshedRef.current = onCameraRefreshed;
     onNetworkReconnectRef.current = onNetworkReconnect;
-  }, [onLocationUpdate, onCameraRefreshed, onNetworkReconnect]);
+    mappingPausedBridgeRef.current = mappingPausedRef;
+  }, [onLocationUpdate, onCameraRefreshed, onNetworkReconnect, mappingPausedRef]);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraRecovering, setCameraRecovering] = useState(false);
@@ -705,6 +708,7 @@ export function useProofOfLocation({
     refreshCamera({ reason: 'initial', force: true });
 
     const samplerId = setInterval(() => {
+      if (mappingPausedBridgeRef.current?.current) return;
       if (
         videoRef.current &&
         videoRef.current.readyState >= 2 &&

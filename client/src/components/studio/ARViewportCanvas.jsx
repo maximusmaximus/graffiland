@@ -64,6 +64,8 @@ function ARViewportCanvasInner({
   arSelectedLandIdRef = null,
   isInteractingWithLand = false,
   isInteractingWithLandRef = null,
+  isArViewOnly = false,
+  isArViewOnlyRef = null,
   mode,
   modeRef,
   toolRef,
@@ -109,6 +111,24 @@ function ARViewportCanvasInner({
   useEffect(() => {
     onVideoMounted?.();
   }, [onVideoMounted]);
+
+  useEffect(() => {
+    if (isArViewOnly) {
+      occlusionRef.current?.reset?.();
+      return;
+    }
+    const host = canvasHostRef.current;
+    const occ = occlusionCanvasRef.current;
+    if (host && occ) {
+      const occW = Math.min(280, Math.max(96, host.clientWidth));
+      const occH = Math.max(
+        96,
+        Math.round((occW * host.clientHeight) / Math.max(1, host.clientWidth))
+      );
+      occ.width = occW;
+      occ.height = occH;
+    }
+  }, [canvasHostRef, isArViewOnly, occlusionCanvasRef, occlusionRef]);
 
   useEffect(() => {
     const host = canvasHostRef.current;
@@ -157,9 +177,13 @@ function ARViewportCanvasInner({
     scene.add(hemiLight);
     hemiLightRef.current = hemiLight;
 
+    const initArViewOnly = Boolean(
+      isArViewOnlyRef?.current || isInteractingWithLandRef?.current || modeRef.current === 'preview'
+    );
+
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.45);
     dirLight.position.set(4, 8, 3);
-    dirLight.castShadow = true;
+    dirLight.castShadow = !initArViewOnly;
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 0.5;
@@ -180,6 +204,7 @@ function ARViewportCanvasInner({
     shadowCatcher.rotation.x = -Math.PI / 2;
     shadowCatcher.position.y = -0.8;
     shadowCatcher.receiveShadow = true;
+    shadowCatcher.visible = !initArViewOnly;
     scene.add(shadowCatcher);
     shadowPlaneRef.current = shadowCatcher;
 
@@ -187,6 +212,7 @@ function ARViewportCanvasInner({
     grid.position.y = -0.805;
     grid.material.transparent = true;
     grid.material.opacity = 0.16;
+    grid.visible = !initArViewOnly;
     scene.add(grid);
     gridHelperRef.current = grid;
 
@@ -328,8 +354,18 @@ function ARViewportCanvasInner({
       }
 
       const interactingLand = Boolean(isInteractingWithLandRef?.current);
-      const showCursor = modeRef.current === 'draw' && !interactingLand;
+      const arViewOnly = Boolean(
+        isArViewOnlyRef?.current || interactingLand || modeRef.current === 'preview'
+      );
+      const showCursor = !arViewOnly && modeRef.current === 'draw' && !interactingLand;
       ghost.visible = showCursor;
+      grid.visible = !arViewOnly;
+      shadowCatcher.visible = !arViewOnly;
+      dirLight.castShadow = !arViewOnly;
+      draftGroup.visible = !interactingLand;
+      if (arViewOnly) {
+        transformBox.visible = false;
+      }
       let latestTarget = null;
 
       if (showCursor) {
@@ -400,7 +436,7 @@ function ARViewportCanvasInner({
       let originZ = null;
       let originRequired = false;
 
-      if (interactingLand) {
+      if (arViewOnly || interactingLand) {
         surfaceMarker.visible = false;
       } else if (anchor) {
         originX = anchor.x;
@@ -437,7 +473,7 @@ function ARViewportCanvasInner({
         beaconMats.dotMat.color.setHex(isBlk ? 0xff3e7f : 0xffd166);
       }
 
-      if (now - lastScanPosePush > 110) {
+      if (!arViewOnly && now - lastScanPosePush > 110) {
         lastScanPosePush = now;
         scanFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
         const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
@@ -514,6 +550,7 @@ function ARViewportCanvasInner({
 
       const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
       if (
+        !arViewOnly &&
         !paintingRef.current &&
         now - lastEnvPush > envRefreshMs &&
         videoRef.current &&
@@ -528,7 +565,7 @@ function ARViewportCanvasInner({
         }
       }
 
-      if (now - lastOcclusionPush > 110 && occlusionCanvasRef.current) {
+      if (!arViewOnly && now - lastOcclusionPush > 110 && occlusionCanvasRef.current) {
         lastOcclusionPush = now;
         let originScreen = { x: 0.5, y: 0.5, onScreen: true, requiredVisible: false };
         if (originX !== null && originY !== null && originZ !== null) {
@@ -748,7 +785,7 @@ function ARViewportCanvasInner({
         }
       }
 
-      if (wsRef.current?.readyState === 1 && now - lastWsPush > 45) {
+      if (!arViewOnly && wsRef.current?.readyState === 1 && now - lastWsPush > 45) {
         lastWsPush = now;
         wsRef.current.send(
           JSON.stringify({
@@ -817,6 +854,7 @@ function ARViewportCanvasInner({
     ghostMeshRef,
     gridHelperRef,
     hemiLightRef,
+    isArViewOnlyRef,
     isInteractingWithLandRef,
     lastPaintPosRef,
     lastScanUiRef,
@@ -859,8 +897,12 @@ function ARViewportCanvasInner({
   return (
     <>
       <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
-      {cameraReady && !sceneScanOptimal && (
-        <div className="mapping-grayscale-grid" aria-hidden="true">
+      {!isArViewOnly && cameraReady && !sceneScanOptimal && (
+        <div
+          className="mapping-grayscale-grid"
+          data-testid="mapping-grayscale-grid"
+          aria-hidden="true"
+        >
           {unmappedGrid.map((isUnmapped, i) => (
             <div
               key={i}
@@ -872,13 +914,20 @@ function ARViewportCanvasInner({
       <div
         ref={canvasHostRef}
         className="webgl-overlay"
+        data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
         onPointerUp={onCanvasPointerUp}
         onPointerCancel={onCanvasPointerCancel}
       />
-      <canvas ref={occlusionCanvasRef} className="occlusion-overlay" />
-      {mode === 'draw' && !isInteractingWithLand && <div className="reticle" />}
+      {!isArViewOnly && (
+        <canvas
+          ref={occlusionCanvasRef}
+          className="occlusion-overlay"
+          data-testid="occlusion-overlay"
+        />
+      )}
+      {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && <div className="reticle" />}
       {contextLost && (
         <div className="scene-error-fallback" role="status">
           <div className="scene-error-card card">
