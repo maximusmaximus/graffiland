@@ -985,7 +985,16 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await farPage.goto(`${baseUrl}/?parcel=GLAND-9Q8YYK8Y`, { waitUntil: 'networkidle' });
     await farPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]');
     await farPage.waitForSelector('[data-testid="parcel-proximity-far"]');
-    await farPage.getByRole('link', { name: /Get Directions/i }).waitFor();
+    await farPage.getByRole('link', { name: /Navigate/i }).waitFor();
+    const farOrder = await farPage.evaluate(() => {
+      const dist = globalThis.document.querySelector('[data-testid="parcel-proximity-far"]')?.getBoundingClientRect();
+      const nav = globalThis.document.querySelector('[data-testid="parcel-directions-row"] a')?.getBoundingClientRect();
+      return { distLeft: dist?.left ?? 9999, navLeft: nav?.left ?? 0 };
+    });
+    assert.ok(
+      farOrder.distLeft < farOrder.navLeft,
+      `Expected distance tag on the left of Navigate button, got ${JSON.stringify(farOrder)}`
+    );
     assert.equal(await farPage.getByRole('button', { name: /View in AR/i }).count(), 0);
     assert.equal(await farPage.getByRole('button', { name: /Make Art on This Property/i }).count(), 0);
     await farCtx.close();

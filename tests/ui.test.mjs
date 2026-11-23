@@ -837,7 +837,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       }
     };
 
-    // 1) Far away -> Get Directions shown, View in AR & Make Art hidden
+    // 1) Far away -> Navigate shown (with distance badge on left), View in AR & Make Art hidden
     const farView = RTL.render(
       React.createElement(MobileParcelVisitView, {
         parcel: baseParcel,
@@ -848,7 +848,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     assert.ok(farView.getAllByText('Sunset Neon Courtyard').length >= 2);
     assert.ok(farView.getByText(/Sculpture park overlooking Market St/i));
-    assert.ok(farView.getByRole('link', { name: /Get Directions/i }));
+    assert.ok(farView.getByRole('link', { name: /Navigate/i }));
     assert.equal(farView.queryByRole('button', { name: /View in AR/i }), null);
     assert.equal(farView.queryByRole('button', { name: /Make Art on This Property/i }), null);
     cleanup();
@@ -3792,11 +3792,17 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       // Refresh GPS button is removed
       assert.equal(plotView.queryByRole('button', { name: /Refresh GPS/i }), null);
 
-      // Directions row contains Get Directions + distance away + Info icon on right
+      // Directions row contains distance tag on the LEFT of Navigate button + Info icon on right
       const dirRow = plotView.getByTestId('parcel-directions-row');
-      assert.ok(dirRow.querySelector('a')?.textContent.includes('Get Directions'));
+      const navLink = dirRow.querySelector('a');
+      assert.ok(navLink?.textContent.includes('Navigate'));
+      assert.equal(navLink?.textContent.includes('Get Directions'), false);
       const distBadge = plotView.getByTestId('parcel-proximity-far');
       assert.ok(dirRow.contains(distBadge));
+      assert.ok(
+        Boolean(distBadge.compareDocumentPosition(navLink) & 4),
+        'Expected distance badge to appear on the left of the Navigate button'
+      );
       assert.ok(distBadge.textContent.includes('away'));
 
       const infoWrap = plotView.getByTestId('parcel-directions-info');
