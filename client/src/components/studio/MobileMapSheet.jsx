@@ -36,6 +36,7 @@ export default function MobileMapSheet({
   initialDimensionMode = '2d',
   onSelectParcel,
   onSelectSculpture,
+  onFindLandInAR = null,
   onOpenProfile = null,
   onManageLand = null,
   onRenameLand = null,
@@ -312,6 +313,17 @@ export default function MobileMapSheet({
             </span>
           </div>
           <div className="mobile-map-fullscreen-dock-actions">
+            {onFindLandInAR && location && (
+              <button
+                type="button"
+                className="btn btn-xs btn-primary"
+                data-testid="mobile-map-dock-find-ar-btn"
+                onClick={() => onFindLandInAR(focusedLand)}
+                aria-label={`Find ${focusedLand.displayName} in AR camera`}
+              >
+                <XeroIcon emoji="👁️" size={12} /> Find in AR
+              </button>
+            )}
             {focusedLand.googleMapsUrl && (
               <a
                 className="btn btn-xs mobile-land-gmaps-btn"
@@ -608,8 +620,19 @@ export default function MobileMapSheet({
                     )}
                   </div>
 
-                  {/* Band 3: Land Action Row (Google Maps + Focus Map + Share) */}
+                  {/* Band 3: Land Action Row (Find in AR + Google Maps + Focus Map + 3D Map + Share) */}
                   <div className="mobile-land-actions">
+                    {onFindLandInAR && location && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        data-testid="land-card-find-ar-btn"
+                        onClick={() => onFindLandInAR(land)}
+                        aria-label={`Guide camera to ${land.displayName} in AR`}
+                      >
+                        <XeroIcon emoji="👁️" size={12} /> Find in AR
+                      </button>
+                    )}
                     {land.googleMapsUrl && (
                       <a
                         className="btn btn-xs mobile-land-gmaps-btn"

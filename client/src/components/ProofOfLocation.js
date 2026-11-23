@@ -128,7 +128,13 @@ export class ProofOfLocationTracker {
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
     const now = Date.now();
     const last = this.gpsSamples[this.gpsSamples.length - 1];
-    if (!last || now - last.t >= 1200) {
+    const movedMeters = last
+      ? Math.hypot(
+          (latitude - last.lat) * 111320,
+          (longitude - last.lng) * 111320 * Math.max(0.08, Math.cos((latitude * Math.PI) / 180))
+        )
+      : Infinity;
+    if (!last || now - last.t >= 1200 || movedMeters >= 2.5) {
       this.gpsSamples.push({
         lat: latitude,
         lng: longitude,
@@ -194,6 +200,10 @@ export class ProofOfLocationTracker {
     if (!this.gpsSamples.length) return fallbackLocation;
     const latest = this.gpsSamples[this.gpsSamples.length - 1];
     const recent = this.gpsSamples.slice(-12);
+    const cosLat = Math.max(0.08, Math.cos((latest.lat * Math.PI) / 180));
+    const latestAcc =
+      Number.isFinite(latest.accuracy) && latest.accuracy > 0 ? latest.accuracy : 12;
+    const clusterRadiusM = Math.max(6, Math.min(20, latestAcc * 1.1));
 
     let wSum = 0;
     let latSum = 0;
@@ -202,10 +212,20 @@ export class ProofOfLocationTracker {
     let altSum = 0;
     let bestAcc = Infinity;
 
-    for (const s of recent) {
+    for (let i = 0; i < recent.length; i++) {
+      const s = recent[i];
+      // Discard older stationary samples once the user has walked to a new spot
+      // so walking closer to a land sharpens live AR distance immediately.
+      const distFromLatestM = Math.hypot(
+        (s.lat - latest.lat) * 111320,
+        (s.lng - latest.lng) * 111320 * cosLat
+      );
+      if (distFromLatestM > clusterRadiusM) continue;
+
       const acc = Number.isFinite(s.accuracy) && s.accuracy > 0 ? s.accuracy : 25;
       if (acc < bestAcc) bestAcc = acc;
-      const w = 1 / Math.max(9, acc * acc);
+      const recencyWeight = 0.5 + ((i + 1) / recent.length) * 0.5;
+      const w = recencyWeight / Math.max(9, acc * acc);
       wSum += w;
       latSum += s.lat * w;
       lngSum += s.lng * w;

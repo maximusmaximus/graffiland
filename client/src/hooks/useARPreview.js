@@ -6,6 +6,10 @@ import {
   computeArLandPrismLocalGeometry,
   findNearbyCameraLands
 } from '../utils/arLandHelpers.js';
+import {
+  applyProximitySharpnessToObject3D,
+  computeProximitySharpness
+} from '../utils/arLandGuidance.js';
 import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
@@ -49,6 +53,14 @@ export function useARPreview({
   const [nearbyParcels, setNearbyParcels] = useState([]);
   const [arTargetedSculpture, setArTargetedSculpture] = useState(null);
   const [arSelectedLandId, setArSelectedLandIdState] = useState('');
+  const [arLandGuidance, setArLandGuidance] = useState(null);
+  const [selectedLandLoadState, setSelectedLandLoadState] = useState({
+    parcelId: '',
+    status: 'idle',
+    loadedCount: 0,
+    totalCount: 0
+  });
+  const selectedLandApiDoneRef = useRef({ parcelId: '', done: true });
 
   const [mapOpen, setMapOpen] = useState(false);
   const [mapInitialDimensionMode, setMapInitialDimensionMode] = useState('2d');
@@ -64,6 +76,10 @@ export function useARPreview({
     const clean = String(nextId || '').trim();
     arSelectedLandIdRef.current = clean;
     setArSelectedLandIdState(clean);
+    if (!clean) {
+      setArLandGuidance(null);
+      setSelectedLandLoadState({ parcelId: '', status: 'idle', loadedCount: 0, totalCount: 0 });
+    }
   }, []);
 
   const hydrateNearbyList = useCallback(async (lightList, curLoc) => {
@@ -86,9 +102,9 @@ export function useARPreview({
           cached &&
           Number(cached.currentRev || 1) === Number(sc.currentRev || 1) &&
           (cached.modelType === 'custom-3d' || (cached.voxels && cached.voxels.length > 0));
-        return d <= 65 && !alreadyHydrated;
+        return d <= 120 && !alreadyHydrated;
       })
-      .slice(0, 8);
+      .slice(0, 16);
 
     if (toFetch.length === 0) return;
 
@@ -143,13 +159,152 @@ export function useARPreview({
     [location, mergedCameraParcels, nearbySculptures, ownedParcelIds, user]
   );
 
+  const renderedCameraLands = useMemo(() => {
+    const base = cameraLands.visibleLands || [];
+    if (!arSelectedLandId || base.some((l) => l.parcelId === arSelectedLandId)) {
+      return base;
+    }
+    const rawMatch = mergedCameraParcels.find((p) => p?.parcelId === arSelectedLandId);
+    if (!rawMatch || !location) return base;
+    const extra = findNearbyCameraLands({
+      parcels: [rawMatch],
+      sculptures: nearbySculptures,
+      location,
+      user,
+      ownedParcelIds,
+      maxDistanceMeters: 50000,
+      nearThresholdMeters: 45
+    }).visibleLands;
+    return extra.length > 0 ? [...base, extra[0]] : base;
+  }, [
+    arSelectedLandId,
+    cameraLands.visibleLands,
+    location,
+    mergedCameraParcels,
+    nearbySculptures,
+    ownedParcelIds,
+    user
+  ]);
+
   const activeArLand = useMemo(() => {
     if (!arSelectedLandId) return null;
-    return (
-      cameraLands.visibleLands.find((l) => l.parcelId === arSelectedLandId) ||
-      null
-    );
-  }, [arSelectedLandId, cameraLands.visibleLands]);
+    return renderedCameraLands.find((l) => l.parcelId === arSelectedLandId) || null;
+  }, [arSelectedLandId, renderedCameraLands]);
+
+  // Eagerly fetch full land metadata + every sculpture's full voxel/3D payload whenever
+  // the user selects a nearby land so when they turn their camera to see it, it renders
+  // immediately and crisply (never blank or missing artworks beyond 65m).
+  useEffect(() => {
+    if (!arSelectedLandId) {
+      selectedLandApiDoneRef.current = { parcelId: '', done: true };
+      return undefined;
+    }
+    let cancelled = false;
+    selectedLandApiDoneRef.current = { parcelId: arSelectedLandId, done: false };
+    setSelectedLandLoadState({
+      parcelId: arSelectedLandId,
+      status: 'loading',
+      loadedCount: 0,
+      totalCount: 0
+    });
+
+    (async () => {
+      try {
+        const detail = await api.getLandDetail(arSelectedLandId).catch(() => null);
+        if (cancelled) return;
+        const freshParcel = detail?.parcel || null;
+        if (freshParcel?.parcelId) {
+          setNearbyParcels((prev) => {
+            const list = Array.isArray(prev) ? prev : [];
+            const idx = list.findIndex((p) => p?.parcelId === freshParcel.parcelId);
+            if (idx >= 0) {
+              const next = [...list];
+              next[idx] = { ...next[idx], ...freshParcel };
+              return next;
+            }
+            return [...list, freshParcel];
+          });
+        }
+
+        const parcelSculptures = Array.isArray(detail?.sculptures) ? detail.sculptures : [];
+        const total = parcelSculptures.length;
+        let readyCount = 0;
+
+        const hydratedResults = await Promise.all(
+          parcelSculptures.map(async (sc) => {
+            if (!sc?.id) return null;
+            const cached = hydratedSculptureMapRef.current.get(sc.id);
+            const isAlreadyFull =
+              cached &&
+              Number(cached.currentRev || 1) === Number(sc.currentRev || 1) &&
+              (cached.modelType === 'custom-3d' || (Array.isArray(cached.voxels) && cached.voxels.length > 0));
+            if (isAlreadyFull) {
+              readyCount += 1;
+              return { ...sc, ...cached };
+            }
+            const hasFullInline =
+              sc.modelType === 'custom-3d' ||
+              (Array.isArray(sc.voxels) && sc.voxels.length > 0);
+            if (hasFullInline) {
+              hydratedSculptureMapRef.current.set(sc.id, sc);
+              readyCount += 1;
+              return sc;
+            }
+            const fetched = await api
+              .getSculpture(sc.id)
+              .then((r) => r?.sculpture || null)
+              .catch(() => null);
+            const resolved = fetched ? { ...sc, ...fetched } : sc;
+            if (resolved?.id) {
+              hydratedSculptureMapRef.current.set(resolved.id, resolved);
+            }
+            readyCount += 1;
+            return resolved;
+          })
+        );
+
+        if (cancelled) return;
+        const validFull = hydratedResults.filter((item) => item?.id);
+        if (validFull.length > 0) {
+          setNearbySculptures((prev) => {
+            const byId = new Map();
+            for (const item of prev || []) {
+              if (item?.id) byId.set(item.id, item);
+            }
+            for (const full of validFull) {
+              byId.set(full.id, { ...(byId.get(full.id) || {}), ...full });
+            }
+            return Array.from(byId.values());
+          });
+        }
+
+        selectedLandApiDoneRef.current = { parcelId: arSelectedLandId, done: true };
+        const hasPendingCustom3d = validFull.some(
+          (sc) => sc.modelType === 'custom-3d' && sc.customModel?.format
+        );
+        setSelectedLandLoadState((prev) => {
+          if (prev.parcelId !== arSelectedLandId) return prev;
+          return {
+            parcelId: arSelectedLandId,
+            status: hasPendingCustom3d && prev.status === 'loading' ? 'loading' : 'ready',
+            loadedCount: readyCount,
+            totalCount: total
+          };
+        });
+      } catch {
+        if (!cancelled) {
+          selectedLandApiDoneRef.current = { parcelId: arSelectedLandId, done: true };
+          setSelectedLandLoadState((prev) =>
+            prev.parcelId === arSelectedLandId ? { ...prev, status: 'ready' } : prev
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [arSelectedLandId]);
 
   // Build nearby sculptures + glowing interactive 3D land volume prisms in BOTH draw and preview modes
   useEffect(() => {
@@ -167,19 +322,29 @@ export function useARPreview({
     let cancelled = false;
 
     const landByParcelId = new Map();
-    for (const land of cameraLands.visibleLands) {
+    for (const land of renderedCameraLands) {
       if (land?.parcelId) landByParcelId.set(land.parcelId, land);
     }
     const parcelRenderedBoxes = new Map();
+    let selectedCustomPending = 0;
 
     for (const sc of nearbySculptures) {
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
+      const isOnSelectedLand = Boolean(arSelectedLandId && sc?.parcelId === arSelectedLandId);
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const dist = Math.hypot(offset.east, offset.north);
+      const sharpness = computeProximitySharpness(dist);
       const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
       const sub = new THREE.Group();
       if (!isCustom3d) {
-        const voxelMeshGroup = buildVoxelGroup(sc.voxels || [], { simplifyLod: false });
+        // Keep selected land and close-range sculptures at full 100% voxel resolution;
+        // distant massive clouds upgrade automatically as the user walks closer.
+        const useCoarseLod =
+          !isOnSelectedLand &&
+          Array.isArray(sc.voxels) &&
+          sc.voxels.length > 350 &&
+          sharpness.simplifyVoxelLod;
+        const voxelMeshGroup = buildVoxelGroup(sc.voxels || [], { simplifyLod: useCoarseLod });
         // Horizontally center voxel clouds on their own anchor (matching 3D Map, GeoJSON, and 3D Viewer)
         // so legacy off-origin AR sculptures ALWAYS render dead-center inside their land volume!
         const rawVoxelBounds = new THREE.Box3().setFromObject(voxelMeshGroup);
@@ -222,6 +387,9 @@ export function useARPreview({
       sub.add(hitProxy);
 
       if (isCustom3d) {
+        if (isOnSelectedLand) {
+          selectedCustomPending += 1;
+        }
         loadCustomModelObject(sc, resolveApiUrl)
           .then((loaded) => {
             if (cancelled || !loaded) return;
@@ -232,6 +400,7 @@ export function useARPreview({
               }
             });
             sub.add(loaded.object3d);
+            applyProximitySharpnessToObject3D(sub, computeProximitySharpness(dist), 8);
             const loadedCenter = new THREE.Vector3();
             const loadedSize = new THREE.Vector3();
             loaded.bounds.getCenter(loadedCenter);
@@ -244,10 +413,23 @@ export function useARPreview({
             );
             hitProxy.position.copy(loadedCenter);
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => {
+            if (cancelled || !isOnSelectedLand) return;
+            selectedCustomPending = Math.max(0, selectedCustomPending - 1);
+            if (
+              selectedCustomPending === 0 &&
+              selectedLandApiDoneRef.current.parcelId === arSelectedLandId &&
+              selectedLandApiDoneRef.current.done
+            ) {
+              setSelectedLandLoadState((prev) =>
+                prev.parcelId === arSelectedLandId ? { ...prev, status: 'ready' } : prev
+              );
+            }
+          });
       }
 
-      const clampFactor = dist > 35 ? 35 / dist : 1;
+      const clampFactor = dist > 55 ? 55 / dist : 1;
 
       const scElev =
         sc.elevation?.anchorAltitudeMeters ??
@@ -266,7 +448,7 @@ export function useARPreview({
       );
       catcher.rotation.x = -Math.PI / 2;
       catcher.position.y = baseY;
-      catcher.receiveShadow = dist <= 25;
+      catcher.receiveShadow = sharpness.enableShadows;
       sub.add(catcher);
 
       const baseGlowRingMat = new THREE.MeshBasicMaterial({
@@ -305,8 +487,11 @@ export function useARPreview({
 
       sub.userData = {
         sculptureId: sc.id,
+        parcelId: sc.parcelId || '',
         sculpture: sc,
         parcel: parentLand,
+        distanceMeters: dist,
+        _lastSharpness: sharpness.sharpness,
         baseRingMat: baseGlowRingMat,
         baseHaloMat,
         baseGlowRing
@@ -330,6 +515,7 @@ export function useARPreview({
         deltaY + ay,
         -offset.north * clampFactor + az
       );
+      applyProximitySharpnessToObject3D(sub, sharpness, 8);
       group.add(sub);
 
       // Record rendered local 3D bounds per parcel (artwork meshes only, excluding shadow/halo rings)
@@ -370,8 +556,21 @@ export function useARPreview({
       }
     }
 
-    // Render interactive 3D Holographic Virtual Land Volume Prisms for every visible nearby land
-    for (const land of cameraLands.visibleLands) {
+    if (
+      arSelectedLandId &&
+      selectedCustomPending === 0 &&
+      selectedLandApiDoneRef.current.parcelId === arSelectedLandId &&
+      selectedLandApiDoneRef.current.done
+    ) {
+      setSelectedLandLoadState((prev) =>
+        prev.parcelId === arSelectedLandId && prev.status !== 'ready'
+          ? { ...prev, status: 'ready' }
+          : prev
+      );
+    }
+
+    // Render interactive 3D Holographic Virtual Land Volume Prisms for every visible/selected land
+    for (const land of renderedCameraLands) {
       const prism = computeArLandPrismLocalGeometry({
         location,
         volume: land.volume,
@@ -392,15 +591,19 @@ export function useARPreview({
         ? 0xff6b35
         : 0x00f5d4;
 
+      const landSharpness = computeProximitySharpness(
+        land.edgeDistanceMeters ?? land.distanceMeters ?? 0
+      );
+
       const landGroup = new THREE.Group();
       const bPts = prism.bottomCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
       const tPts = prism.topCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
-      // 1) Depth-faded 3D boundary wireframe (lines closest to user stay crisp; far-side lines fade >=25%)
+      // 1) Depth-faded 3D boundary wireframe (near lines crisp, far lines faded >=25%, sharpening as user approaches)
       const wireSegments = createDepthFadedThreePrismWireframe(bPts, tPts, baseHex, {
         nearOpacity: 0.98,
         farOpacity: 0.38,
-        opacityScale: isSelected ? 0.96 : land.isInside ? 0.85 : 0.62
+        opacityScale: (isSelected ? 0.98 : land.isInside ? 0.88 : 0.68) * landSharpness.prismOpacityScale
       });
       wireSegments.userData = {
         ...wireSegments.userData,
@@ -442,7 +645,7 @@ export function useARPreview({
       const wallMat = new THREE.MeshBasicMaterial({
         color: baseHex,
         transparent: true,
-        opacity: isSelected ? 0.16 : land.isInside ? 0.08 : 0.055,
+        opacity: (isSelected ? 0.16 : land.isInside ? 0.08 : 0.055) * landSharpness.prismOpacityScale,
         side: THREE.DoubleSide,
         depthWrite: false
       });
@@ -450,10 +653,25 @@ export function useARPreview({
       wallMesh.userData = { parcel: land, isArLandHit: true };
       landGroup.add(wallMesh);
 
+      const scBoxForAim = parcelRenderedBoxes.get(land.parcelId) || null;
+      const aimX = scBoxForAim
+        ? (scBoxForAim.minX + scBoxForAim.maxX) * 0.5
+        : prism.centerLocal.x;
+      const aimY = scBoxForAim
+        ? (scBoxForAim.minY + scBoxForAim.maxY) * 0.5
+        : Math.min(prism.topY - 0.3, Math.max(prism.baseY + 0.85, 0.55));
+      const aimZ = scBoxForAim
+        ? (scBoxForAim.minZ + scBoxForAim.maxZ) * 0.5
+        : prism.centerLocal.z;
+
       landGroup.userData = {
         isParcelPerimeter: true,
         insideParcel: land.isInside,
         parcelId: land.parcelId,
+        displayName: land.displayName || 'Nearby Land',
+        distanceMeters: land.edgeDistanceMeters ?? land.distanceMeters ?? 0,
+        centerLocal: new THREE.Vector3(aimX, aimY, aimZ),
+        cornersLocal: [...bPts, ...tPts],
         parcel: land,
         wireMat: wireSegments.material,
         wallMat
@@ -464,7 +682,7 @@ export function useARPreview({
     return () => {
       cancelled = true;
     };
-  }, [mode, location, nearbySculptures, cameraLands.visibleLands, arSelectedLandId, nearbyGroupRef]);
+  }, [mode, location, nearbySculptures, renderedCameraLands, arSelectedLandId, nearbyGroupRef]);
 
   // Live ORB visual landmark relocalization loop in AR Preview
   useEffect(() => {
@@ -670,13 +888,16 @@ export function useARPreview({
     setNearbyParcels,
     hydratedSculptureMapRef,
     hydrateNearbyList,
-    visibleCameraLands: cameraLands.visibleLands,
+    visibleCameraLands: renderedCameraLands,
     immediateCameraLands: cameraLands.immediateLands,
     primaryCameraLand: cameraLands.primaryLand,
     arSelectedLandId,
     arSelectedLandIdRef,
     setArSelectedLandId,
     activeArLand,
+    arLandGuidance,
+    setArLandGuidance,
+    selectedLandLoadState,
     arTargetedSculpture,
     setArTargetedSculpture,
     arTargetedIdRef,
