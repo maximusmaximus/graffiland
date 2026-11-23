@@ -548,7 +548,16 @@ export default function MobileMapSheet({
                             </span>
                           </button>
                         ) : (
-                          <h3 className="mobile-land-name">{land.displayName}</h3>
+                          <button
+                            type="button"
+                            className="mobile-land-name-btn mobile-land-name-target-btn"
+                            data-testid="land-title-target-trigger"
+                            aria-label={`Target ${land.displayName} on map`}
+                            title={`Target ${land.displayName} on map`}
+                            onClick={() => handleFocusLandOnMap(land.parcelId)}
+                          >
+                            <span className="mobile-land-name">{land.displayName}</span>
+                          </button>
                         )}
                       </div>
                       {isRenaming && renameError && (
@@ -703,7 +712,7 @@ export default function MobileMapSheet({
                         )}
                       </div>
 
-                      {/* Land Action Row (Find in AR + Google Maps + Focus Map + 3D Map) */}
+                      {/* Land Action Row (Find in AR + Google Maps + 3D Map) */}
                       <div className="mobile-land-actions">
                         {onFindLandInAR && location && (
                           <button
@@ -728,14 +737,6 @@ export default function MobileMapSheet({
                             <XeroIcon emoji="🧭" size={12} /> Google Maps
                           </a>
                         )}
-                        <button
-                          type="button"
-                          className="btn btn-xs"
-                          onClick={() => handleFocusLandOnMap(land.parcelId)}
-                          aria-label={`Focus ${land.displayName} on map`}
-                        >
-                          <XeroIcon emoji="🎯" size={12} /> Focus Map
-                        </button>
                         <button
                           type="button"
                           className="btn btn-xs mobile-land-3d-btn"

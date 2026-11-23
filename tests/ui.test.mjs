@@ -1328,9 +1328,12 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(nestedItems[0].textContent.includes('PoL 94'));
     assert.ok(nestedItems[1].textContent.includes('GLB 3D · 3,200 tris'));
 
-    // Clicking Focus Map and 3D inspect fire callbacks cleanly
-    RTL.fireEvent.click(view.getByRole('button', { name: /^Focus Civic Neon Plaza on map$/i }));
-    assert.deepEqual(focusedParcels, ['GLAND-NEAR', 'GLAND-NEAR']);
+    // Target land (Focus Map) button is removed; clicking property name when not logged in targets the land!
+    assert.equal(view.queryByRole('button', { name: /Focus Map/i }), null);
+    const nameTargetBtns = view.getAllByTestId('land-title-target-trigger');
+    assert.equal(nameTargetBtns.length, 2);
+    RTL.fireEvent.click(nameTargetBtns[1]);
+    assert.deepEqual(focusedParcels, ['GLAND-NEAR', 'GLAND-FAR']);
     RTL.fireEvent.click(RTL.within(nestedItems[0]).getByRole('button', { name: /3D/i }));
     assert.deepEqual(selectedSculptures, ['sc-voxel-1']);
 
@@ -2097,8 +2100,9 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(view.queryByTestId('land-inline-rename-form'), null);
     assert.ok(view.getByTestId('land-title-edit-trigger').textContent.includes('Neon Courtyard 🔥'));
 
-    // Signed-out user sees NO gear and NO clickable rename trigger
+    // Signed-out user sees NO gear and NO rename trigger; clicking property name targets the land on the map
     cleanup();
+    const guestTargeted = [];
     const guestView = RTL.render(
       React.createElement(MobileMapSheet, {
         user: null,
@@ -2109,12 +2113,17 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         mapParcels: parcels,
         displayedMapSculptures: [],
         areaSculpturesSorted: [],
+        onSelectParcel: (pid) => guestTargeted.push(pid),
         onManageLand: () => {},
         onClose: () => {}
       })
     );
     assert.equal(guestView.queryAllByTestId('land-manage-gear-btn').length, 0);
     assert.equal(guestView.queryAllByTestId('land-title-edit-trigger').length, 0);
+    const guestNameTargets = guestView.getAllByTestId('land-title-target-trigger');
+    assert.equal(guestNameTargets.length, 2);
+    RTL.fireEvent.click(guestNameTargets[1]);
+    assert.deepEqual(guestTargeted, ['GLAND-OTHER02']);
     cleanup();
   });
 
