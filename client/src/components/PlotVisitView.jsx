@@ -628,6 +628,48 @@ export default function PlotVisitView({
 
   const isDesktop = variant === 'desktop';
 
+  const renderLandInfoTip = () => (
+    <span className="mobile-parcel-directions-info" data-testid="parcel-directions-info">
+      <InfoTip title="Land Info" mode="popover" align="right">
+        <div className="plot-info-popover-content" data-testid="plot-info-popover-content">
+          {hasCenter && (
+            <div className="plot-info-row mono" data-testid="plot-info-coords">
+              <span>📍 Location</span>
+              <strong>
+                {centerLat.toFixed(4)}, {centerLng.toFixed(4)}
+              </strong>
+            </div>
+          )}
+          {landDimensions && (
+            <div className="plot-info-row mono" data-testid="plot-info-dimensions">
+              <span>📐 Dimensions</span>
+              <strong>{landDimensions}</strong>
+            </div>
+          )}
+          <div className="plot-info-row mono" data-testid="plot-info-artworks">
+            <span>🧊 Artworks</span>
+            <strong>
+              {visibleSculptures.length} artwork{visibleSculptures.length === 1 ? '' : 's'}
+            </strong>
+          </div>
+          <div className="plot-info-note">
+            {isDesktop
+              ? isFrozen
+                ? 'Walk near this property on mobile to unlock View in AR (placements are frozen).'
+                : 'Walk near this property on mobile to unlock View in AR and Make Art on This Property.'
+              : isNearProperty
+              ? isFrozen
+                ? 'You are at this property — View in AR is unlocked (placements are frozen).'
+                : 'You are at this property — View in AR and Make Art on This Property are unlocked.'
+              : isFrozen
+              ? 'Walk near this property to unlock View in AR (placements are frozen).'
+              : 'Walk near this property to unlock View in AR and Make Art on This Property.'}
+          </div>
+        </div>
+      </InfoTip>
+    </span>
+  );
+
   return (
     <div
       className={`mobile-parcel-visit-overlay plot-visit-shell ${
@@ -640,58 +682,29 @@ export default function PlotVisitView({
       data-plot-parcel-id={activeParcel?.parcelId || ''}
       data-selected-target={selectedTarget}
     >
-      {/* Top Bar */}
-      <header className="mobile-parcel-header plot-visit-header">
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <h1 className="mobile-parcel-title">
-              {loading ? 'Loading Land…' : landDisplayName}
-            </h1>
-            {activeParcel && (
-              <span
-                className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}
-                style={{ fontSize: 10 }}
-              >
-                {isFrozen ? '❄️ Frozen' : '✅ Open'}
-              </span>
-            )}
-            {isLandOwner && (
-              <span className="badge gold" style={{ fontSize: 10 }} data-testid="plot-owner-badge">
-                👑 Your Land
-              </span>
-            )}
-          </div>
+      {/* Top Bar: strictly Land Name, Status, Share, and Close Window */}
+      <header className="mobile-parcel-header plot-visit-header" data-testid="plot-visit-header">
+        <div className="plot-visit-header-main">
+          <h1 className="mobile-parcel-title">
+            {loading ? 'Loading Land…' : landDisplayName}
+          </h1>
           {activeParcel && (
-            <div className="mono plot-visit-subhead">
-              <span>
-                {landDimensions ? `${landDimensions} · ` : ''}
-                {visibleSculptures.length} artwork{visibleSculptures.length === 1 ? '' : 's'}
-              </span>
-              {hasCenter && (
-                <span className="plot-header-coords" data-testid="plot-header-coords">
-                  📍 {centerLat.toFixed(4)}, {centerLng.toFixed(4)}
-                </span>
-              )}
-            </div>
+            <span
+              className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}
+              data-testid="plot-status-badge"
+              style={{ fontSize: 10, flexShrink: 0 }}
+            >
+              {isFrozen ? '❄️ Frozen' : '✅ Open'}
+            </span>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-          {!user && onRequestLogin && (
-            <button
-              type="button"
-              className="btn btn-sm btn-outline"
-              data-testid="plot-signin-btn"
-              onClick={onRequestLogin}
-              title="Sign in to manage your land or artworks"
-            >
-              <XeroIcon emoji="🔐" size={12} /> Sign In
-            </button>
-          )}
+        <div className="plot-visit-header-actions">
           {activeParcel && (
             <button
               type="button"
               className="btn btn-sm"
+              data-testid="plot-share-btn"
               aria-label="Copy parcel share link"
               title="Copy share link"
               onClick={handleCopyShareLink}
@@ -699,25 +712,16 @@ export default function PlotVisitView({
               🔗
             </button>
           )}
-          {isDesktop ? (
-            <button
-              type="button"
-              className="btn btn-sm"
-              aria-label="Explore full world map"
-              onClick={onClose}
-            >
-              🗺️ Full Map
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-sm"
-              aria-label="Close parcel visit view"
-              onClick={onClose}
-            >
-              <XeroIcon emoji="✕" size={14} />
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            data-testid="plot-close-btn"
+            aria-label={isDesktop ? 'Close land view' : 'Close parcel visit view'}
+            title="Close"
+            onClick={onClose}
+          >
+            <XeroIcon emoji="✕" size={14} />
+          </button>
         </div>
       </header>
 
@@ -1205,6 +1209,17 @@ export default function PlotVisitView({
                             {landExpiration.badgeText}
                           </span>
                         )}
+                        {!user && onRequestLogin && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-outline"
+                            data-testid="plot-signin-btn"
+                            onClick={onRequestLogin}
+                            title="Sign in to manage your land or artworks"
+                          >
+                            <XeroIcon emoji="🔐" size={11} /> Sign In
+                          </button>
+                        )}
                       </div>
 
                       {/* Mobile Proximity & AR Actions */}
@@ -1215,6 +1230,7 @@ export default function PlotVisitView({
                               <span className="badge teal" data-testid="parcel-proximity-near">
                                 📍 You are at this property ({formatDistance(distanceMeters, unitSystem)} away)
                               </span>
+                              {renderLandInfoTip()}
                             </div>
                           )}
 
@@ -1273,16 +1289,7 @@ export default function PlotVisitView({
                                     <XeroIcon emoji="🧭" size={14} /> Navigate
                                   </a>
                                 )}
-                                <span
-                                  className="mobile-parcel-directions-info"
-                                  data-testid="parcel-directions-info"
-                                >
-                                  <InfoTip title="In-Person AR Access" mode="popover" align="right">
-                                    {isFrozen
-                                      ? 'Walk near this property to unlock View in AR (placements are frozen).'
-                                      : 'Walk near this property to unlock View in AR and Make Art on This Property.'}
-                                  </InfoTip>
-                                </span>
+                                {renderLandInfoTip()}
                               </div>
                             )}
                           </div>
@@ -1317,16 +1324,7 @@ export default function PlotVisitView({
                           >
                             🔗 Copy Share Link
                           </button>
-                          <span
-                            className="mobile-parcel-directions-info"
-                            data-testid="parcel-directions-info"
-                          >
-                            <InfoTip title="In-Person AR Access" mode="popover" align="right">
-                              {isFrozen
-                                ? 'Walk near this property on mobile to unlock View in AR (placements are frozen).'
-                                : 'Walk near this property on mobile to unlock View in AR and Make Art on This Property.'}
-                            </InfoTip>
-                          </span>
+                          {renderLandInfoTip()}
                         </div>
                       )}
 
@@ -1337,8 +1335,12 @@ export default function PlotVisitView({
                             <span className="plot-mgmt-title">
                               <XeroIcon emoji="⚙️" size={13} /> Land Management
                             </span>
-                            <span className="badge gold" style={{ fontSize: 10 }}>
-                              Owner Controls
+                            <span
+                              className="badge gold"
+                              style={{ fontSize: 10 }}
+                              data-testid="plot-owner-badge"
+                            >
+                              👑 Your Land
                             </span>
                           </div>
 

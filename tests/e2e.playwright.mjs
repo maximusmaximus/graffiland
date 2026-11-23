@@ -1003,6 +1003,25 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await farPage.waitForSelector('[data-testid="mobile-parcel-visit-view"]');
     await farPage.waitForSelector('[data-testid="parcel-proximity-far"]');
     await farPage.getByRole('link', { name: /Navigate/i }).waitFor();
+    const farHeaderState = await farPage.evaluate(() => {
+      const header = globalThis.document.querySelector('[data-testid="plot-visit-header"]');
+      return {
+        text: header?.textContent || '',
+        btnCount: header?.querySelectorAll('button').length || 0,
+        hasStatus: Boolean(header?.querySelector('[data-testid="plot-status-badge"]')),
+        hasShare: Boolean(header?.querySelector('[data-testid="plot-share-btn"]')),
+        hasClose: Boolean(header?.querySelector('[data-testid="plot-close-btn"]'))
+      };
+    });
+    assert.equal(farHeaderState.btnCount, 2, 'Land top bar must only have Share and Close buttons');
+    assert.equal(farHeaderState.hasStatus, true);
+    assert.equal(farHeaderState.hasShare, true);
+    assert.equal(farHeaderState.hasClose, true);
+    assert.equal(farHeaderState.text.includes('37.7749'), false, 'Coords must be inside the "i" icon, not top bar');
+    assert.equal(farHeaderState.text.includes('ft'), false, 'Dimensions must be inside the "i" icon, not top bar');
+    await farPage.locator('[data-testid="parcel-directions-info"] button').click();
+    await farPage.waitForSelector('[data-testid="plot-info-coords"]');
+    await farPage.waitForSelector('[data-testid="plot-info-dimensions"]');
     const farOrder = await farPage.evaluate(() => {
       const dist = globalThis.document.querySelector('[data-testid="parcel-proximity-far"]')?.getBoundingClientRect();
       const nav = globalThis.document.querySelector('[data-testid="parcel-directions-row"] a')?.getBoundingClientRect();
