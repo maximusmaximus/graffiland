@@ -116,8 +116,8 @@ function parcelToFeature(p, fallbackHeight = LAND_VOLUME_LIMITS.defaultHeightMet
       parcelId: p.parcelId,
       heightMeters: Number(vol.heightMeters || fallbackHeight),
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
-      color: isDormant ? '#ff3e7f' : '#ffb703',
-      borderColor: isDormant ? '#ff7eb3' : '#ffd166'
+      color: isDormant ? '#ff4da6' : '#ff1f8f',
+      borderColor: isDormant ? '#ff85c0' : '#ff1f8f'
     },
     geometry: {
       type: 'Polygon',
@@ -615,8 +615,8 @@ export default function MapView3D({
       if (!geom) continue;
       const isDormant = p?.stewardStatus === 'dormant';
       const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
-      const outerColor = isFrozen ? '#7dd3fc' : isDormant ? '#ff3e7f' : '#ffb703';
-      const innerColor = isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#fff3c4';
+      const outerColor = isFrozen ? '#7dd3fc' : isDormant ? '#ff4da6' : '#ff1f8f';
+      const innerColor = isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#ffd6ec';
       drawGlowingPrism(ctx, geom, {
         outerColor,
         innerColor,
@@ -2274,7 +2274,7 @@ export default function MapView3D({
             onClick={handleResetNorth}
             title="Reset compass north"
           >
-            🧭 North
+            <XeroIcon emoji="🧭" size={12} /> North
           </button>
           <label className="map3d-tilt-control" title="Tilt from flat 2D to 3D">
             <span>Tilt {Math.round(pitchDeg)}°</span>

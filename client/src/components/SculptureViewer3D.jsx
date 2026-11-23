@@ -767,7 +767,7 @@ export default function SculptureViewer3D({
       ? 0xff4d6d
       : siblingBoxes.some((s) => s.wasPushed)
       ? 0xffd166
-      : 0x00f5d4;
+      : 0xff1f8f;
 
     const wireLine = createDepthFadedThreeBoxWireframe(volW, volH, volD, wireColor, {
       nearOpacity: 0.96,

@@ -314,14 +314,14 @@ export default function MapView({
       const isFrozen = Boolean(p.frozen || p.settings?.frozen);
       const hasQuests = Number(p.openQuestCount || 0) > 0;
       const strokeColor = isSelectedParcel
-        ? '#ffd166'
+        ? '#ff0099'
         : isFrozen
         ? '#7dd3fc'
         : isDormant
-        ? '#ff6b35'
+        ? '#ff4da6'
         : hasQuests
-        ? '#7b2cbf'
-        : '#00f5d4';
+        ? '#c026d3'
+        : '#ff1f8f';
 
       const styleOpts = {
         color: strokeColor,

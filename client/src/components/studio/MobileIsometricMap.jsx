@@ -88,10 +88,10 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
   const color = isSelected
     ? isFrozen
       ? '#7dd3fc'
-      : '#00f5d4'
+      : '#ff1f8f'
     : isDormant
-      ? '#ff3e7f'
-      : '#ffb703';
+      ? '#ff4da6'
+      : '#ff1f8f';
   return {
     type: 'Feature',
     properties: {
@@ -118,7 +118,7 @@ function drawMobilePrismWireframe(
 
   if (showGroundHalo) {
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 245, 212, 0.12)';
+    ctx.fillStyle = 'rgba(255, 31, 143, 0.14)';
     ctx.beginPath();
     ctx.moveTo(bottom[0].x, bottom[0].y);
     for (let i = 1; i < 4; i++) ctx.lineTo(bottom[i].x, bottom[i].y);
@@ -201,8 +201,8 @@ function MobileIsoSvgFallback({
 
   const pts = (arr) => arr.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const isFrozen = Boolean(primaryEntry?.parcel?.frozen || primaryEntry?.parcel?.settings?.frozen);
-  const stroke = isFrozen ? '#7dd3fc' : '#00f5d4';
-  const fill = isFrozen ? 'rgba(125, 211, 252, 0.16)' : 'rgba(0, 245, 212, 0.14)';
+  const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
+  const fill = isFrozen ? 'rgba(125, 211, 252, 0.16)' : 'rgba(255, 31, 143, 0.14)';
   const landName = primaryEntry
     ? showcaseMode
       ? resolveLandDisplayName(primaryEntry.parcel, { defaultName: 'Virtual Land' })
@@ -617,8 +617,8 @@ export default function MobileIsometricMap({
     // Pass 1: Draw ONLY the focused land wireframe (never draw neighboring lands' wireframe lines)
     const pendingLabels = [];
     let primaryGeom = null;
-    let primaryOuterColor = '#00f5d4';
-    let primaryInnerColor = '#eafffc';
+    let primaryOuterColor = '#ff1f8f';
+    let primaryInnerColor = '#ffd6ec';
 
     if (primary?.volume) {
       const geom = computePrismScreenGeometry(map, maplibregl, primary.volume);
@@ -631,18 +631,16 @@ export default function MobileIsometricMap({
         const dims = `${formatCompactMeter(primary.volume.widthMeters)}×${formatCompactMeter(
           primary.volume.depthMeters
         )}×${formatCompactMeter(primary.volume.heightMeters)}m`;
-        const outerColor =
-          landSelectedRef.current && showcaseModeRef.current
-            ? '#ffd166'
-            : isFrozen
-              ? '#7dd3fc'
-              : '#00f5d4';
-        const innerColor =
-          landSelectedRef.current && showcaseModeRef.current
-            ? '#fff3c4'
-            : isFrozen
-              ? '#e0f2fe'
-              : '#eafffc';
+        const outerColor = isFrozen
+          ? '#7dd3fc'
+          : landSelectedRef.current && showcaseModeRef.current
+            ? '#ff0099'
+            : '#ff1f8f';
+        const innerColor = isFrozen
+          ? '#e0f2fe'
+          : landSelectedRef.current && showcaseModeRef.current
+            ? '#ffe0f2'
+            : '#ffd6ec';
 
         drawMobilePrismWireframe(ctx, geom, {
           outerColor,
@@ -1576,8 +1574,11 @@ export default function MobileIsometricMap({
       {/* Bottom-Left Compact 3D Isometric HUD (Compass + Metric Scale Bar) */}
       <div className="mobile-iso-hud-bottom" aria-hidden="true">
         <span className="mobile-iso-hud-chip is-accent">3D ISO</span>
-        <span className="mobile-iso-hud-chip mono">
-          🧭 {compass.label} {compass.degrees}°
+        <span className="mobile-iso-hud-chip mono" data-testid="mobile-iso-compass-chip">
+          <XeroIcon emoji="🧭" size={12} />
+          <span>
+            {compass.label} {compass.degrees}°
+          </span>
         </span>
         <span className="mobile-iso-scale-chip mono">
           <span

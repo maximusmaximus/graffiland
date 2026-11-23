@@ -70,10 +70,10 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
   const color = isSelected
     ? isFrozen
       ? '#7dd3fc'
-      : '#00f5d4'
+      : '#ff1f8f'
     : isDormant
-      ? '#ff3e7f'
-      : '#ffb703';
+      ? '#ff4da6'
+      : '#ff1f8f';
   return {
     type: 'Feature',
     properties: {
@@ -102,7 +102,7 @@ function drawPreviewPrism(
     const cx = (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4;
     const cy = (bottom[0].y + bottom[1].y + bottom[2].y + bottom[3].y) / 4;
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 245, 212, 0.14)';
+    ctx.fillStyle = 'rgba(255, 31, 143, 0.14)';
     ctx.beginPath();
     ctx.moveTo(bottom[0].x, bottom[0].y);
     for (let i = 1; i < 4; i++) ctx.lineTo(bottom[i].x, bottom[i].y);
@@ -161,8 +161,8 @@ function IsometricFallbackBlueprint({ volume, parcel, viewMode, bearingDeg }) {
   const t2 = iso(hw, hd, hScale);
   const t3 = iso(-hw, hd, hScale);
   const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
-  const stroke = isFrozen ? '#7dd3fc' : '#00f5d4';
-  const fill = isFrozen ? 'rgba(125, 211, 252, 0.18)' : 'rgba(0, 245, 212, 0.16)';
+  const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
+  const fill = isFrozen ? 'rgba(125, 211, 252, 0.18)' : 'rgba(255, 31, 143, 0.16)';
   const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
 
   return (
@@ -496,8 +496,8 @@ export default function LandIsometricPreview({
         const shortName = displayNameRef.current || 'Virtual Land';
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
         const heightTag = `${Math.round(curVol.heightMeters)}m`;
-        const outerColor = isFrozenNow ? '#7dd3fc' : '#00f5d4';
-        const innerColor = isFrozenNow ? '#e0f2fe' : '#eafffc';
+        const outerColor = isFrozenNow ? '#7dd3fc' : '#ff1f8f';
+        const innerColor = isFrozenNow ? '#e0f2fe' : '#ffd6ec';
         drawPreviewPrism(ctx, geom, {
           outerColor,
           innerColor,
@@ -1082,8 +1082,17 @@ export default function LandIsometricPreview({
             <XeroIcon emoji="📍" size={12} />
             <span>
               {geoSummary.placePrimary ||
-                (placeLoading ? 'Locating neighborhood & street…' : geoSummary.cardinalCoords)}
+                (placeLoading ? 'Locating neighborhood & street…' : '')}
             </span>
+            {geoSummary.cardinalCoords && (
+              <span
+                className="land-preview-header-coords mono"
+                data-testid="land-preview-coords"
+              >
+                {geoSummary.placePrimary ? '· ' : ''}
+                {geoSummary.cardinalCoords}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -1143,19 +1152,21 @@ export default function LandIsometricPreview({
           <div className="land-preview-compass-group">
             <button
               type="button"
-              className="land-preview-compass"
+              className="land-preview-chip land-preview-compass"
+              data-testid="land-preview-compass-btn"
               aria-label={`Compass heading ${compass.label}. Click to reset isometric view`}
               title={`Facing ${compass.label} (${compass.degrees}°) — click to reset isometric angle`}
               onClick={handleResetCompass}
             >
               <svg
-                width="18"
-                height="18"
+                className="land-preview-compass-icon"
+                width="12"
+                height="12"
                 viewBox="0 0 24 24"
                 style={{ transform: `rotate(${-liveBearing}deg)`, transition: 'transform 220ms ease' }}
                 aria-hidden="true"
               >
-                <polygon points="12,2 15.2,12 12,10.2 8.8,12" fill="#ff5e7e" />
+                <polygon points="12,2 15.2,12 12,10.2 8.8,12" fill="#ff1f8f" />
                 <polygon points="12,22 15.2,12 12,13.8 8.8,12" fill="rgba(255,255,255,0.45)" />
               </svg>
               <span className="land-preview-compass-label">{compass.label}</span>
@@ -1230,14 +1241,8 @@ export default function LandIsometricPreview({
         />
       </div>
 
-      {/* 3) Structured Geographic Quick-Facts Strip */}
-      <div className="land-preview-facts">
-        <div className="land-preview-fact">
-          <span className="land-preview-fact-label">Coordinates</span>
-          <span className="land-preview-fact-value mono" data-testid="land-preview-coords">
-            {geoSummary.cardinalCoords}
-          </span>
-        </div>
+      {/* 3) Structured Geographic Quick-Facts Strip (Coordinates moved to header) */}
+      <div className="land-preview-facts is-two-col">
         <div className="land-preview-fact">
           <span className="land-preview-fact-label">3D Footprint</span>
           <span className="land-preview-fact-value mono">{geoSummary.dimensionsLabel}</span>
@@ -1268,7 +1273,7 @@ export default function LandIsometricPreview({
             rel="noopener noreferrer"
             className="btn btn-xs"
           >
-            🧭 Google Maps
+            <XeroIcon emoji="🧭" size={12} /> Google Maps
           </a>
         )}
         {onFocusParcel && (
