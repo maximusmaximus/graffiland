@@ -3766,28 +3766,35 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     };
 
     try {
-      // 1) PlotVisitView (far away): coords in header, removed from details, no GPS button, inline Directions + distance + InfoTip
+      // 1) PlotVisitView (far away): top bar has ONLY land name, status, share, and close; location & dimensions live inside the "i" icon
       const plotView = RTL.render(
         React.createElement(PlotVisitView, {
           variant: 'mobile',
           parcel,
           sculptures: [],
           userLocation: { lat: 39.74, lng: -121.84067 },
+          onRequestLogin: () => {},
           onClose: () => {}
         })
       );
 
-      // Coords are in header, NOT inside plot-land-details
-      const headerCoords = plotView.getByTestId('plot-header-coords');
-      assert.ok(headerCoords.textContent.includes('39.7302'));
-      assert.ok(headerCoords.closest('header.plot-visit-header'));
+      // Top bar contains ONLY land name, status badge, share button, and close button (NO coords, NO dimensions, NO Sign In)
+      const header = plotView.getByTestId('plot-visit-header');
+      assert.ok(header.textContent.includes('Squiggle Bro Land'));
+      assert.ok(header.contains(plotView.getByTestId('plot-status-badge')));
+      assert.ok(header.contains(plotView.getByTestId('plot-share-btn')));
+      assert.ok(header.contains(plotView.getByTestId('plot-close-btn')));
+      assert.equal(header.querySelectorAll('button').length, 2, 'Top bar should only have Share and Close buttons');
+      assert.equal(header.textContent.includes('39.7302'), false, 'Location coords must not appear in top bar');
+      assert.equal(header.textContent.includes('ft'), false, 'Dimensions must not appear in top bar');
+      assert.equal(header.textContent.includes('Sign In'), false, 'Sign In must not appear in top bar');
+      assert.equal(plotView.queryByTestId('plot-header-coords'), null);
 
       const landDetails = plotView.getByTestId('plot-land-details');
       assert.equal(landDetails.textContent.includes('39.7302, -121.8407'), false);
-      // Permanent label is hidden and dimensions already shown in the header are not duplicated in land details
+      // Permanent label is hidden and dimensions are tucked cleanly inside the "i" icon
       assert.equal(plotView.queryByText(/Permanent/i), null);
       assert.equal(landDetails.textContent.includes('📐'), false);
-      assert.ok(plotView.container.querySelector('.plot-visit-subhead').textContent.includes('ft'));
 
       // Refresh GPS button is removed
       assert.equal(plotView.queryByRole('button', { name: /Refresh GPS/i }), null);
@@ -3807,11 +3814,15 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
 
       const infoWrap = plotView.getByTestId('parcel-directions-info');
       assert.ok(dirRow.contains(infoWrap));
-      // Unlock hint text is NOT shown raw below the button until InfoTip is clicked
+      // Location, dimensions & unlock hint are NOT shown raw until the "i" icon is clicked
       assert.equal(plotView.queryByText(/Walk near this property to unlock View in AR/i), null);
+      assert.equal(plotView.queryByTestId('plot-info-coords'), null);
+      assert.equal(plotView.queryByTestId('plot-info-dimensions'), null);
       const infoBtn = infoWrap.querySelector('button');
       assert.ok(infoBtn);
       RTL.fireEvent.click(infoBtn);
+      assert.ok(plotView.getByTestId('plot-info-coords').textContent.includes('39.7302, -121.8407'));
+      assert.ok(plotView.getByTestId('plot-info-dimensions').textContent.includes('ft'));
       assert.ok(plotView.getByText(/Walk near this property to unlock View in AR/i));
       cleanup();
 
