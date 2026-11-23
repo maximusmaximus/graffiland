@@ -11,11 +11,18 @@ import XeroIcon from '../XeroIcon.jsx';
  * Reuses the active MobileStudio AR rear camera <video> when live to avoid iOS dual-stream
  * conflicts, falls back to its own getUserMedia stream if needed, and also supports photo capture.
  */
-export default function DesktopQrScanner({ existingVideoRef = null, onDetected, onClose }) {
+export default function DesktopQrScanner({
+  existingVideoRef = null,
+  onCameraRefreshNeeded = null,
+  onDetected,
+  onClose
+}) {
   const canvasRef = useRef(null);
   const localVideoRef = useRef(null);
   const localStreamRef = useRef(null);
+  const openedOwnStreamRef = useRef(false);
   const onDetectedRef = useRef(onDetected);
+  const onCameraRefreshNeededRef = useRef(onCameraRefreshNeeded);
   const cameraActiveRef = useRef(false);
   const [statusText, setStatusText] = useState('Point camera at Desktop Pair QR code…');
   const [errorText, setErrorText] = useState('');
@@ -23,7 +30,8 @@ export default function DesktopQrScanner({ existingVideoRef = null, onDetected, 
 
   useEffect(() => {
     onDetectedRef.current = onDetected;
-  }, [onDetected]);
+    onCameraRefreshNeededRef.current = onCameraRefreshNeeded;
+  }, [onDetected, onCameraRefreshNeeded]);
 
   useEffect(() => {
     let active = true;
@@ -69,6 +77,7 @@ export default function DesktopQrScanner({ existingVideoRef = null, onDetected, 
           return;
         }
         localStreamRef.current = stream;
+        openedOwnStreamRef.current = true;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
           await localVideoRef.current.play().catch(() => {});
@@ -143,12 +152,17 @@ export default function DesktopQrScanner({ existingVideoRef = null, onDetected, 
         localStreamRef.current.getTracks().forEach((t) => t.stop());
         localStreamRef.current = null;
       }
+      if (openedOwnStreamRef.current) {
+        openedOwnStreamRef.current = false;
+        onCameraRefreshNeededRef.current?.({ reason: 'qr_scanner_closed', force: true });
+      }
     };
   }, [existingVideoRef]);
 
   const handlePhotoFile = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
+    onCameraRefreshNeededRef.current?.({ reason: 'qr_photo_captured', force: true });
     if (!file) return;
     setErrorText('');
     setStatusText('Scanning QR photo…');

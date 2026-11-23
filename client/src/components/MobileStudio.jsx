@@ -152,11 +152,15 @@ export default function MobileStudio({
   }, []);
 
   const onLocationUpdateBridgeRef = useRef(null);
+  const onCameraRefreshedBridgeRef = useRef(null);
+  const onNetworkReconnectBridgeRef = useRef(null);
 
   const pol = useProofOfLocation({
     user,
     dirLightRef,
-    onLocationUpdate: (loc, refined) => onLocationUpdateBridgeRef.current?.(loc, refined)
+    onLocationUpdate: (loc, refined) => onLocationUpdateBridgeRef.current?.(loc, refined),
+    onCameraRefreshed: (meta) => onCameraRefreshedBridgeRef.current?.(meta),
+    onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.()
   });
 
   // Refs bridging actions between circularly-related hooks cleanly
@@ -287,6 +291,22 @@ export default function MobileStudio({
       ar.setNearbyParcels(pRes.parcels);
     }
     await ar.hydrateNearbyList(res.sculptures || [], refined);
+  };
+
+  onCameraRefreshedBridgeRef.current = () => {
+    brush.occlusionRef.current?.reset?.();
+    brush.setOriginStatus((prev) =>
+      prev?.originBlocked
+        ? { ...prev, originBlocked: false, originVisible: true, reason: '' }
+        : prev
+    );
+  };
+
+  onNetworkReconnectBridgeRef.current = () => {
+    const loc = pol.locationRef.current;
+    if (loc) {
+      onLocationUpdateBridgeRef.current?.(loc, loc).catch?.(() => {});
+    }
   };
 
   const parcelsLoadedOnceRef = useRef(false);
@@ -622,6 +642,22 @@ export default function MobileStudio({
     [ar, brush, drafts, lands, pol]
   );
 
+  const {
+    refreshCamera: refreshArCamera,
+    ensureCameraLive: ensureArCameraLive
+  } = pol;
+
+  const handlePairingConnectionChange = useCallback(
+    ({ kind, status }) => {
+      if (status === 'reconnected' || (kind === 'desktop' && status === 'connected')) {
+        refreshArCamera({ reason: `${kind}_${status}`, force: true });
+      } else if (status === 'disconnected' || status === 'ended') {
+        ensureArCameraLive({ reason: `${kind}_${status}` });
+      }
+    },
+    [ensureArCameraLive, refreshArCamera]
+  );
+
   const pairing = usePairing({
     user,
     voxels: brush.voxels,
@@ -631,9 +667,32 @@ export default function MobileStudio({
     showTemporaryHint,
     onOpenLogin: () => setLoginOpen(true),
     onDesktopCommand: handleDesktopCommand,
-    onDelegatedPublishExecuted: resetFormAfterPublish
+    onDelegatedPublishExecuted: resetFormAfterPublish,
+    onConnectionStateChange: handlePairingConnectionChange
   });
   openPairModalRef.current = () => pairing.setPairOpen(true);
+
+  const hasFullscreenOverlay = Boolean(
+    ar.mapOpen ||
+      parcelVisit ||
+      ar.mapSelectedSculpture ||
+      lands.landManageOpen ||
+      pairing.pairOpen ||
+      drafts.agentOpen ||
+      drafts.draftsOpen ||
+      brush.mode === 'publish' ||
+      chat.chatSelection ||
+      profileHandle ||
+      infoOpen ||
+      loginOpen
+  );
+  const prevFullscreenOverlayRef = useRef(hasFullscreenOverlay);
+  useEffect(() => {
+    if (prevFullscreenOverlayRef.current && !hasFullscreenOverlay) {
+      ensureArCameraLive({ reason: 'overlay_closed' });
+    }
+    prevFullscreenOverlayRef.current = hasFullscreenOverlay;
+  }, [ensureArCameraLive, hasFullscreenOverlay]);
 
   const handlePublishSubmit = async (e) => {
     e.preventDefault();
@@ -864,6 +923,8 @@ export default function MobileStudio({
         cameraReady={pol.cameraReady}
         sceneScanOptimal={pol.sceneScan.optimal}
         unmappedGrid={pol.unmappedGrid}
+        onVideoMounted={pol.reattachVideoStream}
+        onCameraRefreshNeeded={pol.refreshCamera}
         computeTargetVoxel={brush.computeTargetVoxel}
         applyVoxelBatch={brush.applyVoxelBatch}
         applyVoxelAction={brush.applyVoxelAction}
@@ -930,8 +991,10 @@ export default function MobileStudio({
           needsGyroTap={pol.needsGyroTap}
           gyroFallbackActive={pol.gyroFallbackActive}
           cameraReady={pol.cameraReady}
+          cameraRecovering={pol.cameraRecovering}
           onEnableIosGyro={pol.enableIosGyro}
           onRetryCameraAccess={pol.retryCameraAccess}
+          onCameraRefreshNeeded={pol.refreshCamera}
           sensorBanner={pol.sensorBanner}
           onDismissSensorBanner={() => pol.setSensorBanner('')}
           arTargetedSculpture={ar.arTargetedSculpture}
@@ -1011,7 +1074,10 @@ export default function MobileStudio({
             onToggleCollapse={() => pol.setScanBoxCollapsed((v) => !v)}
             dockOpen={dockOpen}
             mode={brush.mode}
-            onRefreshOrbRescan={ar.handleRefreshOrbRescan}
+            onRefreshOrbRescan={async () => {
+              await ensureArCameraLive({ reason: 'orb_rescan' });
+              return ar.handleRefreshOrbRescan();
+            }}
           />
         )}
 
@@ -1116,6 +1182,7 @@ export default function MobileStudio({
         <PairDesktopMcpModal
           user={user}
           videoRef={pol.videoRef}
+          onCameraRefreshNeeded={pol.refreshCamera}
           pairCodeInput={pairing.pairCodeInput}
           setPairCodeInput={pairing.setPairCodeInput}
           pairedCode={pairing.pairedCode}

@@ -48,8 +48,10 @@ export default function StudioHudTopBar({
   needsGyroTap,
   gyroFallbackActive,
   cameraReady,
+  cameraRecovering = false,
   onEnableIosGyro,
   onRetryCameraAccess,
+  onCameraRefreshNeeded = null,
   sensorBanner,
   onDismissSensorBanner = null,
   arTargetedSculpture,
@@ -98,9 +100,15 @@ export default function StudioHudTopBar({
     setPairHubOpen(true);
   };
 
-  const showRedSensorError = Boolean(sensorBanner && (dockOpen || !cameraReady));
+  const showRedSensorError = Boolean(
+    !cameraRecovering && sensorBanner && (dockOpen || !cameraReady)
+  );
   const showCameraFallbackBanner =
-    !showRedSensorError && !needsGyroTap && (gyroFallbackActive || !cameraReady) && !arSelectHint;
+    !cameraRecovering &&
+    !showRedSensorError &&
+    !needsGyroTap &&
+    (gyroFallbackActive || !cameraReady) &&
+    !arSelectHint;
   const openLoginAction = onOpenLogin || onOpenLoginFromHint;
 
   return (
@@ -288,6 +296,7 @@ export default function StudioHudTopBar({
           user={user}
           onOpenLogin={onOpenLogin || onOpenLoginFromHint}
           videoRef={videoRef}
+          onCameraRefreshNeeded={onCameraRefreshNeeded}
           pairCodeInput={pairCodeInput}
           setPairCodeInput={setPairCodeInput}
           pairedCode={pairedCode}
@@ -463,6 +472,20 @@ export default function StudioHudTopBar({
                   {selectedPlinthSlot ? '✅ Snapped' : '🪑 Snap to Plinth'}
                 </button>
               )}
+          </div>
+        )}
+
+        {!isInteractingWithLand && cameraRecovering && (
+          <div
+            className="mobile-hud-banner hud-interactive"
+            data-testid="camera-recovering-banner"
+            role="status"
+            aria-live="polite"
+          >
+            <span className="mobile-hud-banner-text">
+              <XeroIcon emoji="🔄" size={14} />
+              <span>Refreshing AR camera…</span>
+            </span>
           </div>
         )}
 

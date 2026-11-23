@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
 import {
@@ -79,6 +79,8 @@ function ARViewportCanvasInner({
   cameraReady,
   sceneScanOptimal,
   unmappedGrid,
+  onVideoMounted = null,
+  onCameraRefreshNeeded = null,
   computeTargetVoxel,
   applyVoxelBatch,
   applyVoxelAction,
@@ -90,6 +92,15 @@ function ARViewportCanvasInner({
   onCanvasPointerCancel
 }) {
   const [contextLost, setContextLost] = useState(false);
+  const onCameraRefreshNeededRef = useRef(onCameraRefreshNeeded);
+
+  useEffect(() => {
+    onCameraRefreshNeededRef.current = onCameraRefreshNeeded;
+  }, [onCameraRefreshNeeded]);
+
+  useEffect(() => {
+    onVideoMounted?.();
+  }, [onVideoMounted]);
 
   useEffect(() => {
     const host = canvasHostRef.current;
@@ -126,6 +137,7 @@ function ARViewportCanvasInner({
     };
     const onContextRestored = () => {
       setContextLost(false);
+      onCameraRefreshNeededRef.current?.({ reason: 'webgl_restored', force: true });
     };
     renderer.domElement.addEventListener('webglcontextlost', onContextLost, false);
     renderer.domElement.addEventListener('webglcontextrestored', onContextRestored, false);
