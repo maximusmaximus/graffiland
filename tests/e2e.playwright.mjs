@@ -1340,6 +1340,15 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok((await otherCards.count()) >= 1, 'Expected at least 1 non-owned land card in Nearest Lands');
     assert.equal(await otherCards.first().locator('[data-testid="land-manage-gear-btn"]').count(), 0);
     assert.equal(await otherCards.first().locator('[data-testid="land-title-edit-trigger"]').count(), 0);
+    assert.equal(await hubPage.getByRole('button', { name: /Focus Map/i }).count(), 0);
+    // Clicking non-owned property name targets that land on the top map cleanly
+    const otherTargetBtn = otherCards.first().locator('[data-testid="land-title-target-trigger"]');
+    assert.equal(await otherTargetBtn.count(), 1);
+    await otherTargetBtn.click();
+    assert.ok(
+      (await otherCards.first().getAttribute('class') || '').includes('is-selected'),
+      'Expected clicking non-owned property name to target and select that land'
+    );
 
     const myOwnedCard = ownedCards.first();
     const myOwnedParcelId = await myOwnedCard.getAttribute('data-parcel-id');
