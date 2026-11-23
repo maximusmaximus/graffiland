@@ -1162,9 +1162,6 @@ export default function PlotVisitView({
                       )}
 
                       <div className="plot-detail-meta-chips">
-                        {landDimensions && (
-                          <span className="mobile-sc-chip">📐 {landDimensions}</span>
-                        )}
                         {onOpenProfile && stewardHandle ? (
                           <button
                             type="button"
@@ -1202,10 +1199,12 @@ export default function PlotVisitView({
                             />
                           </span>
                         )}
-                        <span className="mobile-sc-chip">
-                          {landExpiration.state === 'permanent' ? '♾️' : '⏳'}{' '}
-                          {landExpiration.badgeText}
-                        </span>
+                        {landExpiration.state !== 'permanent' && (
+                          <span className="mobile-sc-chip">
+                            {landExpiration.state === 'expired' ? '⏱️' : '⏳'}{' '}
+                            {landExpiration.badgeText}
+                          </span>
+                        )}
                       </div>
 
                       {/* Mobile Proximity & AR Actions */}

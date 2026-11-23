@@ -1192,15 +1192,16 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       `Expected US location to default to feet/miles, got: ${JSON.stringify(closedCardMetrics)}`
     );
 
-    // Verify expiration badges render in compact cards (both dormant countdown "left" and Permanent lands)
+    // Verify expiration badges render ONLY for dormant countdowns (Permanent label is hidden!)
     const expTexts = await hubPage.locator('[data-testid="land-expiration-badge"]').allTextContents();
     assert.ok(
       expTexts.some((t) => /\bleft\b/i.test(t)),
       `Expected a dormant land expiration countdown badge, got: ${JSON.stringify(expTexts)}`
     );
-    assert.ok(
+    assert.equal(
       expTexts.some((t) => /Permanent/i.test(t)),
-      `Expected a permanent land badge, got: ${JSON.stringify(expTexts)}`
+      false,
+      `Did not expect redundant Permanent badge, got: ${JSON.stringify(expTexts)}`
     );
 
     // Clicking the rank number (#1) focuses that land on top map AND opens the card

@@ -1287,10 +1287,14 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.match(distBadges[0].textContent, /\b(ft|mi)\b/);
     assert.match(distBadges[1].textContent, /\b(ft|mi)\b/);
 
-    // Expiration countdown and Permanent badges render accurately in closed compact cards
+    // Expiration countdown renders ONLY for non-permanent lands (no redundant Permanent badge!)
     const expBadges = view.getAllByTestId('land-expiration-badge');
+    assert.equal(expBadges.length, 1);
     assert.ok(expBadges[0].textContent.includes('1d 18h left'));
-    assert.ok(expBadges[1].textContent.includes('Permanent'));
+    assert.equal(view.queryByText(/Permanent/i), null);
+
+    // Compact US imperial dimensions show once in the card header
+    assert.ok(cards[0].querySelector('[data-testid="land-compact-meta"]').textContent.includes('79×52×118 ft'));
 
     // Clicking the card's #1 number focuses that land on the top map AND opens the card
     const rankBtns = view.getAllByTestId('land-card-rank-btn');
@@ -1307,8 +1311,9 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(cards[1].getAttribute('data-expanded'), 'true');
     assert.deepEqual(focusedParcels, ['GLAND-NEAR']);
 
-    // Land metadata (US imperial dimensions, steward with icon badge, quests, contributors) renders inside expanded cards
-    assert.ok(cards[0].textContent.includes('79×52×118 ft · 4,133 ft²'));
+    // Land details show steward/quests/contributors without duplicating dimensions already shown in card header
+    const card0Details = cards[0].querySelector('[data-testid="mobile-land-card-details"]');
+    assert.equal(card0Details.textContent.includes('79×52×118 ft'), false);
     assert.ok(cards[0].textContent.includes('PainterBot'));
     assert.ok(cards[0].querySelector('[data-testid="user-handle-badge"]'));
     assert.ok(cards[0].textContent.includes('2 open quests'));
@@ -2199,12 +2204,14 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    // 1) Compact dimensions show US imperial precision by default for Chico, CA (9.3×9.6×6.3 ft)
-    // and full area (89 ft²) when expanded via triangle
+    // 1) Compact dimensions show once in the card header (9.3×9.6×6.3 ft) and are not duplicated inside expanded details
     assert.ok(view.container.textContent.includes('9.3×9.6×6.3 ft'));
     const toggleBtns = view.getAllByTestId('land-card-expand-toggle');
     RTL.fireEvent.click(toggleBtns[0]);
-    assert.ok(view.container.textContent.includes('9.3×9.6×6.3 ft · 89 ft²'));
+    assert.equal(
+      view.getByTestId('mobile-land-card-details').textContent.includes('9.3×9.6×6.3 ft'),
+      false
+    );
 
     // 2) Defaults to 3D isometric map immediately with 2D toggle, 90° orbit, Fit, Me & Full buttons
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
@@ -3777,6 +3784,10 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
 
       const landDetails = plotView.getByTestId('plot-land-details');
       assert.equal(landDetails.textContent.includes('39.7302, -121.8407'), false);
+      // Permanent label is hidden and dimensions already shown in the header are not duplicated in land details
+      assert.equal(plotView.queryByText(/Permanent/i), null);
+      assert.equal(landDetails.textContent.includes('📐'), false);
+      assert.ok(plotView.container.querySelector('.plot-visit-subhead').textContent.includes('ft'));
 
       // Refresh GPS button is removed
       assert.equal(plotView.queryByRole('button', { name: /Refresh GPS/i }), null);

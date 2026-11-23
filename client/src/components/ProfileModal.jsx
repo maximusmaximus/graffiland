@@ -1154,18 +1154,14 @@ export default function ProfileModal({
                               {resolveLandDisplayName(land, { defaultName: 'Virtual Land' })}
                             </div>
                           </div>
-                          <span
-                            className={`badge ${
-                              exp.state === 'permanent'
-                                ? 'teal'
-                                : exp.urgent
-                                ? 'danger'
-                                : 'gold'
-                            }`}
-                            style={{ fontSize: 10 }}
-                          >
-                            {exp.badgeText}
-                          </span>
+                          {exp.state !== 'permanent' && (
+                            <span
+                              className={`badge ${exp.urgent ? 'danger' : 'gold'}`}
+                              style={{ fontSize: 10 }}
+                            >
+                              {exp.badgeText}
+                            </span>
+                          )}
                         </div>
                         {land.description && (
                           <div className="profile-item-desc">{land.description}</div>
