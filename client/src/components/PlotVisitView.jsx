@@ -1248,16 +1248,6 @@ export default function PlotVisitView({
                                 className="mobile-parcel-directions-row"
                                 data-testid="parcel-directions-row"
                               >
-                                {directionsUrl && (
-                                  <a
-                                    href={directionsUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="btn btn-primary mobile-parcel-cta mobile-parcel-directions-btn"
-                                  >
-                                    <XeroIcon emoji="🧭" size={14} /> Get Directions
-                                  </a>
-                                )}
                                 {distanceMeters !== null ? (
                                   <span
                                     className="badge gold mobile-parcel-distance-badge"
@@ -1272,6 +1262,16 @@ export default function PlotVisitView({
                                   >
                                     📡 Locating…
                                   </span>
+                                )}
+                                {directionsUrl && (
+                                  <a
+                                    href={directionsUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn btn-primary mobile-parcel-cta mobile-parcel-directions-btn"
+                                  >
+                                    <XeroIcon emoji="🧭" size={14} /> Navigate
+                                  </a>
                                 )}
                                 <span
                                   className="mobile-parcel-directions-info"
@@ -1292,6 +1292,14 @@ export default function PlotVisitView({
                       {/* Desktop Quick Links */}
                       {isDesktop && (
                         <div className="plot-detail-actions">
+                          {distanceMeters !== null && (
+                            <span
+                              className="badge gold mobile-parcel-distance-badge"
+                              data-testid="parcel-proximity-far"
+                            >
+                              📍 {formatDistance(distanceMeters, unitSystem)} away
+                            </span>
+                          )}
                           {directionsUrl && (
                             <a
                               href={directionsUrl}
@@ -1301,14 +1309,6 @@ export default function PlotVisitView({
                             >
                               <XeroIcon emoji="🧭" size={13} /> Navigate
                             </a>
-                          )}
-                          {distanceMeters !== null && (
-                            <span
-                              className="badge gold mobile-parcel-distance-badge"
-                              data-testid="parcel-proximity-far"
-                            >
-                              📍 {formatDistance(distanceMeters, unitSystem)} away
-                            </span>
                           )}
                           <button
                             type="button"
