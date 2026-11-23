@@ -9,10 +9,11 @@ import XeroIcon from '../XeroIcon.jsx';
 const REACH_PRESETS = [1.2, 1.8, 2.4, 3.0];
 
 /**
- * Bottom-right Brush & Pencil Options Palette.
+ * Bottom-right Brush, Pencil & Eraser Options Palette.
  * Core studio/canvas features live in the bottom-center swipe menu (ToolCarouselBar),
- * while this dedicated palette exposes block size, preset standard colors, material finish,
- * reach distance, and quick switching between Brush (connected strokes) and Pencil (single tap).
+ * while this dedicated palette exposes quick switching between Brush (fluid spray can),
+ * Pencil (single-block place/stack/replace), and Eraser, plus block size, standard colors,
+ * material finish, and reach distance.
  */
 export default function StudioDockDrawer({
   dockOpen,
@@ -20,6 +21,7 @@ export default function StudioDockDrawer({
   mode,
   tool,
   onSelectDrawTool = null,
+  onOpenBrushGuide = null,
   blockSize = 1,
   setBlockSize = null,
   color,
@@ -32,7 +34,14 @@ export default function StudioDockDrawer({
   const activeScale = normalizeBlockScale(blockSize);
   const activeSizePreset =
     BLOCK_SIZE_PRESETS.find((p) => Math.abs(p.scale - activeScale) < 0.05) || BLOCK_SIZE_PRESETS[1];
-  const activeToolLabel = tool === 'pencil' ? 'Pencil' : 'Brush';
+  const activeToolLabel =
+    tool === 'erase' ? 'Eraser' : tool === 'pencil' ? 'Pencil' : 'Brush';
+  const activeToolHint =
+    tool === 'erase'
+      ? 'Tap or hold on blocks to erase'
+      : tool === 'pencil'
+      ? 'Tap blocks to replace · move phone to stack'
+      : 'Hold & sweep phone like a spray can';
 
   return (
     <>
@@ -42,14 +51,14 @@ export default function StudioDockDrawer({
         data-testid="palette-options-toggle"
         onClick={onToggleDock}
         aria-expanded={dockOpen}
-        aria-label={dockOpen ? 'Close brush & pencil options' : 'Brush & pencil options'}
+        aria-label={dockOpen ? 'Close brush, pencil & eraser options' : 'Brush, pencil & eraser options'}
         title={`${activeToolLabel} options · Size ${activeSizePreset.label} · Color ${color}`}
       >
         {dockOpen ? (
           <XeroIcon emoji="✖️" size={18} />
         ) : (
           <>
-            <XeroIcon emoji="🎨" size={22} />
+            <XeroIcon emoji={tool === 'erase' ? '🧽' : '🎨'} size={22} />
             <span
               className="palette-fab-color-dot"
               style={{ backgroundColor: color }}
@@ -67,9 +76,9 @@ export default function StudioDockDrawer({
           className="brush-options-popover hud-interactive"
           data-testid="brush-options-popup"
           role="dialog"
-          aria-label="Brush & Pencil Options"
+          aria-label="Brush, Pencil & Eraser Options"
         >
-          <div className="brush-opt-header">
+          <div className="brush-opt-header is-stacked">
             <div className="brush-opt-tool-switch" role="group" aria-label="Draw mode">
               <button
                 type="button"
@@ -87,10 +96,30 @@ export default function StudioDockDrawer({
               >
                 <XeroIcon emoji="✏️" size={13} /> Pencil
               </button>
+              <button
+                type="button"
+                className={`brush-opt-mode-btn is-eraser ${mode === 'draw' && tool === 'erase' ? 'active' : ''}`}
+                data-testid="palette-select-erase"
+                onClick={() => onSelectDrawTool?.('erase')}
+              >
+                <XeroIcon emoji="🧽" size={13} /> Eraser
+              </button>
             </div>
-            <span className="brush-opt-mode-hint">
-              {tool === 'pencil' ? 'Tap for single blocks' : 'Connected 3D strokes'}
-            </span>
+            <div className="brush-opt-hint-row">
+              <span className="brush-opt-mode-hint">{activeToolHint}</span>
+              {tool === 'brush' && onOpenBrushGuide && (
+                <button
+                  type="button"
+                  className="brush-opt-help-btn"
+                  data-testid="palette-brush-guide-btn"
+                  aria-label="How to use Spray Brush"
+                  title="How to use Spray Brush"
+                  onClick={onOpenBrushGuide}
+                >
+                  ?
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Block Size Selector */}

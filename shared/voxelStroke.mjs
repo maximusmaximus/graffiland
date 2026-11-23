@@ -180,3 +180,239 @@ export function areVoxelsFaceConnected(a, b, { step = VOXEL_STEP, blockScale = 1
   const dz = Math.abs(Math.round(Number(a.z) / cellStep) - Math.round(Number(b.z) / cellStep));
   return dx + dy + dz === 1;
 }
+
+const CARDINAL_FACES = Object.freeze([
+  { face: 'top', nx: 0, ny: 1, nz: 0 },
+  { face: 'bottom', nx: 0, ny: -1, nz: 0 },
+  { face: 'right', nx: 1, ny: 0, nz: 0 },
+  { face: 'left', nx: -1, ny: 0, nz: 0 },
+  { face: 'front', nx: 0, ny: 0, nz: 1 },
+  { face: 'back', nx: 0, ny: 0, nz: -1 }
+]);
+
+function coordBucketKey(x, y, z) {
+  return `${Math.round(Number(x) * 1000)},${Math.round(Number(y) * 1000)},${Math.round(Number(z) * 1000)}`;
+}
+
+/**
+ * Computes empty face-adjacent candidate spaces around placed voxels so users can tilt/move
+ * their phone up or sideways around existing blocks to select potential stacking slots easily.
+ */
+export function computeAdjacentCandidateSlots(
+  voxels,
+  { step = VOXEL_STEP, blockScale = 1, aroundVoxel = null } = {}
+) {
+  if (!Array.isArray(voxels) || voxels.length === 0) return [];
+  const activeScale = normalizeBlockScale(blockScale);
+  const occupiedKeys = new Set();
+  for (const v of voxels) {
+    if (!v || !Number.isFinite(Number(v.x))) continue;
+    occupiedKeys.add(coordBucketKey(v.x, v.y, v.z));
+  }
+
+  const sourceList = aroundVoxel ? [aroundVoxel] : voxels;
+  const seenCandidates = new Set();
+  const candidates = [];
+
+  for (const v of sourceList) {
+    if (!v || !Number.isFinite(Number(v.x))) continue;
+    const vScale = normalizeBlockScale(v.scale ?? 1);
+    const stepOut = step * ((vScale + activeScale) * 0.5);
+    for (const dir of CARDINAL_FACES) {
+      const cx = roundCoord3(Number(v.x) + dir.nx * stepOut);
+      const cy = roundCoord3(Number(v.y) + dir.ny * stepOut);
+      const cz = roundCoord3(Number(v.z) + dir.nz * stepOut);
+      const cKey = coordBucketKey(cx, cy, cz);
+      if (occupiedKeys.has(cKey) || seenCandidates.has(cKey)) continue;
+
+      // Reject slots that physically overlap another mixed-scale placed block
+      let overlaps = false;
+      for (const existing of voxels) {
+        if (!existing || !Number.isFinite(Number(existing.x))) continue;
+        const minSep = step * ((normalizeBlockScale(existing.scale ?? 1) + activeScale) * 0.42);
+        if (
+          Math.abs(cx - Number(existing.x)) < minSep &&
+          Math.abs(cy - Number(existing.y)) < minSep &&
+          Math.abs(cz - Number(existing.z)) < minSep
+        ) {
+          overlaps = true;
+          break;
+        }
+      }
+      if (overlaps) continue;
+
+      seenCandidates.add(cKey);
+      candidates.push({
+        x: cx,
+        y: cy,
+        z: cz,
+        scale: activeScale,
+        face: dir.face,
+        parentVoxel: v
+      });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Selects the closest empty face-adjacent space around placed blocks along a camera/pointer ray,
+ * enabling effortless upward/sideways phone movement to pick stacking spaces around existing blocks.
+ */
+export function findBestAdjacentVoxelSlot({
+  rayOrigin,
+  rayDir,
+  voxels,
+  step = VOXEL_STEP,
+  blockScale = 1,
+  maxDistance = 12
+} = {}) {
+  if (!rayOrigin || !rayDir || !Array.isArray(voxels) || voxels.length === 0) return null;
+  const dirLen = Math.hypot(Number(rayDir.x) || 0, Number(rayDir.y) || 0, Number(rayDir.z) || 0);
+  if (dirLen < 1e-6) return null;
+  const dx = Number(rayDir.x) / dirLen;
+  const dy = Number(rayDir.y) / dirLen;
+  const dz = Number(rayDir.z) / dirLen;
+  const ox = Number(rayOrigin.x) || 0;
+  const oy = Number(rayOrigin.y) || 0;
+  const oz = Number(rayOrigin.z) || 0;
+
+  const activeScale = normalizeBlockScale(blockScale);
+  const cellStep = getVoxelCellStep(step, activeScale);
+
+  // Pre-filter placed voxels near the ray for O(1) fast candidate generation on large builds
+  const relevantVoxels = [];
+  for (const v of voxels) {
+    if (!v || !Number.isFinite(Number(v.x))) continue;
+    const vx = Number(v.x) - ox;
+    const vy = Number(v.y) - oy;
+    const vz = Number(v.z) - oz;
+    const t = vx * dx + vy * dy + vz * dz;
+    if (t < 0.05 || t > maxDistance) continue;
+    const px = vx - dx * t;
+    const py = vy - dy * t;
+    const pz = vz - dz * t;
+    const perp = Math.hypot(px, py, pz);
+    const broadRadius = Math.max(cellStep * 3.6, Math.min(cellStep * 5.5, t * 0.22));
+    if (perp <= broadRadius) {
+      relevantVoxels.push(v);
+    }
+  }
+  if (relevantVoxels.length === 0) return null;
+
+  // Check occupancy against ALL voxels, generate candidates only from ray-nearby voxels
+  const occupiedKeys = new Set();
+  for (const v of voxels) {
+    if (v && Number.isFinite(Number(v.x))) {
+      occupiedKeys.add(coordBucketKey(v.x, v.y, v.z));
+    }
+  }
+
+  const seenCandidates = new Set();
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const v of relevantVoxels) {
+    const vScale = normalizeBlockScale(v.scale ?? 1);
+    const stepOut = step * ((vScale + activeScale) * 0.5);
+    for (const dir of CARDINAL_FACES) {
+      const cx = roundCoord3(Number(v.x) + dir.nx * stepOut);
+      const cy = roundCoord3(Number(v.y) + dir.ny * stepOut);
+      const cz = roundCoord3(Number(v.z) + dir.nz * stepOut);
+      const cKey = coordBucketKey(cx, cy, cz);
+      if (occupiedKeys.has(cKey) || seenCandidates.has(cKey)) continue;
+      seenCandidates.add(cKey);
+
+      const vx = cx - ox;
+      const vy = cy - oy;
+      const vz = cz - oz;
+      const t = vx * dx + vy * dy + vz * dz;
+      if (t < 0.15 || t > maxDistance) continue;
+
+      const px = vx - dx * t;
+      const py = vy - dy * t;
+      const pz = vz - dz * t;
+      const perpDist = Math.hypot(px, py, pz);
+      const captureRadius = Math.max(cellStep * 1.18, Math.min(cellStep * 2.45, t * 0.095));
+      if (perpDist > captureRadius) continue;
+
+      // Reject physical overlap with any nearby placed voxel
+      let overlaps = false;
+      for (const existing of relevantVoxels) {
+        const minSep = step * ((normalizeBlockScale(existing.scale ?? 1) + activeScale) * 0.42);
+        if (
+          Math.abs(cx - Number(existing.x)) < minSep &&
+          Math.abs(cy - Number(existing.y)) < minSep &&
+          Math.abs(cz - Number(existing.z)) < minSep
+        ) {
+          overlaps = true;
+          break;
+        }
+      }
+      if (overlaps) continue;
+
+      // Primary metric: tight alignment to aim ray; gentle tie-breaker favors front-facing closer slot
+      const score = perpDist + t * 0.004;
+      if (score < bestScore) {
+        bestScore = score;
+        best = {
+          x: cx,
+          y: cy,
+          z: cz,
+          scale: activeScale,
+          face: dir.face,
+          parentVoxel: v,
+          perpDist,
+          rayDistance: t
+        };
+      }
+    }
+  }
+
+  if (!best) return null;
+  const nearbySlots = computeAdjacentCandidateSlots(voxels, {
+    step,
+    blockScale: activeScale,
+    aroundVoxel: best.parentVoxel
+  }).filter((s) => coordBucketKey(s.x, s.y, s.z) !== coordBucketKey(best.x, best.y, best.z));
+
+  return {
+    ...best,
+    nearbySlots
+  };
+}
+
+/**
+ * Velocity-adaptive exponential smoothing for fluid spray-can 3D brush strokes.
+ * Filters small hand tremor during slow curves while staying crisp and responsive on fast arcs.
+ */
+export function advanceFluidSprayPoint(
+  prevPoint,
+  rawPoint,
+  { dtMs = 16.67, cellStep = VOXEL_STEP } = {}
+) {
+  if (!rawPoint || !Number.isFinite(Number(rawPoint.x))) return prevPoint || null;
+  const rx = Number(rawPoint.x);
+  const ry = Number(rawPoint.y);
+  const rz = Number(rawPoint.z);
+  if (!prevPoint || !Number.isFinite(Number(prevPoint.x))) {
+    return { x: rx, y: ry, z: rz };
+  }
+  const px = Number(prevPoint.x);
+  const py = Number(prevPoint.y);
+  const pz = Number(prevPoint.z);
+  const dist = Math.hypot(rx - px, ry - py, rz - pz);
+  const safeCell = Math.max(0.01, Number(cellStep) || VOXEL_STEP);
+
+  // Smooth slowly on fine details (~0.36), tighten rapidly up to ~0.86 on fast graffiti sweeps
+  const speedRatio = Math.max(0, Math.min(1, (dist - safeCell * 0.5) / (safeCell * 3.0)));
+  const baseAlpha = 0.36 + speedRatio * 0.5;
+  const frameScale = Math.max(0.4, Math.min(3.0, (Number(dtMs) || 16.67) / 16.67));
+  const alpha = 1 - Math.pow(1 - baseAlpha, frameScale);
+
+  return {
+    x: px + (rx - px) * alpha,
+    y: py + (ry - py) * alpha,
+    z: pz + (rz - pz) * alpha
+  };
+}

@@ -12,6 +12,7 @@ import {
   loadLocalDraft,
   QUICK_SCULPT_KEY,
   saveBoolPreference,
+  SPRAY_BRUSH_GUIDE_SEEN_KEY,
   TUTORIAL_SEEN_KEY
 } from '../utils/clipboard.js';
 import { useARPreview } from '../hooks/useARPreview.js';
@@ -40,6 +41,7 @@ import MobileMapSheet from './studio/MobileMapSheet.jsx';
 import MobileParcelVisitView from './studio/MobileParcelVisitView.jsx';
 import PublishSculptureModal from './studio/PublishSculptureModal.jsx';
 import SceneCoverageWidget from './studio/SceneCoverageWidget.jsx';
+import SprayBrushIntroModal from './studio/SprayBrushIntroModal.jsx';
 import StudioDockDrawer from './studio/StudioDockDrawer.jsx';
 import StudioHudTopBar from './studio/StudioHudTopBar.jsx';
 import ToolCarouselBar from './studio/ToolCarouselBar.jsx';
@@ -108,12 +110,22 @@ export default function MobileStudio({
   const [arSelectHint, setArSelectHint] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
+  const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const hintTimerRef = useRef(null);
+  const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
   arViewSessionRef.current = arViewSession;
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
+
+  const maybeShowSprayBrushGuide = useCallback(() => {
+    if (sprayBrushGuideSeenRef.current) return false;
+    sprayBrushGuideSeenRef.current = true;
+    saveBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, true);
+    setSprayBrushGuideOpen(true);
+    return true;
+  }, []);
 
   // Metadata & Publish Form State
   const [title, setTitle] = useState(initialDraft.title || '');
@@ -230,7 +242,8 @@ export default function MobileStudio({
     openDraftsSheetRef: openDraftsCaller,
     openPairModalRef: openPairCaller,
     openAgentHandoffRef: openAgentCaller,
-    openPublishSheetRef: openPublishCaller
+    openPublishSheetRef: openPublishCaller,
+    onFirstBrushUse: maybeShowSprayBrushGuide
   });
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
@@ -1140,7 +1153,13 @@ export default function MobileStudio({
             onToggleDock={() => setDockOpen((v) => !v)}
             mode={brush.mode}
             tool={brush.tool}
-            onSelectDrawTool={(nextTool) => brush.selectKeyTool(nextTool)}
+            onSelectDrawTool={(nextTool) => {
+              brush.selectKeyTool(nextTool);
+              if (nextTool === 'brush') {
+                maybeShowSprayBrushGuide();
+              }
+            }}
+            onOpenBrushGuide={() => setSprayBrushGuideOpen(true)}
             blockSize={brush.blockSize}
             setBlockSize={brush.setBlockSize}
             color={brush.color}
@@ -1180,8 +1199,9 @@ export default function MobileStudio({
               setArViewSession(null);
               ar.setArSelectedLandId('');
               brush.setMode('draw');
+              maybeShowSprayBrushGuide();
               showTemporaryHint(
-                `Drawing on ${targetLand.displayName} — hold Brush to sculpt in 3D AR!`
+                `Drawing on ${targetLand.displayName} — hold Brush to spray in 3D AR!`
               );
             }}
             onOpen3DMap={(targetLand) => {
@@ -1245,6 +1265,10 @@ export default function MobileStudio({
             setTutorialOpen(false);
           }}
         />
+      )}
+
+      {sprayBrushGuideOpen && !isWelcomeOpen && !parcelVisit && !tutorialOpen && (
+        <SprayBrushIntroModal onClose={() => setSprayBrushGuideOpen(false)} />
       )}
 
       {pairing.pairOpen && (
@@ -1453,6 +1477,7 @@ export default function MobileStudio({
             setParcelVisit(null);
             setTutorialOpen(false);
             brush.setMode('draw');
+            maybeShowSprayBrushGuide();
             showTemporaryHint(
               `Ready to sculpt on ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
             );

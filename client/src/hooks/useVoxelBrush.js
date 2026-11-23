@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
 import {
+  computeAdjacentCandidateSlots,
+  findBestAdjacentVoxelSlot,
   getVoxelCellStep,
   normalizeBlockScale,
   snapToVoxelLattice
@@ -17,10 +19,10 @@ import {
 import { ForegroundOcclusionCompositor } from '../components/ForegroundOcclusion.js';
 
 export const KEY_TOOLS = [
-  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold to draw connected strokes', quick: true },
-  { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap anywhere to place single blocks', quick: true },
+  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
+  { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks', quick: true },
   { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
-  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Hold to erase blocks continuously', quick: true },
+  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase', quick: true },
   { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear', quick: true },
   { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas', quick: true },
   { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform', quick: false },
@@ -108,7 +110,8 @@ export function useVoxelBrush({
   openDraftsSheetRef = null,
   openPairModalRef = null,
   openAgentHandoffRef,
-  openPublishSheetRef
+  openPublishSheetRef,
+  onFirstBrushUse = null
 }) {
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
 
@@ -197,6 +200,10 @@ export function useVoxelBrush({
     holdStarted: false
   });
   const paintHoldTimerRef = useRef(null);
+  const canvasSprayTimerRef = useRef(null);
+  const canvasSprayingRef = useRef(false);
+  const onFirstBrushUseRef = useRef(onFirstBrushUse);
+  onFirstBrushUseRef.current = onFirstBrushUse;
   const dragStartRef = useRef(null);
   const tapStartRef = useRef(null);
   const activeCanvasPointersRef = useRef(new Map());
@@ -262,8 +269,8 @@ export function useVoxelBrush({
         reason: originBlocked ? originMsg : !hasVoxels ? needBlocksFor('stacking onto block faces') : ''
       },
       erase: {
-        usable: hasVoxels,
-        reason: !hasVoxels ? needBlocksFor('erasing blocks') : ''
+        usable: true,
+        reason: ''
       },
       clear: {
         usable: hasVoxels,
@@ -344,18 +351,21 @@ export function useVoxelBrush({
       }
 
       for (const [k, v] of wanted.entries()) {
-        if (meshMap.has(k)) {
-          const existing = meshMap.get(k);
-          existing.position.set(v.x, v.y, v.z);
-          existing.scale.setScalar(v.scale ?? 1);
-          existing.userData.voxel = v;
-          continue;
-        }
         const matKey = `${v.color}|${v.material || 'matte'}|1`;
         let mat = matCache.get(matKey);
         if (!mat) {
           mat = createVoxelMaterial(v.color, v.material || 'matte', 1);
           matCache.set(matKey, mat);
+        }
+        if (meshMap.has(k)) {
+          const existing = meshMap.get(k);
+          existing.position.set(v.x, v.y, v.z);
+          existing.scale.setScalar(v.scale ?? 1);
+          if (existing.material !== mat) {
+            existing.material = mat;
+          }
+          existing.userData.voxel = v;
+          continue;
         }
         const mesh = new THREE.Mesh(unitGeo, mat);
         mesh.position.set(v.x, v.y, v.z);
@@ -385,6 +395,8 @@ export function useVoxelBrush({
 
       let origin = cam.position.clone();
       let dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+      let baseNdcX = 0;
+      let baseNdcY = 0;
       if (
         screenPoint &&
         Number.isFinite(Number(screenPoint.clientX)) &&
@@ -392,10 +404,9 @@ export function useVoxelBrush({
         canvasHostRef.current
       ) {
         const rect = canvasHostRef.current.getBoundingClientRect();
-        const ndc = new THREE.Vector2(
-          ((Number(screenPoint.clientX) - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-          -((Number(screenPoint.clientY) - rect.top) / Math.max(1, rect.height)) * 2 + 1
-        );
+        baseNdcX = ((Number(screenPoint.clientX) - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+        baseNdcY = -((Number(screenPoint.clientY) - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+        const ndc = new THREE.Vector2(baseNdcX, baseNdcY);
         const tapRay = new THREE.Raycaster();
         tapRay.setFromCamera(ndc, cam);
         origin = tapRay.ray.origin.clone();
@@ -405,12 +416,17 @@ export function useVoxelBrush({
       if (
         toolRef.current === 'stack' ||
         toolRef.current === 'erase' ||
-        (toolRef.current === 'pencil' && screenPoint)
+        toolRef.current === 'pencil'
       ) {
         const raycaster = new THREE.Raycaster(origin, dir, 0.1, 14);
         const targets = draftGroup ? draftGroup.children : [];
         let hits = targets.length ? raycaster.intersectObjects(targets, false) : [];
-        if (hits.length === 0 && toolRef.current === 'erase' && forContinuousHold && targets.length) {
+        if (
+          hits.length === 0 &&
+          toolRef.current === 'erase' &&
+          (forContinuousHold || screenPoint) &&
+          targets.length
+        ) {
           const offsets = [
             [0.025, 0],
             [-0.025, 0],
@@ -419,7 +435,7 @@ export function useVoxelBrush({
           ];
           const sweepNdc = new THREE.Vector2();
           for (const [ox, oy] of offsets) {
-            sweepNdc.set(ox, oy);
+            sweepNdc.set(baseNdcX + ox, baseNdcY + oy);
             raycaster.setFromCamera(sweepNdc, cam);
             hits = raycaster.intersectObjects(targets, false);
             if (hits.length > 0) break;
@@ -427,15 +443,40 @@ export function useVoxelBrush({
         }
         if (hits.length > 0) {
           const hit = hits[0];
+          const hitVoxel = hit.object.userData.voxel;
           if (toolRef.current === 'erase') {
-            return { action: 'erase', voxel: hit.object.userData.voxel };
+            return { action: 'erase', voxel: hitVoxel };
+          }
+          if (toolRef.current === 'pencil' && hitVoxel) {
+            const nearbySlots = computeAdjacentCandidateSlots(voxelsRef.current || [], {
+              step: VOXEL_STEP,
+              blockScale: activeScale,
+              aroundVoxel: hitVoxel
+            });
+            return {
+              action: 'replace',
+              replaceExisting: true,
+              replacedVoxel: hitVoxel,
+              x: hitVoxel.x,
+              y: hitVoxel.y,
+              z: hitVoxel.z,
+              scale: activeScale,
+              nearbySlots
+            };
           }
           const normal = hit.face.normal
             .clone()
             .transformDirection(hit.object.matrixWorld)
             .normalize();
-          const stepOut = VOXEL_STEP * (((hit.object.userData.voxel?.scale ?? 1) + activeScale) * 0.5);
+          const stepOut = VOXEL_STEP * (((hitVoxel?.scale ?? 1) + activeScale) * 0.5);
           const center = hit.object.position.clone().addScaledVector(normal, stepOut);
+          const nearbySlots = hitVoxel
+            ? computeAdjacentCandidateSlots(voxelsRef.current || [], {
+                step: VOXEL_STEP,
+                blockScale: activeScale,
+                aroundVoxel: hitVoxel
+              })
+            : [];
           return {
             action: 'add',
             x: snapToVoxelLattice(center.x, VOXEL_STEP, activeScale),
@@ -446,10 +487,39 @@ export function useVoxelBrush({
               x: snapCoord(hit.object.position.x),
               y: snapCoord(hit.object.position.y),
               z: snapCoord(hit.object.position.z)
-            }
+            },
+            nearbySlots
           };
         }
         if (toolRef.current === 'erase') return null;
+
+        // When moving phone up or sideways around existing blocks, magnetically select
+        // the closest open face-adjacent space so drawing & stacking around blocks is effortless.
+        if (
+          (toolRef.current === 'pencil' || toolRef.current === 'stack') &&
+          (voxelsRef.current?.length || 0) > 0
+        ) {
+          const adjSlot = findBestAdjacentVoxelSlot({
+            rayOrigin: origin,
+            rayDir: dir,
+            voxels: voxelsRef.current,
+            step: VOXEL_STEP,
+            blockScale: activeScale,
+            maxDistance: 12
+          });
+          if (adjSlot) {
+            return {
+              action: 'add',
+              x: adjSlot.x,
+              y: adjSlot.y,
+              z: adjSlot.z,
+              scale: activeScale,
+              adjacentTo: adjSlot.parentVoxel,
+              adjacentFace: adjSlot.face,
+              nearbySlots: adjSlot.nearbySlots || []
+            };
+          }
+        }
       }
 
       const anchor = surfaceAnchorRef.current;
@@ -472,28 +542,31 @@ export function useVoxelBrush({
               x: snapToVoxelLattice(hitPt.x, VOXEL_STEP, activeScale),
               y: snapToVoxelLattice(hitPt.y, VOXEL_STEP, activeScale),
               z: snapToVoxelLattice(hitPt.z, VOXEL_STEP, activeScale),
-              scale: activeScale
+              scale: activeScale,
+              rawPoint: { x: hitPt.x, y: hitPt.y, z: hitPt.z }
             };
           }
         }
         const fallbackDepth = Math.min(4.5, Math.max(0.5, anchor.depthM || reachRef.current));
-        const fallbackPt = origin.addScaledVector(dir, fallbackDepth);
+        const fallbackPt = origin.clone().addScaledVector(dir, fallbackDepth);
         return {
           action: 'add',
           x: snapToVoxelLattice(fallbackPt.x, VOXEL_STEP, activeScale),
           y: snapToVoxelLattice(fallbackPt.y, VOXEL_STEP, activeScale),
           z: snapToVoxelLattice(fallbackPt.z, VOXEL_STEP, activeScale),
-          scale: activeScale
+          scale: activeScale,
+          rawPoint: { x: fallbackPt.x, y: fallbackPt.y, z: fallbackPt.z }
         };
       }
 
-      const pt = origin.addScaledVector(dir, reachRef.current);
+      const pt = origin.clone().addScaledVector(dir, reachRef.current);
       return {
         action: 'add',
         x: snapToVoxelLattice(pt.x, VOXEL_STEP, activeScale),
         y: snapToVoxelLattice(pt.y, VOXEL_STEP, activeScale),
         z: snapToVoxelLattice(pt.z, VOXEL_STEP, activeScale),
-        scale: activeScale
+        scale: activeScale,
+        rawPoint: { x: pt.x, y: pt.y, z: pt.z }
       };
     },
     [cameraRef, canvasHostRef, draftGroupRef]
@@ -510,7 +583,7 @@ export function useVoxelBrush({
       let hadOutOfBounds = false;
 
       for (const t of targets) {
-        if (!t || t.action !== 'add') continue;
+        if (!t || (t.action !== 'add' && t.action !== 'replace')) continue;
         if (
           Math.abs(t.x) > halfSpan ||
           Math.abs(t.y) > halfSpan ||
@@ -527,6 +600,7 @@ export function useVoxelBrush({
             y: t.y,
             z: t.z,
             scale: normalizeBlockScale(t.scale ?? blockSizeRef.current),
+            replaceExisting: Boolean(t.replaceExisting || t.action === 'replace'),
             key: k
           });
         }
@@ -549,7 +623,7 @@ export function useVoxelBrush({
           return prev;
         }
 
-        const existingKeys = new Set();
+        const existingIndexByKey = new Map();
         let minX = Infinity;
         let maxX = -Infinity;
         let minY = Infinity;
@@ -557,8 +631,9 @@ export function useVoxelBrush({
         let minZ = Infinity;
         let maxZ = -Infinity;
 
-        for (const v of prev) {
-          existingKeys.add(voxelKey(v.x, v.y, v.z));
+        for (let i = 0; i < prev.length; i += 1) {
+          const v = prev[i];
+          existingIndexByKey.set(voxelKey(v.x, v.y, v.z), i);
           if (v.x < minX) minX = v.x;
           if (v.x > maxX) maxX = v.x;
           if (v.y < minY) minY = v.y;
@@ -567,13 +642,37 @@ export function useVoxelBrush({
           if (v.z > maxZ) maxZ = v.z;
         }
 
+        let nextList = null;
         const additions = [];
         for (const cand of uniqueAdds) {
+          if (existingIndexByKey.has(cand.key)) {
+            if (!cand.replaceExisting) continue;
+            const idx = existingIndexByKey.get(cand.key);
+            const cur = (nextList || prev)[idx];
+            const nextScale = normalizeBlockScale(cand.scale ?? blockSizeRef.current);
+            if (
+              cur &&
+              cur.color === colorRef.current &&
+              (cur.material || 'matte') === materialRef.current &&
+              normalizeBlockScale(cur.scale ?? 1) === nextScale
+            ) {
+              continue;
+            }
+            if (!nextList) nextList = [...prev];
+            nextList[idx] = {
+              x: cand.x,
+              y: cand.y,
+              z: cand.z,
+              color: colorRef.current,
+              material: materialRef.current,
+              scale: nextScale
+            };
+            continue;
+          }
           if (prev.length + additions.length >= maxVoxels) {
             limitNotice = `Sculpture voxel limit (${maxVoxels}) reached`;
             break;
           }
-          if (existingKeys.has(cand.key)) continue;
 
           const nMinX = Math.min(minX, cand.x);
           const nMaxX = Math.max(maxX, cand.x);
@@ -596,7 +695,7 @@ export function useVoxelBrush({
           maxY = nMaxY;
           minZ = nMinZ;
           maxZ = nMaxZ;
-          existingKeys.add(cand.key);
+          existingIndexByKey.set(cand.key, prev.length + additions.length);
           additions.push({
             x: cand.x,
             y: cand.y,
@@ -607,6 +706,9 @@ export function useVoxelBrush({
           });
         }
 
+        if (nextList) {
+          return additions.length > 0 ? [...nextList, ...additions] : nextList;
+        }
         return additions.length > 0 ? [...prev, ...additions] : prev;
       });
 
@@ -641,7 +743,7 @@ export function useVoxelBrush({
         eraseTargetVoxel(target);
         return;
       }
-      if (target.action === 'add') {
+      if (target.action === 'add' || target.action === 'replace') {
         applyVoxelBatch([target]);
       }
     },
@@ -741,6 +843,11 @@ export function useVoxelBrush({
       clearTimeout(paintHoldTimerRef.current);
       paintHoldTimerRef.current = null;
     }
+    if (canvasSprayTimerRef.current) {
+      clearTimeout(canvasSprayTimerRef.current);
+      canvasSprayTimerRef.current = null;
+    }
+    canvasSprayingRef.current = false;
     paintingRef.current = false;
     setPainting(false);
     lastPaintPosRef.current = null;
@@ -960,6 +1067,9 @@ export function useVoxelBrush({
     (holdTool) => {
       enterFullscreen();
       if (!ensureToolUsable(holdTool)) return;
+      if (holdTool === 'brush' && onFirstBrushUseRef.current?.()) {
+        return;
+      }
       if ((holdTool === 'brush' || holdTool === 'stack') && !assertOriginUnblockedForPaint()) {
         return;
       }
@@ -973,10 +1083,13 @@ export function useVoxelBrush({
       }
       paintingRef.current = true;
       setPainting(true);
+      if (holdTool === 'brush') {
+        navigator.vibrate?.(6);
+      }
       const t = computeTargetVoxel(true);
       if (holdTool === 'erase') {
         eraseTargetVoxel(t);
-      } else if (t && t.action === 'add') {
+      } else if (t && (t.action === 'add' || t.action === 'replace')) {
         lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
         lastStackAtRef.current = performance.now();
         applyVoxelBatch([t]);
@@ -1094,6 +1207,9 @@ export function useVoxelBrush({
       curTool === 'stack' ||
       curTool === 'erase'
     ) {
+      if (curTool === 'brush' && onFirstBrushUseRef.current?.()) {
+        return;
+      }
       if (
         (curTool === 'brush' || curTool === 'pencil' || curTool === 'stack') &&
         !assertOriginUnblockedForPaint()
@@ -1186,11 +1302,12 @@ export function useVoxelBrush({
 
       const curTool = activeKeyToolRef.current;
       if (targetRel === 0 && (curTool === 'brush' || curTool === 'stack' || curTool === 'erase')) {
+        const holdDelayMs = curTool === 'brush' ? 75 : 135;
         paintHoldTimerRef.current = setTimeout(() => {
           if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
           keyGestureRef.current.holdStarted = true;
           startContinuousHoldTool(curTool);
-        }, 145);
+        }, holdDelayMs);
       }
     },
     [startContinuousHoldTool, stopBrushPainting]
@@ -1431,8 +1548,26 @@ export function useVoxelBrush({
       }
       dragStartRef.current = { x: e.clientX, y: e.clientY };
       tapStartRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
+
+      // Spray-can feel: when gyro is active in Brush mode, holding thumb anywhere on the
+      // live camera screen starts fluid continuous spraying until finger lifts!
+      if (
+        modeRef.current === 'draw' &&
+        toolRef.current === 'brush' &&
+        !isInteractingWithLandRef?.current &&
+        rawOrientationRef.current &&
+        activeCanvasPointersRef.current.size === 1
+      ) {
+        if (canvasSprayTimerRef.current) clearTimeout(canvasSprayTimerRef.current);
+        canvasSprayTimerRef.current = setTimeout(() => {
+          canvasSprayTimerRef.current = null;
+          if (!tapStartRef.current || activeCanvasPointersRef.current.size !== 1) return;
+          canvasSprayingRef.current = true;
+          startContinuousHoldTool('brush');
+        }, 115);
+      }
     },
-    []
+    [isInteractingWithLandRef, rawOrientationRef, startContinuousHoldTool]
   );
 
   const handleCanvasPointerMove = useCallback(
@@ -1502,14 +1637,24 @@ export function useVoxelBrush({
     [cameraRef, fallbackEulerRef, rawOrientationRef]
   );
 
-  const handleCanvasPointerCancel = useCallback((e) => {
-    activeCanvasPointersRef.current.delete(e.pointerId);
-    if (activeCanvasPointersRef.current.size < 2) {
-      transformPinchRef.current = null;
-    }
-    dragStartRef.current = null;
-    tapStartRef.current = null;
-  }, []);
+  const handleCanvasPointerCancel = useCallback(
+    (e) => {
+      activeCanvasPointersRef.current.delete(e.pointerId);
+      if (activeCanvasPointersRef.current.size < 2) {
+        transformPinchRef.current = null;
+      }
+      if (canvasSprayTimerRef.current) {
+        clearTimeout(canvasSprayTimerRef.current);
+        canvasSprayTimerRef.current = null;
+      }
+      if (canvasSprayingRef.current) {
+        stopBrushPainting();
+      }
+      dragStartRef.current = null;
+      tapStartRef.current = null;
+    },
+    [stopBrushPainting]
+  );
 
   const handleCanvasPointerUp = useCallback(
     (e) => {
@@ -1517,10 +1662,18 @@ export function useVoxelBrush({
       if (activeCanvasPointersRef.current.size < 2) {
         transformPinchRef.current = null;
       }
+      if (canvasSprayTimerRef.current) {
+        clearTimeout(canvasSprayTimerRef.current);
+        canvasSprayTimerRef.current = null;
+      }
+      const wasCanvasSpray = canvasSprayingRef.current;
+      if (wasCanvasSpray) {
+        stopBrushPainting();
+      }
       dragStartRef.current = null;
       const start = tapStartRef.current;
       tapStartRef.current = null;
-      if (!start || modeRef.current === 'transform') return;
+      if (wasCanvasSpray || !start || modeRef.current === 'transform') return;
 
       const moveDist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
       if (moveDist > 14) return;
@@ -1556,12 +1709,20 @@ export function useVoxelBrush({
             onTapArLand(null, null);
             return;
           }
-          // Pencil mode: tap/click anywhere around the canvas to place a discrete individual voxel!
+          // Pencil mode: tap a block to replace it, or tap adjacent/open space to place/stack!
           if (toolRef.current === 'pencil') {
             if (!ensureToolUsable('pencil') || !assertOriginUnblockedForPaint()) return;
             const tapTarget = computeTargetVoxel(false, { clientX: e.clientX, clientY: e.clientY });
-            if (tapTarget && tapTarget.action === 'add') {
+            if (tapTarget && (tapTarget.action === 'add' || tapTarget.action === 'replace')) {
               applyVoxelBatch([tapTarget]);
+            }
+            return;
+          }
+          // Eraser mode: tapping a placed block directly erases it cleanly
+          if (toolRef.current === 'erase') {
+            const tapTarget = computeTargetVoxel(true, { clientX: e.clientX, clientY: e.clientY });
+            if (tapTarget && tapTarget.action === 'erase') {
+              eraseTargetVoxel(tapTarget);
             }
             return;
           }
@@ -1613,13 +1774,15 @@ export function useVoxelBrush({
       canvasHostRef,
       computeTargetVoxel,
       ensureToolUsable,
+      eraseTargetVoxel,
       isInteractingWithLandRef,
       locationRef,
       nearbyGroupRef,
       onTapArLand,
       openCameraSelectedChat,
       selectSurfaceAtScreenPoint,
-      setArTargetedSculpture
+      setArTargetedSculpture,
+      stopBrushPainting
     ]
   );
 
