@@ -107,8 +107,13 @@ export default function MobileStudio({
   );
   const [arSelectHint, setArSelectHint] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
+  const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const hintTimerRef = useRef(null);
+  const arViewSessionRef = useRef(null);
+  arViewSessionRef.current = arViewSession;
+  const isArViewOnlyRef = useRef(false);
+  const mappingPausedRef = useRef(false);
 
   // Metadata & Publish Form State
   const [title, setTitle] = useState(initialDraft.title || '');
@@ -162,7 +167,8 @@ export default function MobileStudio({
     dirLightRef,
     onLocationUpdate: (loc, refined) => onLocationUpdateBridgeRef.current?.(loc, refined),
     onCameraRefreshed: (meta) => onCameraRefreshedBridgeRef.current?.(meta),
-    onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.()
+    onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.(),
+    mappingPausedRef
   });
 
   useEffect(() => {
@@ -227,6 +233,8 @@ export default function MobileStudio({
     openPublishSheetRef: openPublishCaller
   });
 
+  const focusedArLandId = arViewSession?.parcel?.parcelId || '';
+
   const ar = useARPreview({
     user,
     ownedParcelIds: ownedParcelIdsState,
@@ -244,11 +252,25 @@ export default function MobileStudio({
     modeRef: brush.modeRef,
     commitTransformAndExit: brush.commitTransformAndExit,
     stopBrushPainting: brush.stopBrushPainting,
-    showTemporaryHint
+    showTemporaryHint,
+    focusedLandId: focusedArLandId,
+    isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
   });
 
-  const isInteractingWithLand = Boolean(ar.activeArLand);
+  const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
+  const isArViewOnly = Boolean(
+    arViewSession || isInteractingWithLand || brush.mode === 'preview'
+  );
   isInteractingWithLandRef.current = isInteractingWithLand;
+  isArViewOnlyRef.current = isArViewOnly;
+  mappingPausedRef.current = Boolean(isArViewOnly || parcelVisit || ar.mapOpen);
+
+  const arExitLabel =
+    arViewSession?.source === 'plot'
+      ? 'Back'
+      : arViewSession?.source === 'map'
+      ? 'Back to Map'
+      : 'Back to Draw';
 
   setArTargetedSculptureBridgeRef.current = ar.setArTargetedSculpture;
   arTargetedIdRef.current = ar.arTargetedIdRef.current;
@@ -261,13 +283,32 @@ export default function MobileStudio({
       }
       brush.stopBrushPainting();
       setDockOpen(false);
-      ar.setArSelectedLandId(land.parcelId);
+      ar.selectArLand(land, land.sculptures || []);
     },
     [ar, brush]
   );
 
+  const handleExitArLand = useCallback(() => {
+    const session = arViewSessionRef.current;
+    setArViewSession(null);
+    ar.setArSelectedLandId('');
+    if (session?.source === 'plot' && session.parcel) {
+      setParcelVisit({
+        loading: false,
+        parcel: session.parcel,
+        sculptures: Array.isArray(session.sculptures) ? session.sculptures : [],
+        error: ''
+      });
+    } else if (session?.source === 'map') {
+      ar.setMapOpen(true);
+    }
+  }, [ar]);
+
   onTapArLandBridgeRef.current = (tappedLand) => {
     if (!tappedLand?.parcelId) {
+      // In dedicated View in AR / Find in AR sessions, tapping empty sky must not drop the
+      // visitor out of AR land view into the mapping/drawing studio.
+      if (arViewSessionRef.current) return;
       ar.setArSelectedLandId('');
       return;
     }
@@ -278,12 +319,12 @@ export default function MobileStudio({
     if (!isInteractingWithLand) return undefined;
     const onKeyDown = (ev) => {
       if (ev.key === 'Escape') {
-        ar.setArSelectedLandId('');
+        handleExitArLand();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [ar, isInteractingWithLand]);
+  }, [handleExitArLand, isInteractingWithLand]);
 
   onLocationUpdateBridgeRef.current = async (loc, refined) => {
     const [res, pRes] = await Promise.all([
@@ -911,6 +952,8 @@ export default function MobileStudio({
         arSelectedLandIdRef={ar.arSelectedLandIdRef}
         isInteractingWithLand={isInteractingWithLand}
         isInteractingWithLandRef={isInteractingWithLandRef}
+        isArViewOnly={isArViewOnly}
+        isArViewOnlyRef={isArViewOnlyRef}
         mode={brush.mode}
         modeRef={brush.modeRef}
         toolRef={brush.toolRef}
@@ -1035,7 +1078,8 @@ export default function MobileStudio({
           nearbyCameraLand={ar.primaryCameraLand}
           nearbyCameraLandCount={ar.immediateCameraLands.length}
           onInspectArLand={handleInspectArLand}
-          onExitArLand={() => ar.setArSelectedLandId('')}
+          onExitArLand={handleExitArLand}
+          arExitLabel={arExitLabel}
           notifRefreshSignal={lands.ownedLandCount}
           onNotificationAction={(item) => {
             if (!item) return;
@@ -1075,7 +1119,7 @@ export default function MobileStudio({
           />
         )}
 
-        {!isInteractingWithLand && (
+        {!isArViewOnly && (
           <SceneCoverageWidget
             sceneScan={pol.sceneScan}
             orbStatus={pol.orbStatus}
@@ -1121,14 +1165,19 @@ export default function MobileStudio({
           <ARLandInspectorPanel
             land={ar.activeArLand}
             nearbyLands={
-              ar.immediateCameraLands.length > 0
+              focusedArLandId
+                ? ar.activeArLand
+                  ? [ar.activeArLand]
+                  : []
+                : ar.immediateCameraLands.length > 0
                 ? ar.immediateCameraLands
                 : ar.visibleCameraLands
             }
             onSelectNearbyLand={(nextLand) => {
-              if (nextLand?.parcelId) ar.setArSelectedLandId(nextLand.parcelId);
+              if (nextLand?.parcelId) ar.selectArLand(nextLand, nextLand.sculptures || []);
             }}
             onDrawHere={(targetLand) => {
+              setArViewSession(null);
               ar.setArSelectedLandId('');
               brush.setMode('draw');
               showTemporaryHint(
@@ -1136,6 +1185,7 @@ export default function MobileStudio({
               );
             }}
             onOpen3DMap={(targetLand) => {
+              setArViewSession(null);
               ar.setArSelectedLandId('');
               ar.openAreaMap({
                 initialDimensionMode: '3d',
@@ -1143,6 +1193,7 @@ export default function MobileStudio({
               });
             }}
             onManageLand={(pid) => {
+              setArViewSession(null);
               ar.setArSelectedLandId('');
               lands.setLandManageParcelId(pid || '');
               lands.setLandManageOpen(true);
@@ -1158,7 +1209,7 @@ export default function MobileStudio({
               chat.openCameraSelectedChat(sc, distM, chat.arPinPreview);
             }}
             onShowHint={showTemporaryHint}
-            onClose={() => ar.setArSelectedLandId('')}
+            onClose={handleExitArLand}
           />
         )}
       </div>
@@ -1364,27 +1415,39 @@ export default function MobileStudio({
               { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
             );
           }}
-          onViewInAR={async (visitedParcel, visitedSculptures) => {
-            setParcelVisit(null);
+          onViewInAR={(visitedParcel, visitedSculptures) => {
+            const list = Array.isArray(visitedSculptures) ? visitedSculptures : [];
+            if (pol.needsGyroTap) {
+              pol.enableIosGyro();
+            }
+            brush.stopBrushPainting();
+            setDockOpen(false);
             setTutorialOpen(false);
-            if (visitedParcel?.parcelId) {
-              ar.setNearbyParcels((prev) => {
-                const list = Array.isArray(prev) ? prev : [];
-                return list.some((p) => p?.parcelId === visitedParcel.parcelId)
-                  ? list
-                  : [...list, visitedParcel];
-              });
-            }
-            if (Array.isArray(visitedSculptures) && visitedSculptures.length > 0) {
-              await ar.hydrateNearbyList(visitedSculptures, pol.location).catch(() => {});
-            }
+            setArSelectHint('');
+            setArViewSession({
+              source: 'plot',
+              parcel: visitedParcel || null,
+              sculptures: list
+            });
             brush.setMode('preview');
             if (visitedParcel?.parcelId) {
-              handleInspectArLand(visitedParcel);
+              ar.setNearbyParcels((prev) => {
+                const existing = Array.isArray(prev) ? prev : [];
+                const idx = existing.findIndex((p) => p?.parcelId === visitedParcel.parcelId);
+                if (idx >= 0) {
+                  const next = [...existing];
+                  next[idx] = { ...next[idx], ...visitedParcel };
+                  return next;
+                }
+                return [...existing, visitedParcel];
+              });
+              ar.selectArLand(visitedParcel, list);
             }
-            showTemporaryHint(
-              `Viewing ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })} in AR!`
-            );
+            setParcelVisit(null);
+            ensureArCameraLive({ reason: 'view_in_ar' }).catch(() => {});
+            if (list.length > 0) {
+              ar.hydrateNearbyList(list, pol.locationRef.current || pol.location).catch(() => {});
+            }
           }}
           onMakeArt={(visitedParcel) => {
             setParcelVisit(null);
@@ -1442,9 +1505,21 @@ export default function MobileStudio({
           onSelectSculpture={ar.setMapSelectedSculpture}
           onFindLandInAR={(land) => {
             if (!land?.parcelId) return;
+            if (pol.needsGyroTap) {
+              pol.enableIosGyro();
+            }
+            brush.stopBrushPainting();
+            setDockOpen(false);
+            setArSelectHint('');
+            setArViewSession({
+              source: 'map',
+              parcel: land,
+              sculptures: Array.isArray(land.sculptures) ? land.sculptures : []
+            });
             ar.setMapOpen(false);
             brush.setMode('preview');
-            handleInspectArLand(land);
+            ar.selectArLand(land, land.sculptures || []);
+            ensureArCameraLive({ reason: 'find_in_ar' }).catch(() => {});
           }}
           onOpenProfile={(handle) => {
             if (handle) setProfileHandle(handle);

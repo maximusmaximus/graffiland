@@ -354,4 +354,60 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.equal(guidedLand.parcelId, 'GLAND-SQUIGGLE');
     view.unmount();
   });
+
+  test('View in AR strips mapping greyscale grid, occlusion overlay, reticle, and mapping HUD details', async () => {
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+
+    // 1) StudioHudTopBar in View in AR mode: clean Back label, no mapping-complete hint, no 3D brush gyro copy
+    let exited = 0;
+    const hudView = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        user: null,
+        mode: 'preview',
+        dockOpen: false,
+        location: { lat: 37.7749, lng: -122.4194 },
+        voxels: [],
+        quickSculpt: false,
+        cameraReady: true,
+        needsGyroTap: true,
+        arSelectHint: 'Mapping complete for this space — 100% precision lock active!',
+        originStatus: { originBlocked: true, reason: 'Origin blocked' },
+        sceneScan: { optimal: false, coveragePct: 12, scannedCount: 1, targetCount: 9 },
+        isInteractingWithLand: true,
+        arExitLabel: 'Back',
+        onExitArLand: () => {
+          exited += 1;
+        },
+        onEnableIosGyro: () => {}
+      })
+    );
+
+    const exitBtn = hudView.getByTestId('ar-land-exit-top-btn');
+    assert.ok(exitBtn.textContent.includes('Back'));
+    assert.equal(exitBtn.textContent.includes('Draw'), false);
+    assert.equal(hudView.queryByText(/Mapping complete/i), null);
+    assert.equal(hudView.queryByText(/Origin blocked/i), null);
+    assert.equal(hudView.queryByText(/3D Brush/i), null);
+    assert.ok(hudView.getByRole('button', { name: /Enable Compass/i }));
+    RTL.fireEvent.click(exitBtn);
+    assert.equal(exited, 1);
+    hudView.unmount();
+
+    // 2) Verify ARViewportCanvas source & JSX strictly gate mapping-grayscale-grid, occlusion, and mapping loops on !isArViewOnly
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const viewportSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'client/src/components/studio/ARViewportCanvas.jsx'),
+      'utf8'
+    );
+    assert.match(viewportSrc, /\{!isArViewOnly && cameraReady && !sceneScanOptimal && \(/);
+    assert.match(viewportSrc, /\{!isArViewOnly && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/);
+    assert.match(viewportSrc, /grid\.visible = !arViewOnly;/);
+    assert.match(viewportSrc, /shadowCatcher\.visible = !arViewOnly;/);
+    assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly;/);
+    assert.match(viewportSrc, /if \(!arViewOnly && now - lastScanPosePush > 110\)/);
+    assert.match(viewportSrc, /if \(!arViewOnly && now - lastOcclusionPush > 110/);
+  });
 });
