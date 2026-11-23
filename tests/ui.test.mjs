@@ -3650,4 +3650,121 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Map compass matches sibling icon width, land lines use magenta, coords sit in land header (not details), GPS button removed, and distance + info icon sit inline with Directions', async () => {
+    const { default: PlotVisitView } = await loadJsxModule(
+      'client/src/components/PlotVisitView.jsx'
+    );
+    const { default: LandIsometricPreview } = await loadJsxModule(
+      'client/src/components/LandIsometricPreview.jsx'
+    );
+    const { default: MobileIsometricMap } = await loadJsxModule(
+      'client/src/components/studio/MobileIsometricMap.jsx'
+    );
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ shortLabel: 'West 2nd St, Chico' })
+    });
+
+    const parcel = {
+      parcelId: 'GLAND-MAGENTA-1',
+      customName: 'Squiggle Bro Land',
+      description: 'Downtown Chico voxel landmark',
+      centerLat: 39.7302,
+      centerLng: -121.84067,
+      volume: {
+        centerLat: 39.7302,
+        centerLng: -121.84067,
+        widthMeters: 5,
+        depthMeters: 3,
+        heightMeters: 3,
+        corners: [
+          [-121.8407, 39.73018],
+          [-121.84064, 39.73018],
+          [-121.84064, 39.73022],
+          [-121.8407, 39.73022]
+        ]
+      }
+    };
+
+    try {
+      // 1) PlotVisitView (far away): coords in header, removed from details, no GPS button, inline Directions + distance + InfoTip
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'mobile',
+          parcel,
+          sculptures: [],
+          userLocation: { lat: 39.74, lng: -121.84067 },
+          onClose: () => {}
+        })
+      );
+
+      // Coords are in header, NOT inside plot-land-details
+      const headerCoords = plotView.getByTestId('plot-header-coords');
+      assert.ok(headerCoords.textContent.includes('39.7302'));
+      assert.ok(headerCoords.closest('header.plot-visit-header'));
+
+      const landDetails = plotView.getByTestId('plot-land-details');
+      assert.equal(landDetails.textContent.includes('39.7302, -121.8407'), false);
+
+      // Refresh GPS button is removed
+      assert.equal(plotView.queryByRole('button', { name: /Refresh GPS/i }), null);
+
+      // Directions row contains Get Directions + distance away + Info icon on right
+      const dirRow = plotView.getByTestId('parcel-directions-row');
+      assert.ok(dirRow.querySelector('a')?.textContent.includes('Get Directions'));
+      const distBadge = plotView.getByTestId('parcel-proximity-far');
+      assert.ok(dirRow.contains(distBadge));
+      assert.ok(distBadge.textContent.includes('away'));
+
+      const infoWrap = plotView.getByTestId('parcel-directions-info');
+      assert.ok(dirRow.contains(infoWrap));
+      // Unlock hint text is NOT shown raw below the button until InfoTip is clicked
+      assert.equal(plotView.queryByText(/Walk near this property to unlock View in AR/i), null);
+      const infoBtn = infoWrap.querySelector('button');
+      assert.ok(infoBtn);
+      RTL.fireEvent.click(infoBtn);
+      assert.ok(plotView.getByText(/Walk near this property to unlock View in AR/i));
+      cleanup();
+
+      // 2) LandIsometricPreview: compass icon is 12px wide, coords live in header (not facts grid), SVG lines are magenta
+      const preview = RTL.render(
+        React.createElement(LandIsometricPreview, {
+          parcel,
+          allParcels: [parcel]
+        })
+      );
+      const compassBtn = preview.getByTestId('land-preview-compass-btn');
+      const compassSvg = compassBtn.querySelector('svg');
+      assert.equal(compassSvg.getAttribute('width'), '12');
+      assert.equal(compassSvg.getAttribute('height'), '12');
+
+      const previewCoords = preview.getByTestId('land-preview-coords');
+      assert.ok(previewCoords.closest('.land-preview-header'));
+      assert.equal(preview.container.querySelectorAll('.land-preview-fact').length, 2);
+
+      const fallbackSvg = preview.getByTestId('land-preview-svg-fallback').querySelector('svg');
+      assert.ok(fallbackSvg.innerHTML.includes('#ff1f8f'), 'Expected magenta land boundary lines');
+      cleanup();
+
+      // 3) MobileIsometricMap: compass chip uses XeroIcon 12px & SVG fallback land lines are magenta
+      const isoMap = RTL.render(
+        React.createElement(MobileIsometricMap, {
+          parcels: [parcel],
+          sculptures: [],
+          selectedParcelId: parcel.parcelId
+        })
+      );
+      const isoCompassChip = isoMap.getByTestId('mobile-iso-compass-chip');
+      assert.ok(isoCompassChip.querySelector('img, span'));
+      const isoSvg = isoMap.getByTestId('mobile-iso-svg-fallback').querySelector('svg');
+      assert.ok(isoSvg.innerHTML.includes('#ff1f8f'), 'Expected magenta land lines in MobileIsometricMap');
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

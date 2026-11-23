@@ -20,6 +20,7 @@ import {
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import InfoTip from './InfoTip.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
@@ -52,7 +53,6 @@ export default function PlotVisitView({
   userLocation = null,
   loading = false,
   error = '',
-  onRefreshLocation = null,
   onViewInAR = null,
   onMakeArt = null,
   onSelectSculpture = null,
@@ -374,7 +374,7 @@ export default function PlotVisitView({
     layer.clearLayers();
     map.invalidateSize();
 
-    const stroke = isFrozen ? '#7dd3fc' : '#00f5d4';
+    const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
     const corners = Array.isArray(activeParcel?.volume?.corners) ? activeParcel.volume.corners : [];
 
     let parcelLayer = null;
@@ -384,7 +384,7 @@ export default function PlotVisitView({
         color: stroke,
         weight: 3,
         fillColor: stroke,
-        fillOpacity: 0.25
+        fillOpacity: 0.22
       })
         .on('click', () => handleSelectLandTarget())
         .addTo(layer);
@@ -393,7 +393,7 @@ export default function PlotVisitView({
         color: stroke,
         weight: 3,
         fillColor: stroke,
-        fillOpacity: 0.25
+        fillOpacity: 0.22
       })
         .on('click', () => handleSelectLandTarget())
         .addTo(layer);
@@ -403,7 +403,7 @@ export default function PlotVisitView({
       radius: 6,
       color: '#ffffff',
       weight: 2,
-      fillColor: isFrozen ? '#38bdf8' : '#ffd166',
+      fillColor: isFrozen ? '#38bdf8' : '#ff1f8f',
       fillOpacity: 1
     })
       .bindTooltip(landDisplayName)
@@ -659,11 +659,15 @@ export default function PlotVisitView({
           </div>
           {activeParcel && (
             <div className="mono plot-visit-subhead">
-              {landDimensions && <span>{landDimensions}</span>}
               <span>
-                {landDimensions ? ' · ' : ''}
+                {landDimensions ? `${landDimensions} · ` : ''}
                 {visibleSculptures.length} artwork{visibleSculptures.length === 1 ? '' : 's'}
               </span>
+              {hasCenter && (
+                <span className="plot-header-coords" data-testid="plot-header-coords">
+                  📍 {centerLat.toFixed(4)}, {centerLng.toFixed(4)}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -1198,40 +1202,18 @@ export default function PlotVisitView({
                           {landExpiration.state === 'permanent' ? '♾️' : '⏳'}{' '}
                           {landExpiration.badgeText}
                         </span>
-                        {hasCenter && (
-                          <span className="mobile-sc-chip mono">
-                            📍 {centerLat.toFixed(4)}, {centerLng.toFixed(4)}
-                          </span>
-                        )}
                       </div>
 
                       {/* Mobile Proximity & AR Actions */}
                       {!isDesktop && (
                         <>
-                          <div className="mobile-parcel-distance-row">
-                            {isNearProperty ? (
+                          {isNearProperty && (
+                            <div className="mobile-parcel-distance-row">
                               <span className="badge teal" data-testid="parcel-proximity-near">
                                 📍 You are at this property ({formatDistance(distanceMeters)} away)
                               </span>
-                            ) : distanceMeters !== null ? (
-                              <span className="badge gold" data-testid="parcel-proximity-far">
-                                📍 {formatDistance(distanceMeters)} away
-                              </span>
-                            ) : (
-                              <span className="badge" data-testid="parcel-proximity-unknown">
-                                📡 Checking GPS distance…
-                              </span>
-                            )}
-                            {onRefreshLocation && !isNearProperty && (
-                              <button
-                                type="button"
-                                className="btn btn-xs"
-                                onClick={onRefreshLocation}
-                              >
-                                Refresh GPS
-                              </button>
-                            )}
-                          </div>
+                            </div>
+                          )}
 
                           <div className="mobile-parcel-actions" data-testid="mobile-parcel-actions">
                             {isNearProperty ? (
@@ -1259,23 +1241,46 @@ export default function PlotVisitView({
                                 )}
                               </>
                             ) : (
-                              <>
+                              <div
+                                className="mobile-parcel-directions-row"
+                                data-testid="parcel-directions-row"
+                              >
                                 {directionsUrl && (
                                   <a
                                     href={directionsUrl}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="btn btn-primary mobile-parcel-cta"
+                                    className="btn btn-primary mobile-parcel-cta mobile-parcel-directions-btn"
                                   >
-                                    <XeroIcon emoji="🧭" size={18} /> Get Directions
+                                    <XeroIcon emoji="🧭" size={14} /> Get Directions
                                   </a>
                                 )}
-                                <div className="mobile-parcel-hint">
-                                  {isFrozen
-                                    ? 'Walk near this property to unlock View in AR (placements are frozen).'
-                                    : 'Walk near this property to unlock View in AR and Make Art on This Property.'}
-                                </div>
-                              </>
+                                {distanceMeters !== null ? (
+                                  <span
+                                    className="badge gold mobile-parcel-distance-badge"
+                                    data-testid="parcel-proximity-far"
+                                  >
+                                    📍 {formatDistance(distanceMeters)} away
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="badge mobile-parcel-distance-badge"
+                                    data-testid="parcel-proximity-unknown"
+                                  >
+                                    📡 Locating…
+                                  </span>
+                                )}
+                                <span
+                                  className="mobile-parcel-directions-info"
+                                  data-testid="parcel-directions-info"
+                                >
+                                  <InfoTip title="In-Person AR Access" mode="popover" align="right">
+                                    {isFrozen
+                                      ? 'Walk near this property to unlock View in AR (placements are frozen).'
+                                      : 'Walk near this property to unlock View in AR and Make Art on This Property.'}
+                                  </InfoTip>
+                                </span>
+                              </div>
                             )}
                           </div>
                         </>
@@ -1291,8 +1296,16 @@ export default function PlotVisitView({
                               rel="noreferrer"
                               className="btn btn-sm"
                             >
-                              🧭 Google Maps
+                              <XeroIcon emoji="🧭" size={13} /> Google Maps
                             </a>
+                          )}
+                          {distanceMeters !== null && (
+                            <span
+                              className="badge gold mobile-parcel-distance-badge"
+                              data-testid="parcel-proximity-far"
+                            >
+                              📍 {formatDistance(distanceMeters)} away
+                            </span>
                           )}
                           <button
                             type="button"
@@ -1301,6 +1314,16 @@ export default function PlotVisitView({
                           >
                             🔗 Copy Share Link
                           </button>
+                          <span
+                            className="mobile-parcel-directions-info"
+                            data-testid="parcel-directions-info"
+                          >
+                            <InfoTip title="In-Person AR Access" mode="popover" align="right">
+                              {isFrozen
+                                ? 'Walk near this property on mobile to unlock View in AR (placements are frozen).'
+                                : 'Walk near this property on mobile to unlock View in AR and Make Art on This Property.'}
+                            </InfoTip>
+                          </span>
                         </div>
                       )}
 

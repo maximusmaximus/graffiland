@@ -1181,6 +1181,15 @@ select {
   isolation: isolate;
 }
 
+.maplibregl-ctrl-group button {
+  width: 28px;
+  height: 28px;
+}
+
+.maplibregl-ctrl-group .maplibregl-ctrl-compass .maplibregl-ctrl-icon {
+  background-size: 16px 16px;
+}
+
 .map-container.compact {
   height: 100%;
   min-height: 250px;
@@ -3568,6 +3577,40 @@ select {
   gap: 10px;
 }
 
+.mobile-parcel-directions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+.mobile-parcel-directions-btn {
+  width: auto !important;
+  flex: 0 1 auto;
+  padding: 9px 13px !important;
+  font-size: 13px !important;
+  white-space: nowrap;
+}
+
+.mobile-parcel-distance-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11.5px;
+  padding: 5px 9px;
+}
+
+.mobile-parcel-directions-info {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.plot-header-coords {
+  color: rgba(226, 232, 240, 0.82);
+}
+
 .mobile-parcel-cta {
   width: 100%;
   justify-content: center;
@@ -3649,6 +3692,10 @@ select {
 }
 
 .plot-visit-subhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
   font-size: 11px;
   color: var(--muted);
   margin-top: 2px;
@@ -3691,16 +3738,16 @@ select {
   max-width: min(76%, 320px);
   padding: 5px 11px;
   border-radius: 999px;
-  border: 1.5px solid rgba(0, 245, 212, 0.78);
-  background: rgba(6, 11, 23, 0.9);
+  border: 1.5px solid rgba(255, 31, 143, 0.85);
+  background: rgba(14, 7, 20, 0.92);
   backdrop-filter: blur(10px);
-  color: #eafffc;
+  color: #ffe8f4;
   font-size: 12px;
   font-weight: 800;
   line-height: 1.15;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52), 0 0 14px rgba(0, 245, 212, 0.24);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52), 0 0 14px rgba(255, 31, 143, 0.28);
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
@@ -3711,28 +3758,28 @@ select {
 
 .plot-iso-land-label-btn:hover {
   border-color: #ffffff;
-  background: rgba(10, 18, 36, 0.96);
+  background: rgba(24, 10, 32, 0.96);
 }
 
 .plot-iso-land-label-btn.is-selected {
-  border-color: #ffd166;
-  background: rgba(24, 19, 8, 0.94);
-  color: #fff8e1;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 209, 102, 0.42);
+  border-color: #ff1f8f;
+  background: rgba(28, 8, 24, 0.94);
+  color: #fff0f8;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 31, 143, 0.45);
 }
 
 .plot-iso-land-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #00f5d4;
-  box-shadow: 0 0 8px #00f5d4;
+  background: #ff1f8f;
+  box-shadow: 0 0 8px #ff1f8f;
   flex-shrink: 0;
 }
 
 .plot-iso-land-label-btn.is-selected .plot-iso-land-dot {
-  background: #ffd166;
-  box-shadow: 0 0 8px #ffd166;
+  background: #ff5cb3;
+  box-shadow: 0 0 8px #ff1f8f;
 }
 
 .plot-iso-land-dims {
@@ -4306,11 +4353,17 @@ select {
 .land-preview-place {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   font-size: 12px;
   color: #b7c8e6;
   line-height: 1.35;
   word-break: break-word;
+}
+
+.land-preview-header-coords {
+  font-size: 11px;
+  color: rgba(216, 229, 250, 0.78);
 }
 
 .land-preview-stage {
@@ -4443,18 +4496,30 @@ select {
   appearance: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 3px 7px 3px 5px;
-  border-radius: 999px;
+  padding: 4px 8px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(6, 11, 22, 0.84);
-  color: #e6eefc;
+  background: rgba(6, 11, 22, 0.88);
+  color: #dce7fa;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
   backdrop-filter: blur(8px);
 }
 
+.land-preview-compass-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: block;
+}
+
 .land-preview-compass:hover {
-  border-color: rgba(0, 245, 212, 0.55);
+  border-color: rgba(255, 31, 143, 0.65);
+  color: #ffffff;
 }
 
 .land-preview-compass-label {
@@ -4462,7 +4527,6 @@ select {
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  min-width: 18px;
   text-align: center;
 }
 
@@ -4510,6 +4574,10 @@ select {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+.land-preview-facts.is-two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .land-preview-fact {
@@ -4560,7 +4628,7 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .land-preview-fact:last-child {
+  .land-preview-facts:not(.is-two-col) .land-preview-fact:last-child {
     grid-column: 1 / -1;
   }
 
@@ -4586,7 +4654,8 @@ select {
   }
 
   .land-preview-compass {
-    padding: 2px 6px 2px 4px;
+    padding: 3px 6px;
+    font-size: 10px;
     white-space: nowrap;
   }
 

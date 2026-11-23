@@ -584,12 +584,12 @@ export function useARPreview({
       const isSelected = Boolean(arSelectedLandId && arSelectedLandId === land.parcelId);
       const isDormant = String(land.stewardStatus || '').toLowerCase() === 'dormant';
       const baseHex = isSelected || land.isInside
-        ? 0xffd166
+        ? 0xff00aa
         : land.isFrozen
         ? 0x7dd3fc
         : isDormant
-        ? 0xff6b35
-        : 0x00f5d4;
+        ? 0xff4da6
+        : 0xff1f8f;
 
       const landSharpness = computeProximitySharpness(
         land.edgeDistanceMeters ?? land.distanceMeters ?? 0
