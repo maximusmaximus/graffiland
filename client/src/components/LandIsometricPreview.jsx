@@ -18,6 +18,7 @@ import {
   buildNeighborArrowsSignature,
   computeNeighborEdgeArrows
 } from '../utils/neighborEdgeArrows.js';
+import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import InfoTip from './InfoTip.jsx';
@@ -95,7 +96,7 @@ function drawPreviewPrism(
   { outerColor, innerColor, lineWidth = 2.1, glowBlur = 12, dashed = false, showGroundHalo = false }
 ) {
   if (!geom) return;
-  const { bottom, top } = geom;
+  const { bottom } = geom;
 
   if (showGroundHalo) {
     const cx = (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4;
@@ -116,41 +117,17 @@ function drawPreviewPrism(
     ctx.restore();
   }
 
-  const drawEdges = (stroke, width, blur) => {
-    ctx.save();
-    if (dashed) ctx.setLineDash([5, 4]);
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = outerColor;
-    ctx.shadowBlur = blur;
-    ctx.beginPath();
-    for (let i = 0; i < 4; i++) {
-      const a = bottom[i];
-      const b = bottom[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      const a = top[i];
-      const b = top[(i + 1) % 4];
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    }
-    for (let i = 0; i < 4; i++) {
-      ctx.moveTo(bottom[i].x, bottom[i].y);
-      ctx.lineTo(top[i].x, top[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  if (!dashed) {
-    drawEdges('rgba(4, 10, 20, 0.72)', lineWidth + 2.8, 2);
-  }
-  drawEdges(outerColor, lineWidth + 1.1, glowBlur);
-  drawEdges(innerColor, Math.max(1, lineWidth - 0.5), 0);
+  // Depth-faded 3D boundary wireframe: lines closest to user stay crisp, far-side lines fade >=25%
+  drawDepthFadedPrismEdges(ctx, geom, {
+    outerColor,
+    innerColor,
+    lineWidth,
+    glowBlur,
+    dashed,
+    darkHalo: !dashed,
+    nearAlpha: 1.0,
+    farAlpha: 0.32
+  });
 }
 
 /**
@@ -199,16 +176,30 @@ function IsometricFallbackBlueprint({ volume, parcel, viewMode, bearingDeg }) {
         <rect width="360" height="220" fill="url(#landIsoGrid)" />
         {/* Surrounding context block lines */}
         <circle cx={cx} cy={cy} r={viewMode === 'context' ? 42 : 76} fill="none" stroke="rgba(255,255,255,0.08)" strokeDasharray="4 4" />
-        {/* Base polygon */}
-        <polygon points={pts([b0, b1, b2, b3])} fill={fill} stroke={stroke} strokeWidth="1.8" />
+        {/* Base polygon fill */}
+        <polygon points={pts([b0, b1, b2, b3])} fill={fill} stroke="none" />
+        {/* Far-side boundary edges away from viewer (faded >= 25%) */}
+        <line x1={b0[0]} y1={b0[1]} x2={b1[0]} y2={b1[1]} stroke={stroke} strokeWidth="1.2" opacity="0.42" />
+        <line x1={b0[0]} y1={b0[1]} x2={b3[0]} y2={b3[1]} stroke={stroke} strokeWidth="1.2" opacity="0.42" />
         {hScale > 0 && (
           <>
-            <polygon points={pts([b1, b2, t2, t1])} fill={fill} stroke={stroke} strokeWidth="1.4" opacity="0.85" />
-            <polygon points={pts([b2, b3, t3, t2])} fill={fill} stroke={stroke} strokeWidth="1.4" opacity="0.65" />
-            <polygon points={pts([t0, t1, t2, t3])} fill={fill} stroke="#eafffc" strokeWidth="1.8" />
-            <line x1={b0[0]} y1={b0[1]} x2={t0[0]} y2={t0[1]} stroke={stroke} strokeWidth="1.2" strokeDasharray="3 3" opacity="0.7" />
+            <line x1={b0[0]} y1={b0[1]} x2={t0[0]} y2={t0[1]} stroke={stroke} strokeWidth="1.15" opacity="0.4" />
+            <line x1={t0[0]} y1={t0[1]} x2={t1[0]} y2={t1[1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
+            <line x1={t0[0]} y1={t0[1]} x2={t3[0]} y2={t3[1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
+            {/* Front translucent walls */}
+            <polygon points={pts([b1, b2, t2, t1])} fill={fill} stroke="none" opacity="0.72" />
+            <polygon points={pts([b2, b3, t3, t2])} fill={fill} stroke="none" opacity="0.58" />
+            <polygon points={pts([t0, t1, t2, t3])} fill={fill} stroke="none" opacity="0.45" />
+            {/* Front-side boundary edges closest to viewer (crisp 100%) */}
+            <line x1={b1[0]} y1={b1[1]} x2={t1[0]} y2={t1[1]} stroke={stroke} strokeWidth="1.6" opacity="0.82" />
+            <line x1={b3[0]} y1={b3[1]} x2={t3[0]} y2={t3[1]} stroke={stroke} strokeWidth="1.6" opacity="0.82" />
+            <line x1={b2[0]} y1={b2[1]} x2={t2[0]} y2={t2[1]} stroke="#eafffc" strokeWidth="2.0" opacity="1" />
+            <line x1={t1[0]} y1={t1[1]} x2={t2[0]} y2={t2[1]} stroke="#eafffc" strokeWidth="1.9" opacity="1" />
+            <line x1={t2[0]} y1={t2[1]} x2={t3[0]} y2={t3[1]} stroke="#eafffc" strokeWidth="1.9" opacity="1" />
           </>
         )}
+        <line x1={b1[0]} y1={b1[1]} x2={b2[0]} y2={b2[1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
+        <line x1={b2[0]} y1={b2[1]} x2={b3[0]} y2={b3[1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
         <text
           x={cx}
           y={Math.max(22, t0[1] - 10)}
@@ -232,6 +223,7 @@ export default function LandIsometricPreview({
   allParcels = [],
   userLocation = null,
   onSelectParcel = null,
+  onSelectSculpture = null,
   onFocusParcel = null
 }) {
   const stageRef = useRef(null);
@@ -337,6 +329,7 @@ export default function LandIsometricPreview({
   const isFrozenRef = useRef(false);
   const otherEntriesRef = useRef(otherParcelEntries);
   const onSelectParcelRef = useRef(onSelectParcel);
+  const onSelectSculptureRef = useRef(onSelectSculpture);
   const viewModeRef = useRef(viewMode);
   const bearingOffsetRef = useRef(bearingOffset);
 
@@ -420,7 +413,8 @@ export default function LandIsometricPreview({
   }, [otherParcelEntries]);
   useEffect(() => {
     onSelectParcelRef.current = onSelectParcel;
-  }, [onSelectParcel]);
+    onSelectSculptureRef.current = onSelectSculpture;
+  }, [onSelectParcel, onSelectSculpture]);
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
@@ -529,7 +523,7 @@ export default function LandIsometricPreview({
     if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
       const stageRect = stageEl.getBoundingClientRect();
       const hudNodes = stageEl.querySelectorAll(
-        '.land-preview-mode-group, .land-preview-compass-group, .land-preview-scale, .land-preview-refit'
+        '.land-preview-mode-group, .land-preview-compass-group, .land-preview-scale, .land-preview-refit, .land-preview-artwork-dock'
       );
       hudNodes.forEach((node) => {
         const r = node.getBoundingClientRect();
@@ -905,6 +899,24 @@ export default function LandIsometricPreview({
         map.on('mouseleave', 'preview-other-lands-extrusion', () => {
           map.getCanvas().style.cursor = '';
         });
+
+        // Clicking a 3D sculpture inside the isometric land preview opens that artwork's 3D view
+        map.on('click', 'preview-sculptures-3d-extrusion', (e) => {
+          const clickedScId = e?.features?.[0]?.properties?.sculptureId;
+          if (!clickedScId || !onSelectSculptureRef.current) return;
+          const match = (hydratedPreviewSculpturesRef.current || []).find(
+            (sc) => sc?.id === clickedScId
+          );
+          if (match) {
+            onSelectSculptureRef.current(match);
+          }
+        });
+        map.on('mouseenter', 'preview-sculptures-3d-extrusion', () => {
+          if (onSelectSculptureRef.current) map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', 'preview-sculptures-3d-extrusion', () => {
+          map.getCanvas().style.cursor = '';
+        });
       })
       .catch(() => {
         if (!cancelled) setWebglAvailable(false);
@@ -1169,6 +1181,36 @@ export default function LandIsometricPreview({
           <span className="land-preview-scale-text">{scaleBar.label}</span>
           <span className="land-preview-scale-bar" style={{ width: scaleBar.widthPx }} />
         </div>
+
+        {/* Bottom-Center: Clickable Artwork Labels that Jump Directly to the Art View */}
+        {onSelectSculpture && hydratedPreviewSculptures.filter((sc) => sc && !sc.hidden).length > 0 && (
+          <div
+            className="land-preview-artwork-dock"
+            data-testid="land-preview-artwork-dock"
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {hydratedPreviewSculptures
+              .filter((sc) => sc && !sc.hidden)
+              .slice(0, 3)
+              .map((sc) => (
+                <button
+                  key={sc.id}
+                  type="button"
+                  className="land-preview-artwork-pill"
+                  data-testid="preview-artwork-label"
+                  data-sculpture-id={sc.id}
+                  title={`Open 3D view of "${sc.title || 'Artwork'}"`}
+                  onClick={() => onSelectSculpture(sc)}
+                >
+                  <span aria-hidden="true">{sc.modelType === 'custom-3d' ? '🧊' : '🎨'}</span>
+                  <span className="land-preview-artwork-pill-name">{sc.title || '3D Artwork'}</span>
+                  <span className="land-preview-artwork-pill-arrow" aria-hidden="true">↗</span>
+                </button>
+              ))}
+          </div>
+        )}
 
         {/* Bottom-Right: Refit Button */}
         <button

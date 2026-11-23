@@ -8,6 +8,7 @@ import {
 } from '../utils/arLandHelpers.js';
 import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
+import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
 import { groupNearestLandsWithSculptures } from '../utils/landMapHelpers.js';
 import {
   buildVoxelGroup,
@@ -395,31 +396,17 @@ export function useARPreview({
       const bPts = prism.bottomCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
       const tPts = prism.topCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
-      // 1) Glowing ground perimeter loop
-      const borderGeo = new THREE.BufferGeometry().setFromPoints(bPts);
-      const borderMat = new THREE.LineBasicMaterial({
-        color: baseHex,
-        transparent: true,
-        opacity: isSelected ? 0.98 : land.isInside ? 0.88 : 0.62
+      // 1) Depth-faded 3D boundary wireframe (lines closest to user stay crisp; far-side lines fade >=25%)
+      const wireSegments = createDepthFadedThreePrismWireframe(bPts, tPts, baseHex, {
+        nearOpacity: 0.98,
+        farOpacity: 0.38,
+        opacityScale: isSelected ? 0.96 : land.isInside ? 0.85 : 0.62
       });
-      const perimeterLoop = new THREE.LineLoop(borderGeo, borderMat);
-      perimeterLoop.userData = { parcel: land, isArLandHit: true };
-      landGroup.add(perimeterLoop);
-
-      // 2) Vertical corner pillars + glowing roof wireframe
-      const edgePoints = [];
-      for (let i = 0; i < 4; i++) {
-        edgePoints.push(bPts[i], tPts[i]);
-        edgePoints.push(tPts[i], tPts[(i + 1) % 4]);
-      }
-      const wireGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
-      const wireMat = new THREE.LineBasicMaterial({
-        color: baseHex,
-        transparent: true,
-        opacity: isSelected ? 0.92 : land.isInside ? 0.72 : 0.44
-      });
-      const wireSegments = new THREE.LineSegments(wireGeo, wireMat);
-      wireSegments.userData = { parcel: land, isArLandHit: true };
+      wireSegments.userData = {
+        ...wireSegments.userData,
+        parcel: land,
+        isArLandHit: true
+      };
       landGroup.add(wireSegments);
 
       // 3) Subtle translucent holographic ground pad + 4 interactive glass boundary walls
@@ -468,8 +455,7 @@ export function useARPreview({
         insideParcel: land.isInside,
         parcelId: land.parcelId,
         parcel: land,
-        perimeterMat: borderMat,
-        wireMat,
+        wireMat: wireSegments.material,
         wallMat
       };
       group.add(landGroup);

@@ -292,16 +292,28 @@ export default function PlotVisitView({
     setIsMapFull(false);
   }, []);
 
-  const handleSelectArtworkTarget = useCallback((sc) => {
-    if (!sc?.id) return;
-    setSelectedTarget('artwork');
-    setSelectedSculptureId(sc.id);
-    setEditingLand(false);
-    setEditingArtworkId('');
-    setConfirmRemoveId('');
-    setDetailsExpanded(true);
-    setIsMapFull(false);
-  }, []);
+  const handleSelectArtworkTarget = useCallback(
+    (sc) => {
+      if (!sc?.id) return;
+      // If this artwork label is already selected, clicking it again goes straight to the full 3D art view
+      if (
+        selectedTarget === 'artwork' &&
+        selectedSculptureId === sc.id &&
+        typeof onSelectSculpture === 'function'
+      ) {
+        onSelectSculpture(sc);
+        return;
+      }
+      setSelectedTarget('artwork');
+      setSelectedSculptureId(sc.id);
+      setEditingLand(false);
+      setEditingArtworkId('');
+      setConfirmRemoveId('');
+      setDetailsExpanded(true);
+      setIsMapFull(false);
+    },
+    [onSelectSculpture, selectedSculptureId, selectedTarget]
+  );
 
   // Optional 2D Leaflet fallback when user explicitly toggles 3D -> 2D
   useEffect(() => {
@@ -753,6 +765,7 @@ export default function PlotVisitView({
                 onSelectLand={handleSelectLandTarget}
                 onSelectParcel={handleSelectNeighborOnMap}
                 onSelectSculpture={handleSelectArtworkTarget}
+                onOpenSculptureView={onSelectSculpture}
               />
             ) : (
               <>
@@ -851,7 +864,20 @@ export default function PlotVisitView({
                       <div className="plot-detail-head">
                         <div style={{ minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <h2 className="plot-detail-title">{selectedArtwork.title}</h2>
+                            {onSelectSculpture ? (
+                              <button
+                                type="button"
+                                className="artwork-title-link-btn is-heading"
+                                data-testid="plot-artwork-title-btn"
+                                title={`Open 3D view of "${selectedArtwork.title}"`}
+                                onClick={() => onSelectSculpture(selectedArtwork)}
+                              >
+                                <h2 className="plot-detail-title">{selectedArtwork.title}</h2>
+                                <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
+                              </button>
+                            ) : (
+                              <h2 className="plot-detail-title">{selectedArtwork.title}</h2>
+                            )}
                             <span className="badge teal" style={{ fontSize: 10 }}>
                               {selectedArtwork.layerRole === 'steward_stage'
                                 ? '🏛️ Stage'

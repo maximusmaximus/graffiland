@@ -423,7 +423,20 @@ export default function ARLandInspectorPanel({
                 data-testid="ar-land-sculpture-row"
               >
                 <div className="ar-land-sc-info">
-                  <div className="ar-land-sc-title">{sc.title || 'Untitled Artwork'}</div>
+                  {onInspectSculpture ? (
+                    <button
+                      type="button"
+                      className="ar-land-sc-title artwork-title-link-btn"
+                      data-testid="ar-land-artwork-label"
+                      title={`View "${sc.title || 'Untitled Artwork'}" in 3D`}
+                      onClick={() => onInspectSculpture(sc)}
+                    >
+                      <span>{sc.title || 'Untitled Artwork'}</span>
+                      <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
+                    </button>
+                  ) : (
+                    <div className="ar-land-sc-title">{sc.title || 'Untitled Artwork'}</div>
+                  )}
                   <div className="ar-land-sc-meta mono" style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                     <span>{formatSculptureAssetMeta(sc)}</span>
                     {(sc.creatorUsername || sc.creatorName) && (

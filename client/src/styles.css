@@ -2365,20 +2365,49 @@ select {
 }
 
 .map3d-sculpture-marker {
-  background: rgba(10, 14, 24, 0.85);
+  background: rgba(10, 14, 24, 0.9);
   border: 1.5px solid rgba(0, 245, 212, 0.72);
   border-radius: 999px;
-  padding: 4px;
+  padding: 3px 8px 3px 5px;
+  gap: 5px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 12px rgba(0, 245, 212, 0.4);
+  color: #eafffc;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  max-width: 176px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.52), 0 0 12px rgba(0, 245, 212, 0.36);
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   z-index: 6;
+}
+
+.map3d-sculpture-marker:hover {
+  border-color: #ffffff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 16px rgba(0, 245, 212, 0.6);
+  transform: translateY(-1px);
+}
+
+.map3d-sculpture-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.map3d-sculpture-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 132px;
 }
 
 .map3d-sculpture-marker.is-selected {
   border-color: #ffd166;
+  color: #fff8dc;
   box-shadow: 0 0 16px rgba(255, 209, 102, 0.75);
 }
 
@@ -3719,20 +3748,70 @@ select {
   position: absolute;
   pointer-events: auto;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 1px;
-  padding: 5px 9px;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 0;
+  padding: 0;
   border-radius: 10px;
   border: 1.25px solid rgba(0, 245, 212, 0.55);
   background: rgba(7, 12, 24, 0.9);
   backdrop-filter: blur(10px);
   color: #eef6ff;
-  text-align: left;
-  cursor: pointer;
+  overflow: hidden;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 245, 212, 0.16);
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.plot-iso-callout-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plot-iso-artwork-callout.is-right .plot-iso-callout-main {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.plot-iso-callout-open-btn {
+  flex: 0 0 auto;
+  width: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 245, 212, 0.16);
+  border: none;
+  border-left: 1px solid rgba(0, 245, 212, 0.32);
+  color: #00f5d4;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.plot-iso-callout-open-btn:hover,
+.plot-iso-callout-open-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.34);
+  color: #ffffff;
+  outline: none;
+}
+
+.plot-iso-artwork-callout.is-selected .plot-iso-callout-open-btn {
+  background: rgba(255, 209, 102, 0.22);
+  border-left-color: rgba(255, 209, 102, 0.42);
+  color: #ffd166;
 }
 
 .plot-iso-artwork-callout.is-left {
@@ -3741,8 +3820,6 @@ select {
 
 .plot-iso-artwork-callout.is-right {
   border-left: 3px solid #00f5d4;
-  align-items: flex-end;
-  text-align: right;
 }
 
 .plot-iso-artwork-callout:hover {
@@ -4131,7 +4208,16 @@ select {
   }
 
   .plot-iso-artwork-callout {
-    padding: 4px 7px;
+    padding: 0;
+  }
+
+  .plot-iso-callout-main {
+    padding: 4px 6px;
+  }
+
+  .plot-iso-callout-open-btn {
+    width: 21px;
+    font-size: 11px;
   }
 
   .plot-iso-callout-title {
@@ -8740,6 +8826,147 @@ button.user-handle-badge:hover .user-handle-text {
 
   .neighbor-edge-arrow-cap {
     width: 19px;
+  }
+}
+
+/* Clickable Artwork Labels on Isometric Previews, Maps, Management Lists & Details */
+.land-preview-artwork-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 18;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: calc(100% - 146px);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.land-preview-artwork-dock::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-iso-artwork-dock {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 18;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 56%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.mobile-iso-artwork-dock::-webkit-scrollbar {
+  display: none;
+}
+
+.land-preview-artwork-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 245, 212, 0.68);
+  background: rgba(7, 13, 25, 0.92);
+  color: #e6fffb;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 245, 212, 0.22);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease, color 140ms ease;
+}
+
+.land-preview-artwork-pill:hover,
+.land-preview-artwork-pill:focus-visible {
+  border-color: #ffd166;
+  background: rgba(16, 26, 44, 0.97);
+  color: #ffffff;
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.land-preview-artwork-pill-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.land-preview-artwork-pill-arrow {
+  color: #00f5d4;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.artwork-title-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  max-width: 100%;
+  transition: color 140ms ease, opacity 140ms ease;
+}
+
+.artwork-title-link-btn > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artwork-title-link-btn:hover,
+.artwork-title-link-btn:focus-visible {
+  color: #00f5d4;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  outline: none;
+}
+
+.artwork-title-link-btn.is-heading .plot-detail-title {
+  margin: 0;
+  color: inherit;
+}
+
+.artwork-title-link-arrow {
+  font-size: 0.82em;
+  color: #00f5d4;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+@media (max-width: 520px) {
+  .land-preview-artwork-dock {
+    max-width: calc(100% - 128px);
+  }
+
+  .land-preview-artwork-pill {
+    height: 22px;
+    padding: 0 7px;
+    font-size: 9.5px;
+  }
+
+  .land-preview-artwork-pill-name {
+    max-width: 72px;
   }
 }
 

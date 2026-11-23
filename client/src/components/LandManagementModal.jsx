@@ -483,6 +483,14 @@ export default function LandManagementModal({
                   allParcels={workspace.parcels}
                   userLocation={userLocation}
                   onSelectParcel={(p) => selectParcel(p)}
+                  onSelectSculpture={
+                    onSelectSculpture
+                      ? (sc) => {
+                          onClose?.();
+                          onSelectSculpture(sc);
+                        }
+                      : null
+                  }
                   onFocusParcel={
                     onFocusParcel
                       ? (p, vol) => {
@@ -1008,13 +1016,29 @@ export default function LandManagementModal({
                         <div key={sc.id} className="land-mgmt-item-card">
                           <div className="land-mgmt-row" style={{ background: 'transparent', padding: 0 }}>
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: 12.5 }}>
-                                {sc.title}{' '}
-                                <span className="badge teal" style={{ fontSize: 10, marginLeft: 4 }}>
+                              <div style={{ fontWeight: 600, fontSize: 12.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                                {onSelectSculpture ? (
+                                  <button
+                                    type="button"
+                                    className="artwork-title-link-btn"
+                                    data-testid="land-mgmt-artwork-label"
+                                    title={`View "${sc.title || 'Artwork'}" in 3D`}
+                                    onClick={() => {
+                                      onClose?.();
+                                      onSelectSculpture(sc);
+                                    }}
+                                  >
+                                    <span>{sc.title}</span>
+                                    <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
+                                  </button>
+                                ) : (
+                                  <span>{sc.title}</span>
+                                )}
+                                <span className="badge teal" style={{ fontSize: 10 }}>
                                   v{sc.currentRev || 1}
                                 </span>
                                 {sc.hidden && (
-                                  <span className="badge badge-error" style={{ fontSize: 10, marginLeft: 4 }}>
+                                  <span className="badge badge-error" style={{ fontSize: 10 }}>
                                     Hidden
                                   </span>
                                 )}

@@ -13,6 +13,7 @@ import {
   disposeObject3D,
   VOXEL_STEP
 } from '../VoxelEngine3D.js';
+import { updateThreeWireframeDepthFade } from '../../utils/prismDepthFade.js';
 import XeroIcon from '../XeroIcon.jsx';
 
 /**
@@ -547,20 +548,21 @@ function ARViewportCanvasInner({
         const selectedLandId = arSelectedLandIdRef?.current || '';
         for (const sub of nearbyGroupRef.current.children) {
           const ud = sub.userData;
-          if (ud?.isParcelPerimeter && ud.perimeterMat) {
+          if (ud?.isParcelPerimeter) {
             const isSelLand = Boolean(selectedLandId && ud.parcelId === selectedLandId);
             const pPulse = 0.5 + 0.5 * Math.sin(now * (isSelLand ? 0.0075 : 0.0045));
-            ud.perimeterMat.opacity = isSelLand
-              ? 0.8 + pPulse * 0.2
+            const pulseScale = isSelLand
+              ? 0.84 + pPulse * 0.16
               : ud.insideParcel
-              ? 0.68 + pPulse * 0.28
-              : 0.44 + pPulse * 0.22;
-            if (ud.wireMat) {
-              ud.wireMat.opacity = isSelLand
-                ? 0.72 + pPulse * 0.24
-                : ud.insideParcel
-                ? 0.52 + pPulse * 0.24
-                : 0.3 + pPulse * 0.18;
+              ? 0.7 + pPulse * 0.24
+              : 0.48 + pPulse * 0.2;
+            if (ud.wireMat?.uniforms?.uOpacityScale) {
+              ud.wireMat.uniforms.uOpacityScale.value = pulseScale;
+            } else if (ud.wireMat) {
+              ud.wireMat.opacity = pulseScale;
+            }
+            if (ud.perimeterMat) {
+              ud.perimeterMat.opacity = pulseScale;
             }
             if (ud.wallMat) {
               ud.wallMat.opacity = isSelLand
@@ -569,6 +571,7 @@ function ARViewportCanvasInner({
                 ? 0.06 + pPulse * 0.04
                 : 0.04 + pPulse * 0.025;
             }
+            updateThreeWireframeDepthFade(sub, camera.position);
             continue;
           }
           if (!ud?.baseRingMat) continue;
