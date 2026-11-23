@@ -1180,31 +1180,60 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const firstScText = await sculptureItems.first().textContent();
     assert.ok(/blocks|3D/i.test(firstScText || ''));
 
-    // Verify zero horizontal overflow on mobile 390px viewport, visible Leaflet map height, and simple land labels
-    const mapMetrics = await hubPage.evaluate(() => ({
-      scrollWidth: globalThis.document.documentElement.scrollWidth,
-      leafletHeight:
-        globalThis.document.querySelector('.mobile-map-canvas .leaflet-container')?.clientHeight || 0,
-      landLabelCount: globalThis.document.querySelectorAll('[data-testid="map-land-label"]').length
-    }));
+    // Verify Nearest Lands opens in 3D isometric view by default, is a 1:1 square on mobile, and has zero horizontal overflow
+    await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 10000 });
+    await hubPage.getByTestId('mobile-map-2d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const default3dMetrics = await hubPage.evaluate(() => {
+      const box = globalThis.document
+        .querySelector('[data-testid="mobile-map-canvas"]')
+        ?.getBoundingClientRect();
+      return {
+        scrollWidth: globalThis.document.documentElement.scrollWidth,
+        width: Math.round(box?.width || 0),
+        height: Math.round(box?.height || 0)
+      };
+    });
     assert.ok(
-      mapMetrics.scrollWidth <= 391,
-      `Expected mobile map scrollWidth <= 391, got ${mapMetrics.scrollWidth}`
+      default3dMetrics.scrollWidth <= 391,
+      `Expected mobile map scrollWidth <= 391, got ${default3dMetrics.scrollWidth}`
     );
     assert.ok(
-      mapMetrics.leafletHeight >= 150,
-      `Expected visible mobile Leaflet map height >= 150px, got ${mapMetrics.leafletHeight}`
+      default3dMetrics.width >= 300 &&
+        default3dMetrics.height >= 300 &&
+        Math.abs(default3dMetrics.width - default3dMetrics.height) <= 4,
+      `Expected mobile Nearest Lands map to be a 1:1 square, got ${default3dMetrics.width}x${default3dMetrics.height}`
+    );
+    await hubPage.getByTestId('mobile-map-orbit-btn').click();
+
+    // Switch 3D -> 2D in compact mode -> verify square Leaflet map & simple land labels, then back to 3D
+    await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
+    await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const mapMetrics = await hubPage.evaluate(() => {
+      const leaflet = globalThis.document.querySelector('.mobile-map-canvas .leaflet-container');
+      const rect = leaflet?.getBoundingClientRect();
+      return {
+        scrollWidth: globalThis.document.documentElement.scrollWidth,
+        leafletWidth: Math.round(rect?.width || 0),
+        leafletHeight: Math.round(rect?.height || 0),
+        landLabelCount: globalThis.document.querySelectorAll('[data-testid="map-land-label"]').length
+      };
+    });
+    assert.ok(
+      mapMetrics.scrollWidth <= 391,
+      `Expected mobile 2D map scrollWidth <= 391, got ${mapMetrics.scrollWidth}`
+    );
+    assert.ok(
+      mapMetrics.leafletWidth >= 300 &&
+        mapMetrics.leafletHeight >= 300 &&
+        Math.abs(mapMetrics.leafletWidth - mapMetrics.leafletHeight) <= 4,
+      `Expected compact 2D mobile Leaflet map to stay square, got ${mapMetrics.leafletWidth}x${mapMetrics.leafletHeight}`
     );
     assert.ok(
       mapMetrics.landLabelCount >= 2,
-      `Expected >= 2 simple land labels on mobile map, got ${mapMetrics.landLabelCount}`
+      `Expected >= 2 simple land labels on mobile 2D map, got ${mapMetrics.landLabelCount}`
     );
-
-    // Verify 2D <-> 3D Isometric map toggle works cleanly on mobile (compact AND full-screen expanded)
     await hubPage.getByTestId('mobile-map-3d-toggle-btn').click();
     await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 10000 });
-    await hubPage.getByTestId('mobile-map-2d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
-    await hubPage.getByTestId('mobile-map-orbit-btn').click();
 
     // Expand Full Map -> verify full-screen height & that 2D/3D/Orbit/Fit/Exit buttons ALL remain clickable
     await hubPage.getByTestId('mobile-map-expand-header-btn').click();
@@ -1233,13 +1262,24 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       full2dHeight >= 480,
       `Expected full-screen 2D mobile map height >= 480px, got ${full2dHeight}`
     );
-    // Switch back to 3D then collapse full-screen cleanly back to split Nearest Lands view
+    // Switch back to 3D then collapse full-screen cleanly back to split square Nearest Lands view
     await hubPage.getByTestId('mobile-map-3d-toggle-btn').click();
     await hubPage.waitForSelector('[data-testid="mobile-iso-3d-map"]', { timeout: 5000 });
     await hubPage.getByTestId('mobile-map-fullscreen-btn').click();
     await hubPage.waitForSelector('[data-testid="mobile-nearest-lands-list"]', { timeout: 5000 });
-    await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
-    await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
+    const collapsedMetrics = await hubPage.evaluate(() => {
+      const box = globalThis.document
+        .querySelector('[data-testid="mobile-map-canvas"]')
+        ?.getBoundingClientRect();
+      return {
+        width: Math.round(box?.width || 0),
+        height: Math.round(box?.height || 0)
+      };
+    });
+    assert.ok(
+      Math.abs(collapsedMetrics.width - collapsedMetrics.height) <= 4,
+      `Expected collapsed map to return to 1:1 square, got ${collapsedMetrics.width}x${collapsedMetrics.height}`
+    );
 
     // Open a nested sculpture in 3D modal and verify modal sits cleanly above map overlay
     await sculptureItems.first().getByRole('button', { name: /3D/i }).click();
