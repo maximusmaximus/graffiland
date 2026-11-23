@@ -1291,7 +1291,7 @@ export default function LandIsometricPreview({
             rel="noopener noreferrer"
             className="btn btn-xs"
           >
-            <XeroIcon emoji="🧭" size={12} /> Google Maps
+            <XeroIcon emoji="🧭" size={12} /> Navigate
           </a>
         )}
         {onFocusParcel && (

@@ -402,8 +402,9 @@ export default function ARLandInspectorPanel({
             target="_blank"
             rel="noreferrer"
             data-testid="ar-land-gmaps-link"
+            aria-label={`Navigate to ${displayName}`}
           >
-            <XeroIcon emoji="🧭" size={12} /> Maps
+            <XeroIcon emoji="🧭" size={12} /> Navigate
           </a>
         )}
         <button

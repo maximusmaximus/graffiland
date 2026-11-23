@@ -1475,7 +1475,7 @@ export default function SculptureModal({
             >
               <XeroIcon emoji="🧭" size={15} />
               <span>
-                Navigate (Google Maps){distanceLabel ? ` · ${distanceLabel}` : ''}
+                Navigate{distanceLabel ? ` · ${distanceLabel}` : ''}
               </span>
             </a>
           )}

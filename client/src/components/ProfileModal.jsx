@@ -1201,7 +1201,7 @@ export default function ProfileModal({
                               target="_blank"
                               rel="noreferrer"
                             >
-                              <XeroIcon emoji="🧭" size={11} /> Maps
+                              <XeroIcon emoji="🧭" size={11} /> Navigate
                             </a>
                           )}
                           {onOpenLand && (

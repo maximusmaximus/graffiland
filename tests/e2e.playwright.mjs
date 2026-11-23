@@ -1206,7 +1206,10 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     // Clicking the rank number (#1) focuses that land on top map AND opens the card
     await landCards.first().getByTestId('land-card-rank-btn').click();
     assert.equal(await landCards.first().getAttribute('data-expanded'), 'true');
-    const firstHref = await landCards.first().getByTestId('land-google-maps-link').getAttribute('href');
+    const firstNavLink = landCards.first().getByTestId('land-google-maps-link');
+    assert.ok((await firstNavLink.textContent()).includes('Navigate'));
+    assert.equal((await firstNavLink.textContent()).includes('Google Maps'), false);
+    const firstHref = await firstNavLink.getAttribute('href');
     assert.ok(firstHref && firstHref.startsWith('https://www.google.com/maps/dir/?api=1&destination='));
 
     // Clicking the triangle on card #2 opens it separately (and clicking again closes it)
