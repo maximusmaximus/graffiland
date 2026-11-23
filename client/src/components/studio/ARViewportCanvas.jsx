@@ -14,6 +14,11 @@ import {
   VOXEL_STEP
 } from '../VoxelEngine3D.js';
 import { updateThreeWireframeDepthFade } from '../../utils/prismDepthFade.js';
+import {
+  applyProximitySharpnessToObject3D,
+  computeArLandCameraGuidance,
+  computeProximitySharpness
+} from '../../utils/arLandGuidance.js';
 import XeroIcon from '../XeroIcon.jsx';
 
 /**
@@ -81,6 +86,7 @@ function ARViewportCanvasInner({
   unmappedGrid,
   onVideoMounted = null,
   onCameraRefreshNeeded = null,
+  onArLandGuidance = null,
   computeTargetVoxel,
   applyVoxelBatch,
   applyVoxelAction,
@@ -93,10 +99,12 @@ function ARViewportCanvasInner({
 }) {
   const [contextLost, setContextLost] = useState(false);
   const onCameraRefreshNeededRef = useRef(onCameraRefreshNeeded);
+  const onArLandGuidanceRef = useRef(onArLandGuidance);
 
   useEffect(() => {
     onCameraRefreshNeededRef.current = onCameraRefreshNeeded;
-  }, [onCameraRefreshNeeded]);
+    onArLandGuidanceRef.current = onArLandGuidance;
+  }, [onCameraRefreshNeeded, onArLandGuidance]);
 
   useEffect(() => {
     onVideoMounted?.();
@@ -283,9 +291,15 @@ function ARViewportCanvasInner({
     let lastTargetCheck = 0;
     let lastScanPosePush = 0;
     let lastOrbExtractPush = 0;
+    let lastGuidancePush = 0;
+    let lastGuidanceKey = '';
+    let lastPixelRatio = renderer.getPixelRatio();
+    let lastCanvasFilter = '';
     let orbExtractBusy = false;
+    const maxAnisotropy = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 8);
     const scanFwdVec = new THREE.Vector3();
     const originProjVec = new THREE.Vector3();
+    const guidanceTargetWorld = new THREE.Vector3();
     const targetRay = new THREE.Raycaster();
     const centerNdc = new THREE.Vector2(0, 0);
 
@@ -552,22 +566,30 @@ function ARViewportCanvasInner({
         }
       }
 
+      let selectedLandObj = null;
+      const selectedLandId = arSelectedLandIdRef?.current || '';
+
       if (
         (modeRef.current === 'draw' || modeRef.current === 'preview') &&
         nearbyGroupRef.current?.children.length
       ) {
         const activeId = arTargetedIdRef.current;
-        const selectedLandId = arSelectedLandIdRef?.current || '';
+        nearbyGroupRef.current.updateMatrixWorld();
         for (const sub of nearbyGroupRef.current.children) {
           const ud = sub.userData;
           if (ud?.isParcelPerimeter) {
             const isSelLand = Boolean(selectedLandId && ud.parcelId === selectedLandId);
+            if (isSelLand) {
+              selectedLandObj = sub;
+            }
+            const landSharp = computeProximitySharpness(ud.distanceMeters ?? 0);
             const pPulse = 0.5 + 0.5 * Math.sin(now * (isSelLand ? 0.0075 : 0.0045));
-            const pulseScale = isSelLand
-              ? 0.84 + pPulse * 0.16
-              : ud.insideParcel
-              ? 0.7 + pPulse * 0.24
-              : 0.48 + pPulse * 0.2;
+            const pulseScale =
+              (isSelLand
+                ? 0.86 + pPulse * 0.14
+                : ud.insideParcel
+                ? 0.72 + pPulse * 0.24
+                : 0.5 + pPulse * 0.2) * landSharp.prismOpacityScale;
             if (ud.wireMat?.uniforms?.uOpacityScale) {
               ud.wireMat.uniforms.uOpacityScale.value = pulseScale;
             } else if (ud.wireMat) {
@@ -577,14 +599,22 @@ function ARViewportCanvasInner({
               ud.perimeterMat.opacity = pulseScale;
             }
             if (ud.wallMat) {
-              ud.wallMat.opacity = isSelLand
-                ? 0.13 + pPulse * 0.08
-                : ud.insideParcel
-                ? 0.06 + pPulse * 0.04
-                : 0.04 + pPulse * 0.025;
+              ud.wallMat.opacity =
+                (isSelLand
+                  ? 0.13 + pPulse * 0.08
+                  : ud.insideParcel
+                  ? 0.06 + pPulse * 0.04
+                  : 0.04 + pPulse * 0.025) * landSharp.prismOpacityScale;
             }
             updateThreeWireframeDepthFade(sub, camera.position);
             continue;
+          }
+          if (ud?.sculptureId && Number.isFinite(ud.distanceMeters)) {
+            const scSharp = computeProximitySharpness(ud.distanceMeters);
+            if (Math.abs(scSharp.sharpness - (ud._lastSharpness ?? -1)) >= 0.03) {
+              ud._lastSharpness = scSharp.sharpness;
+              applyProximitySharpnessToObject3D(sub, scSharp, maxAnisotropy);
+            }
           }
           if (!ud?.baseRingMat) continue;
           const isTargeted = activeId && ud.sculptureId === activeId;
@@ -602,6 +632,94 @@ function ARViewportCanvasInner({
           if (ud.baseGlowRing) {
             const s = isTargeted ? 1.08 + pulse * 0.07 : 1 + pulse * 0.03;
             ud.baseGlowRing.scale.set(s, s, 1);
+          }
+        }
+      }
+
+      if (now - lastGuidancePush > 90) {
+        lastGuidancePush = now;
+        if (
+          selectedLandId &&
+          selectedLandObj?.userData?.centerLocal &&
+          nearbyGroupRef.current
+        ) {
+          const ud = selectedLandObj.userData;
+          camera.updateMatrixWorld();
+          guidanceTargetWorld
+            .copy(ud.centerLocal)
+            .applyMatrix4(nearbyGroupRef.current.matrixWorld);
+          const cornersWorld = (ud.cornersLocal || []).map((pt) =>
+            pt.clone().applyMatrix4(nearbyGroupRef.current.matrixWorld)
+          );
+          const guidance = computeArLandCameraGuidance({
+            targetWorld: guidanceTargetWorld,
+            cornersWorld,
+            camera,
+            isInside: Boolean(ud.insideParcel),
+            distanceMeters: ud.distanceMeters ?? 0
+          });
+          const sharpProfile = computeProximitySharpness(ud.distanceMeters ?? 0);
+
+          const nativeDpr = Math.min(window.devicePixelRatio || 1, 2.5);
+          const targetDpr = Math.max(
+            0.85,
+            Number((nativeDpr * sharpProfile.pixelRatioScale).toFixed(2))
+          );
+          if (Math.abs(targetDpr - lastPixelRatio) >= 0.08) {
+            lastPixelRatio = targetDpr;
+            renderer.setPixelRatio(targetDpr);
+          }
+
+          const hasDraftBlocks = (voxelsRef.current?.length || 0) > 0;
+          const nextFilter =
+            interactingLand &&
+            !hasDraftBlocks &&
+            guidance?.inView &&
+            sharpProfile.canvasBlurPx > 0.05
+              ? `blur(${sharpProfile.canvasBlurPx}px)`
+              : '';
+          if (nextFilter !== lastCanvasFilter) {
+            lastCanvasFilter = nextFilter;
+            renderer.domElement.style.filter = nextFilter;
+          }
+
+          if (guidance) {
+            const key = [
+              selectedLandId,
+              guidance.inView ? 1 : 0,
+              guidance.edge,
+              Math.round((guidance.angleDeg || 0) / 4),
+              Math.round((guidance.turnDegrees || 0) / 3),
+              sharpProfile.sharpnessPct,
+              Math.round(ud.distanceMeters || 0)
+            ].join(':');
+            if (key !== lastGuidanceKey) {
+              lastGuidanceKey = key;
+              onArLandGuidanceRef.current?.({
+                ...guidance,
+                parcelId: selectedLandId,
+                displayName: ud.displayName || 'Nearby Land',
+                distanceMeters: ud.distanceMeters ?? 0,
+                sharpness: sharpProfile.sharpness,
+                sharpnessPct: sharpProfile.sharpnessPct,
+                tier: sharpProfile.tier,
+                tierLabel: sharpProfile.tierLabel
+              });
+            }
+          }
+        } else {
+          if (lastCanvasFilter !== '') {
+            lastCanvasFilter = '';
+            renderer.domElement.style.filter = '';
+          }
+          const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
+          if (Math.abs(baseDpr - lastPixelRatio) >= 0.12) {
+            lastPixelRatio = baseDpr;
+            renderer.setPixelRatio(baseDpr);
+          }
+          if (lastGuidanceKey !== '') {
+            lastGuidanceKey = '';
+            onArLandGuidanceRef.current?.(null);
           }
         }
       }

@@ -31,6 +31,7 @@ import {
   PairDesktopMcpModal,
   SavedDraftsModal
 } from './studio/AgentPairModals.jsx';
+import ARLandGuidanceOverlay from './studio/ARLandGuidanceOverlay.jsx';
 import ARLandInspectorPanel from './studio/ARLandInspectorPanel.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
@@ -925,6 +926,7 @@ export default function MobileStudio({
         unmappedGrid={pol.unmappedGrid}
         onVideoMounted={pol.reattachVideoStream}
         onCameraRefreshNeeded={pol.refreshCamera}
+        onArLandGuidance={ar.setArLandGuidance}
         computeTargetVoxel={brush.computeTargetVoxel}
         applyVoxelBatch={brush.applyVoxelBatch}
         applyVoxelAction={brush.applyVoxelAction}
@@ -1096,6 +1098,15 @@ export default function MobileStudio({
             setMaterial={brush.setMaterial}
             reachMeters={brush.reachMeters}
             setReachMeters={brush.setReachMeters}
+          />
+        )}
+
+        {isInteractingWithLand && (
+          <ARLandGuidanceOverlay
+            land={ar.activeArLand}
+            guidance={ar.arLandGuidance}
+            loadState={ar.selectedLandLoadState}
+            hasBottomInspector={isInteractingWithLand}
           />
         )}
 
@@ -1349,10 +1360,21 @@ export default function MobileStudio({
           onViewInAR={async (visitedParcel, visitedSculptures) => {
             setParcelVisit(null);
             setTutorialOpen(false);
+            if (visitedParcel?.parcelId) {
+              ar.setNearbyParcels((prev) => {
+                const list = Array.isArray(prev) ? prev : [];
+                return list.some((p) => p?.parcelId === visitedParcel.parcelId)
+                  ? list
+                  : [...list, visitedParcel];
+              });
+            }
             if (Array.isArray(visitedSculptures) && visitedSculptures.length > 0) {
               await ar.hydrateNearbyList(visitedSculptures, pol.location).catch(() => {});
             }
             brush.setMode('preview');
+            if (visitedParcel?.parcelId) {
+              handleInspectArLand(visitedParcel);
+            }
             showTemporaryHint(
               `Viewing ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })} in AR!`
             );
@@ -1411,6 +1433,12 @@ export default function MobileStudio({
           initialDimensionMode={ar.mapInitialDimensionMode}
           onSelectParcel={ar.focusMapParcel}
           onSelectSculpture={ar.setMapSelectedSculpture}
+          onFindLandInAR={(land) => {
+            if (!land?.parcelId) return;
+            ar.setMapOpen(false);
+            brush.setMode('preview');
+            handleInspectArLand(land);
+          }}
           onOpenProfile={(handle) => {
             if (handle) setProfileHandle(handle);
           }}

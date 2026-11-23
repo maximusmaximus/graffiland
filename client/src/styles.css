@@ -6538,6 +6538,272 @@ select {
   gap: 9px;
 }
 
+/* =====================================================================
+ * AR Selected Land Directional Blinking Arrows & Proximity Sharpness HUD
+ * ===================================================================== */
+@keyframes arChevronBlink {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(0.88);
+    filter: drop-shadow(0 0 0 rgba(0, 245, 212, 0));
+  }
+  42% {
+    opacity: 1;
+    transform: scale(1.16);
+    filter: drop-shadow(0 0 10px rgba(255, 209, 102, 0.95));
+  }
+  72% {
+    opacity: 0.45;
+    transform: scale(0.96);
+    filter: drop-shadow(0 0 4px rgba(0, 245, 212, 0.55));
+  }
+}
+
+@keyframes arGuidePillPulse {
+  0%,
+  100% {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 14px rgba(255, 209, 102, 0.28);
+  }
+  50% {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.62), 0 0 24px rgba(0, 245, 212, 0.55);
+  }
+}
+
+.ar-guidance-stage {
+  position: fixed;
+  top: max(60px, calc(env(safe-area-inset-top) + 52px));
+  left: 10px;
+  right: 10px;
+  bottom: 92px;
+  z-index: 44;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ar-guidance-stage.has-inspector {
+  bottom: min(58dvh, 446px);
+}
+
+.ar-guide-beacon {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+}
+
+.ar-guide-beacon.is-edge-right {
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: row;
+}
+
+.ar-guide-beacon.is-edge-left {
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: row;
+}
+
+.ar-guide-beacon.is-edge-top {
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: column;
+}
+
+.ar-guide-beacon.is-edge-bottom {
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: column;
+}
+
+.ar-guide-chevrons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffd166;
+}
+
+.ar-guide-chevrons.is-horizontal {
+  flex-direction: row;
+  gap: 0;
+}
+
+.ar-guide-chevrons.is-vertical {
+  flex-direction: column;
+  gap: 0;
+}
+
+.ar-guide-chevron-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: -3px;
+  animation: arChevronBlink 0.96s ease-in-out infinite;
+}
+
+.ar-guide-chevron-svg {
+  display: block;
+}
+
+.ar-guide-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 11px;
+  border-radius: 14px;
+  background: rgba(7, 13, 26, 0.9);
+  border: 1.5px solid rgba(255, 209, 102, 0.85);
+  backdrop-filter: blur(12px);
+  color: #f8fafc;
+  max-width: min(226px, calc(100vw - 98px));
+  animation: arGuidePillPulse 1.6s ease-in-out infinite;
+}
+
+.ar-guide-pill-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ar-guide-land-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff7d6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-guide-land-dist {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #00f5d4;
+  flex-shrink: 0;
+}
+
+.ar-guide-pill-cue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffd166;
+}
+
+.ar-guide-angle {
+  font-size: 10px;
+  color: rgba(248, 250, 252, 0.78);
+}
+
+.ar-in-view-pill {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 12px;
+  border-radius: 14px;
+  background: rgba(7, 14, 26, 0.86);
+  border: 1.5px solid rgba(0, 245, 212, 0.72);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 14px rgba(0, 245, 212, 0.22);
+  backdrop-filter: blur(12px);
+  max-width: min(296px, calc(100vw - 28px));
+  color: #eafffc;
+}
+
+.ar-in-view-pill.is-tier-ultra {
+  border-color: rgba(255, 209, 102, 0.92);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5), 0 0 18px rgba(255, 209, 102, 0.3);
+}
+
+.ar-in-view-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ar-in-view-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #00f5d4;
+  box-shadow: 0 0 8px #00f5d4;
+  flex-shrink: 0;
+}
+
+.ar-in-view-pill.is-tier-ultra .ar-in-view-dot {
+  background: #ffd166;
+  box-shadow: 0 0 9px #ffd166;
+}
+
+.ar-in-view-pill.is-loading .ar-in-view-dot {
+  background: #38bdf8;
+  animation: arChevronBlink 0.9s ease-in-out infinite;
+}
+
+.ar-in-view-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ar-in-view-dist {
+  font-size: 10.5px;
+  color: #00f5d4;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ar-in-view-sharpness {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ar-sharpness-track {
+  flex: 1 1 64px;
+  min-width: 54px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.ar-sharpness-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8, #00f5d4, #ffd166);
+  transition: width 0.28s ease;
+}
+
+.ar-sharpness-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.ar-in-view-pill.is-tier-ultra .ar-sharpness-label {
+  color: #ffd166;
+}
+
 .ar-land-inspector-top {
   display: flex;
   align-items: center;

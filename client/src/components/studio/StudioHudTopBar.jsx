@@ -597,7 +597,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
+        {!isInteractingWithLand && mode === 'draw' && originStatus.originBlocked && !arSelectHint && (
           <div
             className="mobile-hud-banner origin-blocked-banner hud-interactive is-error"
             role="status"
