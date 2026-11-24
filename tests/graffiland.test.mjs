@@ -774,6 +774,71 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(singleSc.body.sculpture.chatSummary.messageCount, 2);
     assert.equal(JSON.stringify(singleSc.body).includes(secretText1), false);
     assert.equal(JSON.stringify(singleSc.body).includes(secretText2), false);
+
+    // 7. Single shared chat per land: a second sculpture on the SAME parcel shares the exact same chat board & messages
+    const sharedLat = singleSc.body.sculpture.lat;
+    const sharedLng = singleSc.body.sculpture.lng;
+    const secondScRes = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visBAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        title: 'Second Piece On Same Land',
+        description: 'Verifies one shared land chat across all artworks on this parcel.',
+        termsAccepted: true,
+        location: { lat: sharedLat, lng: sharedLng, altitude: 16, accuracy: 4, heading: 90 },
+        voxels: [
+          { x: 0.6, y: 0, z: 0.6, color: '#ff006e', material: 'neon' },
+          { x: 0.6, y: 0.2, z: 0.6, color: '#ffd166', material: 'neon' },
+          { x: 0.6, y: 0.4, z: 0.6, color: '#00f5d4', material: 'neon' }
+        ],
+        proofOfLocation: {
+          ...polEvidenceAt(sharedLat, sharedLng),
+          gyroSamples: 20,
+          opticalFlowCorrelation: 0.9,
+          sceneCoveragePct: 100
+        },
+        deviceProfile: { isMobile: true, hasCamera: true, screenWidth: 390, screenHeight: 844 }
+      })
+    });
+    assert.equal(secondScRes.status, 201, JSON.stringify(secondScRes.body));
+    const secondScId = secondScRes.body.sculpture.id;
+    const sharedParcelId = singleSc.body.sculpture.parcelId;
+    assert.equal(secondScRes.body.sculpture.parcelId, sharedParcelId);
+
+    // Entering chat via the 2nd sculpture OR directly via parcelId resolves to the SAME canonical land board & messages!
+    const enterViaSecond = await apiJson(`/api/sculptures/${secondScId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visBAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: visBId.pubFingerprint,
+        sightProof: await makeSightProof(visBId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(enterViaSecond.status, 200);
+    assert.equal(enterViaSecond.body.initialized, true);
+    assert.equal(enterViaSecond.body.boardId, createdSculptureId);
+    assert.equal(enterViaSecond.body.board.sculptureId, createdSculptureId);
+    assert.equal(enterViaSecond.body.messages.length, 2);
+
+    const enterViaParcel = await apiJson(`/api/sculptures/${sharedParcelId}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visBAuth.body.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: visBId.pubFingerprint,
+        sightProof: await makeSightProof(visBId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(enterViaParcel.status, 200);
+    assert.equal(enterViaParcel.body.boardId, createdSculptureId);
+    assert.equal(enterViaParcel.body.messages.length, 2);
+
+    // Second sculpture metadata also reports the land's shared chat message count (2)
+    const secondScMeta = await apiJson(`/api/sculptures/${secondScId}`);
+    assert.equal(secondScMeta.status, 200);
+    assert.equal(secondScMeta.body.sculpture.chatSummary.initialized, true);
+    assert.equal(secondScMeta.body.sculpture.chatSummary.messageCount, 2);
   });
 
   test('NFT platform metadata, 3D GLB export & wallet-to-wallet transferability', async () => {

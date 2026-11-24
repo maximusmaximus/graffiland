@@ -81,7 +81,14 @@ export default function SculptureChatDrawer({
   const pinAttemptedRef = useRef(false);
   const lastUnlockedSeqRef = useRef(Number(initialPinData?.batchSeq || 0));
   const sightRef = useRef(initialSightProof);
+  const boardIdRef = useRef(sculpture.id);
   const listEndRef = useRef(null);
+
+  useEffect(() => {
+    boardIdRef.current = sculpture.id;
+  }, [sculpture.id]);
+
+  const activeBoardId = entered?.board?.sculptureId || entered?.boardId || sculpture.id;
 
   const buildFreshSightProof = useCallback(
     async (idObj) => {
@@ -111,23 +118,24 @@ export default function SculptureChatDrawer({
   );
 
   const autoWrapPendingGrants = useCallback(
-    async (activeKeyB64, activeIdentity) => {
-      if (!activeKeyB64 || !activeIdentity) return;
+    async (activeKeyB64, activeIdentity, targetBoardId = null) => {
+      const roomId = targetBoardId || boardIdRef.current || sculpture.id;
+      if (!activeKeyB64 || !activeIdentity || !roomId) return;
       try {
-        const res = await api.listSculpturePendingGrants(sculpture.id);
+        const res = await api.listSculpturePendingGrants(roomId);
         const list = res.grants || [];
         setPendingGrants(list);
         for (const reqGrant of list) {
           if (reqGrant.sightDistanceM <= 75 && reqGrant.sightScore >= 45) {
             const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
               roomKeyB64: activeKeyB64,
-              sculptureId: sculpture.id,
+              sculptureId: roomId,
               keyEpoch: reqGrant.keyEpoch,
               recipientEcdhPubJwk: reqGrant.requesterEcdhPubJwk,
               recipientPubFp: reqGrant.requesterPubFp,
               grantorIdentity: activeIdentity
             });
-            await api.submitSculptureChatGrant(sculpture.id, {
+            await api.submitSculptureChatGrant(roomId, {
               targetGrantId: reqGrant.id,
               wrappedKeyJson,
               grantorEcdhPubJwk: activeIdentity.ecdhPublicJwk,
@@ -137,7 +145,7 @@ export default function SculptureChatDrawer({
           }
         }
         if (list.length > 0) {
-          const refreshed = await api.listSculpturePendingGrants(sculpture.id);
+          const refreshed = await api.listSculpturePendingGrants(roomId);
           setPendingGrants(refreshed.grants || []);
         }
       } catch {
@@ -152,6 +160,13 @@ export default function SculptureChatDrawer({
       const nextMeta = res?.pinMeta || null;
       if (nextMeta) setPinMeta(nextMeta);
       const serverSeq = Number(nextMeta?.batchSeq || 0);
+
+      if (sculpture.isParcelChat) {
+        setPinnedItems([]);
+        setPinUnlockStatus('no-pins');
+        setPinUnlockError('');
+        return;
+      }
 
       if (res?.isLandHolder) {
         if (lastUnlockedSeqRef.current === serverSeq && serverSeq > 0 && pinUnlockStatus === 'unlocked') {
@@ -240,7 +255,7 @@ export default function SculptureChatDrawer({
         );
       }
     },
-    [pinUnlockStatus, polTracker, sculpture.geohash, sculpture.id, sculpture.parcelId]
+    [pinUnlockStatus, polTracker, sculpture.geohash, sculpture.id, sculpture.isParcelChat, sculpture.parcelId]
   );
 
   const syncBoard = useCallback(async () => {
@@ -258,23 +273,24 @@ export default function SculptureChatDrawer({
         deviceProfile: { isMobile: true }
       });
 
-      // Automatically join/initialize the sculpture's chatbox on selection so the selector is immediately part of it
+      // Automatically join/initialize the land's shared chatbox on selection so the selector is immediately part of it
+      const resolvedInitId = res.board?.sculptureId || res.boardId || sculpture.id;
       if (!res.initialized && !autoInitRef.current) {
         autoInitRef.current = true;
         try {
           const keyB64 = generateRoomKeyB64();
           const epoch = 1;
-          saveLocalRoomKey(user.id, sculpture.id, epoch, keyB64);
-          const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, sculpture.id, epoch);
+          saveLocalRoomKey(user.id, resolvedInitId, epoch, keyB64);
+          const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, resolvedInitId, epoch);
           const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
             roomKeyB64: keyB64,
-            sculptureId: sculpture.id,
+            sculptureId: resolvedInitId,
             keyEpoch: epoch,
             recipientEcdhPubJwk: idObj.ecdhPublicJwk,
             recipientPubFp: idObj.pubFingerprint,
             grantorIdentity: idObj
           });
-          await api.initSculptureChat(sculpture.id, {
+          await api.initSculptureChat(resolvedInitId, {
             ownerEcdhPubJwk: idObj.ecdhPublicJwk,
             ownerSignPubJwk: idObj.signPublicJwk,
             ownerPubFp: idObj.pubFingerprint,
@@ -284,7 +300,7 @@ export default function SculptureChatDrawer({
             sightProof: freshSight,
             deviceProfile: { isMobile: true }
           });
-          res = await api.enterSculptureChat(sculpture.id, {
+          res = await api.enterSculptureChat(resolvedInitId, {
             requesterPubFp: idObj.pubFingerprint,
             sightProof: freshSight,
             deviceProfile: { isMobile: true }
@@ -299,6 +315,8 @@ export default function SculptureChatDrawer({
         }
       }
 
+      const canonicalBoardId = res.board?.sculptureId || res.boardId || sculpture.id;
+      boardIdRef.current = canonicalBoardId;
       setEntered(res);
       setErrorMsg('');
 
@@ -311,7 +329,7 @@ export default function SculptureChatDrawer({
       }
 
       const epoch = res.board.keyEpoch;
-      let activeKey = loadLocalRoomKey(user.id, sculpture.id, epoch);
+      let activeKey = loadLocalRoomKey(user.id, canonicalBoardId, epoch);
 
       if (!activeKey && res.myGrant?.status === 'granted' && res.myGrant?.wrappedKeyJson) {
         try {
@@ -319,11 +337,11 @@ export default function SculptureChatDrawer({
             wrappedKeyJson: res.myGrant.wrappedKeyJson,
             grantSig: res.myGrant.grantSig,
             grantorSignPubJwk: res.myGrant.grantorSignPubJwk,
-            sculptureId: sculpture.id,
+            sculptureId: canonicalBoardId,
             keyEpoch: epoch,
             identity: idObj
           });
-          saveLocalRoomKey(user.id, sculpture.id, epoch, activeKey);
+          saveLocalRoomKey(user.id, canonicalBoardId, epoch, activeKey);
         } catch (err) {
           setErrorMsg(err.message || 'Could not unwrap granted chat key.');
         }
@@ -333,7 +351,7 @@ export default function SculptureChatDrawer({
       if (!activeKey && !res.myGrant && !reqSentRef.current) {
         reqSentRef.current = true;
         await api
-          .requestSculptureChatGrant(sculpture.id, {
+          .requestSculptureChatGrant(canonicalBoardId, {
             requesterEcdhPubJwk: idObj.ecdhPublicJwk,
             requesterSignPubJwk: idObj.signPublicJwk,
             requesterPubFp: idObj.pubFingerprint,
@@ -352,7 +370,7 @@ export default function SculptureChatDrawer({
             const plain = await decryptChatMessage({
               msg: rawMsg,
               roomKeyB64: activeKey,
-              sculptureId: sculpture.id
+              sculptureId: canonicalBoardId
             });
             decList.push(plain);
           } catch {
@@ -369,7 +387,7 @@ export default function SculptureChatDrawer({
         }
         setMessages(decList);
         if (res.pendingRequestsCount > 0) {
-          await autoWrapPendingGrants(activeKey, idObj);
+          await autoWrapPendingGrants(activeKey, idObj, canonicalBoardId);
         } else {
           setPendingGrants([]);
         }
@@ -398,20 +416,21 @@ export default function SculptureChatDrawer({
     setLoading(true);
     setErrorMsg('');
     try {
+      const roomId = activeBoardId;
       const keyB64 = generateRoomKeyB64();
       const epoch = 1;
-      saveLocalRoomKey(user.id, sculpture.id, epoch, keyB64);
-      const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, sculpture.id, epoch);
+      saveLocalRoomKey(user.id, roomId, epoch, keyB64);
+      const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, roomId, epoch);
       const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
         roomKeyB64: keyB64,
-        sculptureId: sculpture.id,
+        sculptureId: roomId,
         keyEpoch: epoch,
         recipientEcdhPubJwk: identity.ecdhPublicJwk,
         recipientPubFp: identity.pubFingerprint,
         grantorIdentity: identity
       });
       const freshSight = await buildFreshSightProof(identity);
-      await api.initSculptureChat(sculpture.id, {
+      await api.initSculptureChat(roomId, {
         ownerEcdhPubJwk: identity.ecdhPublicJwk,
         ownerSignPubJwk: identity.signPublicJwk,
         ownerPubFp: identity.pubFingerprint,
@@ -434,27 +453,28 @@ export default function SculptureChatDrawer({
     setClueBusy(true);
     setClueError('');
     try {
+      const roomId = activeBoardId;
       const epoch = entered.board.keyEpoch;
       const unlocked = await unwrapRoomKeyWithClue({
         clueWrappedJson: entered.board.clueWrappedJson,
-        sculptureId: sculpture.id,
+        sculptureId: roomId,
         keyEpoch: epoch,
         clueAnswer: clueInput
       });
-      saveLocalRoomKey(user.id, sculpture.id, epoch, unlocked);
+      saveLocalRoomKey(user.id, roomId, epoch, unlocked);
 
       // Prove knowledge of K_room via blinded HMAC commitment so viewer joins peer group cleanly
-      const { roomProofToken } = await computeRoomPossessionProof(unlocked, sculpture.id, epoch);
+      const { roomProofToken } = await computeRoomPossessionProof(unlocked, roomId, epoch);
       const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
         roomKeyB64: unlocked,
-        sculptureId: sculpture.id,
+        sculptureId: roomId,
         keyEpoch: epoch,
         recipientEcdhPubJwk: identity.ecdhPublicJwk,
         recipientPubFp: identity.pubFingerprint,
         grantorIdentity: identity
       });
       const freshSight = await buildFreshSightProof(identity);
-      await api.claimClueChatGrant(sculpture.id, {
+      await api.claimClueChatGrant(roomId, {
         roomProofToken,
         requesterEcdhPubJwk: identity.ecdhPublicJwk,
         requesterSignPubJwk: identity.signPublicJwk,
@@ -481,11 +501,12 @@ export default function SculptureChatDrawer({
     setSending(true);
     setErrorMsg('');
     try {
+      const roomId = activeBoardId;
       const epoch = entered?.board?.keyEpoch || 1;
       const freshSight = await buildFreshSightProof(identity);
       const payload = await encryptChatMessage({
         roomKeyB64,
-        sculptureId: sculpture.id,
+        sculptureId: roomId,
         keyEpoch: epoch,
         senderSub: user.id,
         identity,
@@ -494,7 +515,7 @@ export default function SculptureChatDrawer({
         sightDistM: entered?.sight?.distanceMeters ?? null,
         altM: location?.altitude != null ? Math.round(location.altitude) : null
       });
-      await api.postSculptureChatMessage(sculpture.id, {
+      await api.postSculptureChatMessage(roomId, {
         ...payload,
         sightProof: freshSight,
         deviceProfile: { isMobile: true }
@@ -514,17 +535,18 @@ export default function SculptureChatDrawer({
     setSavingClue(true);
     setErrorMsg('');
     try {
+      const roomId = activeBoardId;
       const epoch = entered.board.keyEpoch;
       let clueWrappedJson = '';
       if (newCluePrompt.trim()) {
         clueWrappedJson = await wrapRoomKeyWithClue({
           roomKeyB64,
-          sculptureId: sculpture.id,
+          sculptureId: roomId,
           keyEpoch: epoch,
           clueAnswer: newClueAnswer
         });
       }
-      await api.updateSculptureChatClue(sculpture.id, {
+      await api.updateSculptureChatClue(roomId, {
         cluePrompt: newCluePrompt.trim(),
         clueWrappedJson,
         deviceProfile: { isMobile: true }
@@ -637,16 +659,16 @@ export default function SculptureChatDrawer({
         data-testid="sculpture-chat-drawer"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Clean Compact Chat Board Header */}
+        {/* Clean Compact Land Chat Board Header */}
         <div className="chat-board-header">
           <div className="chat-board-header-info">
             <div className="chat-board-title-row">
               <XeroIcon emoji="💬" size={18} />
-              <h3 className="chat-board-title">{sculpture.title}</h3>
+              <h3 className="chat-board-title">{landDisplayName}</h3>
             </div>
             <div className="chat-board-meta-row">
               <span className="chat-board-pill is-gold">
-                <XeroIcon emoji="📍" size={11} /> {landDisplayName}
+                <XeroIcon emoji="📍" size={11} /> Land Chat
               </span>
               {(sculpture.creatorUsername || sculpture.creatorName) && (
                 <UserHandleBadge

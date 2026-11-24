@@ -1335,7 +1335,7 @@ export default function PlotVisitView({
                             data-testid="plot-open-artwork-viewer-btn"
                             onClick={() => onSelectSculpture(selectedArtwork)}
                           >
-                            <XeroIcon emoji="🧊" size={13} /> Inspect Full 3D &amp; Chat
+                            <XeroIcon emoji="🧊" size={13} /> Inspect Full 3D
                           </button>
                         )}
                         <button

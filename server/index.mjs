@@ -586,9 +586,16 @@ export function createAppServer(serverOptions = {}) {
   // Public Sculptures (Map, Gallery, Mobile AR Preview Mode)
   const SCULPTURE_SELECT_SQL = `
     SELECT s.*,
-      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id) AS chat_initialized,
-      (SELECT COUNT(*) FROM sculpture_chat_messages m WHERE m.sculpture_id = s.id) AS chat_message_count,
-      (SELECT COUNT(*) FROM sculpture_chat_boards b WHERE b.sculpture_id = s.id AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
+      (SELECT COUNT(*) FROM sculpture_chat_boards b
+        LEFT JOIN sculptures bs ON bs.id = b.sculpture_id
+        WHERE b.sculpture_id = s.id OR b.sculpture_id = s.parcel_id OR (s.parcel_id != '' AND bs.parcel_id = s.parcel_id AND bs.hidden = 0)) AS chat_initialized,
+      (SELECT COUNT(*) FROM sculpture_chat_messages m
+        LEFT JOIN sculptures ms ON ms.id = m.sculpture_id
+        WHERE m.sculpture_id = s.id OR m.sculpture_id = s.parcel_id OR (s.parcel_id != '' AND ms.parcel_id = s.parcel_id AND ms.hidden = 0)) AS chat_message_count,
+      (SELECT COUNT(*) FROM sculpture_chat_boards b
+        LEFT JOIN sculptures bs ON bs.id = b.sculpture_id
+        WHERE (b.sculpture_id = s.id OR b.sculpture_id = s.parcel_id OR (s.parcel_id != '' AND bs.parcel_id = s.parcel_id AND bs.hidden = 0))
+          AND b.clue_prompt != '' AND b.clue_wrapped_json != '') AS chat_has_clue,
       (SELECT b.batch_seq FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_batch_seq,
       (SELECT b.pin_count FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_count,
       (SELECT b.ipfs_cid FROM sculpture_pin_batches b WHERE b.sculpture_id = s.id) AS pin_ipfs_cid,

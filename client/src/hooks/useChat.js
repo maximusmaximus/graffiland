@@ -3,6 +3,7 @@ import {
   CHAT_SIGHT_CLIENT_DISTANCE_M,
   haversineMeters
 } from '../../../shared/chatPolicy.mjs';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import {
   decryptPinnedIpfsBatch,
@@ -307,19 +308,30 @@ export function useChat({
       if (!sc) return;
       const loc = locationRef.current;
       if (!cameraReadyRef.current) {
-        showTemporaryHint('Live mobile camera stream must be active to enter sculpture chat.');
+        showTemporaryHint('Live mobile camera stream must be active to enter land chat.');
         return;
       }
       if (!loc) {
-        showTemporaryHint('Waiting for GPS fix before unlocking location chat.');
+        showTemporaryHint('Waiting for GPS fix before unlocking land chat.');
         return;
       }
-      const distM = haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng);
-      if (distM > CHAT_SIGHT_CLIENT_DISTANCE_M) {
-        showTemporaryHint(
-          `"${sc.title}" is ${Math.round(distM)}m away — walk within ${CHAT_SIGHT_CLIENT_DISTANCE_M}m in person to unlock.`
-        );
-        return;
+      const targetLat = Number(sc.lat ?? sc.centerLat);
+      const targetLng = Number(sc.lng ?? sc.centerLng);
+      const landLabel = resolveLandDisplayName(
+        {
+          customName: sc.parcelName || sc.customName || '',
+          firstSculptureTitle: sc.title || ''
+        },
+        { defaultName: sc.title || 'this land' }
+      );
+      if (Number.isFinite(targetLat) && Number.isFinite(targetLng)) {
+        const distM = haversineMeters(loc.lat, loc.lng, targetLat, targetLng);
+        if (distM > CHAT_SIGHT_CLIENT_DISTANCE_M) {
+          showTemporaryHint(
+            `"${landLabel}" is ${Math.round(distM)}m away — walk within ${CHAT_SIGHT_CLIENT_DISTANCE_M}m in person to unlock Land Chat.`
+          );
+          return;
+        }
       }
       const polSnap = polRef.current.getSnapshot();
       if ((polSnap.cameraFrames || 0) < 2) {

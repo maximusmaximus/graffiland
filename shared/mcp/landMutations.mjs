@@ -486,13 +486,13 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
        AND (
          EXISTS (
            SELECT 1 FROM sculpture_chat_grants g
-           JOIN sculptures s ON s.id = g.sculpture_id
-           WHERE s.parcel_id = ? AND g.requester_sub = u.id AND g.status = 'granted'
+           LEFT JOIN sculptures s ON s.id = g.sculpture_id
+           WHERE (g.sculpture_id = ? OR s.parcel_id = ?) AND g.requester_sub = u.id AND g.status = 'granted'
          )
          OR EXISTS (
            SELECT 1 FROM sculpture_chat_messages m
-           JOIN sculptures s ON s.id = m.sculpture_id
-           WHERE s.parcel_id = ? AND m.sender_sub = u.id
+           LEFT JOIN sculptures s ON s.id = m.sculpture_id
+           WHERE (m.sculpture_id = ? OR s.parcel_id = ?) AND m.sender_sub = u.id
          )
          OR EXISTS (
            SELECT 1 FROM parcel_presence_challenges p
@@ -500,7 +500,7 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
          )
        )
      ORDER BY u.username ASC, u.created_at ASC`,
-    [ownerSub, cleanId, cleanId, cleanId]
+    [ownerSub, cleanId, cleanId, cleanId, cleanId, cleanId]
   );
   return (rows || []).map((r) => {
     const username = String(r.username || '').trim();

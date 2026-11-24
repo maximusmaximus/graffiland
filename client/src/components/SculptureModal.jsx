@@ -2316,7 +2316,7 @@ export default function SculptureModal({
 
         <div className="card" style={{ padding: 12, marginTop: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <XeroIcon emoji="🔐" size={18} /> Camera-Locked Location Chat Board (E2EE)
+            <XeroIcon emoji="🔐" size={18} /> Land Chat Board (E2EE · One Shared Chat Per Land)
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: 'var(--muted)' }}>
             <span className="badge">

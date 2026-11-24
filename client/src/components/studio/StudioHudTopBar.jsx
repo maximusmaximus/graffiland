@@ -679,7 +679,7 @@ export default function StudioHudTopBar({
                   onOpenCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
                 }}
               >
-                <XeroIcon emoji="💬" size={14} /> Open Chatbox
+                <XeroIcon emoji="💬" size={14} /> Land Chat
               </button>
             </div>
 
