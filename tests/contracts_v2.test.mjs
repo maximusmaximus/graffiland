@@ -62,6 +62,9 @@ describe('GRAFFILAND V2 Contracts & 5%/3%/2% Economic Constants', () => {
     assert.equal(TRANSACTION_FEES.sellerNetBps, 9000);
     assert.equal(STEWARD_DEFAULTS.starterDormantSlots, 3);
     assert.equal(STEWARD_DEFAULTS.slotsPerAwakenedLand, 2);
-    assert.equal(STEWARD_DEFAULTS.dormantLeaseTtlHours, 168);
+    assert.equal(STEWARD_DEFAULTS.dormantLeaseTtlHours, 72);
+    assert.equal(STEWARD_DEFAULTS.inactivityArchiveDays, 28);
+    assert.equal(STEWARD_DEFAULTS.expiryWarningHours, 3);
+    assert.equal(STEWARD_DEFAULTS.freeSlotsReopenWithoutHumans, false);
   });
 });

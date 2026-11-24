@@ -17,6 +17,7 @@ import {
   resolveSafeUserAvatar
 } from '../userDisplay.mjs';
 import { notifyAfterSculpturePublished } from '../notificationService.mjs';
+import { reapAndArchiveExpiredLands } from '../landArchiveService.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -55,6 +56,7 @@ import {
 } from './helpers.mjs';
 
 export async function listLandsWithCurations(db) {
+  await reapAndArchiveExpiredLands(db).catch(() => {});
   const scRows = await db.all(
     `SELECT
       parcel_id,
@@ -236,6 +238,10 @@ export async function listLandsWithCurations(db) {
       stewardStatus,
       firstSparkBoost: stewardStatus === 'dormant',
       leaseExpiresAt: st?.lease_expires_at || '',
+      inactivityExpiresAt: st?.inactivity_expires_at || '',
+      lastHumanInteractionAt: st?.last_human_interaction_at || '',
+      lastHumanInteractionType: st?.last_human_interaction_type || '',
+      hadHumanInteraction: Number(st?.had_human_interaction || 0) === 1,
       awakenedAt: st?.awakened_at || '',
       humanContributorCount: Number(st?.human_contributor_count || 0),
       openQuestCount: questMap.get(parcelId) || 0,
@@ -508,6 +514,7 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
 }
 
 export async function listOwnerLandsAndSculptures(db, ownerUser) {
+  await reapAndArchiveExpiredLands(db).catch(() => {});
   const wallets = new Set(resolveUserWalletAddresses(ownerUser));
   const ownerId = ownerUser?.id ? String(ownerUser.id) : '';
   const allRows = await db.all(
@@ -564,6 +571,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
   const stewardMap = new Map((stewardRows || []).map((st) => [st.parcel_id, st]));
   for (const st of stewardRows || []) {
+    if (st.status === 'archived' || st.status === 'expired') continue;
     if (
       (ownerId && st.steward_sub === ownerId) ||
       wallets.has(String(st.steward_address || '').toLowerCase())
@@ -670,6 +678,10 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       centerLng: volume?.centerLng ?? bounds?.center?.[1] ?? null,
       stewardStatus: st?.status || 'awakened',
       leaseExpiresAt: st?.lease_expires_at || '',
+      inactivityExpiresAt: st?.inactivity_expires_at || '',
+      lastHumanInteractionAt: st?.last_human_interaction_at || '',
+      lastHumanInteractionType: st?.last_human_interaction_type || '',
+      hadHumanInteraction: Number(st?.had_human_interaction || 0) === 1,
       awakenedAt: st?.awakened_at || '',
       customName: cur?.custom_name || '',
       displayName: resolveLandDisplayName({

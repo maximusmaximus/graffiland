@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { STEWARD_DEFAULTS } from './constants.mjs';
+import { computeAgentSlotUsage } from './landArchiveService.mjs';
 import {
   resolvePublicUserHandle,
   resolveSafeUserAvatar
@@ -67,8 +68,12 @@ export async function verifyAgentJwt(token, secret) {
 
 export function formatAgentProfile(row, extras = {}) {
   if (!row) return null;
-  const maxSlots = Number(row.max_slots ?? STEWARD_DEFAULTS.starterDormantSlots);
-  const usedSlots = Number(extras.activeDormantSlots ?? row.used_slots ?? 0);
+  const maxSlots = Number(extras.maxSlots ?? row.max_slots ?? STEWARD_DEFAULTS.starterDormantSlots);
+  const forfeitedSlots = Number(extras.forfeitedSlots ?? row.forfeited_slots ?? 0);
+  const activeDormantSlots = Number(
+    extras.activeDormantSlots ?? Math.max(0, Number(row.used_slots ?? 0) - forfeitedSlots)
+  );
+  const usedSlots = Number(extras.usedSlots ?? activeDormantSlots + forfeitedSlots);
   return {
     agentId: row.agent_id,
     actorType: 'agent',
@@ -79,6 +84,8 @@ export function formatAgentProfile(row, extras = {}) {
     endpointUrl: row.endpoint_url || '',
     maxSlots,
     usedSlots,
+    activeDormantSlots,
+    forfeitedSlots,
     availableSlots: Math.max(0, maxSlots - usedSlots),
     activatedLandsCount: Number(row.activated_lands_count || 0),
     totalXp: Number(row.total_xp || 0),
@@ -272,16 +279,14 @@ export async function registerOrLoginAgentWallet(
   }
 
   const saved = await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [agentId]);
-  const slotRow = await db.get(
-    `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
-    [agentId]
-  );
-  const activeDormantSlots = Number(slotRow?.cnt || 0);
-  await db.run('UPDATE agent_accounts SET used_slots = ? WHERE agent_id = ?', [
-    activeDormantSlots,
+  const slotUsage = await computeAgentSlotUsage(db, agentId);
+  await db.run('UPDATE agent_accounts SET used_slots = ?, forfeited_slots = ? WHERE agent_id = ?', [
+    slotUsage.usedSlots,
+    slotUsage.forfeitedSlots,
     agentId
   ]);
-  saved.used_slots = activeDormantSlots;
+  saved.used_slots = slotUsage.usedSlots;
+  saved.forfeited_slots = slotUsage.forfeitedSlots;
 
   const token = await signAgentJwt(
     {
@@ -295,7 +300,7 @@ export async function registerOrLoginAgentWallet(
 
   return {
     token,
-    agent: formatAgentProfile(saved, { activeDormantSlots }),
+    agent: formatAgentProfile(saved, slotUsage),
     user: {
       id: saved.agent_id,
       actorType: 'agent',
@@ -318,11 +323,8 @@ export async function resolveAgentFromBearerToken(db, authHeader, sessionSecret)
     if (decoded?.actorType !== 'agent' || !decoded?.sub) return null;
     const agentRow = await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [decoded.sub]);
     if (!agentRow) return null;
-    const slotRow = await db.get(
-      `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
-      [agentRow.agent_id]
-    );
-    return agentRowToUserActor(agentRow, { activeDormantSlots: Number(slotRow?.cnt || 0) });
+    const slotUsage = await computeAgentSlotUsage(db, agentRow.agent_id);
+    return agentRowToUserActor(agentRow, slotUsage);
   } catch {
     return null;
   }
@@ -340,10 +342,7 @@ export async function getAgentProfile(db, agentIdOrWallet) {
   if (!agentRow) {
     throw new McpServiceError('Agent steward not found.', 404);
   }
-  const slotRow = await db.get(
-    `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
-    [agentRow.agent_id]
-  );
+  const slotUsage = await computeAgentSlotUsage(db, agentRow.agent_id);
   const earnedRow = await db.get(
     `SELECT COALESCE(SUM(agent_royalties_eth), 0) AS totalRoyalties
      FROM land_steward_state WHERE steward_sub = ?`,
@@ -360,7 +359,7 @@ export async function getAgentProfile(db, agentIdOrWallet) {
   );
 
   return formatAgentProfile(agentRow, {
-    activeDormantSlots: Number(slotRow?.cnt || 0),
+    ...slotUsage,
     earnedRoyaltiesEth: Number(earnedRow?.totalRoyalties || 0),
     lands: (landRows || []).map((r) => ({
       parcelId: r.parcel_id,
@@ -369,6 +368,10 @@ export async function getAgentProfile(db, agentIdOrWallet) {
       lat: r.center_lat ?? null,
       lng: r.center_lng ?? null,
       leaseExpiresAt: r.lease_expires_at || '',
+      inactivityExpiresAt: r.inactivity_expires_at || '',
+      lastHumanInteractionAt: r.last_human_interaction_at || '',
+      lastHumanInteractionType: r.last_human_interaction_type || '',
+      hadHumanInteraction: Number(r.had_human_interaction || 0) === 1,
       awakenedAt: r.awakened_at || '',
       humanContributorCount: Number(r.human_contributor_count || 0),
       agentRoyaltiesEth: Number(r.agent_royalties_eth || 0)

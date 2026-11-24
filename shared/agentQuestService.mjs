@@ -11,6 +11,12 @@ import {
   validateLandTitle
 } from './landVolume.mjs';
 import {
+  computeAgentSlotUsage,
+  computeDormantLeaseExpiresAt,
+  computeInactivityExpiresAt,
+  reapAndArchiveExpiredLands
+} from './landArchiveService.mjs';
+import {
   getUserMintCapacityStatus,
   notifyAfterSculpturePublished,
   notifyFreeLimitReached
@@ -87,64 +93,13 @@ function serializeQuestRow(row, stewardRow = null, curationRow = null, parcelRow
 }
 
 /**
- * Releases expired 7-day dormant agent land leases without zeroing any land that already received IRL human art.
+ * Archives and destroys expired 72-hour dormant agent lands (with zero in-person human
+ * interactions, even if the agent placed 3D models) AND any active lands that have had
+ * zero verified in-person human interactions for 28 consecutive days.
+ * Also emits 3-hour pre-expiry warning notifications for lands approaching expiry.
  */
 export async function releaseExpiredDormantLands(db, nowIso = new Date().toISOString()) {
-  const expiredRows = await db.all(
-    `SELECT * FROM land_steward_state
-     WHERE status = 'dormant' AND lease_expires_at != '' AND lease_expires_at <= ?`,
-    [nowIso]
-  );
-
-  let releasedCount = 0;
-  for (const row of expiredRows || []) {
-    const humanArt = await db.get(
-      `SELECT COUNT(*) AS cnt
-       FROM sculptures s
-       LEFT JOIN sculpture_layers l ON l.sculpture_id = s.id
-       WHERE s.parcel_id = ?
-         AND s.hidden = 0
-         AND s.creator_sub NOT LIKE 'agent:%'
-         AND COALESCE(l.layer_role, 'artist_work') = 'artist_work'`,
-      [row.parcel_id]
-    );
-    if (Number(humanArt?.cnt || 0) > 0) {
-      await db.run(
-        `UPDATE land_steward_state
-         SET status = 'awakened', lease_expires_at = '', awakened_at = COALESCE(NULLIF(awakened_at, ''), ?), updated_at = ?
-         WHERE parcel_id = ?`,
-        [nowIso, nowIso, row.parcel_id]
-      );
-      continue;
-    }
-
-    await db.run(
-      `UPDATE land_steward_state SET status = 'expired', updated_at = ? WHERE parcel_id = ?`,
-      [nowIso, row.parcel_id]
-    );
-    await db.run(
-      `UPDATE land_quests SET status = 'paused', updated_at = ? WHERE parcel_id = ? AND status = 'open'`,
-      [nowIso, row.parcel_id]
-    );
-    await db.run(
-      `UPDATE sculptures
-       SET hidden = 1, hidden_reason = 'Dormant 7-day lease expired without IRL awakening', hidden_by = 'protocol:lease-reaper'
-       WHERE parcel_id = ? AND creator_sub = ? AND hidden = 0`,
-      [row.parcel_id, row.steward_sub]
-    );
-    await db.run('DELETE FROM parcel_curations WHERE parcel_id = ?', [row.parcel_id]);
-    await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [row.parcel_id]);
-
-    if (row.steward_sub && row.steward_sub.startsWith('agent:')) {
-      await db.run(
-        `UPDATE agent_accounts SET used_slots = MAX(0, used_slots - 1), last_seen_at = ? WHERE agent_id = ?`,
-        [nowIso, row.steward_sub]
-      );
-    }
-    releasedCount += 1;
-  }
-
-  return { releasedCount };
+  return reapAndArchiveExpiredLands(db, nowIso);
 }
 
 /**
@@ -160,6 +115,8 @@ export async function scoutLands(
     `SELECT lp.*,
             st.steward_sub, st.steward_address, st.steward_name, st.steward_type,
             st.status AS steward_status, st.lease_expires_at, st.awakened_at,
+            st.last_human_interaction_at, st.last_human_interaction_type,
+            st.inactivity_expires_at, st.had_human_interaction,
             st.human_contributor_count, st.total_tx_volume_eth, st.agent_royalties_eth,
             pc.custom_name, pc.curation_note,
             (SELECT COUNT(*) FROM land_quests q WHERE q.parcel_id = lp.parcel_id AND q.status = 'open') AS open_quest_count
@@ -206,6 +163,10 @@ export async function scoutLands(
       humanContributorCount: Number(r.human_contributor_count || 0),
       openQuestCount: Number(r.open_quest_count || 0),
       leaseExpiresAt: r.lease_expires_at || '',
+      inactivityExpiresAt: r.inactivity_expires_at || '',
+      lastHumanInteractionAt: r.last_human_interaction_at || '',
+      lastHumanInteractionType: r.last_human_interaction_type || '',
+      hadHumanInteraction: Number(r.had_human_interaction || 0) === 1,
       awakenedAt: r.awakened_at || '',
       distanceMeters
     };
@@ -523,26 +484,30 @@ export async function claimDormantLand(
     ? await db.get('SELECT * FROM agent_accounts WHERE agent_id = ?', [agentUser.id])
     : null;
   let usedSlots = 0;
+  let forfeitedSlots = 0;
   let maxSlots = STEWARD_DEFAULTS.starterDormantSlots;
 
   if (isAgent) {
-    maxSlots = Number(agentRow?.max_slots ?? STEWARD_DEFAULTS.starterDormantSlots);
-    const activeDormantRow = await db.get(
-      `SELECT COUNT(*) AS cnt FROM land_steward_state WHERE steward_sub = ? AND status = 'dormant'`,
-      [agentUser.id]
-    );
-    usedSlots = Number(activeDormantRow?.cnt || 0);
+    const slotUsage = await computeAgentSlotUsage(db, agentUser.id);
+    maxSlots = slotUsage.maxSlots;
+    usedSlots = slotUsage.usedSlots;
+    forfeitedSlots = slotUsage.forfeitedSlots;
     if (usedSlots >= maxSlots) {
+      const forfeitNote =
+        forfeitedSlots > 0
+          ? ` (${forfeitedSlots} expired without human visitors and did not reopen)`
+          : '';
       throw new McpServiceError(
-        `Dormant claim slot limit reached (${usedSlots}/${maxSlots}). Attract a verified IRL human artist to awaken a land and unlock +${STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots.`,
+        `Dormant claim slot limit reached (${usedSlots}/${maxSlots})${forfeitNote}. Attract a verified IRL human artist to awaken an active land and unlock +${STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots.`,
         429,
-        { usedSlots, maxSlots }
+        { usedSlots, forfeitedSlots, maxSlots }
       );
     }
   } else {
     maxSlots = LAND_VOLUME_LIMITS.starterFreeHumanClaims;
     const mintCapacity = await getUserMintCapacityStatus(db, agentUser.id);
     usedSlots = mintCapacity.usedSlots;
+    forfeitedSlots = Number(mintCapacity.forfeitedSlots || 0);
     if (usedSlots >= maxSlots) {
       await notifyFreeLimitReached(db, {
         userSub: agentUser.id,
@@ -550,18 +515,23 @@ export async function claimDormantLand(
         maxSlots,
         unbuiltParcels: mintCapacity.unbuiltParcels
       }).catch(() => {});
+      const forfeitNote =
+        forfeitedSlots > 0
+          ? ` (${forfeitedSlots} free slot${forfeitedSlots === 1 ? '' : 's'} expired without in-person human interaction and did not reopen)`
+          : '';
       throw new McpServiceError(
-        `You have used all ${usedSlots}/${maxSlots} free starter Desktop lands. Build or publish a sculpture on one of your existing lands to unlock another Desktop mint slot — or sculpt in person with Mobile AR right now to claim new land immediately!`,
+        `You have used all ${usedSlots}/${maxSlots} free starter Desktop lands${forfeitNote}. Build or publish a sculpture on one of your existing lands to unlock another Desktop mint slot — or sculpt in person with Mobile AR right now to claim new land immediately!`,
         429,
         {
           code: 'STARTER_FREE_LAND_LIMIT_REACHED',
           usedSlots,
+          forfeitedSlots,
           maxSlots,
           remainingSlots: 0,
           unbuiltParcels: mintCapacity.unbuiltParcels,
           canClaimInPersonMobile: true,
           nextSteps: [
-            'Place or publish a sculpture on one of your 3 existing unbuilt lands to immediately free a Desktop mint slot.',
+            'Place or publish a sculpture on one of your existing unbuilt lands to free a Desktop mint slot.',
             'Or pair your phone and sculpt in person with Mobile AR to claim new land without waiting.'
           ]
         }
@@ -599,9 +569,8 @@ export async function claimDormantLand(
   }
 
   const now = new Date().toISOString();
-  const leaseExpiresAt = isAgent
-    ? new Date(Date.now() + STEWARD_DEFAULTS.dormantLeaseTtlHours * 60 * 60 * 1000).toISOString()
-    : '';
+  const leaseExpiresAt = isAgent ? computeDormantLeaseExpiresAt(now) : '';
+  const inactivityExpiresAt = isAgent ? '' : computeInactivityExpiresAt(now);
   const initialStatus = isAgent ? 'dormant' : 'awakened';
 
   await db.run(
@@ -631,9 +600,11 @@ export async function claimDormantLand(
     `INSERT INTO land_steward_state (
       parcel_id, steward_sub, steward_address, steward_name, steward_type,
       status, claimed_at, lease_expires_at, awakened_at,
+      last_human_interaction_at, last_human_interaction_type, last_human_interaction_sub,
+      inactivity_expires_at, had_human_interaction,
       first_human_sub, first_human_address, human_contributor_count,
       total_tx_volume_eth, agent_royalties_eth, human_royalties_eth, platform_fees_eth, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, 0, 0, 0, 0, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?, 0, '', '', 0, 0, 0, 0, 0, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       steward_sub = excluded.steward_sub,
       steward_address = excluded.steward_address,
@@ -643,6 +614,14 @@ export async function claimDormantLand(
       claimed_at = excluded.claimed_at,
       lease_expires_at = excluded.lease_expires_at,
       awakened_at = excluded.awakened_at,
+      last_human_interaction_at = '',
+      last_human_interaction_type = '',
+      last_human_interaction_sub = '',
+      inactivity_expires_at = excluded.inactivity_expires_at,
+      had_human_interaction = 0,
+      first_human_sub = '',
+      first_human_address = '',
+      human_contributor_count = 0,
       updated_at = excluded.updated_at`,
     [
       cleanParcelId,
@@ -654,6 +633,7 @@ export async function claimDormantLand(
       now,
       leaseExpiresAt,
       isAgent ? '' : now,
+      inactivityExpiresAt,
       now
     ]
   );
@@ -737,10 +717,16 @@ export async function claimDormantLand(
     shareUrl,
     status: initialStatus,
     leaseExpiresAt,
+    inactivityExpiresAt,
     bounds,
     volume: resolvedVolume,
     limits: LAND_VOLUME_LIMITS,
-    slots: { usedSlots: usedSlots + 1, maxSlots, remaining: Math.max(0, maxSlots - usedSlots - 1) }
+    slots: {
+      usedSlots: usedSlots + 1,
+      forfeitedSlots,
+      maxSlots,
+      remaining: Math.max(0, maxSlots - usedSlots - 1)
+    }
   };
 }
 
@@ -1119,15 +1105,36 @@ export async function awakenParcelByHumanVisit(
   const steward = await db.get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [cleanParcel]);
   let awakenedNow = false;
   let slotsUnlockedForAgent = 0;
+  const nextInactivityExp = computeInactivityExpiresAt(now);
 
-  if (!steward) {
+  if (!steward || steward.status === 'archived' || steward.status === 'expired') {
     await db.run(
       `INSERT INTO land_steward_state (
         parcel_id, steward_sub, steward_address, steward_name, steward_type,
         status, claimed_at, lease_expires_at, awakened_at,
+        last_human_interaction_at, last_human_interaction_type, last_human_interaction_sub,
+        inactivity_expires_at, had_human_interaction,
         first_human_sub, first_human_address, human_contributor_count,
         total_tx_volume_eth, agent_royalties_eth, human_royalties_eth, platform_fees_eth, updated_at
-      ) VALUES (?, ?, ?, ?, 'human', 'awakened', ?, '', ?, ?, ?, ?, 0, 0, 0, 0, ?)`,
+      ) VALUES (?, ?, ?, ?, 'human', 'awakened', ?, '', ?, ?, 'irl_publish', ?, ?, 1, ?, ?, ?, 0, 0, 0, 0, ?)
+      ON CONFLICT(parcel_id) DO UPDATE SET
+        steward_sub = excluded.steward_sub,
+        steward_address = excluded.steward_address,
+        steward_name = excluded.steward_name,
+        steward_type = 'human',
+        status = 'awakened',
+        claimed_at = excluded.claimed_at,
+        lease_expires_at = '',
+        awakened_at = excluded.awakened_at,
+        last_human_interaction_at = excluded.last_human_interaction_at,
+        last_human_interaction_type = 'irl_publish',
+        last_human_interaction_sub = excluded.last_human_interaction_sub,
+        inactivity_expires_at = excluded.inactivity_expires_at,
+        had_human_interaction = 1,
+        first_human_sub = excluded.first_human_sub,
+        first_human_address = excluded.first_human_address,
+        human_contributor_count = excluded.human_contributor_count,
+        updated_at = excluded.updated_at`,
       [
         cleanParcel,
         artistUser.id,
@@ -1135,6 +1142,9 @@ export async function awakenParcelByHumanVisit(
         artistUser.name || 'Human Pioneer',
         now,
         now,
+        now,
+        artistUser.id,
+        nextInactivityExp,
         artistUser.id,
         artistAddress,
         qualifiesForPool ? 1 : 0,
@@ -1148,19 +1158,25 @@ export async function awakenParcelByHumanVisit(
        SET status = 'awakened',
            awakened_at = ?,
            lease_expires_at = '',
+           last_human_interaction_at = ?,
+           last_human_interaction_type = 'irl_publish',
+           last_human_interaction_sub = ?,
+           inactivity_expires_at = ?,
+           had_human_interaction = 1,
            first_human_sub = ?,
            first_human_address = ?,
            updated_at = ?
        WHERE parcel_id = ?`,
-      [now, artistUser.id, artistAddress, now, cleanParcel]
+      [now, now, artistUser.id, nextInactivityExp, artistUser.id, artistAddress, now, cleanParcel]
     );
 
     if (steward.steward_sub && steward.steward_sub.startsWith('agent:')) {
       slotsUnlockedForAgent = STEWARD_DEFAULTS.slotsPerAwakenedLand;
+      const usageAfter = await computeAgentSlotUsage(db, steward.steward_sub);
       await db.run(
         `UPDATE agent_accounts
          SET max_slots = MIN(?, max_slots + ?),
-             used_slots = MAX(0, used_slots - 1),
+             used_slots = ?,
              activated_lands_count = activated_lands_count + 1,
              total_xp = total_xp + ?,
              reputation_score = reputation_score + 25,
@@ -1169,12 +1185,25 @@ export async function awakenParcelByHumanVisit(
         [
           STEWARD_DEFAULTS.maxDormantSlots,
           STEWARD_DEFAULTS.slotsPerAwakenedLand,
+          usageAfter.usedSlots,
           STEWARD_DEFAULTS.agentAwakenXp,
           now,
           steward.steward_sub
         ]
       );
     }
+  } else if (steward.status === 'awakened' && isHumanActor && qualifiesForPool) {
+    await db.run(
+      `UPDATE land_steward_state
+       SET last_human_interaction_at = ?,
+           last_human_interaction_type = 'irl_publish',
+           last_human_interaction_sub = ?,
+           inactivity_expires_at = ?,
+           had_human_interaction = 1,
+           updated_at = ?
+       WHERE parcel_id = ?`,
+      [now, artistUser.id, nextInactivityExp, now, cleanParcel]
+    );
   }
 
   let questCompleted = null;
@@ -1378,6 +1407,10 @@ export async function getLandTelemetry(db, parcelId) {
           status: steward.status,
           claimedAt: steward.claimed_at,
           leaseExpiresAt: steward.lease_expires_at,
+          inactivityExpiresAt: steward.inactivity_expires_at || '',
+          lastHumanInteractionAt: steward.last_human_interaction_at || '',
+          lastHumanInteractionType: steward.last_human_interaction_type || '',
+          hadHumanInteraction: Number(steward.had_human_interaction || 0) === 1,
           awakenedAt: steward.awakened_at
         }
       : null,

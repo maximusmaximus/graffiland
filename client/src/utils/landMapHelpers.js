@@ -90,18 +90,34 @@ export function formatDistanceMeters(meters, unitSystem = 'metric') {
  */
 export function formatLandExpiration(parcel, nowMs = Date.now()) {
   const status = String(parcel?.stewardStatus || '').toLowerCase();
-  const rawExpires = parcel?.leaseExpiresAt || parcel?.lease_expires_at || '';
-  const hasTimestamp = Boolean(rawExpires);
-  const parsedExpires = hasTimestamp ? Date.parse(String(rawExpires)) : NaN;
+  const rawLeaseExpires = parcel?.leaseExpiresAt || parcel?.lease_expires_at || '';
+  const rawInactivityExpires =
+    parcel?.inactivityExpiresAt || parcel?.inactivity_expires_at || '';
+  const parsedLease = rawLeaseExpires ? Date.parse(String(rawLeaseExpires)) : NaN;
+  const parsedInactivity = rawInactivityExpires ? Date.parse(String(rawInactivityExpires)) : NaN;
 
   const isLeaseBound =
     status === 'dormant' ||
     status === 'expired' ||
-    (status !== 'awakened' && Number.isFinite(parsedExpires));
+    (status !== 'awakened' && Number.isFinite(parsedLease));
 
-  if (isLeaseBound && Number.isFinite(parsedExpires)) {
-    const diffMs = parsedExpires - nowMs;
-    const expiresAtText = new Date(parsedExpires).toLocaleString(undefined, {
+  const formatDurationBadge = (diffMs) => {
+    const totalMinutes = Math.max(1, Math.floor(diffMs / 60000));
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const mins = totalMinutes % 60;
+    if (days >= 1) {
+      return hours > 0 ? `${days}d ${hours}h left` : `${days}d left`;
+    }
+    if (hours >= 1) {
+      return mins > 0 ? `${hours}h ${mins}m left` : `${hours}h left`;
+    }
+    return `${mins}m left`;
+  };
+
+  if (isLeaseBound && Number.isFinite(parsedLease)) {
+    const diffMs = parsedLease - nowMs;
+    const expiresAtText = new Date(parsedLease).toLocaleString(undefined, {
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
@@ -113,32 +129,19 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
         state: 'expired',
         urgent: true,
         badgeText: 'Expired',
-        detailText: `Lease expired ${expiresAtText} — open to reclaim`,
+        detailText: `72h agent window expired ${expiresAtText} — archived & open to reclaim`,
         remainingMs: 0,
         expiresAtText
       };
     }
 
-    const totalMinutes = Math.max(1, Math.floor(diffMs / 60000));
-    const days = Math.floor(totalMinutes / 1440);
-    const hours = Math.floor((totalMinutes % 1440) / 60);
-    const mins = totalMinutes % 60;
-
-    let badgeText = '';
-    if (days >= 1) {
-      badgeText = hours > 0 ? `${days}d ${hours}h left` : `${days}d left`;
-    } else if (hours >= 1) {
-      badgeText = mins > 0 ? `${hours}h ${mins}m left` : `${hours}h left`;
-    } else {
-      badgeText = `${mins}m left`;
-    }
-
-    const urgent = diffMs < 24 * 60 * 60 * 1000;
+    const badgeText = formatDurationBadge(diffMs);
+    const urgent = diffMs <= 24 * 60 * 60 * 1000;
     return {
       state: urgent ? 'expiring-soon' : 'expiring',
       urgent,
       badgeText,
-      detailText: `Expires ${expiresAtText} unless sparked by a human`,
+      detailText: `72h agent limit — expires ${expiresAtText} unless a human interacts in person (archived & destroyed if expired)`,
       remainingMs: diffMs,
       expiresAtText
     };
@@ -148,10 +151,43 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
     return {
       state: 'dormant',
       urgent: false,
-      badgeText: 'Dormant lease',
-      detailText: 'Awaiting first human spark to become permanent',
+      badgeText: '72h agent window',
+      detailText:
+        'Awaiting a verified in-person human interaction within 72h (archived & destroyed if unvisited)',
       remainingMs: null,
       expiresAtText: ''
+    };
+  }
+
+  if (Number.isFinite(parsedInactivity)) {
+    const diffMs = parsedInactivity - nowMs;
+    const expiresAtText = new Date(parsedInactivity).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+
+    if (diffMs <= 0 || status === 'archived') {
+      return {
+        state: 'expired',
+        urgent: true,
+        badgeText: 'Archived',
+        detailText: `28-day inactivity window elapsed ${expiresAtText} — archived & open to reclaim`,
+        remainingMs: 0,
+        expiresAtText
+      };
+    }
+
+    const badgeText = formatDurationBadge(diffMs);
+    const urgent = diffMs <= 3 * 60 * 60 * 1000 || diffMs <= 24 * 60 * 60 * 1000;
+    return {
+      state: urgent ? 'expiring-soon' : 'expiring',
+      urgent,
+      badgeText,
+      detailText: `28-day activity window — resets on any in-person human visit (expires ${expiresAtText})`,
+      remainingMs: diffMs,
+      expiresAtText
     };
   }
 

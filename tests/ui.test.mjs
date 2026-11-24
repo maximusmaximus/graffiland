@@ -4366,4 +4366,101 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('InfoTermsModal explains 72h agent reclaim, 28d inactivity, exact in-person ways, non-reopening slots, 3h alerts, and links to LandArchiveModal', async () => {
+    const InfoTermsModal = (await loadJsxModule('client/src/components/InfoTermsModal.jsx')).default;
+    const LandArchiveModal = (await loadJsxModule('client/src/components/LandArchiveModal.jsx')).default;
+
+    let archiveOpened = false;
+    const infoView = RTL.render(
+      React.createElement(InfoTermsModal, {
+        config: { policy: { termsVersion: '2026-11-24.v4', termsText: [] } },
+        user: null,
+        onOpenArchive: () => {
+          archiveOpened = true;
+        },
+        onClose: () => {}
+      })
+    );
+
+    const card = infoView.getByTestId('info-land-lifecycle-card');
+    assert.ok(card.textContent.includes('72 hours'));
+    assert.ok(card.textContent.includes('28 days'));
+    assert.ok(card.textContent.includes('3 hours'));
+    assert.ok(card.textContent.includes('does not reopen'));
+    assert.ok(card.textContent.includes('Sculpt & Publish in Mobile AR'));
+    assert.ok(card.textContent.includes('In-Person Mobile AR Land Check-In'));
+    assert.ok(card.textContent.includes('Camera-Locked AR Location Chat'));
+    assert.ok(card.textContent.includes('Unlock Parcel-Locked Pinned Notes'));
+
+    const archiveLink = infoView.getByTestId('info-open-archive-link');
+    assert.equal(archiveLink.getAttribute('href'), '?archive=1');
+    RTL.fireEvent.click(archiveLink);
+    assert.equal(archiveOpened, true);
+    cleanup();
+
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (url) => {
+        if (String(url).includes('/api/archive')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              counts: { total: 1, agent72h: 1, inactivity28d: 0 },
+              archives: [
+                {
+                  id: 'arch_demo123',
+                  parcelId: 'GLAND-9Q8YYK8D',
+                  landName: 'Neon Ghost Plaza',
+                  stewardName: 'Archon Bot',
+                  stewardType: 'agent',
+                  archiveReason: 'agent_72h_no_human_interaction',
+                  archiveReasonLabel:
+                    'Archived & reclaimed: agent-created land had no verified in-person human interaction within 72 hours of minting.',
+                  centerLat: 37.7749,
+                  centerLng: -122.4194,
+                  volume: { widthMeters: 14, depthMeters: 14, heightMeters: 18 },
+                  sculptureCount: 1,
+                  sculpturesSnapshot: [
+                    {
+                      id: 'sc-arch-1',
+                      title: 'Agent 3D Monolith',
+                      modelType: 'custom-3d',
+                      modelFormat: 'glb',
+                      layerRole: 'steward_stage'
+                    }
+                  ],
+                  hadHumanInteraction: false,
+                  freeSlotForfeited: true,
+                  claimedAt: '2026-11-20T00:00:00.000Z',
+                  expiredAt: '2026-11-23T00:00:00.000Z',
+                  archivedAt: '2026-11-23T00:01:00.000Z',
+                  lastHumanInteractionAt: ''
+                }
+              ]
+            })
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const archView = RTL.render(
+        React.createElement(LandArchiveModal, {
+          onClose: () => {}
+        })
+      );
+      const item = await archView.findByTestId('land-archive-item');
+      assert.ok(item.textContent.includes('Neon Ghost Plaza'));
+      assert.ok(item.textContent.includes('72h No Human Visit'));
+      assert.ok(item.textContent.includes('Slot not reopened'));
+
+      RTL.fireEvent.click(archView.getByRole('button', { name: /Details \(1 art\)/i }));
+      assert.ok(archView.getByText('Agent 3D Monolith'));
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

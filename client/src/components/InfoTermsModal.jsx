@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
 import { isAddress } from 'ethers';
+import {
+  IN_PERSON_HUMAN_INTERACTIONS,
+  NON_QUALIFYING_INTERACTIONS,
+  STEWARD_DEFAULTS
+} from '../../../shared/constants.mjs';
 import { buildPayoutLinkMessage } from '../../../shared/payoutLinkMessage.mjs';
 import { api } from '../utils/api.js';
 import {
@@ -25,6 +30,7 @@ export default function InfoTermsModal({
   initialTab = 'guide',
   onUserUpdate,
   onOpenProfile = null,
+  onOpenArchive = null,
   onLogout,
   onRequestLogin,
   onClose
@@ -222,10 +228,14 @@ export default function InfoTermsModal({
                     <strong>AI Agents, Quests &amp; 5% / 3% / 2% Splits</strong>
                     <InfoTip title="Agentic Stewardship Economics">
                       AI Agents sign in directly with a wallet (<code>npx graffiland-mcp</code> or{' '}
-                      <code>/llms.txt</code>) with 3 starter slots ($0 platform fee — agents pay
-                      own gas) under a 7-day lease. When an IRL human adds 3+ blocks, the land
-                      awakens permanently, unlocks +2 agent slots, and every sale splits 90% Seller
-                      · 5% Platform · 3% Agent · 2% Human Pool.
+                      <code>/llms.txt</code>) with {STEWARD_DEFAULTS.starterDormantSlots} starter
+                      slots ($0 platform fee — agents pay own gas). Agent-created lands must receive
+                      a verified in-person human interaction within{' '}
+                      <strong>{STEWARD_DEFAULTS.dormantLeaseTtlHours} hours</strong> (even if the
+                      agent adds 3D models) or they are archived &amp; destroyed and the consumed
+                      free slot does not reopen. When an IRL human adds 3+ blocks, the land unlocks
+                      +2 agent slots and every sale splits 90% Seller · 5% Platform · 3% Agent · 2%
+                      Human Pool.
                     </InfoTip>
                   </div>
                   <p>
@@ -321,6 +331,70 @@ export default function InfoTermsModal({
               </div>
             )}
 
+            <div
+              className="card info-simple-card"
+              style={{ borderColor: 'rgba(0, 245, 212, 0.28)' }}
+              data-testid="info-land-lifecycle-card"
+            >
+              <div className="info-simple-title">
+                <XeroIcon emoji="⏳" size={16} />
+                <strong>Land Expiry, In-Person Human Rules &amp; Archive</strong>
+                <InfoTip title="72h Agent Reclaim, 28-Day Inactivity & Free Slots">
+                  Agent-created lands are archived and destroyed if no verified human interacts with
+                  them in person within {STEWARD_DEFAULTS.dormantLeaseTtlHours} hours — even if the
+                  agent places 3D models or stages on the land. Any land without an in-person human
+                  interaction for {STEWARD_DEFAULTS.inactivityArchiveDays} consecutive days is also
+                  archived and destroyed. Owners receive an alert{' '}
+                  {STEWARD_DEFAULTS.expiryWarningHours} hours before expiry. Free mint slots used by
+                  lands that expire without in-person human users do not open back up.
+                </InfoTip>
+              </div>
+              <p style={{ marginBottom: 6 }}>
+                <strong>72-Hour Agent Limit:</strong> Agent-created lands must get a verified{' '}
+                <strong>in-person human interaction within 72 hours</strong> of minting (even if the
+                agent puts 3D models on the land) or they are <strong>archived and destroyed</strong>{' '}
+                and their free mint slot does not reopen.
+              </p>
+              <p style={{ marginBottom: 8 }}>
+                <strong>28-Day Activity Rule &amp; 3-Hour Alerts:</strong> Any land with no
+                in-person human interaction for <strong>28 days</strong> is archived and destroyed.
+                Owners are notified <strong>3 hours before</strong> expiry.
+              </p>
+              <div style={{ fontSize: 12, marginBottom: 8 }}>
+                <strong>Exact Ways a Human Interacts In Person (Mobile Camera + GPS):</strong>
+                <ul style={{ margin: '5px 0 6px 18px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(policy?.inPersonHumanInteractions || IN_PERSON_HUMAN_INTERACTIONS).map((way) => (
+                    <li key={way.id}>
+                      <strong>{way.title}:</strong> {way.summary}
+                    </li>
+                  ))}
+                </ul>
+                <div style={{ color: 'var(--muted)', fontSize: 11.5 }}>
+                  <strong>Does not count:</strong>{' '}
+                  {(policy?.nonQualifyingInteractions || NON_QUALIFYING_INTERACTIONS).join(' ')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <a
+                  href="?archive=1"
+                  className="btn btn-sm btn-primary"
+                  data-testid="info-open-archive-link"
+                  onClick={(e) => {
+                    if (typeof onOpenArchive === 'function') {
+                      e.preventDefault();
+                      onClose?.();
+                      onOpenArchive('');
+                    }
+                  }}
+                >
+                  <XeroIcon emoji="🗄️" size={13} /> Open Land Archive
+                </a>
+                <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                  Browse all archived &amp; reclaimed lands and their preserved 3D snapshots.
+                </span>
+              </div>
+            </div>
+
             <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 209, 102, 0.25)' }}>
               <div className="info-simple-title">
                 <XeroIcon emoji="🛡️" size={15} />
@@ -362,7 +436,25 @@ export default function InfoTermsModal({
               <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong> Every
               sale allocates <strong>5% Platform</strong>, <strong>3% Land Steward</strong>,{' '}
               <strong>2% Human Contributor Pool</strong> (&ge;3 voxels IRL), and{' '}
-              <strong>90% Net Seller</strong>. Unawakened agent claims expire after 7 days.
+              <strong>90% Net Seller</strong>. Agent-created lands expire after{' '}
+              <strong>72 hours</strong> without an in-person human interaction (even with 3D models
+              placed), and any land inactive for <strong>28 days</strong> without an in-person human
+              visit is archived and destroyed. Consumed free slots without human users do not reopen.
+              Owners receive a notification <strong>3 hours</strong> before expiry.{' '}
+              <a
+                href="?archive=1"
+                style={{ color: 'var(--accent)', fontWeight: 600 }}
+                data-testid="terms-open-archive-link"
+                onClick={(e) => {
+                  if (typeof onOpenArchive === 'function') {
+                    e.preventDefault();
+                    onClose?.();
+                    onOpenArchive('');
+                  }
+                }}
+              >
+                View Land Archive ↗
+              </a>
             </div>
             <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
               <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}

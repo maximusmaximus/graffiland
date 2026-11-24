@@ -5,6 +5,7 @@ import {
   looksMobileRequest,
   verifyCameraSightProof
 } from './chatPolicy.mjs';
+import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
 import { getPinnedBatchMeta, isUserLandHolder } from './pinService.mjs';
 
 function sanitizePublicEcJwk(raw) {
@@ -257,6 +258,15 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     sculpture
   });
 
+  if (sculpture?.parcel_id) {
+    await recordInPersonHumanInteraction(db, {
+      parcelId: sculpture.parcel_id,
+      user,
+      interactionType: 'ar_chat',
+      awakenDormant: true
+    }).catch(() => {});
+  }
+
   const [isLandHolder, pinMetaResult] = await Promise.all([
     isUserLandHolder(db, { sculpture, user }),
     getPinnedBatchMeta(db, { sculptureId: sculpture.id })
@@ -332,6 +342,15 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
     sculpture
   });
 
+  if (sculpture?.parcel_id) {
+    await recordInPersonHumanInteraction(db, {
+      parcelId: sculpture.parcel_id,
+      user,
+      interactionType: 'ar_chat',
+      awakenDormant: true
+    }).catch(() => {});
+  }
+
   const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (!board) throw new ChatHttpError(404, 'Sculpture chat board is not initialized yet.');
 
@@ -406,6 +425,15 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
     userAgent,
     sculpture
   });
+
+  if (sculpture?.parcel_id) {
+    await recordInPersonHumanInteraction(db, {
+      parcelId: sculpture.parcel_id,
+      user,
+      interactionType: 'ar_chat',
+      awakenDormant: true
+    }).catch(() => {});
+  }
 
   const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (!board) throw new ChatHttpError(404, 'Chat board not initialized');
@@ -663,5 +691,13 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
   );
 
   const saved = await db.get('SELECT * FROM sculpture_chat_messages WHERE id = ?', [id]);
+  if (sculpture?.parcel_id) {
+    await recordInPersonHumanInteraction(db, {
+      parcelId: sculpture.parcel_id,
+      user,
+      interactionType: 'ar_chat',
+      awakenDormant: true
+    }).catch(() => {});
+  }
   return { message: formatMessageRow(saved) };
 }

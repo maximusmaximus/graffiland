@@ -27,6 +27,12 @@ import {
   updateLandVolume
 } from '../shared/agentQuestService.mjs';
 import {
+  checkInToLandInPerson,
+  getArchivedLandDetail,
+  listArchivedLands,
+  reapAndArchiveExpiredLands
+} from '../shared/landArchiveService.mjs';
+import {
   deleteNotification,
   listUserNotifications,
   markNotificationsRead,
@@ -1145,8 +1151,57 @@ export function createAppServer(serverOptions = {}) {
     }
   });
 
+  app.get('/api/archive', async (req, res) => {
+    try {
+      const out = await listArchivedLands(chatDb, {
+        q: String(req.query?.q || ''),
+        reason: String(req.query?.reason || ''),
+        steward: String(req.query?.steward || ''),
+        limit: req.query?.limit ? Number(req.query.limit) : 50,
+        offset: req.query?.offset ? Number(req.query.offset) : 0
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not load land archive' });
+    }
+  });
+
+  app.get('/api/archive/:id', async (req, res) => {
+    try {
+      const out = await getArchivedLandDetail(chatDb, req.params.id);
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 404).json({ error: err.message || 'Archive record not found' });
+    }
+  });
+
+  app.get('/api/lands/archive', async (req, res) => {
+    try {
+      const out = await listArchivedLands(chatDb, {
+        q: String(req.query?.q || ''),
+        reason: String(req.query?.reason || ''),
+        steward: String(req.query?.steward || ''),
+        limit: req.query?.limit ? Number(req.query.limit) : 50,
+        offset: req.query?.offset ? Number(req.query.offset) : 0
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not load land archive' });
+    }
+  });
+
+  app.get('/api/lands/archive/:id', async (req, res) => {
+    try {
+      const out = await getArchivedLandDetail(chatDb, req.params.id);
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 404).json({ error: err.message || 'Archive record not found' });
+    }
+  });
+
   app.get('/api/notifications', requireAuth, async (req, res) => {
     try {
+      await reapAndArchiveExpiredLands(chatDb).catch(() => {});
       const out = await listUserNotifications(chatDb, req.user.id, {
         limit: req.query?.limit ? Number(req.query.limit) : 40
       });
@@ -1251,6 +1306,23 @@ export function createAppServer(serverOptions = {}) {
     '/api/lands/:parcelId/telemetry',
     handleChatRoute((req) => getLandTelemetry(chatDb, req.params.parcelId))
   );
+
+  app.post('/api/lands/:parcelId/checkin', requireAuth, async (req, res) => {
+    try {
+      const out = await checkInToLandInPerson(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body || {},
+        userAgent: String(req.headers['user-agent'] || '')
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({
+        error: err.message || 'In-person check-in failed',
+        ...(err?.extra || {})
+      });
+    }
+  });
 
   app.post('/api/lands/:parcelId/quests', requireAuth, async (req, res) => {
     try {

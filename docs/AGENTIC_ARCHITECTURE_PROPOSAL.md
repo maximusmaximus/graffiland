@@ -9,10 +9,13 @@ Locked Requirements from Architecture Review:
    - **3% (`300 bps`)** → Agent Land Steward
    - **2% (`200 bps`)** → Human IRL Contributor Pool (shared pro-rata among verified visiting human artists on that parcel forever)
    - **90% (`9000 bps`)** → Net seller / primary payout
-2. **Progressive Reputation Slots + 7-Day Dormant Lease**:
-   - Autonomous agents claim unclaimed parcels with `0` platform fee (agents pay their own EVM network gas) starting with **`3` unawakened ("dormant") land slots**.
-   - Attracting **1 verified IRL human artist** permanently **Awakens** that parcel and unlocks **`+2` additional free claim slots** (`dormantSlotCap` scales with real human delight).
-   - Dormant lands with **0 IRL human visits after 7 days** automatically recycle back to public unclaimed land.
+2. **Progressive Reputation Slots + 72-Hour Agent Reclaim + 28-Day Inactivity Archive**:
+   - Autonomous agents claim unclaimed parcels with `0` platform fee (agents pay their own EVM network gas) starting with **`3` unawakened ("dormant") free land slots**.
+   - **72-Hour Agent Reclaim**: Agent-created lands with **0 verified in-person human interactions within 72 hours** of minting (even if the agent placed 3D models or stages on the land) are **archived and destroyed**, returning their physical coordinates to open supply.
+   - **28-Day Human Inactivity Archive**: Any land with **0 verified in-person human interactions for 28 consecutive days** is automatically **archived and destroyed** into the public **Land Archive** (`/api/archive`, `?archive=1`).
+   - **Non-Reopening Free Mint Slots**: Consumed free slots that expire without an in-person human user are **permanently forfeited and never open back up**.
+   - **3-Hour Expiry Alerts**: Landholders receive an automated warning notification **3 hours before** expiry (and a direct Archive notice if reclaimed).
+   - **Verified In-Person Human Interactions**: (1) Mobile AR 3+ voxel sculpt / Quest completion (also unlocks **`+2` additional claim slots** and joins the **2% Human Contributor Pool**), (2) Mobile AR In-Person Land Check-In (`POST /api/lands/:parcelId/checkin`), (3) Camera-Locked AR Location Chat (`<= 75m`), or (4) On-Site Parcel-Locked Pinned Note Unlock. Agent 3D model uploads, remote map viewing, remote edits, and 1–2 block spam do **not** count.
 3. **Awakening Rush + Art Quests + Pro-Rata Human Pool**:
    - Dormant agent lands pulse on maps and AR (`🔥 Needs First Spark · +2x XP · Join 2% Pool`).
    - Agents publish themed **Art Quests** with custom starter stages/pedestals; verified IRL humans share that parcel's **2% Contributor Royalty Pool** pro-rata permanently.

@@ -24,6 +24,7 @@ import { useProofOfLocation } from '../hooks/useProofOfLocation.js';
 import { useVoxelBrush } from '../hooks/useVoxelBrush.js';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import LandArchiveModal from './LandArchiveModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
@@ -90,6 +91,24 @@ export default function MobileStudio({
   const [dockOpen, setDockOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoInitialTab, setInfoInitialTab] = useState('guide');
+  const [archiveOpen, setArchiveOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const p = new URLSearchParams(window.location.search).get('archive');
+      return Boolean(p && p !== '0' && p !== 'false');
+    } catch {
+      return false;
+    }
+  });
+  const [archiveInitialId, setArchiveInitialId] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = new URLSearchParams(window.location.search).get('archive') || '';
+      return p && p !== '1' && p !== 'true' ? p : '';
+    } catch {
+      return '';
+    }
+  });
   const [loginOpen, setLoginOpen] = useState(false);
   const [profileHandle, setProfileHandle] = useState(() =>
     parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
@@ -749,6 +768,7 @@ export default function MobileStudio({
       chat.chatSelection ||
       profileHandle ||
       infoOpen ||
+      archiveOpen ||
       loginOpen
   );
   const prevFullscreenOverlayRef = useRef(hasFullscreenOverlay);
@@ -1100,7 +1120,10 @@ export default function MobileStudio({
           notifRefreshSignal={lands.ownedLandCount}
           onNotificationAction={(item) => {
             if (!item) return;
-            if (item.actionType === 'open_land' && item.parcelId) {
+            if (item.actionType === 'open_archive') {
+              setArchiveInitialId(String(item.meta?.archiveId || ''));
+              setArchiveOpen(true);
+            } else if (item.actionType === 'open_land' && item.parcelId) {
               if (lands.hasOwnedLand) {
                 lands.setLandManageParcelId(item.parcelId);
                 lands.setLandManageOpen(true);
@@ -1207,6 +1230,40 @@ export default function MobileStudio({
               showTemporaryHint(
                 `Drawing on ${targetLand.displayName} — hold Brush to spray in 3D AR!`
               );
+            }}
+            onCheckInLand={async (targetLand) => {
+              if (!user) {
+                setLoginOpen(true);
+                showTemporaryHint('Sign in to verify your in-person visit on this land.');
+                return false;
+              }
+              const loc = pol.location;
+              if (!loc) {
+                showTemporaryHint('Waiting for GPS fix before checking in…');
+                return false;
+              }
+              try {
+                const polSnap = pol.polRef.current?.getSnapshot?.() || {};
+                const res = await api.checkInToLand(targetLand.parcelId, {
+                  location: { lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy },
+                  proofOfLocation: polSnap,
+                  deviceProfile: {
+                    isMobile: true,
+                    hasCamera: Boolean(pol.cameraReady),
+                    screenWidth: window.innerWidth,
+                    screenHeight: window.innerHeight
+                  }
+                });
+                showTemporaryHint(
+                  res?.awakenedNow
+                    ? `✨ In-person visit verified! "${targetLand.displayName}" awakened (28-day window active).`
+                    : `✅ In-person visit verified! 28-day activity timer refreshed for "${targetLand.displayName}".`
+                );
+                return true;
+              } catch (err) {
+                showTemporaryHint(err?.message || 'Could not verify in-person check-in.');
+                return false;
+              }
             }}
             onOpen3DMap={(targetLand) => {
               setArViewSession(null);
@@ -1726,6 +1783,10 @@ export default function MobileStudio({
           initialTab={infoInitialTab}
           onUserUpdate={onUserUpdate}
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
+          onOpenArchive={(archId = '') => {
+            setArchiveInitialId(archId || '');
+            setArchiveOpen(true);
+          }}
           onLogout={() => {
             onLogout();
             setInfoOpen(false);
@@ -1737,6 +1798,16 @@ export default function MobileStudio({
           onClose={() => {
             setInfoOpen(false);
             setInfoInitialTab('guide');
+          }}
+        />
+      )}
+
+      {archiveOpen && (
+        <LandArchiveModal
+          initialArchiveId={archiveInitialId}
+          onClose={() => {
+            setArchiveOpen(false);
+            setArchiveInitialId('');
           }}
         />
       )}

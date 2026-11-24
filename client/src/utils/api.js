@@ -344,6 +344,23 @@ export const api = {
   },
   getLandTelemetry: (parcelId) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/telemetry`),
+  checkInToLand: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/checkin`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  getLandArchives: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', String(params.q));
+    if (params.reason && params.reason !== 'all') qs.set('reason', String(params.reason));
+    if (params.steward) qs.set('steward', String(params.steward));
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params.offset !== undefined) qs.set('offset', String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/archive${suffix}`);
+  },
+  getLandArchiveDetail: (id) =>
+    request(`/api/archive/${encodeURIComponent(id)}`),
   listMarketplaceListings: (params = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
