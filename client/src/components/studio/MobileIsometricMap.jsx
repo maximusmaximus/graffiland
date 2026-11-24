@@ -87,6 +87,7 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
     : isDormant
       ? '#ff4da6'
       : '#ff1f8f';
+  const innerColor = isFrozen ? '#e0f2fe' : isSelected ? '#ffe0f2' : '#ffd6ec';
   return {
     type: 'Feature',
     properties: {
@@ -94,6 +95,7 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
       heightMeters: Number(vol.heightMeters || 18),
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
       color,
+      innerColor,
       isSelected: isSelected ? 1 : 0
     },
     geometry: {
@@ -106,22 +108,12 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
 function drawMobilePrismWireframe(
   ctx,
   geom,
-  { outerColor, innerColor, lineWidth = 2, glowBlur = 10, dashed = false, showGroundHalo = false }
+  { outerColor, innerColor, lineWidth = 2, glowBlur = 10, dashed = false, includeBottomEdges = true }
 ) {
   if (!geom) return;
-  const { bottom } = geom;
 
-  if (showGroundHalo) {
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 31, 143, 0.14)';
-    ctx.beginPath();
-    ctx.moveTo(bottom[0].x, bottom[0].y);
-    for (let i = 1; i < 4; i++) ctx.lineTo(bottom[i].x, bottom[i].y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
+  // Never paint a translucent floor polygon on the foreground 2D canvas — the pink land base
+  // renders on MapLibre's ground layers strictly BEHIND the 3D sculptures.
   // Depth-faded 3D boundary wireframe: lines closest to user stay crisp, far-side lines fade >=25%
   drawDepthFadedPrismEdges(ctx, geom, {
     outerColor,
@@ -131,7 +123,8 @@ function drawMobilePrismWireframe(
     dashed,
     darkHalo: !dashed,
     nearAlpha: 1.0,
-    farAlpha: 0.32
+    farAlpha: 0.32,
+    includeBottomEdges
   });
 }
 
@@ -289,9 +282,7 @@ function MobileIsoSvgFallback({
             />
           </>
         )}
-        <polygon points={pts([b[1], b[2], t[2], t[1]])} fill={fill} stroke="none" opacity="0.68" />
-        <polygon points={pts([b[2], b[3], t[3], t[2]])} fill={fill} stroke="none" opacity="0.54" />
-        <polygon points={pts(t)} fill={fill} stroke="none" opacity="0.42" />
+        {/* Bottom floor stays strictly behind the 3D sculpture — never paint pink fills in the foreground */}
         {/* Front-side boundary edges closest to viewer (crisp 100%) */}
         <line x1={b[1][0]} y1={b[1][1]} x2={b[2][0]} y2={b[2][1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
         <line x1={b[2][0]} y1={b[2][1]} x2={b[3][0]} y2={b[3][1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
@@ -677,6 +668,7 @@ export default function MobileIsometricMap({
 
     // Pass 1: In compact land focus, draw ONLY the focused land wireframe;
     // in Full View free-navigation mode, draw neighboring lands too so users can explore freely.
+    const mapPitch = Number(map.getPitch?.() || 0);
     const pendingLabels = [];
     let primaryGeom = null;
     let primaryOuterColor = '#ff1f8f';
@@ -696,14 +688,17 @@ export default function MobileIsometricMap({
       // Draw farther lands first so closer boundaries stay crisp in front
       projectedOthers.sort((a, b) => (b.otherGeom.avgDepth || 0) - (a.otherGeom.avgDepth || 0));
       for (const { other, otherGeom, otherOuter, otherInner } of projectedOthers) {
-        drawMobilePrismWireframe(ctx, otherGeom, {
-          outerColor: otherOuter,
-          innerColor: otherInner,
-          lineWidth: 1.5,
-          glowBlur: 8,
-          dashed: false,
-          showGroundHalo: false
-        });
+        const isElevated = Number(other.volume?.baseAltitudeM || 0) > 0.25;
+        if (mapPitch >= 2 || isElevated) {
+          drawMobilePrismWireframe(ctx, otherGeom, {
+            outerColor: otherOuter,
+            innerColor: otherInner,
+            lineWidth: 1.5,
+            glowBlur: 8,
+            dashed: false,
+            includeBottomEdges: isElevated
+          });
+        }
         pendingLabels.push({
           geom: otherGeom,
           outerColor: otherOuter,
@@ -735,14 +730,17 @@ export default function MobileIsometricMap({
             ? '#ffe0f2'
             : '#ffd6ec';
 
-        drawMobilePrismWireframe(ctx, geom, {
-          outerColor,
-          innerColor,
-          lineWidth: 2.2,
-          glowBlur: 13,
-          dashed: false,
-          showGroundHalo: true
-        });
+        const isPrimaryElevated = Number(primary.volume?.baseAltitudeM || 0) > 0.25;
+        if (mapPitch >= 2 || isPrimaryElevated) {
+          drawMobilePrismWireframe(ctx, geom, {
+            outerColor,
+            innerColor,
+            lineWidth: 2.2,
+            glowBlur: 13,
+            dashed: false,
+            includeBottomEdges: isPrimaryElevated
+          });
+        }
 
         primaryGeom = geom;
         primaryOuterColor = outerColor;
@@ -1098,26 +1096,63 @@ export default function MobileIsometricMap({
         if (!map.getSource('mobile-iso-lands')) {
           map.addSource('mobile-iso-lands', { type: 'geojson', data: EMPTY_FC });
         }
-        if (!map.getLayer('mobile-iso-lands-extrusion')) {
+        // Render the land bottom floor + glowing ground perimeter strictly BEFORE 3D sculptures
+        // so the pink land base ALWAYS sits underneath/behind the models, never in the foreground.
+        if (!map.getLayer('mobile-iso-lands-floor-fill')) {
           map.addLayer({
-            id: 'mobile-iso-lands-extrusion',
-            type: 'fill-extrusion',
+            id: 'mobile-iso-lands-floor-fill',
+            type: 'fill',
             source: 'mobile-iso-lands',
             paint: {
-              'fill-extrusion-color': ['get', 'color'],
-              'fill-extrusion-height': ['get', 'heightMeters'],
-              'fill-extrusion-base': ['get', 'baseAltitudeM'],
-              'fill-extrusion-opacity': [
+              'fill-color': ['get', 'color'],
+              'fill-opacity': [
                 'case',
                 ['==', ['get', 'isSelected'], 1],
-                0.08,
-                0.06
+                0.22,
+                0.13
               ]
             }
           });
         }
+        if (!map.getLayer('mobile-iso-lands-floor-glow')) {
+          map.addLayer({
+            id: 'mobile-iso-lands-floor-glow',
+            type: 'line',
+            source: 'mobile-iso-lands',
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': ['case', ['==', ['get', 'isSelected'], 1], 8, 5],
+              'line-blur': 5,
+              'line-opacity': 0.36
+            }
+          });
+        }
+        if (!map.getLayer('mobile-iso-lands-floor-outline')) {
+          map.addLayer({
+            id: 'mobile-iso-lands-floor-outline',
+            type: 'line',
+            source: 'mobile-iso-lands',
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': ['case', ['==', ['get', 'isSelected'], 1], 2.6, 1.8],
+              'line-opacity': 0.94
+            }
+          });
+        }
+        if (!map.getLayer('mobile-iso-lands-floor-core')) {
+          map.addLayer({
+            id: 'mobile-iso-lands-floor-core',
+            type: 'line',
+            source: 'mobile-iso-lands',
+            paint: {
+              'line-color': ['get', 'innerColor'],
+              'line-width': 1,
+              'line-opacity': 0.72
+            }
+          });
+        }
 
-        // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms
+        // Mount real un-pixelated Three.js 3D models STRICTLY AFTER the ground land floor layers
         let threeMounted = Boolean(map.getLayer('mobile-iso-sculptures-three-3d'));
         if (!threeMounted && maplibreRef.current) {
           try {
@@ -1131,10 +1166,7 @@ export default function MobileIsometricMap({
               }
             });
             threeLayerRef.current = threeLayer;
-            map.addLayer(
-              threeLayer,
-              map.getLayer('mobile-iso-lands-extrusion') ? 'mobile-iso-lands-extrusion' : undefined
-            );
+            map.addLayer(threeLayer);
             threeMounted = Boolean(map.getLayer('mobile-iso-sculptures-three-3d'));
           } catch {
             threeLayerRef.current = null;
@@ -1357,9 +1389,9 @@ export default function MobileIsometricMap({
                 return;
               }
             }
-            if (map.getLayer('mobile-iso-lands-extrusion')) {
+            if (map.getLayer('mobile-iso-lands-floor-fill')) {
               const landHits = map.queryRenderedFeatures(e.point, {
-                layers: ['mobile-iso-lands-extrusion']
+                layers: ['mobile-iso-lands-floor-fill']
               });
               const pid = landHits?.[0]?.properties?.parcelId;
               if (pid) {

@@ -854,7 +854,8 @@ export default function SculptureViewer3D({
       })
     );
     floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.position.y = 0.005;
+    floorMesh.position.y = -0.004;
+    floorMesh.renderOrder = -1;
     landOverlay.add(floorMesh);
 
     // Target footprint ring directly under the active sculpture (skip duplicate when gizmo frame is visible)

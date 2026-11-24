@@ -116,14 +116,16 @@ function parcelToFeature(p, fallbackHeight = LAND_VOLUME_LIMITS.defaultHeightMet
     (p?.bounds ? buildDefaultVolumeFromBounds(p.bounds, p.parcelId, p.geohash) : null);
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
   const isDormant = p?.stewardStatus === 'dormant';
+  const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
   return {
     type: 'Feature',
     properties: {
       parcelId: p.parcelId,
       heightMeters: Number(vol.heightMeters || fallbackHeight),
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
-      color: isDormant ? '#ff4da6' : '#ff1f8f',
-      borderColor: isDormant ? '#ff85c0' : '#ff1f8f'
+      color: isFrozen ? '#7dd3fc' : isDormant ? '#ff4da6' : '#ff1f8f',
+      innerColor: isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#ffd6ec',
+      borderColor: isFrozen ? '#7dd3fc' : isDormant ? '#ff85c0' : '#ff1f8f'
     },
     geometry: {
       type: 'Polygon',
@@ -170,7 +172,8 @@ function drawGlowingPrism(
     lineWidth = 2,
     glowBlur = 14,
     showGizmo = false,
-    activeHandle = ''
+    activeHandle = '',
+    includeBottomEdges = true
   }
 ) {
   if (!geom) return;
@@ -184,7 +187,8 @@ function drawGlowingPrism(
     glowBlur,
     darkHalo: true,
     nearAlpha: 1.0,
-    farAlpha: 0.32
+    farAlpha: 0.32,
+    includeBottomEdges
   });
 
   if (showGizmo) {
@@ -634,14 +638,19 @@ export default function MapView3D({
         innerColor
       });
     }
+    const mapPitch = Number(map.getPitch?.() || 0);
     projectedParcels.sort((a, b) => (b.geom.avgDepth || 0) - (a.geom.avgDepth || 0));
     for (const item of projectedParcels) {
-      drawGlowingPrism(ctx, item.geom, {
-        outerColor: item.outerColor,
-        innerColor: item.innerColor,
-        lineWidth: 1.8,
-        glowBlur: 10
-      });
+      const isElevated = Number(item.vol?.baseAltitudeM || 0) > 0.25;
+      if (mapPitch >= 2 || isElevated) {
+        drawGlowingPrism(ctx, item.geom, {
+          outerColor: item.outerColor,
+          innerColor: item.innerColor,
+          lineWidth: 1.8,
+          glowBlur: 10,
+          includeBottomEdges: isElevated
+        });
+      }
       if (item.pid) {
         parcelGeomMap.set(item.pid, {
           vol: item.vol,
@@ -1066,22 +1075,70 @@ export default function MapView3D({
       if (!map.getSource('owned-lands')) {
         map.addSource('owned-lands', { type: 'geojson', data: EMPTY_FC });
       }
-      if (!map.getLayer('owned-lands-extrusion')) {
+      // Render owned land bottom floor + glowing ground perimeter strictly BEFORE 3D sculptures
+      // so the pink land base ALWAYS sits on the bottom behind the models, never in the foreground.
+      if (!map.getLayer('owned-lands-floor-fill')) {
         map.addLayer({
-          id: 'owned-lands-extrusion',
-          type: 'fill-extrusion',
+          id: 'owned-lands-floor-fill',
+          type: 'fill',
           source: 'owned-lands',
           paint: {
-            'fill-extrusion-color': ['get', 'color'],
-            'fill-extrusion-height': ['get', 'heightMeters'],
-            'fill-extrusion-base': ['get', 'baseAltitudeM'],
-            'fill-extrusion-opacity': 0.08
+            'fill-color': ['get', 'color'],
+            'fill-opacity': 0.2
+          }
+        });
+      }
+      if (!map.getLayer('owned-lands-floor-glow')) {
+        map.addLayer({
+          id: 'owned-lands-floor-glow',
+          type: 'line',
+          source: 'owned-lands',
+          paint: {
+            'line-color': ['get', 'color'],
+            'line-width': 7,
+            'line-blur': 5,
+            'line-opacity': 0.34
+          }
+        });
+      }
+      if (!map.getLayer('owned-lands-floor-outline')) {
+        map.addLayer({
+          id: 'owned-lands-floor-outline',
+          type: 'line',
+          source: 'owned-lands',
+          paint: {
+            'line-color': ['get', 'color'],
+            'line-width': 2.4,
+            'line-opacity': 0.92
+          }
+        });
+      }
+      if (!map.getLayer('owned-lands-floor-core')) {
+        map.addLayer({
+          id: 'owned-lands-floor-core',
+          type: 'line',
+          source: 'owned-lands',
+          paint: {
+            'line-color': ['get', 'innerColor'],
+            'line-width': 1,
+            'line-opacity': 0.68
           }
         });
       }
 
       if (!map.getSource('draft-lands')) {
         map.addSource('draft-lands', { type: 'geojson', data: EMPTY_FC });
+      }
+      if (!map.getLayer('draft-lands-floor-fill')) {
+        map.addLayer({
+          id: 'draft-lands-floor-fill',
+          type: 'fill',
+          source: 'draft-lands',
+          paint: {
+            'fill-color': ['get', 'color'],
+            'fill-opacity': 0.2
+          }
+        });
       }
       if (!map.getLayer('draft-lands-extrusion')) {
         map.addLayer({
@@ -1092,12 +1149,12 @@ export default function MapView3D({
             'fill-extrusion-color': ['get', 'color'],
             'fill-extrusion-height': ['get', 'heightMeters'],
             'fill-extrusion-base': ['get', 'baseAltitudeM'],
-            'fill-extrusion-opacity': 0.24
+            'fill-extrusion-opacity': 0.16
           }
         });
       }
 
-      // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms so sculptures shine through cleanly
+      // Mount real un-pixelated Three.js 3D models STRICTLY AFTER all ground land floor layers
       let threeMounted = Boolean(map.getLayer('sculptures-three-3d'));
       if (!threeMounted) {
         try {
@@ -1111,10 +1168,7 @@ export default function MapView3D({
             }
           });
           threeLayerRef.current = threeLayer;
-          map.addLayer(
-            threeLayer,
-            map.getLayer('owned-lands-extrusion') ? 'owned-lands-extrusion' : undefined
-          );
+          map.addLayer(threeLayer);
           threeMounted = Boolean(map.getLayer('sculptures-three-3d'));
         } catch {
           threeLayerRef.current = null;

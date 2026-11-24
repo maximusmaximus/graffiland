@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -119,5 +121,103 @@ describe('Depth-Faded 3D Boundaries (>=25% Far-Side Fade Across MapLibre, Viewer
     const fromBack = computeThreeCornersDepthAlphas(corners, camBack);
     assert.ok(fromBack[0] > fromBack[2] + 0.4, 'After 180° orbit, (-2,-2) must be crisp and (+2,+2) must fade');
     assert.ok(fromBack[2] <= fromBack[0] * 0.75);
+  });
+
+  test('drawDepthFadedPrismEdges supports includeBottomEdges=false so ground edges render strictly behind 3D models', () => {
+    const bottom = [
+      { x: 180, y: 80, depth: 20 },
+      { x: 240, y: 115, depth: 15 },
+      { x: 180, y: 150, depth: 10 },
+      { x: 120, y: 115, depth: 15 }
+    ];
+    const top = bottom.map((p) => ({ ...p, y: p.y - 60 }));
+
+    let strokesNoBottom = 0;
+    const mockCtx = {
+      save() {},
+      restore() {},
+      setLineDash() {},
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {
+        strokesNoBottom += 1;
+      },
+      createLinearGradient() {
+        return { addColorStop() {} };
+      }
+    };
+
+    drawDepthFadedPrismEdges(mockCtx, { bottom, top }, {
+      outerColor: '#ff1f8f',
+      innerColor: '#ffd6ec',
+      lineWidth: 2.2,
+      glowBlur: 12,
+      includeBottomEdges: false
+    });
+    assert.equal(
+      strokesNoBottom,
+      24,
+      'With includeBottomEdges=false, only the 8 elevated vertical+top edges (x3 passes = 24 strokes) should draw on the foreground canvas'
+    );
+  });
+
+  test('All 3D MapLibre map views render the pink land bottom floor strictly BEHIND 3D models (never in the foreground)', () => {
+    const mapFiles = [
+      {
+        file: 'client/src/components/MapView3D.jsx',
+        floorFillId: 'owned-lands-floor-fill',
+        floorOutlineId: 'owned-lands-floor-outline',
+        threeLayerId: 'sculptures-three-3d',
+        forbiddenExtrusions: ['owned-lands-extrusion']
+      },
+      {
+        file: 'client/src/components/studio/MobileIsometricMap.jsx',
+        floorFillId: 'mobile-iso-lands-floor-fill',
+        floorOutlineId: 'mobile-iso-lands-floor-outline',
+        threeLayerId: 'mobile-iso-sculptures-three-3d',
+        forbiddenExtrusions: ['mobile-iso-lands-extrusion']
+      },
+      {
+        file: 'client/src/components/LandIsometricPreview.jsx',
+        floorFillId: 'preview-selected-land-floor-fill',
+        floorOutlineId: 'preview-selected-land-floor-outline',
+        threeLayerId: 'preview-sculptures-three-3d',
+        forbiddenExtrusions: ['preview-selected-land-extrusion', 'preview-other-lands-extrusion']
+      }
+    ];
+
+    for (const cfg of mapFiles) {
+      const src = fs.readFileSync(path.resolve(process.cwd(), cfg.file), 'utf8');
+
+      const fillIdx = src.indexOf(`id: '${cfg.floorFillId}'`);
+      const outlineIdx = src.indexOf(`id: '${cfg.floorOutlineId}'`);
+      const threeIdx = src.indexOf(`id: '${cfg.threeLayerId}'`);
+
+      assert.ok(fillIdx > 0, `${cfg.file} must define ground floor fill layer '${cfg.floorFillId}'`);
+      assert.ok(outlineIdx > 0, `${cfg.file} must define ground floor outline layer '${cfg.floorOutlineId}'`);
+      assert.ok(threeIdx > 0, `${cfg.file} must define Three.js 3D sculpture layer '${cfg.threeLayerId}'`);
+      assert.ok(
+        fillIdx < threeIdx && outlineIdx < threeIdx,
+        `${cfg.file} must mount ground floor fill/outline layers BEFORE Three.js 3D sculptures`
+      );
+      assert.match(
+        src,
+        /map\.addLayer\(threeLayer\);/,
+        `${cfg.file} must add threeLayer AFTER the ground land floor layers (never beforeId behind a pink land layer)`
+      );
+      assert.equal(
+        /ctx\.fillStyle\s*=\s*['"]rgba\(255,\s*31,\s*143/.test(src),
+        false,
+        `${cfg.file} must NOT paint a foreground pink floor polygon on the 2D overlay canvas`
+      );
+      for (const badLayer of cfg.forbiddenExtrusions) {
+        assert.equal(
+          src.includes(badLayer),
+          false,
+          `${cfg.file} must NOT mount foreground pink fill-extrusion layer '${badLayer}' over 3D models`
+        );
+      }
+    }
   });
 });
