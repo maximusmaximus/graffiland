@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import {
   formatDistance,
@@ -26,6 +26,9 @@ export default function StudioHudTopBar({
   mcpPairBusy = false,
   mcpPairNotice = '',
   setMcpPairNotice,
+  repairNotice = null,
+  onDismissRepairNotice = null,
+  openPairHubSignal = null,
   onCreateMcpPairing,
   onDisconnectMcpPairing,
   onOpenAgentHandoff,
@@ -93,6 +96,16 @@ export default function StudioHudTopBar({
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
   const { unitSystem } = useMeasurementUnits(location);
+
+  useEffect(() => {
+    if (!openPairHubSignal?.ts) return;
+    setPairHubTab(openPairHubSignal.tab === 'pending' ? 'pending' : 'pair');
+    setPairHubOpen(true);
+  }, [openPairHubSignal]);
+
+  const needsRepairAlert = Boolean(
+    repairNotice || mcpPairingsState?.needsRepair || mcpPairingsState?.expiringSoon
+  );
 
   const pendingCount = pendingSignatures.length;
   const isPaired = Boolean(pairedCode || mcpPairingsState?.mcpActive);
@@ -271,6 +284,21 @@ export default function StudioHudTopBar({
             </button>
           )}
 
+          {needsRepairAlert && !pairHubOpen && (
+            <button
+              type="button"
+              data-pair-hub-trigger="1"
+              data-testid="mobile-repair-pill"
+              className="pending-alert-pill is-repair"
+              onClick={() => togglePairHub('pair')}
+              aria-label="Re-pair needed — open pairing panel"
+            >
+              <XeroIcon emoji="🔗" size={12} />
+              <span>Re-pair needed</span>
+              <span aria-hidden="true">▾</span>
+            </button>
+          )}
+
           {hasOwnedLand && (
             <button
               type="button"
@@ -314,6 +342,8 @@ export default function StudioHudTopBar({
           mcpPairBusy={mcpPairBusy}
           mcpPairNotice={mcpPairNotice}
           setMcpPairNotice={setMcpPairNotice}
+          repairNotice={repairNotice}
+          onDismissRepairNotice={onDismissRepairNotice}
           onCreateMcpPairing={onCreateMcpPairing}
           onDisconnectMcpPairing={onDisconnectMcpPairing}
           onOpenAgentHandoff={onOpenAgentHandoff}

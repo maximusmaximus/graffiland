@@ -140,6 +140,7 @@ export default function MobileStudio({
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
+  const [openPairHubSignal, setOpenPairHubSignal] = useState(null);
   const hintTimerRef = useRef(null);
   const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
@@ -1216,6 +1217,9 @@ export default function MobileStudio({
           mcpPairBusy={pairing.mcpPairBusy}
           mcpPairNotice={pairing.mcpPairNotice}
           setMcpPairNotice={pairing.setMcpPairNotice}
+          repairNotice={pairing.repairNotice}
+          onDismissRepairNotice={pairing.dismissRepairNotice}
+          openPairHubSignal={openPairHubSignal}
           onCreateMcpPairing={pairing.handleCreateMcpPairing}
           onDisconnectMcpPairing={pairing.handleDisconnectMcpPairing}
           onOpenAgentHandoff={drafts.openAgentHandoff}
@@ -1294,6 +1298,30 @@ export default function MobileStudio({
           notifRefreshSignal={lands.ownedLandCount}
           onNotificationAction={async (item) => {
             if (!item) return;
+            if (item.actionType === 'open_pair_mobile') {
+              setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
+              return;
+            }
+            if (item.actionType === 'open_land_approval' && item.parcelId) {
+              setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
+              try {
+                const res = await api.getLandDetail(item.parcelId);
+                setParcelVisit({
+                  loading: false,
+                  parcel: res?.parcel || null,
+                  sculptures: res?.sculptures || [],
+                  error: res?.parcel ? '' : 'Virtual Land parcel not found.'
+                });
+              } catch (err) {
+                setParcelVisit({
+                  loading: false,
+                  parcel: null,
+                  sculptures: [],
+                  error: err?.message || 'Could not load Virtual Land parcel.'
+                });
+              }
+              return;
+            }
             if (item.actionType === 'open_mint') {
               setInfoInitialTab('mint');
               setInfoOpen(true);
@@ -1546,6 +1574,9 @@ export default function MobileStudio({
           mcpPairBusy={pairing.mcpPairBusy}
           mcpPairNotice={pairing.mcpPairNotice}
           setMcpPairNotice={pairing.setMcpPairNotice}
+          repairNotice={pairing.repairNotice}
+          onDismissRepairNotice={pairing.dismissRepairNotice}
+          openPairHubSignal={openPairHubSignal}
           onCreateMcpPairing={pairing.handleCreateMcpPairing}
           onDisconnectMcpPairing={pairing.handleDisconnectMcpPairing}
           onClose={() => pairing.setPairOpen(false)}
@@ -1746,6 +1777,10 @@ export default function MobileStudio({
           onOpenManageLand={(pid) => {
             lands.setLandManageParcelId(pid || '');
             lands.setLandManageOpen(true);
+          }}
+          onOpenPair={() => {
+            setParcelVisit(null);
+            setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
           }}
           onOpenProfile={(handle) => {
             if (handle) setProfileHandle(handle);

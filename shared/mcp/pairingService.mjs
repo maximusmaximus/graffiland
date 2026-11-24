@@ -8,6 +8,7 @@ import {
   normalizePairingCode
 } from '../landSignatureMessage.mjs';
 import { McpServiceError, resolvePreferredOwnerWallet, resolveUserWalletAddresses } from './helpers.mjs';
+import { notifyMcpRepairNeeded } from '../notificationService.mjs';
 
 export function formatPairingRow(row) {
   if (!row) return null;
@@ -74,9 +75,28 @@ export async function listMcpPairings(db, { user }) {
   );
   const pairings = (rows || []).map(formatPairingRow);
   const activePairing = pairings.find((p) => p.status === 'connected') || null;
+  const latestPairing = pairings[0] || null;
+  const nowMs = Date.now();
+  const activeExpMs = activePairing ? Date.parse(String(activePairing.expiresAt || '')) : NaN;
+  const expiringSoon = Boolean(
+    activePairing &&
+      Number.isFinite(activeExpMs) &&
+      activeExpMs > nowMs &&
+      activeExpMs - nowMs <= 2 * 60 * 60 * 1000
+  );
+  const needsRepair = Boolean(
+    !activePairing &&
+      latestPairing &&
+      (latestPairing.status === 'expired' || latestPairing.status === 'disconnected')
+  );
+  const repairReason = needsRepair ? latestPairing.status : expiringSoon ? 'expiring_soon' : '';
   return {
     mcpActive: Boolean(activePairing),
     activePairing,
+    latestPairing,
+    needsRepair,
+    expiringSoon,
+    repairReason,
     pairings
   };
 }
@@ -205,15 +225,32 @@ export async function requireActiveMcpPairing(db, { pairingCode, callerUser = nu
     });
   }
   if (new Date(row.expires_at).getTime() < Date.now()) {
+    await notifyMcpRepairNeeded(db, {
+      userSub: row.owner_sub,
+      code: norm,
+      reason: 'expired',
+      agentName: row.agent_name,
+      expiresAt: row.expires_at
+    }).catch(() => {});
     throw new McpServiceError('MCP service is inactive: pairing code expired.', 403, {
-      reason: 'MCP_PAIRING_EXPIRED'
+      reason: 'MCP_PAIRING_EXPIRED',
+      needsRepair: true
     });
   }
   if (row.status !== 'connected') {
+    if (row.status === 'disconnected') {
+      await notifyMcpRepairNeeded(db, {
+        userSub: row.owner_sub,
+        code: norm,
+        reason: 'disconnected',
+        agentName: row.agent_name,
+        expiresAt: row.expires_at
+      }).catch(() => {});
+    }
     throw new McpServiceError(
       'MCP service is inactive for this user until the pairing code is connected.',
       403,
-      { reason: 'MCP_PAIRING_NOT_CONNECTED', status: row.status }
+      { reason: 'MCP_PAIRING_NOT_CONNECTED', status: row.status, needsRepair: row.status === 'disconnected' }
     );
   }
   if (callerUser && callerUser.id !== row.owner_sub) {

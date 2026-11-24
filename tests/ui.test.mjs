@@ -5696,4 +5696,222 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('PlotVisitView lets signed-in land holder approve/reject pending land transactions directly on the land page and notifies when re-pair is needed', async () => {
+    const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+
+    const origFetch = globalThis.fetch;
+    const ownerUser = {
+      id: 'google:landholder-99',
+      username: 'land_holder',
+      walletAddress: '0x3333333333333333333333333333333333333333'
+    };
+    const parcel = {
+      parcelId: 'GLAND-9R1652SD',
+      customName: 'Artists Studio Box',
+      description: 'Direct plot visit test',
+      centerLat: 39.7285,
+      centerLng: -121.8375,
+      ownerSub: ownerUser.id,
+      stewardStatus: 'awakened',
+      volume: {
+        centerLat: 39.7285,
+        centerLng: -121.8375,
+        widthMeters: 20,
+        depthMeters: 20,
+        heightMeters: 18,
+        footprintAreaSqM: 400
+      }
+    };
+
+    const signedIds = [];
+    const rejectedIds = [];
+    const repairClicks = [];
+    let plotUpdatedCount = 0;
+
+    let currentPending = [
+      {
+        id: 'sigreq-approve-1',
+        parcelId: 'GLAND-9R1652SD',
+        parcelName: 'Artists Studio Box',
+        action: 'create_sculpture',
+        agentName: 'BuilderBot',
+        summaryTitle: 'Place "Neon Monolith"',
+        summaryDescription: 'Add GLB 3D model on "Artists Studio Box".',
+        status: 'pending',
+        ownerAddress: ownerUser.walletAddress,
+        canonicalMessage: 'Approve Neon Monolith',
+        expiresAt: new Date(Date.now() + 45 * 60_000).toISOString()
+      },
+      {
+        id: 'sigreq-reject-2',
+        parcelId: 'GLAND-9R1652SD',
+        parcelName: 'Artists Studio Box',
+        action: 'update_land_settings',
+        agentName: 'BuilderBot',
+        summaryTitle: 'Freeze Land',
+        summaryDescription: 'Freeze land on "Artists Studio Box".',
+        status: 'pending',
+        ownerAddress: ownerUser.walletAddress,
+        canonicalMessage: 'Freeze land',
+        expiresAt: new Date(Date.now() + 45 * 60_000).toISOString()
+      }
+    ];
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      const method = String(opts.method || 'GET').toUpperCase();
+      if (u.includes('/api/signatures/pending')) {
+        return { ok: true, json: async () => ({ requests: currentPending }) };
+      }
+      if (u.includes('/api/mcp/pairings')) {
+        return {
+          ok: true,
+          json: async () => ({
+            mcpActive: false,
+            activePairing: null,
+            latestPairing: { code: 'GLP-OLD1-OLD2-OLD3-OLD4', status: 'expired', agentName: 'BuilderBot' },
+            needsRepair: true,
+            expiringSoon: false,
+            repairReason: 'expired',
+            pairings: []
+          })
+        };
+      }
+      if (u.includes('/mobile-sign') && method === 'POST') {
+        const match = u.match(/requests\/([^/]+)\/mobile-sign/);
+        if (match) {
+          signedIds.push(match[1]);
+          currentPending = currentPending.filter((r) => r.id !== match[1]);
+        }
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      if (u.includes('/reject') && method === 'POST') {
+        const match = u.match(/requests\/([^/]+)\/reject/);
+        if (match) {
+          rejectedIds.push(match[1]);
+          currentPending = currentPending.filter((r) => r.id !== match[1]);
+        }
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      if (u.includes('/api/lands/GLAND-9R1652SD')) {
+        return {
+          ok: true,
+          json: async () => ({
+            parcel,
+            sculptures: [
+              {
+                id: 'sc-approved-1',
+                title: 'Neon Monolith',
+                parcelId: 'GLAND-9R1652SD',
+                voxelCount: 24
+              }
+            ]
+          })
+        };
+      }
+      if (u.includes('/api/parcels')) {
+        return { ok: true, json: async () => ({ parcels: [parcel] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures: [],
+          allParcels: [parcel],
+          user: ownerUser,
+          ownedParcelIds: ['GLAND-9R1652SD'],
+          config: {},
+          onOpenPair: (info) => repairClicks.push(info),
+          onPlotUpdated: () => {
+            plotUpdatedCount += 1;
+          },
+          onClose: () => {}
+        })
+      );
+
+      // 1) Signed-in land holder sees pending transactions card & re-pair alert right on the land view
+      await RTL.waitFor(() => {
+        assert.ok(view.getByTestId('plot-pending-approvals'));
+        assert.equal(view.getAllByTestId('plot-pending-approval-item').length, 2);
+        assert.ok(view.getByTestId('plot-repair-notice'));
+      });
+      assert.ok(view.getByTestId('plot-pending-approvals').textContent.includes('Place "Neon Monolith"'));
+      assert.ok(view.getByTestId('plot-repair-notice').textContent.includes('expired'));
+
+      // 2) Clicking Re-pair Now triggers onOpenPair callback
+      RTL.fireEvent.click(view.getByTestId('plot-repair-btn'));
+      assert.equal(repairClicks.length, 1);
+
+      // 3) Clicking Approve & Execute approves the first transaction & refreshes the land
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getAllByTestId('plot-approve-tx-btn')[0]);
+      });
+      await RTL.waitFor(() => {
+        assert.deepEqual(signedIds, ['sigreq-approve-1']);
+        assert.equal(view.getAllByTestId('plot-pending-approval-item').length, 1);
+      });
+      assert.ok(plotUpdatedCount >= 1);
+
+      // 4) Clicking Reject rejects the second transaction & clears the pending card
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('plot-reject-tx-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.deepEqual(rejectedIds, ['sigreq-reject-2']);
+        assert.equal(view.queryByTestId('plot-pending-approvals'), null);
+      });
+      cleanup();
+
+      // 5) Mobile StudioHudTopBar displays Re-pair needed pill & opens MobilePairApprovalDropdown with Re-pair banner
+      const hudView = RTL.render(
+        React.createElement(StudioHudTopBar, {
+          user: ownerUser,
+          mode: 'draw',
+          dockOpen: false,
+          location: null,
+          pairedCode: '',
+          voxels: [],
+          quickSculpt: false,
+          hasOwnedLand: true,
+          ownedLandCount: 1,
+          originStatus: { originBlocked: false, isSecure: true, isTrusted: true },
+          sceneScan: { active: false },
+          surfaceAnchor: { locked: false },
+          mcpPairingsState: {
+            mcpActive: false,
+            activePairing: null,
+            needsRepair: true,
+            repairReason: 'expired',
+            pairings: []
+          },
+          repairNotice: {
+            kind: 'mcp',
+            reason: 'expired',
+            code: 'GLP-OLD1-OLD2-OLD3-OLD4',
+            message: 'Your AI agent pairing expired — tap Pair to re-pair.'
+          },
+          pendingSignatures: [],
+          signatureHistory: []
+        })
+      );
+      const repairPill = hudView.getByTestId('mobile-repair-pill');
+      assert.ok(repairPill.textContent.includes('Re-pair needed'));
+      RTL.fireEvent.click(repairPill);
+      const repairBanner = hudView.getByTestId('mobile-repair-banner');
+      assert.ok(repairBanner.textContent.includes('Re-pair Needed'));
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      localStorage.removeItem('graffiland_user_history_v1:google:landholder-99');
+      cleanup();
+    }
+  });
 });

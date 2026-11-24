@@ -195,7 +195,17 @@ export default function DesktopHub({
   const [myLands, setMyLands] = useState({ parcelCount: 0, parcels: [] });
   const [adminOpen, setAdminOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [mcpState, setMcpState] = useState({ mcpActive: false, activePairing: null, pairings: [] });
+  const [mcpState, setMcpState] = useState({
+    mcpActive: false,
+    activePairing: null,
+    latestPairing: null,
+    needsRepair: false,
+    expiringSoon: false,
+    repairReason: '',
+    pairings: []
+  });
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const notifiedRepairKeysRef = useRef(new Set());
   const [mcpNotice, setMcpNotice] = useState('');
   const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
     try {
@@ -398,13 +408,57 @@ export default function DesktopHub({
     refreshVisitedParcelDetail(activeVisitedParcelId);
   }, [activeVisitedParcelId, user?.id, refreshVisitedParcelDetail]);
 
+  const refreshPairingAndApprovals = useCallback(async () => {
+    if (!user?.id) {
+      setMcpState({
+        mcpActive: false,
+        activePairing: null,
+        latestPairing: null,
+        needsRepair: false,
+        expiringSoon: false,
+        repairReason: '',
+        pairings: []
+      });
+      setPendingApprovals([]);
+      return;
+    }
+    try {
+      const [pairRes, sigRes] = await Promise.all([
+        api.listMcpPairings().catch(() => null),
+        api.listPendingSignatures().catch(() => null)
+      ]);
+      if (pairRes) {
+        setMcpState(pairRes);
+        if (pairRes.needsRepair || pairRes.expiringSoon) {
+          const code = pairRes.latestPairing?.code || pairRes.activePairing?.code || '';
+          const reason = pairRes.needsRepair ? pairRes.repairReason || 'expired' : 'expiring_soon';
+          const dedupeKey = `desk:${reason}:${code}`;
+          if (!notifiedRepairKeysRef.current.has(dedupeKey)) {
+            notifiedRepairKeysRef.current.add(dedupeKey);
+            const msg =
+              reason === 'expiring_soon'
+                ? `🔗 Your AI agent pairing (${code || 'MCP'}) expires soon — open Pair Phone to re-pair.`
+                : `🔗 Re-pair needed: your AI agent pairing (${code || 'MCP'}) ${
+                    reason === 'disconnected' ? 'was disconnected' : 'expired'
+                  }. Open Pair Phone to reconnect.`;
+            notifySettingsSaved(msg, { tone: 'warning', durationMs: 6500 });
+          }
+        }
+      }
+      if (sigRes && Array.isArray(sigRes.requests)) {
+        setPendingApprovals(sigRes.requests.filter((r) => r && r.status === 'pending'));
+      }
+    } catch {
+      // ignore transient error
+    }
+  }, [user?.id]);
+
   useEffect(() => {
-    if (!user?.id) return;
-    api
-      .listMcpPairings()
-      .then(setMcpState)
-      .catch(() => {});
-  }, [user?.id, pairOpen]);
+    refreshPairingAndApprovals();
+    if (!user?.id) return undefined;
+    const timer = setInterval(refreshPairingAndApprovals, 12000);
+    return () => clearInterval(timer);
+  }, [user?.id, pairOpen, refreshPairingAndApprovals]);
 
   useEffect(() => {
     if (!navigator.geolocation) return undefined;
@@ -667,7 +721,16 @@ export default function DesktopHub({
   async function handleNotificationAction(item) {
     if (!item) return;
     if (item.actionType === 'open_pair_mobile') {
+      if (item.meta?.needsRepair) {
+        setAgentPairExpanded(true);
+      }
       openPairModal();
+    } else if (item.actionType === 'open_land_approval' && item.parcelId) {
+      const localParcel =
+        (parcels || []).find(
+          (p) => String(p.parcelId || '').toUpperCase() === String(item.parcelId).toUpperCase()
+        ) || { parcelId: item.parcelId };
+      openLandShowcase(localParcel);
     } else if (item.actionType === 'open_mint') {
       setInfoInitialTab('mint');
       setInfoOpen(true);
@@ -1317,14 +1380,50 @@ export default function DesktopHub({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {pendingApprovals.length > 0 && (
+            <button
+              type="button"
+              className="btn desktop-pending-approvals-btn"
+              data-testid="desktop-pending-approvals-btn"
+              onClick={() => {
+                const first = pendingApprovals[0];
+                if (!first?.parcelId) return;
+                const match =
+                  (parcels || []).find(
+                    (p) => String(p.parcelId || '').toUpperCase() === String(first.parcelId).toUpperCase()
+                  ) || { parcelId: first.parcelId };
+                openLandShowcase(match);
+              }}
+              title="Open your land to approve or reject pending agent transactions"
+            >
+              <XeroIcon emoji="✍️" size={14} /> Approve ({pendingApprovals.length})
+            </button>
+          )}
           <button
             type="button"
-            className="btn btn-primary btn-pair-glow"
+            className={`btn btn-primary btn-pair-glow ${
+              mcpState.needsRepair || mcpState.expiringSoon ? 'has-repair-alert' : ''
+            }`}
             data-testid="nav-pair-phone-btn"
-            onClick={openPairModal}
-            title="Pair your mobile phone via QR for live 3D drawing & in-person AR sculpting"
+            data-needs-repair={mcpState.needsRepair || mcpState.expiringSoon ? 'true' : 'false'}
+            onClick={() => {
+              if (mcpState.needsRepair || mcpState.expiringSoon) {
+                setAgentPairExpanded(true);
+              }
+              openPairModal();
+            }}
+            title={
+              mcpState.needsRepair
+                ? 'Re-pair needed: your agent pairing expired or disconnected'
+                : mcpState.expiringSoon
+                ? 'Agent pairing expires soon — click to re-pair'
+                : 'Pair your mobile phone via QR for live 3D drawing & in-person AR sculpting'
+            }
           >
             <XeroIcon emoji="🔗" size={16} /> Pair Phone
+            {(mcpState.needsRepair || mcpState.expiringSoon) && (
+              <span className="pair-repair-dot" aria-label="Re-pair needed" />
+            )}
           </button>
           <button
             type="button"
@@ -2189,8 +2288,22 @@ export default function DesktopHub({
                   </div>
                 </div>
                 <div className="pair-agent-trigger-right">
-                  <span className={`badge ${mcpState.mcpActive ? 'teal' : 'gold'}`}>
-                    {mcpState.mcpActive
+                  <span
+                    className={`badge ${
+                      mcpState.needsRepair
+                        ? 'danger'
+                        : mcpState.expiringSoon
+                        ? 'gold'
+                        : mcpState.mcpActive
+                        ? 'teal'
+                        : 'gold'
+                    }`}
+                  >
+                    {mcpState.needsRepair
+                      ? '⚠️ Re-pair Needed'
+                      : mcpState.expiringSoon
+                      ? '⏳ Expiring Soon'
+                      : mcpState.mcpActive
                       ? mcpState.activePairing?.keyConnected
                         ? '🟢 Connected'
                         : '🟢 Active'
@@ -2204,6 +2317,23 @@ export default function DesktopHub({
 
               {agentPairExpanded && (
                 <div className="pair-agent-body" data-testid="pair-agent-structured-steps">
+                  {user && (mcpState.needsRepair || mcpState.expiringSoon) && (
+                    <div
+                      className="desktop-repair-banner"
+                      data-testid="desktop-repair-banner"
+                      role="alert"
+                      style={{ marginBottom: 10 }}
+                    >
+                      <span>
+                        🔗{' '}
+                        {mcpState.expiringSoon
+                          ? `Your active agent pairing (${mcpState.activePairing?.code || 'MCP'}) expires soon — generate a fresh code below to stay connected.`
+                          : `Your previous agent pairing (${mcpState.latestPairing?.code || 'MCP'}) ${
+                              mcpState.repairReason === 'disconnected' ? 'was disconnected' : 'expired'
+                            } — generate a fresh code below to re-pair.`}
+                      </span>
+                    </div>
+                  )}
                   {!user ? (
                     <div className="pair-agent-signin-row">
                       <span>Sign in first to generate a personal MCP Agent Pairing code and prompt.</span>
@@ -2383,12 +2513,17 @@ export default function DesktopHub({
             setLandManageParcelId(pid || '');
             setLandManageOpen(true);
           }}
+          onOpenPair={() => {
+            setVisitedParcel(null);
+            setAgentPairExpanded(true);
+            openPairModal();
+          }}
           onOpenAddLandItem={(pid) => handleOpenAddLandItem(pid)}
           onOpenProfile={(handle) => {
             if (handle) setProfileHandle(handle);
           }}
           onRequestLogin={() => setLoginOpen(true)}
-          onPlotUpdated={({ parcel: nextParcel, sculptures: nextSculptures }) => {
+          onPlotUpdated={({ parcel: nextParcel, sculptures: nextSculptures } = {}) => {
             setVisitedParcel((prev) =>
               prev
                 ? {
@@ -2400,6 +2535,8 @@ export default function DesktopHub({
             );
             refreshData();
             refreshMyLands();
+            refreshPairingAndApprovals();
+            setNotifRefreshSignal((n) => n + 1);
           }}
           onClose={() => setVisitedParcel(null)}
         />
