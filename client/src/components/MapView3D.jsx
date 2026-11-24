@@ -465,6 +465,7 @@ export default function MapView3D({
   const [gizmoCursor, setGizmoCursor] = useState('');
   const [gizmoHint, setGizmoHint] = useState('');
   const [holdDrawActive, setHoldDrawActive] = useState(false);
+  const [draftCanvasDragMode, setDraftCanvasDragMode] = useState('orbit'); // 'orbit' | 'pan'
   const [rendered3dSculptureCount, setRendered3dSculptureCount] = useState(0);
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
   const threeLayerRef = useRef(null);
@@ -516,6 +517,10 @@ export default function MapView3D({
   const holdDrawRef = useRef(null);
   const pendingSculptureClickRef = useRef(null);
   const gizmoDragRef = useRef(null);
+  const orbitDragRef = useRef(null);
+  const shiftPanActiveRef = useRef(false);
+  const draftCanvasDragModeRef = useRef(draftCanvasDragMode);
+  const prevDraftCountRef = useRef(draftParcels.length);
   const jumpToSearchResultRef = useRef(null);
 
   useEffect(() => {
@@ -545,6 +550,15 @@ export default function MapView3D({
   useEffect(() => {
     drawModeRef.current = drawMode;
   }, [drawMode]);
+  useEffect(() => {
+    draftCanvasDragModeRef.current = draftCanvasDragMode;
+  }, [draftCanvasDragMode]);
+  useEffect(() => {
+    if (prevDraftCountRef.current === 0 && draftParcels.length > 0) {
+      setDraftCanvasDragMode('orbit');
+    }
+    prevDraftCountRef.current = draftParcels.length;
+  }, [draftParcels.length]);
   useEffect(() => {
     showBuildingsRef.current = showBuildings;
   }, [showBuildings]);
@@ -1423,20 +1437,27 @@ export default function MapView3D({
     }
   }, [showTerrain]);
 
-  // Disable left-click pan while Draw Land tool is active so dragging draws a rectangle
+  // Disable left-click pan while Draw Land tool is active or while orbiting around a drawn land
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (drawMode) {
+    const shouldOrbitDrafts = draftParcels.length > 0 && draftCanvasDragMode === 'orbit';
+    if (drawMode || shouldOrbitDrafts) {
       map.dragPan.disable();
-    } else if (!gizmoDragRef.current) {
+      if (!drawMode) {
+        dragStartRef.current = null;
+        dragPreviewRef.current = null;
+        hoverDrawPreviewRef.current = null;
+        drawWireframes();
+      }
+    } else if (!gizmoDragRef.current && !orbitDragRef.current) {
       map.dragPan.enable();
       dragStartRef.current = null;
       dragPreviewRef.current = null;
       hoverDrawPreviewRef.current = null;
       drawWireframes();
     }
-  }, [drawMode, drawWireframes]);
+  }, [drawMode, draftParcels.length, draftCanvasDragMode, drawWireframes]);
 
   useEffect(() => {
     drawWireframes();
@@ -1982,9 +2003,42 @@ export default function MapView3D({
     setHoldDrawActive(false);
   }
 
+  function resolveOrbitPivotDraft() {
+    const list = draftsRef.current || [];
+    if (list.length === 0) return null;
+    const selectedId = selectedDraftIdRef.current;
+    return list.find((d) => d.id === selectedId) || list[0] || null;
+  }
+
+  function finishOrbitDrag(targetEl = null) {
+    const orb = orbitDragRef.current;
+    if (!orb) return;
+    orbitDragRef.current = null;
+    if (orb.active && targetEl && typeof targetEl.releasePointerCapture === 'function') {
+      try {
+        targetEl.releasePointerCapture(orb.pointerId);
+      } catch {
+        // ignore release errors
+      }
+    }
+    const map = mapRef.current;
+    if (map && orb.active) {
+      const c = map.getCenter();
+      onViewportChangeRef.current?.({
+        lat: Number(c.lat.toFixed(6)),
+        lng: Number(c.lng.toFixed(6)),
+        zoom: Number(map.getZoom().toFixed(2)),
+        bearing: normalizeRotationDeg(map.getBearing())
+      });
+    }
+    setGizmoCursor('');
+    setGizmoHint('');
+    drawWireframes();
+  }
+
   function handleOverlayPointerDown(e) {
     if (e.button !== 0 || !mapRef.current || !mapHostRef.current) return;
-    if (e.target.closest('.map3d-ui-stop')) return;
+    if (e.target.closest('.map3d-ui-stop, .maplibregl-ctrl')) return;
 
     const rect = mapHostRef.current.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -2047,6 +2101,40 @@ export default function MapView3D({
       return;
     }
 
+    // Priority 3.5: When user has drawn a land, click-and-drag on canvas rotates & tilts map around that drawn land
+    if (draftsRef.current.length > 0 && !drawModeRef.current && draftCanvasDragModeRef.current === 'orbit') {
+      if (e.shiftKey) {
+        // Shift+drag temporarily pans while staying in Orbit Land mode
+        shiftPanActiveRef.current = true;
+        mapRef.current.dragPan.enable();
+        return;
+      }
+      const pivotDraft = resolveOrbitPivotDraft();
+      if (
+        pivotDraft &&
+        Number.isFinite(Number(pivotDraft.centerLat)) &&
+        Number.isFinite(Number(pivotDraft.centerLng))
+      ) {
+        cancelPendingHoldDraw();
+        pendingSculptureClickRef.current = null;
+        const c = mapRef.current.getCenter();
+        orbitDragRef.current = {
+          active: false,
+          pointerId: e.pointerId,
+          startPx: px,
+          startPy: py,
+          startBearing: mapRef.current.getBearing(),
+          startPitch: mapRef.current.getPitch(),
+          startCenterLng: Number(c.lng),
+          startCenterLat: Number(c.lat),
+          pivotLng: Number(pivotDraft.centerLng),
+          pivotLat: Number(pivotDraft.centerLat),
+          pivotName: pivotDraft.customName?.trim() || 'drawn land'
+        };
+        return;
+      }
+    }
+
     // Priority 4: Hold down in 1 spot on the map (~380ms without dragging) -> start drawing a 3D cube!
     cancelPendingHoldDraw();
     pendingSculptureClickRef.current = null;
@@ -2100,13 +2188,67 @@ export default function MapView3D({
 
   function handleOverlayPointerMove(e) {
     if (!mapRef.current || !mapHostRef.current) return;
-    if (!gizmoDragRef.current && !dragStartRef.current && !holdDrawRef.current && e.target.closest('.map3d-ui-stop')) {
+    if (
+      !gizmoDragRef.current &&
+      !orbitDragRef.current &&
+      !dragStartRef.current &&
+      !holdDrawRef.current &&
+      e.target.closest('.map3d-ui-stop, .maplibregl-ctrl')
+    ) {
       return;
     }
 
     const rect = mapHostRef.current.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
+
+    // Active click-and-drag canvas orbit around the drawn land
+    if (orbitDragRef.current) {
+      if (e.buttons === 0) {
+        finishOrbitDrag(e.currentTarget);
+        return;
+      }
+      const orb = orbitDragRef.current;
+      const dx = px - orb.startPx;
+      const dy = py - orb.startPy;
+      if (!orb.active && Math.hypot(dx, dy) < 4) return;
+      if (!orb.active) {
+        orb.active = true;
+        userAdjustedRef.current = true;
+        try {
+          e.currentTarget.setPointerCapture?.(orb.pointerId);
+        } catch {
+          // ignore synthetic pointer capture errors
+        }
+        setGizmoCursor('grabbing');
+      }
+      const deltaBearing = dx * 0.45;
+      const nextBearing = orb.startBearing + deltaBearing;
+      const nextPitch = Math.max(0, Math.min(65, orb.startPitch - dy * 0.25));
+      const cosLat = Math.max(0.1, Math.cos((orb.pivotLat * Math.PI) / 180));
+      const dx0 = (orb.startCenterLng - orb.pivotLng) * cosLat;
+      const dy0 = orb.startCenterLat - orb.pivotLat;
+      const theta = -(deltaBearing * Math.PI) / 180;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+      const dx1 = dx0 * cosT - dy0 * sinT;
+      const dy1 = dx0 * sinT + dy0 * cosT;
+      const nextCenterLng = orb.pivotLng + dx1 / cosLat;
+      const nextCenterLat = orb.pivotLat + dy1;
+
+      mapRef.current.jumpTo({
+        center: [nextCenterLng, nextCenterLat],
+        bearing: nextBearing,
+        pitch: nextPitch
+      });
+      setBearingDeg(Math.round(nextBearing * 10) / 10);
+      setPitchDeg(Math.round(nextPitch * 10) / 10);
+      setGizmoHint(
+        `🔄 Orbiting around ${orb.pivotName} · ${Math.round(normalizeRotationDeg(nextBearing))}° · Tilt ${Math.round(nextPitch)}°`
+      );
+      drawWireframes();
+      return;
+    }
 
     // Cancel pending 3D sculpture click if pointer dragged away
     if (pendingSculptureClickRef.current) {
@@ -2263,7 +2405,13 @@ export default function MapView3D({
         if (hoveredSc) {
           setGizmoCursor('pointer');
           setGizmoHint(`🧊 ${hoveredSc.title} · Click for 3D & metadata`);
-        } else if (gizmoCursor === 'pointer') {
+        } else if (
+          draftsRef.current.length > 0 &&
+          draftCanvasDragModeRef.current === 'orbit'
+        ) {
+          if (gizmoCursor !== 'grab') setGizmoCursor('grab');
+          if (gizmoHint && !gizmoHint.startsWith('🔄')) setGizmoHint('');
+        } else if (gizmoCursor === 'pointer' || gizmoCursor === 'grab') {
           setGizmoCursor('');
           setGizmoHint('');
         }
@@ -2272,9 +2420,30 @@ export default function MapView3D({
   }
 
   function handleOverlayPointerUp(e) {
+    if (shiftPanActiveRef.current) {
+      shiftPanActiveRef.current = false;
+      if (
+        mapRef.current &&
+        (drawModeRef.current ||
+          (draftsRef.current.length > 0 && draftCanvasDragModeRef.current === 'orbit'))
+      ) {
+        mapRef.current.dragPan.disable();
+      }
+      return;
+    }
+
+    if (orbitDragRef.current) {
+      finishOrbitDrag(e.currentTarget);
+      return;
+    }
+
     if (gizmoDragRef.current) {
       gizmoDragRef.current = null;
-      if (mapRef.current && !drawModeRef.current) {
+      if (
+        mapRef.current &&
+        !drawModeRef.current &&
+        !(draftsRef.current.length > 0 && draftCanvasDragModeRef.current === 'orbit')
+      ) {
         mapRef.current.dragPan.enable();
       }
       setGizmoCursor('');
@@ -2449,6 +2618,7 @@ export default function MapView3D({
       data-pitch={Math.round(pitchDeg)}
       data-bearing={Math.round(bearingDeg)}
       data-draw-mode={drawMode ? 'on' : 'off'}
+      data-canvas-drag={drawMode ? 'draw' : draftParcels.length > 0 ? draftCanvasDragMode : 'pan'}
       data-hold-draw={holdDrawActive ? 'active' : 'idle'}
       data-draft-count={draftParcels.length}
       data-owned-count={parcels.length}
@@ -2503,12 +2673,32 @@ export default function MapView3D({
               {drawMode ? '✏️ Drawing Land' : '✏️ Draw Land'}
             </button>
           )}
+          {draftParcels.length > 0 && !drawMode && (
+            <button
+              type="button"
+              className={`btn ${draftCanvasDragMode === 'orbit' ? 'btn-primary' : ''}`}
+              data-testid="map3d-orbit-pan-toggle"
+              style={{ padding: '4px 9px', fontSize: 11.5 }}
+              aria-pressed={draftCanvasDragMode === 'orbit'}
+              title={
+                draftCanvasDragMode === 'orbit'
+                  ? 'Dragging the map orbits around your drawn land (click to switch to Pan, or hold Shift+drag to pan)'
+                  : 'Switch map drag back to orbiting around your drawn land'
+              }
+              onClick={() =>
+                setDraftCanvasDragMode((cur) => (cur === 'orbit' ? 'pan' : 'orbit'))
+              }
+            >
+              {draftCanvasDragMode === 'orbit' ? '🔄 Orbit Land' : '✋ Pan Map'}
+            </button>
+          )}
           <InfoTip title="3D Map & Land Handles" mode="popover">
             <strong>Hold down</strong> in one spot on the map (or click <strong>Draw Land</strong>)
-            and drag to draw a 3D cube. Drag <strong>corner balls</strong> to scale,{' '}
-            <strong>side bars</strong> to stretch an edge, <strong>vertical gold bars</strong> to
-            rotate, the <strong>center ↕ orb</strong> to pull height up/down, or click any{' '}
-            <strong>3D sculpture</strong> to view all metadata.
+            and drag to draw a 3D cube. Once drawn, <strong>click &amp; drag anywhere around the land</strong>{' '}
+            to rotate &amp; tilt the 3D map around it (hold <strong>Shift+drag</strong> to pan). Drag{' '}
+            <strong>corner balls</strong> to scale, <strong>side bars</strong> to stretch an edge,{' '}
+            <strong>vertical gold bars</strong> to rotate, the <strong>center ↕ orb</strong> to pull
+            height up/down, or click any <strong>3D sculpture</strong> to view all metadata.
           </InfoTip>
         </div>
 

@@ -7013,6 +7013,14 @@ select {
   color: var(--accent-gold);
 }
 
+.profile-history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .profile-empty-box {
   padding: 14px;
   border-radius: 10px;

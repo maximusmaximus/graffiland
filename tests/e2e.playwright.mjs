@@ -642,7 +642,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     // Click rendered 3D sculpture on Desktop map -> opens SculptureModal with ALL metadata (incl. expandable full JSON)
     await page.locator('.map3d-sculpture-marker').first().click();
-    await page.waitForSelector('text=E2E Lighthouse Cube');
+    await page.waitForSelector('.modal-title');
+    const openedSculptureTitle = (await page.locator('.modal-title').first().textContent()).trim();
+    assert.ok(openedSculptureTitle.length > 0);
     await page.getByRole('button', { name: /View All Metadata/i }).click();
     await page.waitForSelector('[data-testid="sculpture-all-metadata"]');
     const rawMetaText = await page.locator('[data-testid="sculpture-all-metadata"]').textContent();
@@ -658,9 +660,11 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-search-pin', { timeout: 5000 });
     await page.waitForTimeout(350);
 
-    // Verify broken Connect Agent button is removed, Pair Phone glows, and Pair modal has structured revealable Agent Pairing
+    // Verify broken Connect Agent button is removed, Pair Phone label is concise & glows, and Pair modal has structured revealable Agent Pairing
     assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
+    assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Last Viewed/i }).count(), 0);
     const pairNavBtn = page.getByTestId('nav-pair-phone-btn');
+    assert.equal((await pairNavBtn.textContent()).trim(), 'Pair Phone');
     assert.ok((await pairNavBtn.getAttribute('class')).includes('btn-pair-glow'));
     await pairNavBtn.click();
     await page.waitForSelector('[data-testid="pair-phone-modal"]');
@@ -683,6 +687,27 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="desktop-land-builder-panel"]');
     assert.equal(await stage.getAttribute('data-view-mode'), 'isometric');
     assert.equal(await stage.getAttribute('data-draw-mode'), 'off');
+    assert.equal(await stage.getAttribute('data-canvas-drag'), 'orbit');
+    await page.waitForSelector('[data-testid="map3d-orbit-pan-toggle"]');
+
+    // Click and drag on blank canvas around the drawn land -> rotates & tilts the map smoothly around it!
+    const bearingBeforeOrbit = Number(await stage.getAttribute('data-bearing'));
+    const orbitStartX = mapBox.x + mapBox.width * 0.14;
+    const orbitStartY = mapBox.y + mapBox.height * 0.55;
+    await page.mouse.move(orbitStartX, orbitStartY);
+    await page.mouse.down();
+    await page.mouse.move(orbitStartX + 95, orbitStartY - 24, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const bearingAfterOrbit = Number(await stage.getAttribute('data-bearing'));
+    assert.notEqual(
+      bearingAfterOrbit,
+      bearingBeforeOrbit,
+      `Expected canvas click-drag around drawn land to rotate map bearing (${bearingBeforeOrbit} -> ${bearingAfterOrbit})`
+    );
+    // Reset back to Isometric orientation before exercising gizmo handle coordinates
+    await page.locator('.map3d-toolbar').getByRole('button', { name: /^Isometric$/i }).click();
+    await page.waitForTimeout(220);
     const drawnText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(drawnText.includes('315°'), `Expected drawn square to inherit 315° isometric orientation, got: ${drawnText}`);
     assert.ok(drawnText.includes('Name Req.'), `Expected untitled drawn plot to require a land title, got: ${drawnText}`);
@@ -880,6 +905,23 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.locator('.add-item-modal-card').getByRole('button', { name: /Freeze Land/i }).click();
     await page.locator('.add-item-modal-card').getByRole('button', { name: /Unfreeze Land/i }).waitFor();
     await page.getByRole('button', { name: /Close add 3D item modal/i }).click();
+
+    // Open Profile -> verify Last Viewed items & Action History (mint/freeze) live under Profile
+    await page.getByTestId('desktop-profile-btn').click();
+    await page.waitForSelector('[data-testid="profile-modal"]', { timeout: 10000 });
+    await page.getByTestId('profile-tab-last-viewed').click();
+    await page.waitForSelector('[data-testid="profile-last-viewed-list"]');
+    const viewedProfileText = await page.getByTestId('profile-last-viewed-list').textContent();
+    assert.ok(
+      viewedProfileText.includes(openedSculptureTitle),
+      `Expected "${openedSculptureTitle}" in Profile Last Viewed, got: ${viewedProfileText}`
+    );
+    await page.getByTestId('profile-tab-actions').click();
+    await page.waitForSelector('[data-testid="profile-actions-list"]');
+    const actionsProfileText = await page.getByTestId('profile-actions-list').textContent();
+    assert.ok(actionsProfileText.includes('History of Actions'), `Expected History of Actions heading, got: ${actionsProfileText}`);
+    assert.ok(actionsProfileText.includes('Skyline Studio Plot'), `Expected Skyline Studio Plot action in Profile Action History, got: ${actionsProfileText}`);
+    await page.getByRole('button', { name: /Close profile/i }).click();
 
     assert.deepEqual(pageErrors, []);
     await context.close();

@@ -14,6 +14,7 @@ import {
   normalizeSeenLandKey,
   saveSeenLands
 } from '../utils/seenLands.js';
+import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
 import {
   loadBoolPreference,
   loadLocalDraft,
@@ -519,6 +520,57 @@ export default function MobileStudio({
 
   // Support deep link ?sculpture=<id> and ?parcel=<GLAND-...>&slug=<slug> directly on mobile
   const { setMapSelectedSculpture } = ar;
+
+  // Record viewed sculptures & visited lands into Profile Last Viewed & Action History
+  useEffect(() => {
+    const sc = ar.mapSelectedSculpture;
+    if (!sc?.id) return;
+    const landLabel = resolveLandDisplayName(
+      { customName: sc.parcelName || sc.landDisplayName || '', firstSculptureTitle: sc.title || '' },
+      { defaultName: 'Virtual Land' }
+    );
+    recordLastViewedItem(user?.id, {
+      kind: 'sculpture',
+      id: sc.id,
+      sculptureId: sc.id,
+      parcelId: sc.parcelId || '',
+      title: sc.title || 'Sculpture',
+      subtitle: landLabel,
+      snapshot: sc
+    });
+    recordUserAction(user?.id, {
+      type: 'view_sculpture',
+      icon: '🧊',
+      title: `Viewed "${sc.title || 'Sculpture'}"`,
+      detail: landLabel,
+      sculptureId: sc.id,
+      parcelId: sc.parcelId || '',
+      linkLabel: 'View'
+    });
+  }, [ar.mapSelectedSculpture, user?.id]);
+
+  useEffect(() => {
+    const parcel = parcelVisit?.parcel;
+    if (!parcel?.parcelId) return;
+    const title = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+    recordLastViewedItem(user?.id, {
+      kind: 'land',
+      id: parcel.parcelId,
+      parcelId: parcel.parcelId,
+      title,
+      subtitle: '',
+      snapshot: parcel
+    });
+    recordUserAction(user?.id, {
+      type: 'view_land',
+      icon: '🗺️',
+      title: `Visited land "${title}"`,
+      detail: 'Mobile land showcase',
+      parcelId: parcel.parcelId,
+      linkLabel: 'Land'
+    });
+  }, [parcelVisit?.parcel, user?.id]);
+
   useEffect(() => {
     const deepId = new URLSearchParams(window.location.search).get('sculpture');
     if (deepId) {
