@@ -1,6 +1,7 @@
 import {
   extractSculptureBaseDimensions,
-  extractSculptureScale
+  extractSculptureScale,
+  parcelLocalOffsetToWorldLatLng
 } from '../../../shared/sculpturePlacement.mjs';
 import { placeFloatingLabelRect } from './canvasLabelLayout.js';
 import { buildSculptureShareUrl } from './clipboard.js';
@@ -273,9 +274,7 @@ export function computeSideArtworkCallouts({
   const volH = Number(volume?.heightMeters || 0);
   const volLat = Number(volume?.centerLat);
   const volLng = Number(volume?.centerLng);
-  const metersPerDegLat = 111320;
-  const metersPerDegLng =
-    metersPerDegLat * Math.max(0.08, Math.cos(((Number.isFinite(volLat) ? volLat : 0) * Math.PI) / 180));
+  const volRotDeg = Number(volume?.rotationDeg || 0);
 
   const projected = visible.map((sc, idx) => {
     const liveTransform =
@@ -285,10 +284,20 @@ export function computeSideArtworkCallouts({
     let lng;
     let targetAlt;
     if (liveTransform && Number.isFinite(Number(liveTransform.lat)) && Number.isFinite(Number(liveTransform.lng))) {
-      const dxM = Number(liveTransform.anchorDx || 0);
-      const dzM = Number(liveTransform.anchorDz || 0);
-      lat = Number(liveTransform.lat) - dzM / metersPerDegLat;
-      lng = Number(liveTransform.lng) + dxM / metersPerDegLng;
+      if (Number.isFinite(Number(liveTransform.worldLat)) && Number.isFinite(Number(liveTransform.worldLng))) {
+        lat = Number(liveTransform.worldLat);
+        lng = Number(liveTransform.worldLng);
+      } else {
+        const wPos = parcelLocalOffsetToWorldLatLng(
+          Number(liveTransform.lat),
+          Number(liveTransform.lng),
+          Number(liveTransform.anchorDx || 0),
+          Number(liveTransform.anchorDz || 0),
+          Number(liveTransform.parcelRotationDeg ?? volRotDeg)
+        );
+        lat = wPos.lat;
+        lng = wPos.lng;
+      }
       const renderedH = Math.max(0.1, Number(liveTransform.renderedSize?.y || 1));
       targetAlt = Number(liveTransform.altitudeMeters || 0) + renderedH * 0.5;
     } else {
@@ -297,8 +306,15 @@ export function computeSideArtworkCallouts({
       const dxM = Number(sc.anchorOffset?.dx || 0);
       const dyM = Math.max(0, Number(sc.anchorOffset?.dy || 0));
       const dzM = Number(sc.anchorOffset?.dz || 0);
-      lat = (Number.isFinite(rawLat) ? rawLat : volLat) - dzM / metersPerDegLat;
-      lng = (Number.isFinite(rawLng) ? rawLng : volLng) + dxM / metersPerDegLng;
+      const wPos = parcelLocalOffsetToWorldLatLng(
+        Number.isFinite(rawLat) ? rawLat : volLat,
+        Number.isFinite(rawLng) ? rawLng : volLng,
+        dxM,
+        dzM,
+        volRotDeg
+      );
+      lat = wPos.lat;
+      lng = wPos.lng;
 
       // Aim pointer squarely at the true un-autoscaled vertical center of the 3D sculpture
       const userScale = extractSculptureScale(sc);

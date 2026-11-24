@@ -6,6 +6,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { computeLegacyAutoFitCompensation } from '../../../shared/model3d.mjs';
+import { extractSculptureScale } from '../../../shared/sculpturePlacement.mjs';
 
 let sharedDracoLoader = null;
 function getSharedDracoLoader() {
@@ -88,11 +89,6 @@ function normalizeLoadedObject(
 
   // Compensate ONLY legacy pre-1:1 DB records calibrated under old 1.4m autoFit; new models stay strictly 1:1
   const legacyFactor = computeLegacyAutoFitCompensation(meshStats, size);
-  const baseSize = {
-    width: Math.max(0.01, Math.round(size.x * legacyFactor * 10000) / 10000),
-    height: Math.max(0.01, Math.round(size.y * legacyFactor * 10000) / 10000),
-    depth: Math.max(0.01, Math.round(size.z * legacyFactor * 10000) / 10000)
-  };
   const userScale =
     applyCustomScale && Number.isFinite(Number(customModel?.scale)) && Number(customModel.scale) > 0
       ? Number(customModel.scale)
@@ -117,6 +113,18 @@ function normalizeLoadedObject(
   enforceCrispTexturesAndShading(wrapper, maxAnisotropy);
 
   const bounds = new THREE.Box3().setFromObject(wrapper);
+  const finalSize = new THREE.Vector3();
+  if (!bounds.isEmpty()) {
+    bounds.getSize(finalSize);
+  } else {
+    finalSize.copy(size).multiplyScalar(finalScale);
+  }
+  const invUserScale = userScale > 0 ? 1 / userScale : 1;
+  const baseSize = {
+    width: Math.max(0.01, Math.round(finalSize.x * invUserScale * 10000) / 10000),
+    height: Math.max(0.01, Math.round(finalSize.y * invUserScale * 10000) / 10000),
+    depth: Math.max(0.01, Math.round(finalSize.z * invUserScale * 10000) / 10000)
+  };
   return { object3d: wrapper, bounds, baseSize };
 }
 
@@ -317,7 +325,12 @@ export async function loadCustomModelObject(
     ? resolvedUrl.slice(0, resolvedUrl.lastIndexOf('/') + 1)
     : '';
 
-  const normalized = await parseCustomModelBytes(arrayBuffer, format, cm, {
+  const effectiveScale = extractSculptureScale(sculpture);
+  const effectiveCustomModel = {
+    ...cm,
+    scale: effectiveScale
+  };
+  const normalized = await parseCustomModelBytes(arrayBuffer, format, effectiveCustomModel, {
     maxAnisotropy,
     applyCustomScale,
     basePath,

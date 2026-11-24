@@ -154,12 +154,23 @@ export function extractSculptureBaseDimensions(sculpture, overrideDims = null) {
 }
 
 /**
- * Resolves a valid parcel 3D volume from an explicit parcel object, volume object, or sculpture geohash.
- * @param {{ parcel?: any, volume?: any, sculpture?: any }} opts
+ * Resolves a valid parcel 3D volume from `{ parcel, volume, sculpture }` (or a direct parcel/volume object).
+ * @param {any} input
  * @returns {{ centerLat: number, centerLng: number, widthMeters: number, depthMeters: number, heightMeters: number, rotationDeg: number, baseAltitudeM: number }}
  */
-export function resolveParcelVolumeForPlacement({ parcel = null, volume = null, sculpture = null } = {}) {
-  const src = volume || parcel?.volume || null;
+export function resolveParcelVolumeForPlacement(input = {}) {
+  const isWrapped =
+    input &&
+    typeof input === 'object' &&
+    ('parcel' in input || 'volume' in input || 'sculpture' in input);
+  const parcel = isWrapped ? input.parcel || null : input?.parcelId || input?.bounds ? input : null;
+  const volume = isWrapped
+    ? input.volume || null
+    : Number.isFinite(Number(input?.widthMeters))
+    ? input
+    : null;
+  const sculpture = isWrapped ? input.sculpture || null : null;
+  const src = volume || parcel?.volume || (isWrapped ? null : input?.volume) || null;
   if (
     src &&
     Number.isFinite(Number(src.widthMeters)) &&
@@ -229,6 +240,70 @@ export function latLngToParcelLocalMeters(lat, lng, parcelVolume) {
   return {
     baseX: round3(east * cosR - south * sinR),
     baseZ: round3(east * sinR + south * cosR)
+  };
+}
+
+/**
+ * Exact algebraic inverse of `latLngToParcelLocalMeters`: rotates parcel-local `(dx, dz)`
+ * meters (X = local East/width, Z = local South/depth) by the parcel's clockwise `rotationDeg`
+ * into world meters (`east` = Three.js +X, `south` = Three.js +Z, `north` = -south).
+ * @param {number} dx
+ * @param {number} dz
+ * @param {number} [rotationDeg]
+ * @returns {{ east: number, south: number, north: number }}
+ */
+export function parcelLocalMetersToWorldMeters(dx = 0, dz = 0, rotationDeg = 0) {
+  const lx = Number(dx || 0);
+  const lz = Number(dz || 0);
+  if (!Number.isFinite(lx) || !Number.isFinite(lz)) {
+    return { east: 0, south: 0, north: 0 };
+  }
+  const rotRad = (Number(rotationDeg || 0) * Math.PI) / 180;
+  const cosR = Math.cos(rotRad);
+  const sinR = Math.sin(rotRad);
+  const east = lx * cosR - lz * sinR;
+  const south = lx * sinR + lz * cosR;
+  return {
+    east: round4(east),
+    south: round4(south),
+    north: round4(-south)
+  };
+}
+
+/**
+ * Converts a parcel-local sculpture yaw (degrees or radians, CCW around +Y in Three.js)
+ * into world Three.js Y-rotation radians accounting for the parcel's clockwise `rotationDeg`.
+ * @param {number} yaw
+ * @param {number} [rotationDeg]
+ * @returns {number}
+ */
+export function parcelLocalYawToWorldYawRad(yaw = 0, rotationDeg = 0) {
+  const parcelRotRad = (Number(rotationDeg || 0) * Math.PI) / 180;
+  return yawToRadians(yaw) - parcelRotRad;
+}
+
+/**
+ * Converts a sculpture's base `(lat, lng)` plus parcel-local `(dx, dz)` offset into
+ * exact world `(lat, lng)` and world meter offsets `(worldDx, worldDz)` accounting for `rotationDeg`.
+ * @param {number} baseLat
+ * @param {number} baseLng
+ * @param {number} [dx]
+ * @param {number} [dz]
+ * @param {number} [rotationDeg]
+ */
+export function parcelLocalOffsetToWorldLatLng(baseLat, baseLng, dx = 0, dz = 0, rotationDeg = 0) {
+  const lat0 = Number(baseLat);
+  const lng0 = Number(baseLng);
+  const { east, south } = parcelLocalMetersToWorldMeters(dx, dz, rotationDeg);
+  if (!Number.isFinite(lat0) || !Number.isFinite(lng0)) {
+    return { lat: lat0, lng: lng0, worldDx: east, worldDz: south };
+  }
+  const cosLat = Math.max(0.08, Math.cos((lat0 * Math.PI) / 180));
+  return {
+    lat: lat0 - south / METERS_PER_DEG_LAT,
+    lng: lng0 + east / (METERS_PER_DEG_LAT * cosLat),
+    worldDx: east,
+    worldDz: south
   };
 }
 

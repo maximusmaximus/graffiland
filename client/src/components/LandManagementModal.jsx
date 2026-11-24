@@ -961,20 +961,20 @@ export default function LandManagementModal({
                         </div>
                       )}
                       {(() => {
+                        const activeVol = activeParcel
+                          ? resolveParcelVolumeForPlacement({ parcel: activeParcel })
+                          : null;
                         const fit =
-                          uploadStats?.bbox && activeParcel
+                          uploadStats?.bbox && activeVol
                             ? evaluateModelFitInParcel({
-                                parcelVolume: resolveParcelVolumeForPlacement(activeParcel),
+                                parcelVolume: activeVol,
                                 bbox: uploadStats.bbox,
                                 modelScale: Number(uploadScale || 1),
                                 anchorOffset,
                                 existingItems: (activeParcel.sculptures || [])
                                   .filter((sc) => sc && !sc.hidden)
                                   .map((sc) =>
-                                    buildPlacementItemFromSculpture(
-                                      sc,
-                                      resolveParcelVolumeForPlacement(activeParcel)
-                                    )
+                                    buildPlacementItemFromSculpture(sc, activeVol)
                                   )
                               })
                             : null;

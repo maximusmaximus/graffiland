@@ -246,7 +246,7 @@ export default function AddLandItemModal({
     if (!validatedData || !parcel) return null;
     const bbox = validatedData.stats?.bbox || null;
     if (!bbox) return validatedData.landFit || null;
-    const vol = resolveParcelVolumeForPlacement(parcel);
+    const vol = resolveParcelVolumeForPlacement({ parcel });
     const existingItems = (existingSculptures || [])
       .filter((sc) => sc && !sc.hidden)
       .map((sc) => buildPlacementItemFromSculpture(sc, vol));

@@ -10,7 +10,11 @@ import {
   applyProximitySharpnessToObject3D,
   computeProximitySharpness
 } from '../utils/arLandGuidance.js';
-import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
+import {
+  extractSculptureScale,
+  parcelLocalMetersToWorldMeters,
+  parcelLocalYawToWorldYawRad
+} from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
 import {
@@ -589,20 +593,22 @@ export function useARPreview({
       const ax = Number(sc.anchorOffset?.dx || 0);
       const ay = Number(sc.anchorOffset?.dy || 0);
       const az = Number(sc.anchorOffset?.dz || 0);
-      const ayaw = yawToRadians(sc.anchorOffset?.yaw || 0);
-      if (Number.isFinite(ayaw) && ayaw !== 0) {
-        sub.rotation.y = ayaw;
+      const parentRotDeg = Number(parentLand?.volume?.rotationDeg || 0);
+      const worldOff = parcelLocalMetersToWorldMeters(ax, az, parentRotDeg);
+      const worldYawRad = parcelLocalYawToWorldYawRad(sc.anchorOffset?.yaw || 0, parentRotDeg);
+      if (Number.isFinite(worldYawRad) && worldYawRad !== 0) {
+        sub.rotation.y = worldYawRad;
       }
-      if (sc.modelType !== 'custom-3d') {
+      if (!isCustom3d) {
         const scScale = extractSculptureScale(sc);
         if (scScale !== 1) {
           sub.scale.setScalar(scScale);
         }
       }
       sub.position.set(
-        offset.east * clampFactor + ax,
+        offset.east * clampFactor + worldOff.east,
         deltaY + ay,
-        -offset.north * clampFactor + az
+        -offset.north * clampFactor + worldOff.south
       );
       applyProximitySharpnessToObject3D(sub, sharpness, 8);
       group.add(sub);
