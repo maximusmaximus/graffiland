@@ -13,6 +13,7 @@ import {
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
@@ -279,7 +280,9 @@ export default function LandManagementModal({
         { ...activeParcel, customName: customName || activeParcel.customName },
         { defaultName: 'Virtual Land' }
       );
-      setNotice(`Saved settings for "${savedLabel}".`);
+      const savedMsg = `Saved settings for "${savedLabel}".`;
+      setNotice(savedMsg);
+      notifySettingsSaved(savedMsg);
     } catch (err) {
       setErrorMsg(err.message || 'Could not update land settings');
     } finally {
@@ -771,9 +774,34 @@ export default function LandManagementModal({
                     </div>
                   </div>
 
-                  <button type="submit" className="btn btn-primary btn-sm" disabled={busy !== ''}>
-                    <XeroIcon emoji="✅" size={13} /> Save Land Settings
-                  </button>
+                  <div className="land-mgmt-save-row">
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-sm"
+                      data-testid="land-mgmt-save-settings-btn"
+                      disabled={busy !== ''}
+                    >
+                      <XeroIcon emoji="✅" size={13} />{' '}
+                      {busy === 'save' ? 'Saving…' : 'Save Land Settings'}
+                    </button>
+                    {notice && (
+                      <span
+                        className="settings-inline-saved"
+                        data-testid="land-settings-saved-inline"
+                        role="status"
+                      >
+                        ✅ {notice}
+                      </span>
+                    )}
+                    {errorMsg && (
+                      <span
+                        className="settings-inline-error"
+                        role="alert"
+                      >
+                        ⚠️ {errorMsg}
+                      </span>
+                    )}
+                  </div>
                 </form>
 
                 {/* 2) Contributors */}

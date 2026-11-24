@@ -1705,4 +1705,138 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(overlapClaim.status, 409, `Same-owner overlapping boundary must be rejected with 409: ${JSON.stringify(overlapBody)}`);
     assert.match(String(overlapBody.error || ''), /overlaps existing Virtual Land/i);
   });
+
+  test('PUT /api/sculptures/:id persists vertical pitch/roll rotation and pushes multi-sibling sculptures without intersection', async () => {
+    const authRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: { email: 'vertical-tilt-owner@graffiland.test', name: 'Tilt Tester' }
+      })
+    }).then((r) => r.json());
+    const tok = authRes.token;
+    assert.ok(tok);
+
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        lat: 37.7681,
+        lng: -122.4312,
+        customName: 'Vertical Measure Lot',
+        volume: {
+          centerLat: 37.7681,
+          centerLng: -122.4312,
+          widthMeters: 12,
+          depthMeters: 12,
+          heightMeters: 14,
+          rotationDeg: 0
+        }
+      })
+    });
+    const claimBody = await claimRes.json();
+    assert.equal(claimRes.status, 201, JSON.stringify(claimBody));
+    const parcelId = claimBody.parcelId;
+
+    // Place 3 sculptures inside the 12m × 12m × 14m land
+    const mkVoxelBar = (lenX, lenY, lenZ) => {
+      const pts = [];
+      for (let ix = 0; ix <= lenX; ix += 2) {
+        for (let iy = 0; iy <= lenY; iy += 2) {
+          for (let iz = 0; iz <= lenZ; iz += 2) {
+            pts.push({ x: ix * 0.25, y: iy * 0.25, z: iz * 0.25, color: '#00f5d4', material: 'matte' });
+          }
+        }
+      }
+      return pts;
+    };
+
+    const s1Res = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(parcelId)}/sculptures`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        title: 'Flat Beam',
+        description: 'Long flat sculpture to stand vertically',
+        voxels: mkVoxelBar(10, 2, 16), // ~2.5m × 0.5m × 4m
+        anchorOffset: { dx: -2.5, dy: 0, dz: 0, yaw: 0 }
+      })
+    });
+    const s1 = (await s1Res.json()).sculpture;
+    assert.ok(s1Res.ok && s1?.id);
+
+    const s2Res = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(parcelId)}/sculptures`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        title: 'Center Cube',
+        description: 'Neighboring artwork',
+        voxels: mkVoxelBar(8, 8, 8),
+        anchorOffset: { dx: 0.8, dy: 0, dz: 0, yaw: 0 }
+      })
+    });
+    const s2 = (await s2Res.json()).sculpture;
+    assert.ok(s2Res.ok && s2?.id);
+
+    const s3Res = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(parcelId)}/sculptures`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        title: 'Right Cube',
+        description: 'Third artwork behind Center Cube',
+        voxels: mkVoxelBar(8, 8, 8),
+        anchorOffset: { dx: 3.4, dy: 0, dz: 0, yaw: 0 }
+      })
+    });
+    const s3 = (await s3Res.json()).sculpture;
+    assert.ok(s3Res.ok && s3?.id);
+
+    // Rotate Flat Beam vertically (pitch = 90°, roll = -15°) AND move it right into Center Cube
+    const updRes = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(s1.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        title: 'Flat Beam',
+        description: 'Stood upright vertically',
+        scale: 1,
+        anchorOffset: { dx: 0.8, dy: 0, dz: 0, yaw: 10, pitch: 90, roll: -15 }
+      })
+    });
+    const updBody = await updRes.json();
+    assert.equal(updRes.status, 200, JSON.stringify(updBody));
+    assert.equal(updBody.sculpture.anchorOffset.pitch, 90);
+    assert.equal(updBody.sculpture.anchorOffset.roll, -15);
+    assert.equal(updBody.sculpture.meshStats?.transformPitch, 90);
+    assert.equal(updBody.sculpture.meshStats?.transformRoll, -15);
+    assert.ok(Array.isArray(updBody.pushedSiblings) && updBody.pushedSiblings.length >= 1);
+
+    // Reload sculpture from DB -> pitch & roll persist cleanly
+    const reloaded = await fetch(`${baseUrl}/api/sculptures/${encodeURIComponent(s1.id)}`).then((r) => r.json());
+    assert.equal(reloaded.sculpture.anchorOffset.pitch, 90);
+    assert.equal(reloaded.sculpture.anchorOffset.roll, -15);
+
+    // Verify zero pairwise bounding-box overlap among all 3 sculptures persisted on the land
+    const detail = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(parcelId)}`).then((r) => r.json());
+    const all3 = (detail.sculptures || []).filter((x) => [s1.id, s2.id, s3.id].includes(x.id));
+    assert.equal(all3.length, 3);
+    const { buildPlacementItemFromSculpture, computeItemLocalBox } = await import(
+      '../shared/sculpturePlacement.mjs'
+    );
+    const boxes = all3.map((sc) =>
+      computeItemLocalBox(buildPlacementItemFromSculpture(sc, detail.parcel.volume))
+    );
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const ox = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+        const oz = Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ);
+        const oy = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+        assert.equal(
+          ox > 0.005 && oz > 0.005 && oy > 0.005,
+          false,
+          `Persisted sculptures ${i} and ${j} must NOT intersect after push`
+        );
+      }
+    }
+  });
 });

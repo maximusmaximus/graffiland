@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../utils/api';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 
 const CATEGORY_META = [
@@ -84,6 +85,24 @@ export default function NotificationCenter({
   const [savingPrefKey, setSavingPrefKey] = useState('');
   const [browserPerm, setBrowserPerm] = useState(getBrowserNotificationPermission);
   const [pushFeedback, setPushFeedback] = useState('');
+  const [settingsSavedNotice, setSettingsSavedNotice] = useState('');
+  const settingsNoticeTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (settingsNoticeTimerRef.current) clearTimeout(settingsNoticeTimerRef.current);
+    };
+  }, []);
+
+  const flashSettingsSaved = useCallback((msg, tone = 'success') => {
+    setSettingsSavedNotice(msg);
+    notifySettingsSaved(msg, { tone });
+    if (settingsNoticeTimerRef.current) clearTimeout(settingsNoticeTimerRef.current);
+    settingsNoticeTimerRef.current = setTimeout(() => {
+      setSettingsSavedNotice('');
+      settingsNoticeTimerRef.current = null;
+    }, 3200);
+  }, []);
 
   const containerRef = useRef(null);
   const seenIdsRef = useRef(new Set());
@@ -260,8 +279,12 @@ export default function NotificationCenter({
     try {
       const res = await api.updateNotificationPreferences({ [key]: nextVal });
       if (res?.preferences) setPreferences({ ...DEFAULT_PREFS, ...res.preferences });
+      const cat = CATEGORY_META.find((c) => c.key === key);
+      const label = cat ? cat.label : key === 'browser_push_enabled' ? 'Browser alerts' : 'Notification setting';
+      flashSettingsSaved(`Saved: ${label} ${nextVal ? 'enabled' : 'disabled'}.`);
     } catch {
       setPreferences((prev) => ({ ...prev, [key]: !nextVal }));
+      flashSettingsSaved('Could not save notification preference.', 'error');
     } finally {
       setSavingPrefKey('');
     }
@@ -309,6 +332,7 @@ export default function NotificationCenter({
       if (res?.preferences) setPreferences({ ...DEFAULT_PREFS, ...res.preferences });
       else setPreferences((prev) => ({ ...prev, browser_push_enabled: true }));
       setPushFeedback('Browser notifications enabled!');
+      flashSettingsSaved('Saved: Browser notifications enabled.');
       fireBrowserNotification(
         'GRAFFILAND Notifications Active',
         'You will be alerted when sculptures land on your parcels or new mint slots unlock.',
@@ -565,6 +589,15 @@ export default function NotificationCenter({
             </div>
           ) : (
             <div className="notif-settings-body">
+              {settingsSavedNotice && (
+                <div
+                  className="settings-inline-saved notif-settings-saved-pill"
+                  data-testid="notif-settings-saved"
+                  role="status"
+                >
+                  ✅ {settingsSavedNotice}
+                </div>
+              )}
               <MeasurementUnitSetting compact />
               <div className="notif-push-card">
                 <div className="notif-push-info">

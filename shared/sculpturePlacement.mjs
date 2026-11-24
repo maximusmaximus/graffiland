@@ -54,6 +54,114 @@ export function yawToDegrees(yaw) {
 }
 
 /**
+ * Normalizes a pitch/roll tilt angle (always stored in degrees) into [-180, 180].
+ * @param {number} deg
+ * @returns {number}
+ */
+export function tiltToDegrees(deg) {
+  const val = Number(deg || 0);
+  if (!Number.isFinite(val) || val === 0) return 0;
+  let wrapped = ((val + 180) % 360 + 360) % 360 - 180;
+  if (wrapped === -180 && val > 0) wrapped = 180;
+  return Math.round(wrapped * 100) / 100;
+}
+
+/**
+ * Converts a pitch/roll tilt angle (degrees) directly into radians.
+ * @param {number} deg
+ * @returns {number}
+ */
+export function tiltToRadians(deg) {
+  const val = Number(deg || 0);
+  if (!Number.isFinite(val) || val === 0) return 0;
+  return (val * Math.PI) / 180;
+}
+
+/**
+ * Reads persisted 3-axis rotation `{ yaw, pitch, roll }` (in degrees) for a sculpture.
+ * @param {any} sculpture
+ * @returns {{ yaw: number, pitch: number, roll: number }}
+ */
+export function extractSculptureRotation(sculpture) {
+  const off = sculpture?.anchorOffset || {};
+  const stats = sculpture?.meshStats || {};
+  const rawPitch = off.pitch !== undefined && off.pitch !== null ? off.pitch : stats.transformPitch ?? 0;
+  const rawRoll = off.roll !== undefined && off.roll !== null ? off.roll : stats.transformRoll ?? 0;
+  return {
+    yaw: yawToDegrees(off.yaw || 0),
+    pitch: tiltToDegrees(rawPitch),
+    roll: tiltToDegrees(rawRoll)
+  };
+}
+
+/**
+ * Computes exact axis-aligned 3D extents `{ effW, effH, effD }` for an oriented box
+ * rotated by Euler `(pitch, yaw, roll)` in `'YXZ'` order (`R = Ry(yaw) * Rx(pitch) * Rz(roll)`).
+ * Matches Three.js `Euler(pitchRad, yawRad, rollRad, 'YXZ')` identically.
+ * @param {{
+ *   width: number,
+ *   height: number,
+ *   depth: number,
+ *   yaw?: number,
+ *   pitch?: number,
+ *   roll?: number,
+ *   scale?: number
+ * }} params
+ * @returns {{ effW: number, effH: number, effD: number }}
+ */
+export function computeRotatedBoxDimensions({
+  width,
+  height,
+  depth,
+  yaw = 0,
+  pitch = 0,
+  roll = 0,
+  scale = 1
+}) {
+  const s = Math.max(MIN_ARTWORK_SCALE, Number(scale || 1));
+  const bw = Math.max(0.05, Number(width || 1)) * s;
+  const bh = Math.max(0.05, Number(height || 1)) * s;
+  const bd = Math.max(0.05, Number(depth || 1)) * s;
+
+  const yawRad = yawToRadians(yaw || 0);
+  const pitchRad = tiltToRadians(pitch || 0);
+  const rollRad = tiltToRadians(roll || 0);
+
+  if (pitchRad === 0 && rollRad === 0) {
+    const absC = Math.abs(Math.cos(yawRad));
+    const absS = Math.abs(Math.sin(yawRad));
+    return {
+      effW: bw * absC + bd * absS,
+      effH: bh,
+      effD: bw * absS + bd * absC
+    };
+  }
+
+  const cy = Math.cos(yawRad);
+  const sy = Math.sin(yawRad);
+  const cx = Math.cos(pitchRad);
+  const sx = Math.sin(pitchRad);
+  const cz = Math.cos(rollRad);
+  const sz = Math.sin(rollRad);
+
+  const m00 = cy * cz + sy * sx * sz;
+  const m01 = -cy * sz + sy * sx * cz;
+  const m02 = sy * cx;
+  const m10 = cx * sz;
+  const m11 = cx * cz;
+  const m12 = -sx;
+  const m20 = -sy * cz + cy * sx * sz;
+  const m21 = sy * sz + cy * sx * cz;
+  const m22 = cy * cx;
+
+  return {
+    effW: Math.abs(m00) * bw + Math.abs(m01) * bh + Math.abs(m02) * bd,
+    effH: Math.abs(m10) * bw + Math.abs(m11) * bh + Math.abs(m12) * bd,
+    effD: Math.abs(m20) * bw + Math.abs(m21) * bh + Math.abs(m22) * bd
+  };
+}
+
+/**
  * Reads the persisted uniform scale factor for a sculpture (voxel or custom-3d).
  * @param {any} sculpture
  * @returns {number}
@@ -317,6 +425,11 @@ export function buildPlacementItemFromSculpture(sculpture, parcelVolume, overrid
   const dims = extractSculptureBaseDimensions(sculpture, overrideDims);
   const scale = extractSculptureScale(sculpture);
   const off = sculpture?.anchorOffset || {};
+  const stats = sculpture?.meshStats || {};
+  const rawPitch =
+    off.pitch !== undefined && off.pitch !== null ? off.pitch : stats.transformPitch ?? 0;
+  const rawRoll =
+    off.roll !== undefined && off.roll !== null ? off.roll : stats.transformRoll ?? 0;
   const { baseX, baseZ } = latLngToParcelLocalMeters(sculpture?.lat, sculpture?.lng, parcelVolume);
   return {
     id: String(sculpture?.id || ''),
@@ -327,6 +440,8 @@ export function buildPlacementItemFromSculpture(sculpture, parcelVolume, overrid
     dy: Number.isFinite(Number(off.dy)) ? Math.max(0, Number(off.dy)) : 0,
     dz: Number.isFinite(Number(off.dz)) ? Number(off.dz) : 0,
     yaw: Number.isFinite(Number(off.yaw)) ? Number(off.yaw) : 0,
+    pitch: tiltToDegrees(rawPitch),
+    roll: tiltToDegrees(rawRoll),
     scale,
     baseWidth: dims.width,
     baseHeight: dims.height,
@@ -339,16 +454,15 @@ export function buildPlacementItemFromSculpture(sculpture, parcelVolume, overrid
  * @param {any} item
  */
 export function computeItemLocalBox(item) {
-  const scale = Math.max(MIN_ARTWORK_SCALE, Number(item?.scale || 1));
-  const bw = Math.max(0.05, Number(item?.baseWidth || 1)) * scale;
-  const bh = Math.max(0.05, Number(item?.baseHeight || 1)) * scale;
-  const bd = Math.max(0.05, Number(item?.baseDepth || 1)) * scale;
-  const rad = yawToRadians(item?.yaw || 0);
-  const absC = Math.abs(Math.cos(rad));
-  const absS = Math.abs(Math.sin(rad));
-  const effW = bw * absC + bd * absS;
-  const effD = bw * absS + bd * absC;
-  const effH = bh;
+  const { effW, effH, effD } = computeRotatedBoxDimensions({
+    width: item?.baseWidth || 1,
+    height: item?.baseHeight || 1,
+    depth: item?.baseDepth || 1,
+    yaw: item?.yaw || 0,
+    pitch: item?.pitch || 0,
+    roll: item?.roll || 0,
+    scale: item?.scale || 1
+  });
 
   const cx = Number(item?.baseX || 0) + Number(item?.dx || 0);
   const cz = Number(item?.baseZ || 0) + Number(item?.dz || 0);
@@ -480,33 +594,80 @@ function computeBoxOverlap(a, b, gap) {
   };
 }
 
-function findBestEscapeForSibling(sib, obstacleBox, origCx, origCz, halfVolW, halfVolD, wallMargin, gap) {
+function hasRawBoxIntersection(a, b) {
+  const RAW_EPS = 1e-4;
+  const ox = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+  const oz = Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ);
+  const oy = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+  return ox > RAW_EPS && oz > RAW_EPS && oy > RAW_EPS;
+}
+
+function findBestEscapeForSibling(
+  sib,
+  primaryObstacleBox,
+  allObstacleBoxes,
+  origCx,
+  origCz,
+  halfVolW,
+  halfVolD,
+  wallMargin,
+  gap
+) {
   const sibBox = computeItemLocalBox(sib);
   const minCx = -halfVolW + wallMargin + sibBox.halfW;
   const maxCx = halfVolW - wallMargin - sibBox.halfW;
   const minCz = -halfVolD + wallMargin + sibBox.halfD;
   const maxCz = halfVolD - wallMargin - sibBox.halfD;
+  if (minCx > maxCx + 1e-5 || minCz > maxCz + 1e-5) return null;
 
-  const pushPlusX = obstacleBox.maxX + gap + sibBox.halfW;
-  const pushMinusX = obstacleBox.minX - gap - sibBox.halfW;
-  const pushPlusZ = obstacleBox.maxZ + gap + sibBox.halfD;
-  const pushMinusZ = obstacleBox.minZ - gap - sibBox.halfD;
+  const pushPlusX = primaryObstacleBox.maxX + gap + sibBox.halfW;
+  const pushMinusX = primaryObstacleBox.minX - gap - sibBox.halfW;
+  const pushPlusZ = primaryObstacleBox.maxZ + gap + sibBox.halfD;
+  const pushMinusZ = primaryObstacleBox.minZ - gap - sibBox.halfD;
 
-  // Candidate positions: 4 cardinal slides + 4 corner slides around obstacle
+  // Candidate positions: 4 cardinal slides + 4 corner slides around primary obstacle,
+  // plus secondary slides around other obstacle edges when a cardinal slide is blocked.
   const candidates = [
-    { cx: pushPlusX, cz: sibBox.cz, dir: 1 },
-    { cx: pushMinusX, cz: sibBox.cz, dir: -1 },
-    { cx: sibBox.cx, cz: pushPlusZ, dir: 1 },
-    { cx: sibBox.cx, cz: pushMinusZ, dir: -1 },
-    { cx: pushPlusX, cz: pushPlusZ, dir: 0 },
-    { cx: pushPlusX, cz: pushMinusZ, dir: 0 },
-    { cx: pushMinusX, cz: pushPlusZ, dir: 0 },
-    { cx: pushMinusX, cz: pushMinusZ, dir: 0 }
+    { cx: pushPlusX, cz: sibBox.cz },
+    { cx: pushMinusX, cz: sibBox.cz },
+    { cx: sibBox.cx, cz: pushPlusZ },
+    { cx: sibBox.cx, cz: pushMinusZ },
+    { cx: pushPlusX, cz: pushPlusZ },
+    { cx: pushPlusX, cz: pushMinusZ },
+    { cx: pushMinusX, cz: pushPlusZ },
+    { cx: pushMinusX, cz: pushMinusZ },
+    { cx: pushPlusX, cz: origCz },
+    { cx: pushMinusX, cz: origCz },
+    { cx: origCx, cz: pushPlusZ },
+    { cx: origCx, cz: pushMinusZ }
   ];
 
-  // Prefer pushing away from obstacle center when distances are nearly equal
-  const awayX = sibBox.cx - obstacleBox.cx;
-  const awayZ = sibBox.cz - obstacleBox.cz;
+  const obstacles = Array.isArray(allObstacleBoxes) ? allObstacleBoxes : [primaryObstacleBox];
+  for (const ob of obstacles) {
+    if (!ob || ob === primaryObstacleBox) continue;
+    const obPlusX = ob.maxX + gap + sibBox.halfW;
+    const obMinusX = ob.minX - gap - sibBox.halfW;
+    const obPlusZ = ob.maxZ + gap + sibBox.halfD;
+    const obMinusZ = ob.minZ - gap - sibBox.halfD;
+    candidates.push(
+      { cx: pushPlusX, cz: obPlusZ },
+      { cx: pushPlusX, cz: obMinusZ },
+      { cx: pushMinusX, cz: obPlusZ },
+      { cx: pushMinusX, cz: obMinusZ },
+      { cx: obPlusX, cz: pushPlusZ },
+      { cx: obMinusX, cz: pushPlusZ },
+      { cx: obPlusX, cz: pushMinusZ },
+      { cx: obMinusX, cz: pushMinusZ },
+      { cx: obPlusX, cz: sibBox.cz },
+      { cx: obMinusX, cz: sibBox.cz },
+      { cx: sibBox.cx, cz: obPlusZ },
+      { cx: sibBox.cx, cz: obMinusZ }
+    );
+  }
+
+  // Prefer pushing away from primary obstacle center when distances are nearly equal
+  const awayX = sibBox.cx - primaryObstacleBox.cx;
+  const awayZ = sibBox.cz - primaryObstacleBox.cz;
 
   let best = null;
   let bestScore = Infinity;
@@ -517,19 +678,135 @@ function findBestEscapeForSibling(sib, obstacleBox, origCx, origCz, halfVolW, ha
 
     const clampedCx = Math.max(minCx, Math.min(maxCx, cand.cx));
     const clampedCz = Math.max(minCz, Math.min(maxCz, cand.cz));
+    const testBox = {
+      ...sibBox,
+      cx: clampedCx,
+      cz: clampedCz,
+      minX: clampedCx - sibBox.halfW,
+      maxX: clampedCx + sibBox.halfW,
+      minZ: clampedCz - sibBox.halfD,
+      maxZ: clampedCz + sibBox.halfD
+    };
+
+    // Never accept a candidate that still overlaps the primary obstacle
+    if (computeBoxOverlap(primaryObstacleBox, testBox, gap).colliding) continue;
+
+    let overlapCount = 0;
+    let overlapPenalty = 0;
+    for (const ob of obstacles) {
+      if (!ob || ob === primaryObstacleBox) continue;
+      const ov = computeBoxOverlap(ob, testBox, gap);
+      if (ov.colliding) {
+        overlapCount += 1;
+        overlapPenalty += Math.min(ov.overlapX, ov.overlapZ);
+      }
+    }
+
     const moveDist = Math.hypot(clampedCx - sibBox.cx, clampedCz - sibBox.cz);
     const driftDist = Math.hypot(clampedCx - origCx, clampedCz - origCz);
     const dotAway = (clampedCx - sibBox.cx) * awayX + (clampedCz - sibBox.cz) * awayZ;
     const awayBonus = dotAway > 0 ? -0.05 : 0;
-    const score = moveDist * 1.0 + driftDist * 0.2 + awayBonus;
+    // Strongly prefer candidates that clear ALL siblings without causing a cascade
+    const score = overlapCount * 1000 + overlapPenalty * 40 + moveDist * 1.0 + driftDist * 0.2 + awayBonus;
 
     if (score < bestScore) {
       bestScore = score;
-      best = { cx: clampedCx, cz: clampedCz };
+      best = { cx: clampedCx, cz: clampedCz, clearOfAll: overlapCount === 0 };
     }
   }
 
   return best;
+}
+
+function findClosestClearPocketForItem(
+  item,
+  origCx,
+  origCz,
+  obstacleBoxes,
+  halfVolW,
+  halfVolD,
+  volH,
+  wallMargin,
+  gap
+) {
+  const sBox = computeItemLocalBox(item);
+  const minCx = -halfVolW + wallMargin + sBox.halfW;
+  const maxCx = halfVolW - wallMargin - sBox.halfW;
+  const minCz = -halfVolD + wallMargin + sBox.halfD;
+  const maxCz = halfVolD - wallMargin - sBox.halfD;
+  if (minCx > maxCx + 1e-5 || minCz > maxCz + 1e-5) return null;
+
+  const rawXAnchors = [origCx, minCx, maxCx, 0];
+  const rawZAnchors = [origCz, minCz, maxCz, 0];
+
+  for (const ob of obstacleBoxes) {
+    if (!ob) continue;
+    rawXAnchors.push(ob.maxX + gap + sBox.halfW, ob.minX - gap - sBox.halfW, ob.cx);
+    rawZAnchors.push(ob.maxZ + gap + sBox.halfD, ob.minZ - gap - sBox.halfD, ob.cz);
+  }
+
+  const dedup = (arr, lo, hi) => {
+    const out = [];
+    for (const v of arr) {
+      if (!Number.isFinite(v) || v < lo - EPS || v > hi + EPS) continue;
+      const clamped = Math.max(lo, Math.min(hi, v));
+      if (!out.some((u) => Math.abs(u - clamped) < 1e-4)) {
+        out.push(clamped);
+      }
+    }
+    return out;
+  };
+
+  const xAnchors = dedup(rawXAnchors, minCx, maxCx);
+  const zAnchors = dedup(rawZAnchors, minCz, maxCz);
+
+  const testPoint = (candX, candZ) => {
+    const testBox = computeItemLocalBox({
+      ...item,
+      dx: candX - item.baseX,
+      dz: candZ - item.baseZ
+    });
+    if (!isBoxInsideParcel(testBox, halfVolW, halfVolD, volH, wallMargin)) return false;
+    for (const ob of obstacleBoxes) {
+      if (!ob) continue;
+      if (computeBoxOverlap(ob, testBox, gap).colliding || hasRawBoxIntersection(ob, testBox)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  let rescue = null;
+  let bestDist = Infinity;
+
+  for (const cx of xAnchors) {
+    for (const cz of zAnchors) {
+      if (!testPoint(cx, cz)) continue;
+      const dist = Math.hypot(cx - origCx, cz - origCz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        rescue = { cx, cz };
+      }
+    }
+  }
+  if (rescue) return rescue;
+
+  // Fallback parcel sweep grid when anchor intersections miss an open interior pocket
+  const GRID_STEPS = 14;
+  for (let ix = 0; ix <= GRID_STEPS; ix += 1) {
+    const cx = minCx + ((maxCx - minCx) * ix) / GRID_STEPS;
+    for (let iz = 0; iz <= GRID_STEPS; iz += 1) {
+      const cz = minCz + ((maxCz - minCz) * iz) / GRID_STEPS;
+      if (!testPoint(cx, cz)) continue;
+      const dist = Math.hypot(cx - origCx, cz - origCz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        rescue = { cx, cz };
+      }
+    }
+  }
+
+  return rescue;
 }
 
 /**
@@ -537,7 +814,7 @@ function findBestEscapeForSibling(sib, obstacleBox, origCx, origCz, halfVolW, ha
  * @param {{
  *   parcelVolume: any,
  *   targetId: string,
- *   targetTransform?: { dx?: number, dy?: number, dz?: number, yaw?: number, scale?: number },
+ *   targetTransform?: { dx?: number, dy?: number, dz?: number, yaw?: number, pitch?: number, roll?: number, scale?: number },
  *   items?: any[],
  *   minGapMeters?: number,
  *   wallMargin?: number
@@ -556,6 +833,7 @@ export function resolveSculpturePlacement({
   const halfVolD = vol.depthMeters / 2;
   const volH = vol.heightMeters;
   const gap = Math.max(0, Number(minGapMeters || 0));
+  const solveGap = gap + 0.002;
   const margin = Math.max(0, Number(wallMargin || 0));
 
   const cloned = (items || []).map((it) => ({
@@ -567,6 +845,8 @@ export function resolveSculpturePlacement({
     dy: Math.max(0, Number(it.dy || 0)),
     dz: Number(it.dz || 0),
     yaw: Number(it.yaw || 0),
+    pitch: tiltToDegrees(it.pitch || 0),
+    roll: tiltToDegrees(it.roll || 0),
     scale: Math.max(MIN_ARTWORK_SCALE, Number(it.scale || 1)),
     baseWidth: Math.max(0.05, Number(it.baseWidth || 1)),
     baseHeight: Math.max(0.05, Number(it.baseHeight || 1)),
@@ -584,6 +864,8 @@ export function resolveSculpturePlacement({
       dy: 0,
       dz: 0,
       yaw: 0,
+      pitch: 0,
+      roll: 0,
       scale: 1,
       baseWidth: 1.4,
       baseHeight: 1.4,
@@ -597,15 +879,23 @@ export function resolveSculpturePlacement({
   if (targetTransform.dy !== undefined) target.dy = Number(targetTransform.dy || 0);
   if (targetTransform.dz !== undefined) target.dz = Number(targetTransform.dz || 0);
   if (targetTransform.yaw !== undefined) target.yaw = Number(targetTransform.yaw || 0);
+  if (targetTransform.pitch !== undefined) target.pitch = Number(targetTransform.pitch || 0);
+  if (targetTransform.roll !== undefined) target.roll = Number(targetTransform.roll || 0);
   if (targetTransform.scale !== undefined) target.scale = Number(targetTransform.scale || 1);
 
-  if (![target.dx, target.dy, target.dz, target.yaw, target.scale].every(Number.isFinite)) {
+  if (
+    ![target.dx, target.dy, target.dz, target.yaw, target.pitch, target.roll, target.scale].every(
+      Number.isFinite
+    )
+  ) {
     return {
       ok: false,
       reason: 'invalid_transform',
       message: 'Move, scale, and rotation values must be finite numbers.'
     };
   }
+  target.pitch = tiltToDegrees(target.pitch);
+  target.roll = tiltToDegrees(target.roll);
 
   const maxScaleForLand = computeMaxScaleForParcel(target, vol, { wallMargin: margin });
   if (target.scale < MIN_ARTWORK_SCALE - 1e-6) {
@@ -630,14 +920,22 @@ export function resolveSculpturePlacement({
       ok: false,
       reason: 'exceeds_land_bounds',
       maxScaleForLand,
-      message: `Scale ${round3(target.scale)}× exceeds the ${round3(vol.widthMeters)}×${round3(
+      message: `Scale ${round3(target.scale)}× (${round3(targetTestBox.effW)}×${round3(
+        targetTestBox.effH
+      )}×${round3(targetTestBox.effD)}m) exceeds the ${round3(vol.widthMeters)}×${round3(
         vol.depthMeters
       )}×${round3(volH)}m land bounds (max ${round3(maxScaleForLand)}×).`
     };
   }
 
-  // Clamp target cleanly inside parcel bounds
+  // Clamp target cleanly inside parcel bounds and round to persisted precision before collision solving
   const clampedToLandBounds = clampItemInsideParcel(target, halfVolW, halfVolD, volH, margin);
+  target.dx = round3(target.dx);
+  target.dy = round3(Math.max(0, target.dy));
+  target.dz = round3(target.dz);
+  if (!isBoxInsideParcel(computeItemLocalBox(target), halfVolW, halfVolD, volH, margin)) {
+    clampItemInsideParcel(target, halfVolW, halfVolD, volH, margin);
+  }
   const targetBox = computeItemLocalBox(target);
 
   const siblings = cloned.filter((it) => it.id !== target.id);
@@ -659,34 +957,42 @@ export function resolveSculpturePlacement({
   let anyTargetOverlap = false;
   for (const s of siblings) {
     const sBox = computeItemLocalBox(s);
-    if (computeBoxOverlap(targetBox, sBox, gap).colliding) {
+    if (
+      computeBoxOverlap(targetBox, sBox, solveGap).colliding ||
+      hasRawBoxIntersection(targetBox, sBox)
+    ) {
       anyTargetOverlap = true;
       break;
     }
   }
 
   if (anyTargetOverlap) {
-    const MAX_ITERS = 64;
+    const MAX_ITERS = 96;
     for (let iter = 0; iter < MAX_ITERS; iter += 1) {
       let movedAny = false;
 
-      // Phase A: Target pushes overlapping siblings out of its box while keeping them inside land bounds
+      // Phase A: Target pushes overlapping siblings out of its box while avoiding other siblings
       for (const s of siblings) {
         const sBox = computeItemLocalBox(s);
-        const ov = computeBoxOverlap(targetBox, sBox, gap);
-        if (!ov.colliding) continue;
+        const ov = computeBoxOverlap(targetBox, sBox, solveGap);
+        if (!ov.colliding && !hasRawBoxIntersection(targetBox, sBox)) continue;
 
         touchedIds.add(s.id);
         const orig = origPos.get(s.id);
+        const allObstacles = [
+          targetBox,
+          ...siblings.filter((other) => other.id !== s.id).map((other) => computeItemLocalBox(other))
+        ];
         const best = findBestEscapeForSibling(
           s,
           targetBox,
+          allObstacles,
           orig.cx,
           orig.cz,
           halfVolW,
           halfVolD,
           margin,
-          gap
+          solveGap
         );
         if (best) {
           s.dx = best.cx - s.baseX;
@@ -694,20 +1000,19 @@ export function resolveSculpturePlacement({
           clampItemInsideParcel(s, halfVolW, halfVolD, volH, margin);
           movedAny = true;
         } else {
-          // Fallback incremental push away from target center along whichever axis has more slack
           const awayX = sBox.cx >= targetBox.cx ? 1 : -1;
           const awayZ = sBox.cz >= targetBox.cz ? 1 : -1;
           if (ov.overlapX <= ov.overlapZ) {
-            s.dx += awayX * ov.overlapX;
+            s.dx += awayX * Math.max(ov.overlapX, 0.02);
           } else {
-            s.dz += awayZ * ov.overlapZ;
+            s.dz += awayZ * Math.max(ov.overlapZ, 0.02);
           }
           clampItemInsideParcel(s, halfVolW, halfVolD, volH, margin);
           movedAny = true;
         }
       }
 
-      // Phase B: Resolve cascade collisions involving any touched sibling against other siblings
+      // Phase B: Resolve cascade collisions involving any touched sibling against ALL other siblings
       for (let i = 0; i < siblings.length; i += 1) {
         for (let j = i + 1; j < siblings.length; j += 1) {
           const a = siblings[i];
@@ -716,11 +1021,16 @@ export function resolveSculpturePlacement({
 
           const boxA = computeItemLocalBox(a);
           const boxB = computeItemLocalBox(b);
-          const ov = computeBoxOverlap(boxA, boxB, gap);
-          if (!ov.colliding) continue;
+          const ov = computeBoxOverlap(boxA, boxB, solveGap);
+          if (!ov.colliding && !hasRawBoxIntersection(boxA, boxB)) continue;
 
           touchedIds.add(a.id);
           touchedIds.add(b.id);
+
+          const prevADx = a.dx;
+          const prevADz = a.dz;
+          const prevBDx = b.dx;
+          const prevBDz = b.dz;
 
           // Push along minimum-penetration horizontal axis, distributing displacement by free room to walls
           const pushAlongX = ov.overlapX <= ov.overlapZ;
@@ -741,7 +1051,6 @@ export function resolveSculpturePlacement({
               a.dx -= sign * ov.overlapX * shareA;
               b.dx += sign * ov.overlapX * shareB;
             } else {
-              // No room along X -> slide orthogonally along Z
               const signZ = boxB.cz >= boxA.cz ? 1 : -1;
               a.dz -= signZ * (ov.overlapZ * 0.5);
               b.dz += signZ * (ov.overlapZ * 0.5);
@@ -771,86 +1080,222 @@ export function resolveSculpturePlacement({
 
           clampItemInsideParcel(a, halfVolW, halfVolD, volH, margin);
           clampItemInsideParcel(b, halfVolW, halfVolD, volH, margin);
-          movedAny = true;
+
+          // If proportional push got stuck against walls or shoved either sibling back into target,
+          // use obstacle-aware escape on the sibling that has clearer escape options
+          const nextBoxA = computeItemLocalBox(a);
+          const nextBoxB = computeItemLocalBox(b);
+          const stillHits =
+            computeBoxOverlap(nextBoxA, nextBoxB, solveGap).colliding ||
+            hasRawBoxIntersection(nextBoxA, nextBoxB) ||
+            computeBoxOverlap(targetBox, nextBoxA, solveGap).colliding ||
+            computeBoxOverlap(targetBox, nextBoxB, solveGap).colliding;
+
+          if (stillHits) {
+            const origB = origPos.get(b.id);
+            const obstaclesForB = [
+              targetBox,
+              nextBoxA,
+              ...siblings
+                .filter((other) => other.id !== a.id && other.id !== b.id)
+                .map((other) => computeItemLocalBox(other))
+            ];
+            const escB = findBestEscapeForSibling(
+              b,
+              nextBoxA,
+              obstaclesForB,
+              origB.cx,
+              origB.cz,
+              halfVolW,
+              halfVolD,
+              margin,
+              solveGap
+            );
+            if (escB && escB.clearOfAll) {
+              b.dx = escB.cx - b.baseX;
+              b.dz = escB.cz - b.baseZ;
+              clampItemInsideParcel(b, halfVolW, halfVolD, volH, margin);
+            } else {
+              const origA = origPos.get(a.id);
+              const obstaclesForA = [
+                targetBox,
+                nextBoxB,
+                ...siblings
+                  .filter((other) => other.id !== a.id && other.id !== b.id)
+                  .map((other) => computeItemLocalBox(other))
+              ];
+              const escA = findBestEscapeForSibling(
+                a,
+                nextBoxB,
+                obstaclesForA,
+                origA.cx,
+                origA.cz,
+                halfVolW,
+                halfVolD,
+                margin,
+                solveGap
+              );
+              if (escA && escA.clearOfAll) {
+                a.dx = escA.cx - a.baseX;
+                a.dz = escA.cz - a.baseZ;
+                clampItemInsideParcel(a, halfVolW, halfVolD, volH, margin);
+              }
+            }
+          }
+
+          if (
+            Math.abs(a.dx - prevADx) > 1e-5 ||
+            Math.abs(a.dz - prevADz) > 1e-5 ||
+            Math.abs(b.dx - prevBDx) > 1e-5 ||
+            Math.abs(b.dz - prevBDz) > 1e-5
+          ) {
+            movedAny = true;
+          }
         }
       }
 
       if (!movedAny) break;
     }
 
-    // Phase C (Pocket-search rescue for tightly packed corners):
-    // If any touched sibling still overlaps target or another sibling, test clean non-overlapping pockets around target
-    for (const s of siblings) {
-      if (!touchedIds.has(s.id)) continue;
-      const sBox = computeItemLocalBox(s);
-      const stillCollides =
-        computeBoxOverlap(targetBox, sBox, gap).colliding ||
-        siblings.some(
-          (other) =>
-            other.id !== s.id && computeBoxOverlap(sBox, computeItemLocalBox(other), gap).colliding
-        );
-      if (!stillCollides) continue;
-
-      const orig = origPos.get(s.id);
-      const minCx = -halfVolW + margin + sBox.halfW;
-      const maxCx = halfVolW - margin - sBox.halfW;
-      const minCz = -halfVolD + margin + sBox.halfD;
-      const maxCz = halfVolD - margin - sBox.halfD;
-      if (minCx > maxCx || minCz > maxCz) continue;
-
-      const xAnchors = [
-        orig.cx,
-        targetBox.maxX + gap + sBox.halfW,
-        targetBox.minX - gap - sBox.halfW,
-        minCx,
-        maxCx
-      ].filter((v) => v >= minCx - EPS && v <= maxCx + EPS);
-      const zAnchors = [
-        orig.cz,
-        targetBox.maxZ + gap + sBox.halfD,
-        targetBox.minZ - gap - sBox.halfD,
-        minCz,
-        maxCz
-      ].filter((v) => v >= minCz - EPS && v <= maxCz + EPS);
-
-      let rescue = null;
-      let bestDist = Infinity;
-      for (const cx of xAnchors) {
-        for (const cz of zAnchors) {
-          const candX = Math.max(minCx, Math.min(maxCx, cx));
-          const candZ = Math.max(minCz, Math.min(maxCz, cz));
-          const testBox = computeItemLocalBox({
-            ...s,
-            dx: candX - s.baseX,
-            dz: candZ - s.baseZ
-          });
-          if (!isBoxInsideParcel(testBox, halfVolW, halfVolD, volH, margin)) continue;
-          if (computeBoxOverlap(targetBox, testBox, gap).colliding) continue;
-          const hitsOther = siblings.some(
-            (other) =>
-              other.id !== s.id &&
-              computeBoxOverlap(testBox, computeItemLocalBox(other), gap).colliding
-          );
-          if (hitsOther) continue;
-          const dist = Math.hypot(candX - orig.cx, candZ - orig.cz);
-          if (dist < bestDist) {
-            bestDist = dist;
-            rescue = { cx: candX, cz: candZ };
+    // Phase C (Multi-pass Pocket-Search Rescue across target + all sibling edges + parcel sweep):
+    const hasTouchedCollisions = () => {
+      for (const s of siblings) {
+        const sBox = computeItemLocalBox(s);
+        if (
+          computeBoxOverlap(targetBox, sBox, solveGap).colliding ||
+          hasRawBoxIntersection(targetBox, sBox)
+        ) {
+          touchedIds.add(s.id);
+          return true;
+        }
+      }
+      for (let i = 0; i < siblings.length; i += 1) {
+        for (let j = i + 1; j < siblings.length; j += 1) {
+          const a = siblings[i];
+          const b = siblings[j];
+          if (!touchedIds.has(a.id) && !touchedIds.has(b.id)) continue;
+          const bA = computeItemLocalBox(a);
+          const bB = computeItemLocalBox(b);
+          if (computeBoxOverlap(bA, bB, solveGap).colliding || hasRawBoxIntersection(bA, bB)) {
+            touchedIds.add(a.id);
+            touchedIds.add(b.id);
+            return true;
           }
         }
       }
-      if (rescue) {
-        s.dx = rescue.cx - s.baseX;
-        s.dz = rescue.cz - s.baseZ;
+      return false;
+    };
+
+    for (let rescuePass = 0; rescuePass < 3; rescuePass += 1) {
+      if (!hasTouchedCollisions()) break;
+      let rescuedAny = false;
+      for (const s of siblings) {
+        if (!touchedIds.has(s.id)) continue;
+        const sBox = computeItemLocalBox(s);
+        const stillCollides =
+          computeBoxOverlap(targetBox, sBox, solveGap).colliding ||
+          hasRawBoxIntersection(targetBox, sBox) ||
+          siblings.some((other) => {
+            if (other.id === s.id) return false;
+            const oBox = computeItemLocalBox(other);
+            return computeBoxOverlap(sBox, oBox, solveGap).colliding || hasRawBoxIntersection(sBox, oBox);
+          });
+        if (!stillCollides) continue;
+
+        const orig = origPos.get(s.id);
+        const obstacleBoxes = [
+          targetBox,
+          ...siblings.filter((other) => other.id !== s.id).map((other) => computeItemLocalBox(other))
+        ];
+        const rescue = findClosestClearPocketForItem(
+          s,
+          orig.cx,
+          orig.cz,
+          obstacleBoxes,
+          halfVolW,
+          halfVolD,
+          volH,
+          margin,
+          solveGap
+        );
+        if (rescue) {
+          s.dx = rescue.cx - s.baseX;
+          s.dz = rescue.cz - s.baseZ;
+          rescuedAny = true;
+        }
+      }
+      if (!rescuedAny) break;
+    }
+
+    // Phase D (Joint Multi-Sibling Repack Fallback for deadlocked 2+ sibling clusters):
+    if (hasTouchedCollisions() && touchedIds.size >= 1) {
+      const snapshot = siblings.map((s) => ({ id: s.id, dx: s.dx, dy: s.dy, dz: s.dz }));
+      const fixedSiblings = siblings.filter((s) => !touchedIds.has(s.id));
+      const movableSiblings = siblings
+        .filter((s) => touchedIds.has(s.id))
+        .sort((a, b) => {
+          const boxA = computeItemLocalBox(a);
+          const boxB = computeItemLocalBox(b);
+          const areaDiff = boxB.effW * boxB.effD - boxA.effW * boxA.effD;
+          if (Math.abs(areaDiff) > 1e-4) return areaDiff;
+          return a.id.localeCompare(b.id);
+        });
+
+      const placedBoxes = [targetBox, ...fixedSiblings.map((s) => computeItemLocalBox(s))];
+      let repackOk = true;
+
+      for (const s of movableSiblings) {
+        const orig = origPos.get(s.id);
+        const pocket = findClosestClearPocketForItem(
+          s,
+          orig.cx,
+          orig.cz,
+          placedBoxes,
+          halfVolW,
+          halfVolD,
+          volH,
+          margin,
+          solveGap
+        );
+        if (!pocket) {
+          repackOk = false;
+          break;
+        }
+        s.dx = pocket.cx - s.baseX;
+        s.dz = pocket.cz - s.baseZ;
+        placedBoxes.push(computeItemLocalBox(s));
+      }
+
+      if (!repackOk) {
+        const snapMap = new Map(snapshot.map((st) => [st.id, st]));
+        for (const s of siblings) {
+          const prev = snapMap.get(s.id);
+          if (prev) {
+            s.dx = prev.dx;
+            s.dy = prev.dy;
+            s.dz = prev.dz;
+          }
+        }
       }
     }
   }
 
-  // Final Strict Verification Gate:
+  // Round all persisted coordinates BEFORE final strict zero-intersection verification
+  for (const s of siblings) {
+    if (touchedIds.has(s.id)) {
+      s.dx = round3(s.dx);
+      s.dy = round3(Math.max(0, s.dy));
+      s.dz = round3(s.dz);
+    }
+  }
+
+  const finalTargetBox = computeItemLocalBox(target);
+
+  // Final Strict Verification Gate (evaluated on exact rounded output coordinates):
   // 1) Target and all touched siblings MUST lie strictly inside parcelVolume
-  // 2) Zero overlaps involving target OR any touched sibling
+  // 2) ZERO overlaps or raw bounding-box intersections involving target OR any touched sibling
   const collidingIds = new Set();
-  if (!isBoxInsideParcel(targetBox, halfVolW, halfVolD, volH, margin)) {
+  if (!isBoxInsideParcel(finalTargetBox, halfVolW, halfVolD, volH, margin)) {
     return {
       ok: false,
       reason: 'exceeds_land_bounds',
@@ -864,7 +1309,10 @@ export function resolveSculpturePlacement({
     if (touchedIds.has(s.id) && !isBoxInsideParcel(sBox, halfVolW, halfVolD, volH, margin)) {
       collidingIds.add(s.id);
     }
-    if (computeBoxOverlap(targetBox, sBox, gap).colliding) {
+    if (
+      computeBoxOverlap(finalTargetBox, sBox, gap).colliding ||
+      hasRawBoxIntersection(finalTargetBox, sBox)
+    ) {
       collidingIds.add(s.id);
     }
   }
@@ -874,7 +1322,9 @@ export function resolveSculpturePlacement({
       const a = siblings[i];
       const b = siblings[j];
       if (!touchedIds.has(a.id) && !touchedIds.has(b.id)) continue;
-      if (computeBoxOverlap(computeItemLocalBox(a), computeItemLocalBox(b), gap).colliding) {
+      const boxA = computeItemLocalBox(a);
+      const boxB = computeItemLocalBox(b);
+      if (computeBoxOverlap(boxA, boxB, gap).colliding || hasRawBoxIntersection(boxA, boxB)) {
         collidingIds.add(a.id);
         collidingIds.add(b.id);
       }
@@ -909,6 +1359,8 @@ export function resolveSculpturePlacement({
         dy: round3(s.dy),
         dz: round3(s.dz),
         yaw: round4(s.yaw),
+        pitch: tiltToDegrees(s.pitch),
+        roll: tiltToDegrees(s.roll),
         scale: round4(s.scale),
         movedMeters: round3(movedMeters),
         box
@@ -922,6 +1374,8 @@ export function resolveSculpturePlacement({
     dy: round3(it.dy),
     dz: round3(it.dz),
     yaw: round4(it.yaw),
+    pitch: tiltToDegrees(it.pitch),
+    roll: tiltToDegrees(it.roll),
     scale: round4(it.scale),
     box: computeItemLocalBox(it),
     wasPushed: pushedSiblings.some((p) => p.id === it.id)
@@ -938,8 +1392,10 @@ export function resolveSculpturePlacement({
       dy: round3(target.dy),
       dz: round3(target.dz),
       yaw: round4(target.yaw),
+      pitch: tiltToDegrees(target.pitch),
+      roll: tiltToDegrees(target.roll),
       scale: round4(target.scale),
-      box: computeItemLocalBox(target)
+      box: finalTargetBox
     },
     pushedSiblings,
     allItems
@@ -952,7 +1408,7 @@ export function resolveSculpturePlacement({
  * @param {{
  *   parcelVolume: any,
  *   targetId: string,
- *   targetTransform?: { dx?: number, dy?: number, dz?: number, yaw?: number, scale?: number },
+ *   targetTransform?: { dx?: number, dy?: number, dz?: number, yaw?: number, pitch?: number, roll?: number, scale?: number },
  *   items?: any[],
  *   minGapMeters?: number,
  *   wallMargin?: number
@@ -972,7 +1428,9 @@ export function computeMaxFeasibleScale({
 
   const probe = {
     ...target,
-    ...(targetTransform.yaw !== undefined ? { yaw: Number(targetTransform.yaw || 0) } : {})
+    ...(targetTransform.yaw !== undefined ? { yaw: Number(targetTransform.yaw || 0) } : {}),
+    ...(targetTransform.pitch !== undefined ? { pitch: tiltToDegrees(targetTransform.pitch || 0) } : {}),
+    ...(targetTransform.roll !== undefined ? { roll: tiltToDegrees(targetTransform.roll || 0) } : {})
   };
   const hiMax = computeMaxScaleForParcel(probe, vol, { wallMargin });
   if (!Number.isFinite(hiMax) || hiMax < MIN_ARTWORK_SCALE) {
@@ -1035,7 +1493,7 @@ export function computeMaxFeasibleScale({
  *   parcelVolume: any,
  *   bbox: any,
  *   modelScale?: number,
- *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number, scale?: number },
+ *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number, pitch?: number, roll?: number, scale?: number },
  *   existingItems?: any[],
  *   minGapMeters?: number,
  *   wallMargin?: number
@@ -1057,6 +1515,8 @@ export function evaluateModelFitInParcel({
   const dy = Math.max(0, Number.isFinite(Number(anchorOffset?.dy)) ? Number(anchorOffset.dy) : 0);
   const dz = Number.isFinite(Number(anchorOffset?.dz)) ? Number(anchorOffset.dz) : 0;
   const yaw = Number.isFinite(Number(anchorOffset?.yaw)) ? Number(anchorOffset.yaw) : 0;
+  const pitch = tiltToDegrees(anchorOffset?.pitch || 0);
+  const roll = tiltToDegrees(anchorOffset?.roll || 0);
 
   const parcelDimensions = {
     widthMeters: round3(vol.widthMeters),
@@ -1088,6 +1548,8 @@ export function evaluateModelFitInParcel({
     dy,
     dz,
     yaw,
+    pitch,
+    roll,
     scale,
     baseWidth: dims.width,
     baseHeight: dims.height,
@@ -1098,7 +1560,7 @@ export function evaluateModelFitInParcel({
   const placement = resolveSculpturePlacement({
     parcelVolume: vol,
     targetId: candidateId,
-    targetTransform: { dx, dy, dz, yaw, scale },
+    targetTransform: { dx, dy, dz, yaw, pitch, roll, scale },
     items,
     minGapMeters,
     wallMargin
@@ -1107,16 +1569,25 @@ export function evaluateModelFitInParcel({
   const maxSafeScale = computeMaxFeasibleScale({
     parcelVolume: vol,
     targetId: candidateId,
-    targetTransform: { dx, dy, dz, yaw },
+    targetTransform: { dx, dy, dz, yaw, pitch, roll },
     items,
     minGapMeters,
     wallMargin
   });
 
+  const rotScaled = computeRotatedBoxDimensions({
+    width: dims.width,
+    height: dims.height,
+    depth: dims.depth,
+    yaw,
+    pitch,
+    roll,
+    scale
+  });
   const scaledDimensions = {
-    widthMeters: round3(dims.width * scale),
-    depthMeters: round3(dims.depth * scale),
-    heightMeters: round3(dims.height * scale)
+    widthMeters: round3(rotScaled.effW),
+    depthMeters: round3(rotScaled.effD),
+    heightMeters: round3(rotScaled.effH)
   };
 
   if (placement.ok) {

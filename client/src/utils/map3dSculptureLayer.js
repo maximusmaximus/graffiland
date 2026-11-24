@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
+  computeRotatedBoxDimensions,
+  extractSculptureRotation,
   extractSculptureScale,
   parcelLocalOffsetToWorldLatLng,
   parcelLocalYawToWorldYawRad,
+  tiltToRadians,
   yawToRadians
 } from '../../../shared/sculpturePlacement.mjs';
 import { buildVoxelGroup, disposeObject3D } from '../components/VoxelEngine3D.js';
@@ -100,14 +103,26 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
   const anchorDx = Number.isFinite(Number(off.dx)) ? Number(off.dx) : 0;
   const anchorDy = Number.isFinite(Number(off.dy)) ? Math.max(0, Number(off.dy)) : 0;
   const anchorDz = Number.isFinite(Number(off.dz)) ? Number(off.dz) : 0;
+  const rot = extractSculptureRotation(sc);
   const yawRad = yawToRadians(off.yaw || 0);
+  const pitchRad = tiltToRadians(rot.pitch);
+  const rollRad = tiltToRadians(rot.roll);
   const userScale = extractSculptureScale(sc);
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
 
   // Never autoscale objects placed into lands: strictly preserve native 1:1 size × explicit userScale
   const scale = Math.max(0.001, Number(userScale.toFixed(5)));
-  const renderedH = safeSizeY * scale;
+  const yawLocalUnit = computeRotatedBoxDimensions({
+    width: safeSizeX,
+    height: safeSizeY,
+    depth: safeSizeZ,
+    yaw: 0,
+    pitch: rot.pitch,
+    roll: rot.roll,
+    scale: 1
+  });
+  const renderedH = yawLocalUnit.effH * scale;
   let altitudeMeters = baseAlt + anchorDy;
 
   if (hasVol) {
@@ -141,16 +156,24 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
     worldDz: worldPos.worldDz,
     yawRad,
     worldYawRad,
+    pitchRad,
+    rollRad,
     parcelRotationDeg,
     centerOffset: {
       x: -center.x,
       y: -min.y,
       z: -center.z
     },
+    centroidOffset: {
+      x: -center.x,
+      y: -center.y,
+      z: -center.z
+    },
+    rotatedLiftY: Number((yawLocalUnit.effH / 2).toFixed(5)),
     renderedSize: {
-      x: Number((safeSizeX * scale).toFixed(4)),
-      y: Number((safeSizeY * scale).toFixed(4)),
-      z: Number((safeSizeZ * scale).toFixed(4))
+      x: Number((yawLocalUnit.effW * scale).toFixed(4)),
+      y: Number((yawLocalUnit.effH * scale).toFixed(4)),
+      z: Number((yawLocalUnit.effD * scale).toFixed(4))
     }
   };
 }
@@ -158,6 +181,7 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
 function buildSculptureSignature(sc, parcelVolume) {
   const cm = sc?.customModel || {};
   const off = sc?.anchorOffset || {};
+  const rot = extractSculptureRotation(sc);
   const voxels = Array.isArray(sc?.voxels) ? sc.voxels : [];
   const firstV = voxels[0];
   const lastV = voxels[voxels.length - 1];
@@ -183,6 +207,8 @@ function buildSculptureSignature(sc, parcelVolume) {
     off.dy ?? 0,
     off.dz ?? 0,
     off.yaw ?? 0,
+    rot.pitch,
+    rot.roll,
     voxelSig,
     volSig
   ].join('|');
@@ -327,16 +353,30 @@ export function createSculptureThreeLayer({
     const container = new THREE.Group();
     const pivot = new THREE.Group();
 
-    object3d.position.set(
-      transform.centerOffset.x,
-      transform.centerOffset.y,
-      transform.centerOffset.z
-    );
-    pivot.add(object3d);
-    pivot.scale.setScalar(transform.scale);
-    if (transform.worldYawRad !== 0) {
-      pivot.rotation.y = transform.worldYawRad;
+    if (transform.pitchRad !== 0 || transform.rollRad !== 0) {
+      const rotator = new THREE.Group();
+      rotator.rotation.order = 'YXZ';
+      object3d.position.set(
+        transform.centroidOffset.x,
+        transform.centroidOffset.y,
+        transform.centroidOffset.z
+      );
+      rotator.add(object3d);
+      rotator.rotation.set(transform.pitchRad, transform.worldYawRad, transform.rollRad);
+      rotator.position.set(0, transform.rotatedLiftY, 0);
+      pivot.add(rotator);
+    } else {
+      object3d.position.set(
+        transform.centerOffset.x,
+        transform.centerOffset.y,
+        transform.centerOffset.z
+      );
+      pivot.add(object3d);
+      if (transform.worldYawRad !== 0) {
+        pivot.rotation.y = transform.worldYawRad;
+      }
     }
+    pivot.scale.setScalar(transform.scale);
     pivot.position.set(transform.worldDx, 0, transform.worldDz);
     container.add(pivot);
 

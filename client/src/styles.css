@@ -10018,6 +10018,190 @@ button.user-handle-badge:hover .user-handle-text {
   }
 }
 
+/* Vertical Rotation Measurement Bar & Floating Height Ruler Badge */
+.sculpture-vertical-ruler-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 20px);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(8, 14, 28, 0.88);
+  border: 1px solid rgba(255, 209, 102, 0.65);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  color: #ffd166;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.sculpture-ruler-sep {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.sculpture-ruler-tilt {
+  color: #00f5d4;
+  font-weight: 700;
+}
+
+.sculpture-vertical-measure-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 209, 102, 0.08);
+  border: 1px solid rgba(255, 209, 102, 0.32);
+}
+
+.sculpture-vertical-measure-stats {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #fde68a;
+}
+
+.sculpture-vertical-dims-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sculpture-vertical-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Global Floating Settings Saved Toast & Inline Settings Confirmations */
+.settings-saved-toast {
+  position: fixed;
+  bottom: max(20px, env(safe-area-inset-bottom, 20px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10050;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(92vw, 460px);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(6, 20, 32, 0.96);
+  border: 1px solid rgba(0, 245, 212, 0.72);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 18px rgba(0, 245, 212, 0.25);
+  color: #e6fffb;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  animation: settingsToastSlideUp 180ms ease-out;
+}
+
+.settings-saved-toast.is-tone-error {
+  background: rgba(42, 10, 20, 0.96);
+  border-color: rgba(255, 94, 126, 0.8);
+  color: #ffe4ea;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 18px rgba(255, 94, 126, 0.28);
+}
+
+.settings-saved-toast-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+}
+
+.settings-saved-toast-text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.settings-saved-toast-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px 0 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.settings-saved-toast-close:hover {
+  color: #ffffff;
+}
+
+@keyframes settingsToastSlideUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.settings-inline-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(0, 245, 212, 0.12);
+  border: 1px solid rgba(0, 245, 212, 0.42);
+  color: #5eead4;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255, 94, 126, 0.14);
+  border: 1px solid rgba(255, 94, 126, 0.48);
+  color: #fda4af;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.unit-setting-saved-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.16);
+  border: 1px solid rgba(0, 245, 212, 0.48);
+  color: #00f5d4;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.notif-settings-saved-pill {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 11.5px;
+}
+
+.land-mgmt-save-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* Comfortable touch targets on touch screens without inflating compact .btn-sm / .btn-xs controls. */
 @media (pointer: coarse) {
   .btn:not(.btn-sm):not(.btn-xs) {

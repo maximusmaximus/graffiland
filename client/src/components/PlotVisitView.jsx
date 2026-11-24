@@ -22,6 +22,7 @@ import {
 } from '../utils/landMapHelpers.js';
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -720,7 +721,9 @@ export default function PlotVisitView({
       };
       setLocalParcel(updatedParcel);
       setEditingLand(false);
-      flashStatus(`Saved details for "${updatedParcel.displayName || updatedParcel.customName}"!`);
+      const detailSavedMsg = `Saved settings for "${updatedParcel.displayName || updatedParcel.customName}"!`;
+      flashStatus(detailSavedMsg);
+      notifySettingsSaved(detailSavedMsg);
       onPlotUpdated?.({ parcel: updatedParcel, sculptures: activeSculptures });
     } catch (err) {
       flashStatus(err?.message || 'Could not save land details.', true);
@@ -743,11 +746,11 @@ export default function PlotVisitView({
         settings: { ...(activeParcel.settings || {}), frozen: actualFrozen }
       };
       setLocalParcel(updatedParcel);
-      flashStatus(
-        actualFrozen
-          ? `Frozen "${landDisplayName}" — placements paused.`
-          : `Unfrozen "${landDisplayName}" — placements open.`
-      );
+      const freezeSavedMsg = actualFrozen
+        ? `Frozen "${landDisplayName}" — placements paused.`
+        : `Unfrozen "${landDisplayName}" — placements open.`;
+      flashStatus(freezeSavedMsg);
+      notifySettingsSaved(freezeSavedMsg);
       onPlotUpdated?.({ parcel: updatedParcel, sculptures: activeSculptures });
     } catch (err) {
       flashStatus(err?.message || 'Could not update freeze status.', true);

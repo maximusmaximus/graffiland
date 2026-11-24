@@ -25,6 +25,7 @@ import {
 } from '../utils/landMapHelpers.js';
 import { prepareProfileImageFile } from '../utils/profileImageHelper.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
@@ -384,6 +385,7 @@ export default function ProfileModal({
       setHeaderDirty(false);
       setEditing(false);
       setSaveNotice('Profile saved!');
+      notifySettingsSaved(`Profile settings saved (@${localUsernameValidation.username}).`);
       onShowHint?.(`Profile updated (@${localUsernameValidation.username})`);
 
       // Keep ?u= URL synced if user was viewing their own public URL

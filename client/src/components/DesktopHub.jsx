@@ -23,6 +23,7 @@ import {
   formatRadiusLabel,
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
@@ -1061,11 +1062,11 @@ export default function DesktopHub({
     try {
       await api.updateLandSettings(parcelId, { frozen: Boolean(nextFrozen) });
       const landName = getLiveLandName(parcelId);
-      setLandStatus({
-        text: nextFrozen
-          ? `Frozen "${landName}" — no new sculptures can be placed here.`
-          : `Unfrozen "${landName}" — new sculptures are allowed again.`
-      });
+      const freezeMsg = nextFrozen
+        ? `Frozen "${landName}" — no new sculptures can be placed here.`
+        : `Unfrozen "${landName}" — new sculptures are allowed again.`;
+      setLandStatus({ text: freezeMsg });
+      notifySettingsSaved(freezeMsg);
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
       setLandStatus({ text: err?.message || 'Could not update freeze setting.', isError: true });

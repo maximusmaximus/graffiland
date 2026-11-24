@@ -4,6 +4,7 @@ import { parseProfileParamFromLocation } from '../../shared/profileRules.mjs';
 import DirectLinkIntroOverlay from './components/DirectLinkIntroOverlay.jsx';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import GoogleLoginGate from './components/GoogleLoginGate.jsx';
+import SettingsSavedToast from './components/SettingsSavedToast.jsx';
 import UsernameOnboardingModal from './components/UsernameOnboardingModal.jsx';
 import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
@@ -215,6 +216,7 @@ export default function App() {
         {directLinkIntroOverlay}
         {directLoginModal}
         {onboardingModal}
+        <SettingsSavedToast />
       </>
     );
   }
@@ -235,6 +237,7 @@ export default function App() {
       {directLinkIntroOverlay}
       {directLoginModal}
       {onboardingModal}
+      <SettingsSavedToast />
     </>
   );
 }
