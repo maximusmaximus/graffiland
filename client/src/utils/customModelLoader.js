@@ -5,6 +5,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { computeLegacyAutoFitCompensation } from '../../../shared/model3d.mjs';
 
 let sharedDracoLoader = null;
 function getSharedDracoLoader() {
@@ -69,7 +70,7 @@ export function enforceCrispTexturesAndShading(root, maxAnisotropy = 8) {
 function normalizeLoadedObject(
   root,
   customModel = {},
-  { maxAnisotropy = 8, applyCustomScale = true } = {}
+  { maxAnisotropy = 8, applyCustomScale = true, meshStats = null } = {}
 ) {
   const wrapper = new THREE.Group();
   wrapper.add(root);
@@ -85,17 +86,18 @@ function normalizeLoadedObject(
     center.set(0, 0.5, 0);
   }
 
-  // Preserve native 1:1 dimensions of placed 3D assets (never autoscale to fit land or showcase size)
+  // Compensate ONLY legacy pre-1:1 DB records calibrated under old 1.4m autoFit; new models stay strictly 1:1
+  const legacyFactor = computeLegacyAutoFitCompensation(meshStats, size);
   const baseSize = {
-    width: Math.max(0.01, Math.round(size.x * 10000) / 10000),
-    height: Math.max(0.01, Math.round(size.y * 10000) / 10000),
-    depth: Math.max(0.01, Math.round(size.z * 10000) / 10000)
+    width: Math.max(0.01, Math.round(size.x * legacyFactor * 10000) / 10000),
+    height: Math.max(0.01, Math.round(size.y * legacyFactor * 10000) / 10000),
+    depth: Math.max(0.01, Math.round(size.z * legacyFactor * 10000) / 10000)
   };
   const userScale =
     applyCustomScale && Number.isFinite(Number(customModel?.scale)) && Number(customModel.scale) > 0
       ? Number(customModel.scale)
       : 1;
-  const finalScale = userScale;
+  const finalScale = legacyFactor * userScale;
 
   root.scale.multiplyScalar(finalScale);
   const minY = Number.isFinite(initialBox.min.y) ? initialBox.min.y : 0;
@@ -149,7 +151,7 @@ export async function parseCustomModelBytes(
   bytesOrBuf,
   formatRaw,
   customModel = {},
-  { maxAnisotropy = 8, applyCustomScale = true, basePath = '' } = {}
+  { maxAnisotropy = 8, applyCustomScale = true, basePath = '', meshStats = null } = {}
 ) {
   const format = String(formatRaw || customModel?.format || '').trim().toLowerCase();
   const arrayBuffer = toArrayBuffer(bytesOrBuf);
@@ -259,7 +261,7 @@ export async function parseCustomModelBytes(
     throw new Error(`Unsupported 3D model format: ${format}`);
   }
 
-  return normalizeLoadedObject(root, customModel, { maxAnisotropy, applyCustomScale });
+  return normalizeLoadedObject(root, customModel, { maxAnisotropy, applyCustomScale, meshStats });
 }
 
 async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
@@ -301,7 +303,7 @@ async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
 export async function loadCustomModelObject(
   sculpture,
   resolveUrlFn = (u) => u,
-  { maxAnisotropy = 8, applyCustomScale = true } = {}
+  { maxAnisotropy = 8, applyCustomScale = true, meshStats = undefined } = {}
 ) {
   const cm = sculpture?.customModel;
   if (!cm?.format) return null;
@@ -318,7 +320,8 @@ export async function loadCustomModelObject(
   const normalized = await parseCustomModelBytes(arrayBuffer, format, cm, {
     maxAnisotropy,
     applyCustomScale,
-    basePath
+    basePath,
+    meshStats: meshStats !== undefined ? meshStats : sculpture?.meshStats || null
   });
 
   normalized.object3d.traverse((obj) => {

@@ -1,7 +1,7 @@
 import { buildDefaultVolumeFromBounds } from './landVolume.mjs';
 import { decodeGeohashBounds } from '../server/services/pol.mjs';
 
-export const MIN_ARTWORK_SCALE = 0.1;
+export const MIN_ARTWORK_SCALE = 0.001;
 export const MAX_ARTWORK_SCALE = 60;
 export const DEFAULT_ITEM_GAP_METERS = 0.08;
 export const DEFAULT_WALL_MARGIN_METERS = 0.02;
@@ -87,9 +87,9 @@ export function normalizeBaseDimensions(raw) {
   const d = Number(raw.depth ?? raw.z);
   if (![w, h, d].every((v) => Number.isFinite(v) && v > 0)) return null;
   return {
-    width: Math.max(0.05, Math.min(500, round4(w))),
-    height: Math.max(0.05, Math.min(500, round4(h))),
-    depth: Math.max(0.05, Math.min(500, round4(d)))
+    width: Math.max(0.01, Math.min(100000, round4(w))),
+    height: Math.max(0.01, Math.min(100000, round4(h))),
+    depth: Math.max(0.01, Math.min(100000, round4(d)))
   };
 }
 
@@ -317,12 +317,15 @@ export function computeMaxScaleForParcel(
 
   const unitBox = computeItemLocalBox({ ...item, scale: 1 });
   const maxS = Math.min(
-    volW / Math.max(0.05, unitBox.effW),
-    volD / Math.max(0.05, unitBox.effD),
-    volH / Math.max(0.05, unitBox.effH),
+    volW / Math.max(0.01, unitBox.effW),
+    volD / Math.max(0.01, unitBox.effD),
+    volH / Math.max(0.01, unitBox.effH),
     MAX_ARTWORK_SCALE
   );
-  return Math.max(MIN_ARTWORK_SCALE, round4(maxS));
+  if (!Number.isFinite(maxS) || maxS < MIN_ARTWORK_SCALE) {
+    return 0;
+  }
+  return maxS < 0.1 ? Math.floor(maxS * 10000) / 10000 : Math.floor(maxS * 1000) / 1000;
 }
 
 function clampItemInsideParcel(item, halfVolW, halfVolD, volH, wallMargin) {
@@ -897,6 +900,9 @@ export function computeMaxFeasibleScale({
     ...(targetTransform.yaw !== undefined ? { yaw: Number(targetTransform.yaw || 0) } : {})
   };
   const hiMax = computeMaxScaleForParcel(probe, vol, { wallMargin });
+  if (!Number.isFinite(hiMax) || hiMax < MIN_ARTWORK_SCALE) {
+    return 0;
+  }
 
   // Quick check: does maxScaleForLand already fit cleanly?
   const topRes = resolveSculpturePlacement({
@@ -911,7 +917,7 @@ export function computeMaxFeasibleScale({
 
   let lo = MIN_ARTWORK_SCALE;
   let hi = hiMax;
-  let best = MIN_ARTWORK_SCALE;
+  let best = 0;
 
   const loRes = resolveSculpturePlacement({
     parcelVolume: vol,
@@ -921,9 +927,10 @@ export function computeMaxFeasibleScale({
     minGapMeters,
     wallMargin
   });
-  if (!loRes.ok) return lo;
+  if (!loRes.ok) return 0;
+  best = lo;
 
-  for (let i = 0; i < 14; i += 1) {
+  for (let i = 0; i < 16; i += 1) {
     const mid = (lo + hi) / 2;
     const res = resolveSculpturePlacement({
       parcelVolume: vol,
@@ -940,5 +947,132 @@ export function computeMaxFeasibleScale({
       hi = mid;
     }
   }
-  return Math.max(MIN_ARTWORK_SCALE, Math.floor(best * 100) / 100);
+  return best < 0.1
+    ? Math.max(MIN_ARTWORK_SCALE, Math.floor(best * 10000) / 10000)
+    : Math.max(MIN_ARTWORK_SCALE, Math.floor(best * 100) / 100);
+}
+
+/**
+ * Evaluates whether a candidate 3D model (or voxel bbox) at `modelScale` & `anchorOffset`
+ * fits strictly inside `parcelVolume` without exceeding walls/ceiling or colliding with siblings.
+ * Returns structured fit metrics + exact `maxSafeScale` for API/MCP errors and UI "Fit to Land" buttons.
+ * @param {{
+ *   parcelVolume: any,
+ *   bbox: any,
+ *   modelScale?: number,
+ *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number, scale?: number },
+ *   existingItems?: any[],
+ *   minGapMeters?: number,
+ *   wallMargin?: number
+ * }} params
+ */
+export function evaluateModelFitInParcel({
+  parcelVolume,
+  bbox,
+  modelScale = 1,
+  anchorOffset = {},
+  existingItems = [],
+  minGapMeters = DEFAULT_ITEM_GAP_METERS,
+  wallMargin = DEFAULT_WALL_MARGIN_METERS
+}) {
+  const vol = resolveParcelVolumeForPlacement({ volume: parcelVolume });
+  const dims = normalizeBaseDimensions(bbox);
+  const scale = Number.isFinite(Number(modelScale)) && Number(modelScale) > 0 ? Number(modelScale) : 1;
+  const dx = Number.isFinite(Number(anchorOffset?.dx)) ? Number(anchorOffset.dx) : 0;
+  const dy = Math.max(0, Number.isFinite(Number(anchorOffset?.dy)) ? Number(anchorOffset.dy) : 0);
+  const dz = Number.isFinite(Number(anchorOffset?.dz)) ? Number(anchorOffset.dz) : 0;
+  const yaw = Number.isFinite(Number(anchorOffset?.yaw)) ? Number(anchorOffset.yaw) : 0;
+
+  const parcelDimensions = {
+    widthMeters: round3(vol.widthMeters),
+    depthMeters: round3(vol.depthMeters),
+    heightMeters: round3(vol.heightMeters)
+  };
+
+  if (!dims) {
+    return {
+      fits: false,
+      reason: 'unmeasurable_model',
+      parcelDimensions,
+      modelNativeDimensions: null,
+      scaledDimensions: null,
+      requestedScale: round4(scale),
+      maxSafeScale: 0,
+      suggestedScale: 0,
+      message: 'Could not determine 3D model bounding box dimensions to verify land boundary fit.'
+    };
+  }
+
+  const candidateId = '__candidate__';
+  const candidateItem = {
+    id: candidateId,
+    title: 'Candidate 3D Model',
+    baseX: 0,
+    baseZ: 0,
+    dx,
+    dy,
+    dz,
+    yaw,
+    scale,
+    baseWidth: dims.width,
+    baseHeight: dims.height,
+    baseDepth: dims.depth
+  };
+  const items = [...(existingItems || []), candidateItem];
+
+  const placement = resolveSculpturePlacement({
+    parcelVolume: vol,
+    targetId: candidateId,
+    targetTransform: { dx, dy, dz, yaw, scale },
+    items,
+    minGapMeters,
+    wallMargin
+  });
+
+  const maxSafeScale = computeMaxFeasibleScale({
+    parcelVolume: vol,
+    targetId: candidateId,
+    targetTransform: { dx, dy, dz, yaw },
+    items,
+    minGapMeters,
+    wallMargin
+  });
+
+  const scaledDimensions = {
+    widthMeters: round3(dims.width * scale),
+    depthMeters: round3(dims.depth * scale),
+    heightMeters: round3(dims.height * scale)
+  };
+
+  if (placement.ok) {
+    return {
+      fits: true,
+      reason: null,
+      parcelDimensions,
+      modelNativeDimensions: dims,
+      scaledDimensions,
+      requestedScale: round4(scale),
+      maxSafeScale,
+      suggestedScale: round4(scale),
+      message: null
+    };
+  }
+
+  const fitHint =
+    maxSafeScale >= MIN_ARTWORK_SCALE
+      ? `Set modelScale <= ${maxSafeScale}× (or re-export smaller in meters).`
+      : `Model is too large for this land even at minimum scale (${MIN_ARTWORK_SCALE}×) — re-export in meters.`;
+
+  return {
+    fits: false,
+    reason: placement.reason || 'exceeds_land_bounds',
+    parcelDimensions,
+    modelNativeDimensions: dims,
+    scaledDimensions,
+    requestedScale: round4(scale),
+    maxSafeScale,
+    suggestedScale: maxSafeScale,
+    collidingIds: placement.collidingIds || [],
+    message: `3D object (${scaledDimensions.widthMeters}×${scaledDimensions.depthMeters}×${scaledDimensions.heightMeters}m at ${round4(scale)}×) does not fit inside ${parcelDimensions.widthMeters}×${parcelDimensions.depthMeters}×${parcelDimensions.heightMeters}m land. ${fitHint}`
+  };
 }

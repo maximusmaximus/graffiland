@@ -777,6 +777,39 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       });
       assert.equal(uploadedPayload.modelFormat, 'glb');
       assert.equal(uploadedPayload.modelUrl, 'https://assets.example.com/cyber-phoenix.glb');
+
+      // Oversized model shows warning + optional one-click "Fit to Land" button (never silent autoscale)
+      globalThis.fetch = async (url) => {
+        if (String(url).includes('/api/models/validate-url')) {
+          return {
+            ok: true,
+            json: async () => ({
+              valid: true,
+              format: 'glb',
+              byteLength: 88000,
+              stats: {
+                triangleCount: 2400,
+                bbox: { width: 40, height: 60, depth: 40 },
+                bboxUnits: 'native-meters'
+              },
+              suggestedTitle: 'Giant Colossus',
+              modelUrl: 'https://assets.example.com/giant-colossus.glb'
+            })
+          };
+        }
+        return { ok: true, json: async () => ({}) };
+      };
+      RTL.fireEvent.change(view.getByLabelText('3D Model URL'), {
+        target: { value: 'https://assets.example.com/giant-colossus.glb' }
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByRole('button', { name: /^Validate Link$/i }));
+      });
+      assert.ok(view.getByTestId('model-land-fit-warning'));
+      const fitBtn = view.getByTestId('fit-model-to-land-btn');
+      assert.ok(fitBtn.textContent.includes('Fit to Land'));
+      RTL.fireEvent.click(fitBtn);
+      assert.equal(view.queryByTestId('model-land-fit-warning'), null, 'Warning clears after user clicks Fit to Land');
     } finally {
       globalThis.fetch = origFetch;
     }

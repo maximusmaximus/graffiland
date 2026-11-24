@@ -939,6 +939,19 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
         res.end('just plain text not a 3d mesh');
         return;
       }
+      if (req.url === '/models/giant-tower.obj') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end(
+          [
+            '# Giant 120m tower',
+            'v 0 0 0',
+            'v 80 0 0',
+            'v 40 120 80',
+            'f 1 2 3'
+          ].join('\n')
+        );
+        return;
+      }
       res.writeHead(404);
       res.end('not found');
     });
@@ -974,6 +987,46 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       const badVal = await badValRes.json();
       assert.equal(badValRes.status, 400);
       assert.equal(badVal.valid, false);
+
+      // 2b) Pre-flight validate oversized URL against target parcelId -> returns landFit.fits === false + exact maxSafeScale
+      const giantValRes = await fetch(`${baseUrl}/api/models/validate-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({
+          modelUrl: `${assetBase}/models/giant-tower.obj`,
+          parcelId: firstClaimedParcelId,
+          modelScale: 1
+        })
+      });
+      const giantVal = await giantValRes.json();
+      assert.equal(giantValRes.status, 200, JSON.stringify(giantVal));
+      assert.equal(giantVal.valid, true);
+      assert.equal(giantVal.stats.bboxUnits, 'native-meters');
+      assert.equal(giantVal.landFit?.fits, false);
+      assert.equal(giantVal.landFit?.reason, 'exceeds_land_bounds');
+      assert.ok(giantVal.landFit?.maxSafeScale > 0 && giantVal.landFit?.maxSafeScale < 1);
+
+      // 2c) Direct REST upload of oversized model onto parcel -> hard-rejected 409 with exact maxSafeScale
+      const oversizedUpRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/sculptures`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${humanToken}`
+        },
+        body: JSON.stringify({
+          title: 'Oversized Tower',
+          description: 'Oversized 120m tower should be blocked by land boundary guardrail.',
+          modelUrl: `${assetBase}/models/giant-tower.obj`,
+          modelScale: 1
+        })
+      });
+      const oversizedUp = await oversizedUpRes.json();
+      assert.equal(oversizedUpRes.status, 409, JSON.stringify(oversizedUp));
+      assert.equal(oversizedUp.code, 'exceeds_land_bounds');
+      assert.ok(oversizedUp.maxSafeScale > 0 && oversizedUp.maxSafeScale < 1);
 
       // 3) Upload validated URL directly onto owned parcel (without requiring manual modelFormat)
       const upRes = await fetch(`${baseUrl}/api/lands/${firstClaimedParcelId}/sculptures`, {

@@ -6,7 +6,9 @@ import path from 'node:path';
 import http from 'node:http';
 import * as THREE from 'three';
 import {
+  computeLegacyAutoFitCompensation,
   fetchModelBytesFromGateways,
+  inspectCustomModelStats,
   validateModelBytesByFormat
 } from '../shared/model3d.mjs';
 import { serializeSculptureRow } from '../shared/sculpture.mjs';
@@ -283,6 +285,67 @@ describe('All 5 Custom 3D Formats (.glb, .gltf, .obj, .stl, .ply) & Gateway Mode
     );
     const tinyParsed = await parseCustomModelBytes(tinyObjBytes, 'obj', { format: 'obj', scale: 1 });
     assert.ok(Math.abs(tinyParsed.baseSize.height - 0.18) < 0.01, `Expected native 0.18m height without autoscale, got ${tinyParsed.baseSize.height}`);
+
+    // 7) Server inspectCustomModelStats extracts exact native-meter bboxes across GLTF node transforms, OBJ, STL (ASCII+binary), and PLY
+    const scaledGltfJson = new TextEncoder().encode(
+      JSON.stringify({
+        asset: { version: '2.0' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ mesh: 0, scale: [10, 20, 5] }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, mode: 4 }] }],
+        accessors: [{ type: 'VEC3', componentType: 5126, count: 3, min: [0, 0, 0], max: [1, 1, 1] }]
+      })
+    );
+    const gltfNodeStats = inspectCustomModelStats('gltf', scaledGltfJson);
+    assert.equal(gltfNodeStats.error, null);
+    assert.equal(gltfNodeStats.stats.bboxUnits, 'native-meters');
+    assert.deepEqual(gltfNodeStats.stats.bbox, { width: 10, height: 20, depth: 5 });
+
+    const objStats = inspectCustomModelStats('obj', tallObjBytes);
+    assert.equal(objStats.stats.bboxUnits, 'native-meters');
+    assert.deepEqual(objStats.stats.bbox, { width: 4, height: 6.5, depth: 1 });
+
+    const binStlStats = inspectCustomModelStats('stl', paddedBinaryStl);
+    assert.equal(binStlStats.stats.bboxUnits, 'native-meters');
+    assert.ok(binStlStats.stats.bbox.width > 0.9 && binStlStats.stats.bbox.height > 0.9);
+
+    const plyStats = inspectCustomModelStats('ply', new TextEncoder().encode(plyMeshText));
+    assert.equal(plyStats.stats.bboxUnits, 'native-meters');
+    assert.ok(Math.abs(plyStats.stats.bbox.height - 1.2) < 0.01);
+
+    // 8) Legacy autoFit DB records (Christmas Tree 55x, Santa Bunny 12.857x) auto-compensate back to intended heights,
+    // while new native-meters models ALWAYS return factor 1.0 (zero autoscaling)
+    const bunnyFactor = computeLegacyAutoFitCompensation(
+      { bbox: { width: 0.7894, height: 1.4, depth: 0.7484 } },
+      { x: 10.1498, y: 18, z: 9.6217 }
+    );
+    assert.ok(Math.abs(18 * bunnyFactor * 12.857 - 18) < 0.02, 'Legacy Santa Bunny restores to 18m tall');
+
+    const treeFactor = computeLegacyAutoFitCompensation(
+      { bbox: { width: 0.4543, height: 1.4, depth: 0.4543 } },
+      { x: 32.517, y: 100.2, z: 32.517 }
+    );
+    assert.ok(Math.abs(100.2 * treeFactor * 55 - 77) < 0.05, 'Legacy Christmas Tree restores to 77m tall instead of 5.5km');
+
+    const newModelFactor = computeLegacyAutoFitCompensation(
+      { bbox: { width: 0.7894, height: 1.4, depth: 0.7484 }, bboxUnits: 'native-meters' },
+      { x: 10.1498, y: 18, z: 9.6217 }
+    );
+    assert.equal(newModelFactor, 1, 'New native-meter models NEVER get autoFit compensation');
+
+    // Verify parseCustomModelBytes applies legacy compensation ONLY when legacy meshStats is passed
+    const legacyBunnyObj = new TextEncoder().encode(
+      ['o SantaBunny', 'v 0 0 0', 'v 10.1498 0 0', 'v 5 18 9.6217', 'f 1 2 3'].join('\n')
+    );
+    const legacyRendered = await parseCustomModelBytes(
+      legacyBunnyObj,
+      'obj',
+      { format: 'obj', scale: 12.857 },
+      { applyCustomScale: true, meshStats: { bbox: { width: 0.7894, height: 1.4, depth: 0.7484 } } }
+    );
+    const legacyH = legacyRendered.bounds.max.y - legacyRendered.bounds.min.y;
+    assert.ok(Math.abs(legacyH - 18) < 0.05, `Expected legacy compensated height ~18m, got ${legacyH}`);
   });
 
   test('fetchModelBytesFromGateways skips failing/HTML gateways and returns verified real GLB bytes', async () => {

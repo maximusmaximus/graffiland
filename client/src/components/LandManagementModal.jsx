@@ -4,6 +4,12 @@ import {
   buildParcelShareUrl,
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
+import { inspectCustomModelStats } from '../../../shared/model3d.mjs';
+import {
+  buildPlacementItemFromSculpture,
+  evaluateModelFitInParcel,
+  resolveParcelVolumeForPlacement
+} from '../../../shared/sculpturePlacement.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
@@ -54,6 +60,8 @@ export default function LandManagementModal({
   const [uploadFormat, setUploadFormat] = useState('glb');
   const [uploadBase64, setUploadBase64] = useState('');
   const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadStats, setUploadStats] = useState(null);
+  const [uploadFitError, setUploadFitError] = useState(null);
   const [uploadScale, setUploadScale] = useState(1);
   const [anchorOffset, setAnchorOffset] = useState({ dx: 0, dy: 0, dz: 0, yaw: 0 });
 
@@ -162,6 +170,8 @@ export default function LandManagementModal({
       return;
     }
     setErrorMsg('');
+    setUploadFitError(null);
+    setUploadStats(null);
     setUploadFormat(ext);
     setUploadFileName(file.name);
     if (!uploadTitle.trim()) {
@@ -170,6 +180,16 @@ export default function LandManagementModal({
     const reader = new FileReader();
     reader.onload = () => {
       const bytes = new Uint8Array(reader.result);
+      try {
+        const inspected = inspectCustomModelStats(ext, bytes);
+        if (inspected?.error) {
+          setErrorMsg(inspected.error);
+        } else if (inspected?.stats) {
+          setUploadStats(inspected.stats);
+        }
+      } catch {
+        setUploadStats(null);
+      }
       let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) {
         bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -185,6 +205,7 @@ export default function LandManagementModal({
     setBusy('upload');
     setNotice('');
     setErrorMsg('');
+    setUploadFitError(null);
     const activeLandLabel = resolveLandDisplayName(
       { ...activeParcel, customName: customName || activeParcel.customName },
       { defaultName: 'Virtual Land' }
@@ -209,6 +230,8 @@ export default function LandManagementModal({
       setUploadDesc('');
       setUploadBase64('');
       setUploadFileName('');
+      setUploadStats(null);
+      setUploadFitError(null);
       setShowLocalUpload(false);
       await loadWorkspace();
       onWorkspaceChanged?.();
@@ -216,7 +239,13 @@ export default function LandManagementModal({
         `Uploaded "${res?.sculpture?.title || '3D Model'}" (${uploadFormat.toUpperCase()}) onto "${activeLandLabel}".`
       );
     } catch (err) {
-      setErrorMsg(err.message || 'Could not upload 3D model');
+      if (err?.data?.maxSafeScale !== undefined) {
+        setUploadFitError({
+          maxSafeScale: Number(err.data.maxSafeScale || 0),
+          message: err?.data?.error || err?.message || '3D model exceeds land bounds.'
+        });
+      }
+      setErrorMsg(err?.data?.error || err.message || 'Could not upload 3D model');
     } finally {
       setBusy('');
     }
@@ -924,8 +953,71 @@ export default function LandManagementModal({
                       {uploadFileName && (
                         <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
                           Loaded {uploadFileName} ({uploadFormat.toUpperCase()})
+                          {uploadStats?.bbox
+                            ? ` · ${Number(uploadStats.bbox.width).toFixed(2)}×${Number(
+                                uploadStats.bbox.depth
+                              ).toFixed(2)}×${Number(uploadStats.bbox.height).toFixed(2)}m`
+                            : ''}
                         </div>
                       )}
+                      {(() => {
+                        const fit =
+                          uploadStats?.bbox && activeParcel
+                            ? evaluateModelFitInParcel({
+                                parcelVolume: resolveParcelVolumeForPlacement(activeParcel),
+                                bbox: uploadStats.bbox,
+                                modelScale: Number(uploadScale || 1),
+                                anchorOffset,
+                                existingItems: (activeParcel.sculptures || [])
+                                  .filter((sc) => sc && !sc.hidden)
+                                  .map((sc) =>
+                                    buildPlacementItemFromSculpture(
+                                      sc,
+                                      resolveParcelVolumeForPlacement(activeParcel)
+                                    )
+                                  )
+                              })
+                            : null;
+                        if ((!fit || fit.fits) && !uploadFitError) return null;
+                        const warnMsg =
+                          (fit && !fit.fits ? fit.message : '') ||
+                          uploadFitError?.message ||
+                          '3D model exceeds this land boundary at current scale.';
+                        const maxS =
+                          fit && !fit.fits
+                            ? Number(fit.maxSafeScale || 0)
+                            : Number(uploadFitError?.maxSafeScale || 0);
+                        return (
+                          <div
+                            className="status-banner status-banner-error"
+                            role="alert"
+                            data-testid="local-model-fit-warning"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              flexWrap: 'wrap'
+                            }}
+                          >
+                            <span>⚠️ {warnMsg}</span>
+                            {maxS >= 0.001 && (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-primary"
+                                data-testid="local-fit-model-to-land-btn"
+                                onClick={() => {
+                                  setUploadScale(maxS);
+                                  setUploadFitError(null);
+                                  setErrorMsg('');
+                                }}
+                              >
+                                📐 Fit to Land ({maxS}×)
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         <EmojiInput
                           className="input"
@@ -940,12 +1032,15 @@ export default function LandManagementModal({
                           <input
                             type="number"
                             className="input"
-                            style={{ width: 64 }}
-                            min={0.1}
-                            max={20}
-                            step={0.1}
+                            style={{ width: 72 }}
+                            min={0.001}
+                            max={60}
+                            step={0.01}
                             value={uploadScale}
-                            onChange={(e) => setUploadScale(Number(e.target.value || 1))}
+                            onChange={(e) => {
+                              setUploadScale(Number(e.target.value || 1));
+                              if (uploadFitError) setUploadFitError(null);
+                            }}
                           />
                         </label>
                       </div>

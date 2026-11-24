@@ -46,6 +46,7 @@ import {
   getLandSettingsInternal,
   getMyLandsWorkspace,
   getPublicParcelDetail,
+  inspectParcelFitForModel,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listOwnerLandsAndSculptures,
@@ -87,6 +88,7 @@ export {
   getMyLandsWorkspace,
   getPublicParcelDetail,
   getSignatureRequest,
+  inspectParcelFitForModel,
   isUserLandOwner,
   isUserParcelContributor,
   listLandContributorsAndEligible,
@@ -240,6 +242,15 @@ export async function handleMcpJsonRpc(
       const checked = await validate3dModelUrl(args.modelUrl, {
         formatHint: args.modelFormat || ''
       });
+      let landFit = null;
+      if (checked.valid && args.parcelId) {
+        landFit = await inspectParcelFitForModel(db, {
+          parcelId: args.parcelId,
+          bbox: checked.stats?.bbox || null,
+          modelScale: Number(args.modelScale ?? 1),
+          anchorOffset: args.anchorOffset || {}
+        });
+      }
       toolResult = {
         valid: checked.valid,
         error: checked.error || null,
@@ -248,7 +259,8 @@ export async function handleMcpJsonRpc(
         byteLength: checked.byteLength || 0,
         stats: checked.stats || null,
         suggestedTitle: checked.suggestedTitle || '',
-        modelUrl: args.modelUrl
+        modelUrl: args.modelUrl,
+        ...(landFit ? { landFit } : {})
       };
     } else if (toolName === 'get_parcel_share_link') {
       const detail = await getPublicParcelDetail(db, { parcelOrSlug: args.parcelId });
