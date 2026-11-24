@@ -1302,8 +1302,8 @@ export default function MobileStudio({
                 });
                 showTemporaryHint(
                   res?.awakenedNow
-                    ? `✨ In-person visit verified! "${targetLand.displayName}" awakened (28-day window active).`
-                    : `✅ In-person visit verified! 28-day activity timer refreshed for "${targetLand.displayName}".`
+                    ? `✨ In-person visit verified! "${targetLand.displayName}" awakened — draw art here in AR anytime to make it permanent (no timer).`
+                    : `✅ In-person visit verified for "${targetLand.displayName}" — draw art here in AR to permanently own it with no timer.`
                 );
                 return true;
               } catch (err) {

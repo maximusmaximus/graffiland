@@ -4438,11 +4438,14 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     const card = infoView.getByTestId('info-land-lifecycle-card');
-    assert.ok(card.textContent.includes('72 hours'));
-    assert.ok(card.textContent.includes('28 days'));
-    assert.ok(card.textContent.includes('3 hours'));
-    assert.ok(card.textContent.includes('does not reopen'));
-    assert.ok(card.textContent.includes('Sculpt & Publish in Mobile AR'));
+    assert.ok(card.textContent.includes('No Timer — Permanent'));
+    assert.ok(card.textContent.includes('never expire or get recycled'));
+    assert.ok(card.textContent.includes('Land Made First'));
+    assert.ok(card.textContent.includes('72-hour timer'));
+    assert.ok(card.textContent.includes('28-day timer'));
+    assert.ok(card.textContent.includes('3 hours before'));
+    assert.ok(card.textContent.includes('do not reopen'));
+    assert.ok(card.textContent.includes('Draw & Publish Art Manually in Mobile AR'));
     assert.ok(card.textContent.includes('In-Person Mobile AR Land Check-In'));
     assert.ok(card.textContent.includes('Camera-Locked AR Location Chat'));
     assert.ok(card.textContent.includes('Unlock Parcel-Locked Pinned Notes'));

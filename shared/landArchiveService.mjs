@@ -15,7 +15,7 @@ export const ARCHIVE_REASON_LABELS = {
   [ARCHIVE_REASON_AGENT_72H]:
     'Archived & reclaimed: agent-created land had no verified in-person human interaction within 72 hours of minting.',
   [ARCHIVE_REASON_INACTIVITY_28D]:
-    'Archived & reclaimed: land had no verified in-person human interaction for 28 consecutive days.'
+    'Archived & reclaimed: pre-claimed land without permanent human AR art had no verified in-person human interaction for 28 consecutive days.'
 };
 
 function parseJsonSafe(raw, fallback) {
@@ -98,11 +98,12 @@ export async function computeAgentSlotUsage(db, agentId) {
 
 /**
  * Records a verified in-person human interaction on a Virtual Land parcel.
- * - Refreshes the 28-day human inactivity clock (`inactivity_expires_at = now + 28 days`).
- * - Marks `had_human_interaction = 1` so free slots are preserved.
- * - When `awakenDormant` is true and the land is currently a dormant agent parcel, transitions it
- *   to `awakened` so it is saved from 72-hour reclamation (note: +2 bonus slots & 2% pool share
- *   are granted separately by `awakenParcelByHumanVisit` upon 3+ voxel IRL art).
+ * - Land minted from manual human Mobile AR art (`irl_publish`) or already permanent
+ *   (`had_human_interaction = 1`, `inactivity_expires_at = ''`, `lease_expires_at = ''`)
+ *   NEVER gets an expiry timer attached or re-attached.
+ * - For land made first (dormant 72h agent land or pre-claimed 28-day map land awaiting art),
+ *   in-person AR Check-In / AR Chat / Pin Unlock clears any 72h agent timer and sets/refreshes
+ *   a 28-day activity window until a human adds AR art to permanently own it.
  */
 export async function recordInPersonHumanInteraction(
   db,
@@ -122,7 +123,8 @@ export async function recordInPersonHumanInteraction(
   const cleanParcel = normalizeParcelId(parcelId);
   if (!cleanParcel) return { recorded: false, reason: 'missing_parcel' };
 
-  const nextInactivityExp = computeInactivityExpiresAt(nowIso);
+  const isPermanentArtPublish = String(interactionType || '') === 'irl_publish';
+  const nextInactivityExp = isPermanentArtPublish ? '' : computeInactivityExpiresAt(nowIso);
   const steward = await db
     .get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [cleanParcel])
     .catch(() => null);
@@ -165,6 +167,7 @@ export async function recordInPersonHumanInteraction(
       recorded: true,
       parcelId: cleanParcel,
       awakenedNow: false,
+      permanent: nextInactivityExp === '',
       interactionType,
       lastHumanInteractionAt: nowIso,
       inactivityExpiresAt: nextInactivityExp
@@ -175,7 +178,15 @@ export async function recordInPersonHumanInteraction(
     return { recorded: false, reason: 'parcel_archived' };
   }
 
+  const alreadyPermanent =
+    steward.status === 'awakened' &&
+    Number(steward.had_human_interaction || 0) === 1 &&
+    !String(steward.lease_expires_at || '').trim() &&
+    !String(steward.inactivity_expires_at || '').trim();
+
   let awakenedNow = false;
+  let effectiveInactivityExp = alreadyPermanent || isPermanentArtPublish ? '' : nextInactivityExp;
+
   if (steward.status === 'dormant' && awakenDormant) {
     awakenedNow = true;
     await db.run(
@@ -197,7 +208,7 @@ export async function recordInPersonHumanInteraction(
         nowIso,
         String(interactionType || 'ar_checkin'),
         userId,
-        nextInactivityExp,
+        effectiveInactivityExp,
         userId,
         user.wallet_address || '',
         nowIso,
@@ -232,7 +243,7 @@ export async function recordInPersonHumanInteraction(
         nowIso,
         String(interactionType || 'ar_checkin'),
         userId,
-        nextInactivityExp,
+        effectiveInactivityExp,
         nowIso,
         cleanParcel
       ]
@@ -243,9 +254,10 @@ export async function recordInPersonHumanInteraction(
     recorded: true,
     parcelId: cleanParcel,
     awakenedNow,
+    permanent: effectiveInactivityExp === '',
     interactionType,
     lastHumanInteractionAt: nowIso,
-    inactivityExpiresAt: nextInactivityExp
+    inactivityExpiresAt: effectiveInactivityExp
   };
 }
 
@@ -689,25 +701,26 @@ export async function reapAndArchiveExpiredLands(db, nowIso = new Date().toISOSt
                awakened_at = COALESCE(NULLIF(awakened_at, ''), ?),
                last_human_interaction_at = COALESCE(NULLIF(last_human_interaction_at, ''), ?),
                last_human_interaction_type = COALESCE(NULLIF(last_human_interaction_type, ''), 'irl_publish'),
-               inactivity_expires_at = COALESCE(NULLIF(inactivity_expires_at, ''), ?),
+               inactivity_expires_at = '',
                had_human_interaction = 1,
                updated_at = ?
            WHERE parcel_id = ?`,
-          [latestAt, latestAt, computeInactivityExpiresAt(latestAt), nowIso, row.parcel_id]
+          [latestAt, latestAt, nowIso, row.parcel_id]
         );
         continue;
       }
     } else {
       const lastAt = row.last_human_interaction_at || nowIso;
+      const clearedByHumanArt = row.last_human_interaction_type === 'irl_publish';
       await db.run(
         `UPDATE land_steward_state
          SET status = 'awakened',
              lease_expires_at = '',
              awakened_at = COALESCE(NULLIF(awakened_at, ''), ?),
-             inactivity_expires_at = COALESCE(NULLIF(inactivity_expires_at, ''), ?),
+             inactivity_expires_at = ?,
              updated_at = ?
          WHERE parcel_id = ?`,
-        [lastAt, computeInactivityExpiresAt(lastAt), nowIso, row.parcel_id]
+        [lastAt, clearedByHumanArt ? '' : computeInactivityExpiresAt(lastAt), nowIso, row.parcel_id]
       );
       continue;
     }
@@ -725,7 +738,8 @@ export async function reapAndArchiveExpiredLands(db, nowIso = new Date().toISOSt
     }
   }
 
-  // 2) Check 28-day human inactivity expirations across all active lands
+  // 2) Check 28-day expiry across pre-claimed lands that still carry an active countdown timer
+  //    (lands minted or upgraded with manual human Mobile AR art have inactivity_expires_at = '' and NEVER expire)
   const expiredInactive = await db
     .all(
       `SELECT * FROM land_steward_state
@@ -735,6 +749,32 @@ export async function reapAndArchiveExpiredLands(db, nowIso = new Date().toISOSt
     .catch(() => []);
 
   for (const row of expiredInactive || []) {
+    // Safety guard: never recycle a land that already has manual human-drawn AR voxel art!
+    const manualHumanArt = await db
+      .get(
+        `SELECT COUNT(*) AS cnt
+         FROM sculptures s
+         LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+         WHERE s.parcel_id = ?
+           AND s.hidden = 0
+           AND s.creator_sub NOT LIKE 'agent:%'
+           AND m.model_format IS NULL`,
+        [row.parcel_id]
+      )
+      .catch(() => ({ cnt: 0 }));
+    if (Number(manualHumanArt?.cnt || 0) > 0) {
+      await db.run(
+        `UPDATE land_steward_state
+         SET lease_expires_at = '',
+             inactivity_expires_at = '',
+             had_human_interaction = 1,
+             updated_at = ?
+         WHERE parcel_id = ?`,
+        [nowIso, row.parcel_id]
+      );
+      continue;
+    }
+
     const res = await archiveAndDestroyParcel(db, {
       stewardRow: row,
       archiveReason: ARCHIVE_REASON_INACTIVITY_28D,

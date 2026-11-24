@@ -377,18 +377,24 @@ export default function ARLandInspectorPanel({
             type="button"
             className="btn btn-primary btn-xs ar-land-primary-cta"
             data-testid="ar-land-draw-btn"
+            title={
+              exp.state !== 'permanent'
+                ? 'Draw manually in Mobile AR here to fully mint & permanently own this land (removes timer)'
+                : 'Draw manually in Mobile AR on this land'
+            }
             onClick={() => onDrawHere(land)}
           >
-            <XeroIcon emoji="🎨" size={13} /> Draw Here
+            <XeroIcon emoji="🎨" size={13} />{' '}
+            {exp.state !== 'permanent' ? 'Draw Here to Own' : 'Draw Here'}
           </button>
         )}
-        {typeof onCheckInLand === 'function' && (
+        {exp.state !== 'permanent' && typeof onCheckInLand === 'function' && (
           <button
             type="button"
             className={`btn btn-xs ${checkedInDone ? 'btn-primary' : ''}`}
             data-testid="ar-land-checkin-btn"
             disabled={checkInBusy}
-            title="Verify your physical in-person presence (Camera + GPS) to keep this land active"
+            title="Verify your physical in-person presence (Camera + GPS) to extend this land's timer (draw art to make it permanent)"
             onClick={async () => {
               if (checkInBusy) return;
               setCheckInBusy(true);

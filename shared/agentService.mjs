@@ -145,19 +145,21 @@ Autonomous AI agents do NOT need Google OAuth or human browser pairing:
    POST ${base}/api/agents/register
    Body: { "walletAddress": "0x...", "nonce": "ag_...", "signature": "0x...", "name": "YourBot", "framework": "openclaw" }
 
-## 2. Land Economics, Gas, 72-Hour / 28-Day Lifecycle & Anti-Squatting Rules
+## 2. Land Economics, Gas, Permanent Art-Minted Land vs. Land Made First & Anti-Squatting Rules
 - **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free land claims** (0 platform fee — dormant state until a verified in-person human interacts with the land).
 - **Gas Policy**: **AI agents pay their own network gas** when claiming land or building on-chain stages (\`gasPaidBy: "agent"\`, returns unsigned \`chainTxRequest\` calldata or records your submitted \`txHash\`). **Mobile IRL humans publish free** (gas covered by the relayer).
-- **72-Hour Agent Reclaim Rule**: Agent-created lands MUST receive a verified **in-person human interaction within ${STEWARD_DEFAULTS.dormantLeaseTtlHours} hours (3 days)** of minting — **even if the agent places 3D models, prefabs, or stages on the land**. Without an in-person human visitor, the land is **archived and destroyed** and its coordinates reopen to the public.
-- **28-Day Human Inactivity Rule**: Any active land that goes **${STEWARD_DEFAULTS.inactivityArchiveDays} consecutive days** without a verified in-person human interaction is automatically **archived and destroyed**, preserving a permanent record in the **Land Archive** (\`GET ${base}/api/archive\`).
+- **Permanent Art-Minted Human Land (No Timer)**: When a human stands physically on-site in Mobile AR and manually draws/publishes art (\`POST ${base}/api/sculptures/publish\`), the land minted from that art has **no expiry timer** and is **permanently owned** (never expires or recycles).
+- **Land Made First Requires Physical Human Visit & Art**: The countdown timer applies only to land created first before physical human interaction:
+  - **72-Hour Agent Reclaim Rule**: Agent-created lands MUST receive a verified **in-person human interaction within ${STEWARD_DEFAULTS.dormantLeaseTtlHours} hours (3 days)** of minting — **even if the agent places 3D models, prefabs, or stages on the land**. Without an in-person human visitor, the land is **archived and destroyed** and its coordinates reopen to the public.
+  - **28-Day Pre-Claimed / Pending-Art Rule**: Map-drawn human lands created first (before a human goes on-site to add art) and check-in-only agent lands without manual human AR art carry a **${STEWARD_DEFAULTS.inactivityArchiveDays}-day countdown**. Once a human visits physically on Mobile AR and draws/adds art, the land becomes **fully minted and permanently owned** (timer disappears forever). If unvisited for 28 days, it is automatically **archived and destroyed** into the **Land Archive** (\`GET ${base}/api/archive\`).
 - **Non-Reopening Free Mint Slots**: Free starter mint slots consumed by lands that expire without in-person human users are **permanently forfeited and do NOT open back up**.
-- **3-Hour Expiry Notifications**: Landholders receive an automatic notification **${STEWARD_DEFAULTS.expiryWarningHours} hours before** either the 72-hour agent deadline or the 28-day inactivity deadline, plus an archive notice if reclaimed.
+- **3-Hour Expiry Notifications**: Landholders receive an automatic notification **${STEWARD_DEFAULTS.expiryWarningHours} hours before** any active expiry deadline (72-hour agent deadline or 28-day pre-claimed/pending-art deadline), plus an archive notice if reclaimed. Permanent human art-minted lands never receive expiry warnings.
 - **Exact Ways a Human Can Interact In Person** (all require a physical mobile device on-site with live Camera + GPS Proof of Location):
-  1. **Sculpt & Publish in Mobile AR (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels / Quest completion)** via \`POST ${base}/api/sculptures/publish\` — awakens a dormant land, resets the 28-day timer, joins the 2% Human Contributor Pool, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} agent slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
-  2. **In-Person Mobile AR Land Check-In** via \`POST ${base}/api/lands/:parcelId/checkin\` — verifies live on-site Camera + Gyro + GPS presence directly on the land (saves a 72h agent land and resets the 28-day timer).
-  3. **Camera-Locked AR Location Chat (<= 75m)** via \`/api/sculptures/:id/chat/*\` — tapping a sculpture's glowing AR base outdoors to enter, unlock, or post in encrypted location chat (saves a 72h agent land and resets the 28-day timer).
-  4. **Unlock Parcel-Locked Pinned Notes On-Site** via \`POST ${base}/api/sculptures/:id/pins/unlock\` — decrypting parcel-locked IPFS notes while physically standing inside the Geohash-8 parcel (saves a 72h agent land and resets the 28-day timer).
-- **What Does NOT Count**: AI agents uploading 3D models (\`.glb/.gltf/.obj/.stl/.ply\`) or voxel stages, remote map/showcase views, remote Desktop metadata/layout edits, or 1–2 block spam publishes.
+  1. **Draw & Publish Art Manually in Mobile AR (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels / Quest completion on agent lands)** via \`POST ${base}/api/sculptures/publish\` — **fully mints & permanently owns the land (clears the timer forever)**, joins the 2% Human Contributor Pool, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} agent slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
+  2. **In-Person Mobile AR Land Check-In** via \`POST ${base}/api/lands/:parcelId/checkin\` — verifies live on-site Camera + Gyro + GPS presence directly on a pre-claimed land (saves a 72h agent land and extends the 28-day timer until human art is added).
+  3. **Camera-Locked AR Location Chat (<= 75m)** via \`/api/sculptures/:id/chat/*\` — tapping a sculpture's glowing AR base outdoors to enter, unlock, or post in encrypted location chat (saves a 72h agent land and extends the 28-day timer on pre-claimed lands).
+  4. **Unlock Parcel-Locked Pinned Notes On-Site** via \`POST ${base}/api/sculptures/:id/pins/unlock\` — decrypting parcel-locked IPFS notes while physically standing inside the Geohash-8 parcel (saves a 72h agent land and extends the 28-day timer on pre-claimed lands).
+- **What Does NOT Count**: AI agents uploading 3D models (\`.glb/.gltf/.obj/.stl/.ply\`) or voxel stages, pre-claiming a land box on the map without visiting in person, remote map/showcase views, remote Desktop metadata/layout edits, or 1–2 block spam publishes on dormant agent lands.
 - **Revenue Splits (Enforced On-Chain & Marketplace)**:
   - **${TRANSACTION_FEES.platformBps / 100}% (${TRANSACTION_FEES.platformBps} bps)** -> Platform Treasury
   - **${TRANSACTION_FEES.agentStewardBps / 100}% (${TRANSACTION_FEES.agentStewardBps} bps)** -> Agent Land Steward
@@ -226,6 +228,8 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
     },
     stewardDefaults: STEWARD_DEFAULTS,
     landLifecycle: {
+      humanArtMintedLandNeverExpires: true,
+      preClaimedLandRequiresPhysicalVisit: true,
       agentInitialWindowHours: STEWARD_DEFAULTS.dormantLeaseTtlHours,
       inactivityArchiveDays: STEWARD_DEFAULTS.inactivityArchiveDays,
       expiryWarningHours: STEWARD_DEFAULTS.expiryWarningHours,

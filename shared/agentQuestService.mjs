@@ -718,6 +718,9 @@ export async function claimDormantLand(
     status: initialStatus,
     leaseExpiresAt,
     inactivityExpiresAt,
+    hadHumanInteraction: false,
+    requiresInPersonVisit: true,
+    permanentOwnership: false,
     bounds,
     volume: resolvedVolume,
     limits: LAND_VOLUME_LIMITS,
@@ -1105,8 +1108,9 @@ export async function awakenParcelByHumanVisit(
   const steward = await db.get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [cleanParcel]);
   let awakenedNow = false;
   let slotsUnlockedForAgent = 0;
-  const nextInactivityExp = computeInactivityExpiresAt(now);
 
+  // Land minted from manual human Mobile AR art (or upgraded by physical human art on a
+  // pre-claimed map/agent land) is immediately permanently owned with NO expiry timer.
   if (!steward || steward.status === 'archived' || steward.status === 'expired') {
     await db.run(
       `INSERT INTO land_steward_state (
@@ -1116,7 +1120,7 @@ export async function awakenParcelByHumanVisit(
         inactivity_expires_at, had_human_interaction,
         first_human_sub, first_human_address, human_contributor_count,
         total_tx_volume_eth, agent_royalties_eth, human_royalties_eth, platform_fees_eth, updated_at
-      ) VALUES (?, ?, ?, ?, 'human', 'awakened', ?, '', ?, ?, 'irl_publish', ?, ?, 1, ?, ?, ?, 0, 0, 0, 0, ?)
+      ) VALUES (?, ?, ?, ?, 'human', 'awakened', ?, '', ?, ?, 'irl_publish', ?, '', 1, ?, ?, ?, 0, 0, 0, 0, ?)
       ON CONFLICT(parcel_id) DO UPDATE SET
         steward_sub = excluded.steward_sub,
         steward_address = excluded.steward_address,
@@ -1129,7 +1133,7 @@ export async function awakenParcelByHumanVisit(
         last_human_interaction_at = excluded.last_human_interaction_at,
         last_human_interaction_type = 'irl_publish',
         last_human_interaction_sub = excluded.last_human_interaction_sub,
-        inactivity_expires_at = excluded.inactivity_expires_at,
+        inactivity_expires_at = '',
         had_human_interaction = 1,
         first_human_sub = excluded.first_human_sub,
         first_human_address = excluded.first_human_address,
@@ -1144,7 +1148,6 @@ export async function awakenParcelByHumanVisit(
         now,
         now,
         artistUser.id,
-        nextInactivityExp,
         artistUser.id,
         artistAddress,
         qualifiesForPool ? 1 : 0,
@@ -1161,13 +1164,13 @@ export async function awakenParcelByHumanVisit(
            last_human_interaction_at = ?,
            last_human_interaction_type = 'irl_publish',
            last_human_interaction_sub = ?,
-           inactivity_expires_at = ?,
+           inactivity_expires_at = '',
            had_human_interaction = 1,
            first_human_sub = ?,
            first_human_address = ?,
            updated_at = ?
        WHERE parcel_id = ?`,
-      [now, now, artistUser.id, nextInactivityExp, artistUser.id, artistAddress, now, cleanParcel]
+      [now, now, artistUser.id, artistUser.id, artistAddress, now, cleanParcel]
     );
 
     if (steward.steward_sub && steward.steward_sub.startsWith('agent:')) {
@@ -1192,17 +1195,26 @@ export async function awakenParcelByHumanVisit(
         ]
       );
     }
-  } else if (steward.status === 'awakened' && isHumanActor && qualifiesForPool) {
+  } else if (
+    steward.status === 'awakened' &&
+    isHumanActor &&
+    (qualifiesForPool || steward.steward_type === 'human')
+  ) {
+    // Physical human AR art clears any pre-minted countdown timer permanently -> fully minted & owned.
     await db.run(
       `UPDATE land_steward_state
-       SET last_human_interaction_at = ?,
+       SET lease_expires_at = '',
+           awakened_at = COALESCE(NULLIF(awakened_at, ''), ?),
+           last_human_interaction_at = ?,
            last_human_interaction_type = 'irl_publish',
            last_human_interaction_sub = ?,
-           inactivity_expires_at = ?,
+           inactivity_expires_at = '',
            had_human_interaction = 1,
+           first_human_sub = COALESCE(NULLIF(first_human_sub, ''), ?),
+           first_human_address = COALESCE(NULLIF(first_human_address, ''), ?),
            updated_at = ?
        WHERE parcel_id = ?`,
-      [now, artistUser.id, nextInactivityExp, now, cleanParcel]
+      [now, now, artistUser.id, artistUser.id, artistAddress, now, cleanParcel]
     );
   }
 

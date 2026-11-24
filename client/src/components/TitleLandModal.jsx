@@ -109,6 +109,22 @@ export default function TitleLandModal({
             />
           </label>
 
+          {mode === 'draft' && (
+            <div
+              style={{
+                fontSize: 11.5,
+                lineHeight: 1.4,
+                color: 'var(--muted)',
+                padding: '7px 9px',
+                borderRadius: 8,
+                background: 'rgba(255, 209, 102, 0.08)',
+                border: '1px solid rgba(255, 209, 102, 0.24)'
+              }}
+            >
+              ⏳ <strong>Land created first:</strong> Map-drawn plots start with a 28-day timer until a human visits in person on Mobile AR and adds art to fully mint &amp; permanently own them (land minted directly from manual Mobile AR art never has a timer).
+            </div>
+          )}
+
           {errorMsg && (
             <div className="status-banner status-banner-error" role="alert">
               {errorMsg}

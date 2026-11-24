@@ -141,7 +141,7 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
       state: urgent ? 'expiring-soon' : 'expiring',
       urgent,
       badgeText,
-      detailText: `72h agent limit — expires ${expiresAtText} unless a human interacts in person (archived & destroyed if expired)`,
+      detailText: `72h agent limit — expires ${expiresAtText} unless a human visits in person on Mobile AR (add art to permanently own, or check in; archived & recycled if unvisited)`,
       remainingMs: diffMs,
       expiresAtText
     };
@@ -153,7 +153,7 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
       urgent: false,
       badgeText: '72h agent window',
       detailText:
-        'Awaiting a verified in-person human interaction within 72h (archived & destroyed if unvisited)',
+        'Awaiting a verified in-person human visit on Mobile AR within 72h (archived & recycled if unvisited)',
       remainingMs: null,
       expiresAtText: ''
     };
@@ -173,7 +173,7 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
         state: 'expired',
         urgent: true,
         badgeText: 'Archived',
-        detailText: `28-day inactivity window elapsed ${expiresAtText} — archived & open to reclaim`,
+        detailText: `28-day window elapsed ${expiresAtText} — archived & open to reclaim`,
         remainingMs: 0,
         expiresAtText
       };
@@ -181,11 +181,15 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
 
     const badgeText = formatDurationBadge(diffMs);
     const urgent = diffMs <= 3 * 60 * 60 * 1000 || diffMs <= 24 * 60 * 60 * 1000;
+    const neverVisitedInPerson =
+      parcel?.hadHumanInteraction === false || Number(parcel?.had_human_interaction) === 0;
     return {
       state: urgent ? 'expiring-soon' : 'expiring',
       urgent,
       badgeText,
-      detailText: `28-day activity window — resets on any in-person human visit (expires ${expiresAtText})`,
+      detailText: neverVisitedInPerson
+        ? `Land created first — a human must visit in person on Mobile AR and add art before ${expiresAtText} to fully mint & permanently own it (archived & recycled if unvisited)`
+        : `28-day activity window — add art in person on Mobile AR to permanently own (no timer), or visit on-site before ${expiresAtText} to extend`,
       remainingMs: diffMs,
       expiresAtText
     };
@@ -195,9 +199,7 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
     state: 'permanent',
     urgent: false,
     badgeText: 'Permanent',
-    detailText: parcel?.awakenedAt
-      ? 'Awakened — permanent land (no expiry)'
-      : 'Permanent land — does not expire',
+    detailText: 'Permanently owned — minted with in-person human art (no expiry)',
     remainingMs: null,
     expiresAtText: ''
   };

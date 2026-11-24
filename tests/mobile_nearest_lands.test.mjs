@@ -78,12 +78,25 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(expired.badgeText, 'Expired');
 
     const permanent = formatLandExpiration(
-      { stewardStatus: 'awakened', awakenedAt: '2026-11-18T00:00:00.000Z' },
+      { stewardStatus: 'awakened', awakenedAt: '2026-11-18T00:00:00.000Z', hadHumanInteraction: true },
       now
     );
     assert.equal(permanent.state, 'permanent');
     assert.equal(permanent.urgent, false);
     assert.equal(permanent.badgeText, 'Permanent');
+
+    const mapMadeFirst = formatLandExpiration(
+      {
+        stewardStatus: 'awakened',
+        hadHumanInteraction: false,
+        inactivityExpiresAt: '2026-12-18T12:00:00.000Z'
+      },
+      now
+    );
+    assert.equal(mapMadeFirst.state, 'expiring');
+    assert.equal(mapMadeFirst.badgeText, '28d left');
+    assert.match(mapMadeFirst.detailText, /Land created first/i);
+    assert.match(mapMadeFirst.detailText, /fully mint & permanently own/i);
   });
 
   test('formatLandDimensions and formatSculptureAssetMeta summarize volume and 3D model info', () => {
