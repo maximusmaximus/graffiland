@@ -1182,6 +1182,26 @@ export function useProofOfLocation({
   notifyMappingViewLeftRef.current = notifyMappingViewLeft;
   notifyMappingViewReturnedRef.current = notifyMappingViewReturned;
 
+  const prevSceneOptimalRef = useRef(Boolean(sceneScan?.optimal));
+  useEffect(() => {
+    const wasOptimal = prevSceneOptimalRef.current;
+    const isOptimal = Boolean(sceneScan?.optimal);
+    if (!wasOptimal && isOptimal) {
+      // Auto-close (collapse) the mapping window once 100% locked
+      setScanBoxCollapsed(true);
+    } else if (wasOptimal && !isOptimal) {
+      // Auto-reopen whenever mapping unlocks and resync is needed
+      setScanBoxCollapsed(false);
+    }
+    prevSceneOptimalRef.current = isOptimal;
+  }, [sceneScan?.optimal]);
+
+  useEffect(() => {
+    if (mappingRestartPrompt) {
+      setScanBoxCollapsed(false);
+    }
+  }, [mappingRestartPrompt]);
+
   const restartSceneMapping = useCallback(
     async ({ reason = 'manual', refreshCameraFeed = true } = {}) => {
       leaveCheckpointRef.current = null;

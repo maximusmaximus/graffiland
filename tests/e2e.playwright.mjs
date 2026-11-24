@@ -544,33 +544,51 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page2.waitForSelector('[role="tooltip"]', { state: 'detached', timeout: 3000 });
     await page2.getByRole('button', { name: 'Close info' }).click();
 
-    // Mobile Studio bottom-right Palette opens Brush & Pencil Options popup (Block Size + Preset Colors) & switches to Pencil
+    // Mobile Studio bottom-right Paint & Brush Kit floats ABOVE the center tool carousel (leaving active tool visible),
+    // keeps Brush/Pencil/Eraser exclusively in the center bottom tool switcher, and minimizes back to icon on click-off
     await page2.waitForSelector('[data-testid="palette-options-toggle"]');
     await page2.getByTestId('palette-options-toggle').click();
     await page2.waitForSelector('[data-testid="brush-options-popup"]');
     const popBox = await page2.getByTestId('brush-options-popup').boundingBox();
+    const carouselBox = await page2.getByTestId('key-carousel').boundingBox();
     assert.ok(
       popBox && popBox.x >= 0 && popBox.x + popBox.width <= 390 && popBox.y >= 0,
-      `Expected Brush & Pencil options popup cleanly inside 390x844 viewport, got ${JSON.stringify(popBox)}`
+      `Expected Paint & Brush Kit cleanly inside 390x844 viewport, got ${JSON.stringify(popBox)}`
     );
+    assert.ok(
+      carouselBox && popBox.y + popBox.height <= carouselBox.y + 1,
+      `Expected Paint & Brush Kit above center tool button (${JSON.stringify(popBox)} vs ${JSON.stringify(carouselBox)})`
+    );
+    // Brush, Pencil, and Eraser options must NOT live inside the palette
+    assert.equal(await page2.locator('[data-testid="palette-select-brush"]').count(), 0);
+    assert.equal(await page2.locator('[data-testid="palette-select-pencil"]').count(), 0);
+    assert.equal(await page2.locator('[data-testid="palette-select-erase"]').count(), 0);
+
     await page2.getByTestId('block-size-l').click();
     await page2.getByRole('button', { name: 'Color Red' }).click();
-    await page2.getByTestId('palette-select-pencil').click();
+
+    // Clicking off the Paint & Brush Kit onto open viewport minimizes it cleanly back to its icon
+    await page2.mouse.click(40, 180);
+    await page2.waitForSelector('[data-testid="brush-options-popup"]', { state: 'detached' });
+
+    // Tool switching (Brush, Pencil, Erase) lives strictly in the center bottom button carousel
+    await page2.locator('[data-tool-rel="1"]').click();
     await page2.waitForSelector('.key-tool-caption:has-text("Pencil")');
-    // Dock includes Eraser right next to Brush & Pencil
-    await page2.getByTestId('palette-select-erase').click();
+    await page2.locator('[data-tool-rel="1"]').click();
     await page2.waitForSelector('.key-tool-caption:has-text("Erase")');
-    // First time selecting Brush opens the Spray-Can Brush intro popup explaining how to use it
-    await page2.getByTestId('palette-select-brush').click();
+    // Switching back to Brush for the first time triggers the Spray-Can Brush intro popup once
+    await page2.locator('[data-tool-rel="-1"]').click();
+    await page2.waitForSelector('.key-tool-caption:has-text("Pencil")');
+    await page2.locator('[data-tool-rel="-1"]').click();
     await page2.waitForSelector('[data-testid="spray-brush-guide-modal"]', { timeout: 5000 });
     await page2.getByTestId('spray-brush-guide-start-btn').click();
     await page2.waitForSelector('[data-testid="spray-brush-guide-modal"]', { state: 'detached' });
-    // Selecting Brush a second time must NOT re-open the first-time guide popup
-    await page2.getByTestId('palette-select-pencil').click();
-    await page2.getByTestId('palette-select-brush').click();
+    // Switching back to Brush a second time must NOT re-open the first-time guide popup
+    await page2.locator('[data-tool-rel="1"]').click();
+    await page2.waitForSelector('.key-tool-caption:has-text("Pencil")');
+    await page2.locator('[data-tool-rel="-1"]').click();
+    await page2.waitForSelector('.key-tool-caption:has-text("Brush")');
     assert.equal(await page2.locator('[data-testid="spray-brush-guide-modal"]').count(), 0);
-    await page2.getByTestId('palette-options-toggle').click();
-    await page2.waitForSelector('[data-testid="brush-options-popup"]', { state: 'detached' });
 
     assert.deepEqual(errors2, []);
     await ctx2.close();

@@ -34,7 +34,7 @@ export default function ToolCarouselBar({
 
   return (
     <>
-      <div className="key-carousel hud-interactive">
+      <div className="key-carousel hud-interactive" data-testid="key-carousel">
         <div className={`key-tool-caption ${activeUnavailable ? 'is-unavailable' : ''}`}>
           <XeroIcon emoji={activeUnavailable ? '🔒' : '🔑'} size={12} />
           <span>{activeItem.label}</span>

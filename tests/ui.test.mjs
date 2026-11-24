@@ -2706,33 +2706,37 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     const picked = { tool: 'brush', size: 1, color: '#00f5d4', material: 'matte', reach: 1.8 };
     let isOpen = false;
     const renderDrawer = () =>
-      React.createElement(StudioDockDrawer, {
-        dockOpen: isOpen,
-        onToggleDock: () => {
-          isOpen = !isOpen;
-        },
-        mode: 'draw',
-        tool: picked.tool,
-        onSelectDrawTool: (t) => {
-          picked.tool = t;
-        },
-        blockSize: picked.size,
-        setBlockSize: (s) => {
-          picked.size = s;
-        },
-        color: picked.color,
-        setColor: (c) => {
-          picked.color = c;
-        },
-        material: picked.material,
-        setMaterial: (m) => {
-          picked.material = m;
-        },
-        reachMeters: picked.reach,
-        setReachMeters: (r) => {
-          picked.reach = r;
-        }
-      });
+      React.createElement(
+        'div',
+        null,
+        React.createElement('div', { 'data-testid': 'outside-studio-area' }, 'AR viewport'),
+        React.createElement(StudioDockDrawer, {
+          dockOpen: isOpen,
+          onToggleDock: () => {
+            isOpen = !isOpen;
+          },
+          onCloseDock: () => {
+            isOpen = false;
+          },
+          tool: picked.tool,
+          blockSize: picked.size,
+          setBlockSize: (s) => {
+            picked.size = s;
+          },
+          color: picked.color,
+          setColor: (c) => {
+            picked.color = c;
+          },
+          material: picked.material,
+          setMaterial: (m) => {
+            picked.material = m;
+          },
+          reachMeters: picked.reach,
+          setReachMeters: (r) => {
+            picked.reach = r;
+          }
+        })
+      );
 
     const view = RTL.render(renderDrawer());
     assert.equal(view.queryByTestId('brush-options-popup'), null);
@@ -2740,17 +2744,26 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     view.rerender(renderDrawer());
 
     assert.ok(view.getByTestId('brush-options-popup'));
-    RTL.fireEvent.click(view.getByTestId('palette-select-pencil'));
+    // Brush, Pencil, and Eraser options live strictly in center bottom KEY_TOOLS, never inside the palette
+    assert.equal(view.queryByTestId('palette-select-brush'), null);
+    assert.equal(view.queryByTestId('palette-select-pencil'), null);
+    assert.equal(view.queryByTestId('palette-select-erase'), null);
+
     RTL.fireEvent.click(view.getByTestId('block-size-xl'));
     RTL.fireEvent.click(view.getByRole('button', { name: 'Color Red' }));
     RTL.fireEvent.click(view.getByRole('button', { name: /Neon/i }));
     RTL.fireEvent.click(view.getByRole('button', { name: '2.4m' }));
 
-    assert.equal(picked.tool, 'pencil');
     assert.equal(picked.size, 2);
     assert.equal(picked.color, '#ef4444');
     assert.equal(picked.material, 'neon');
     assert.equal(picked.reach, 2.4);
+
+    // Clicking off the Paint & Brush Kit minimizes it cleanly back to its icon
+    RTL.fireEvent.mouseDown(view.getByTestId('outside-studio-area'));
+    view.rerender(renderDrawer());
+    assert.equal(isOpen, false);
+    assert.equal(view.queryByTestId('brush-options-popup'), null);
     cleanup();
   });
 
@@ -4056,40 +4069,50 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     const { useVoxelBrush } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
 
-    // 1) Dock exposes Brush, Pencil, and Eraser + brush guide help trigger
+    // 1) Palette keeps Brush/Pencil/Eraser out (they stay in center ToolCarouselBar), exposes spray guide '?' & minimizes on click-off
     let selectedTool = 'brush';
     let guideOpened = 0;
+    let dockOpen = true;
     const renderDock = () =>
-      React.createElement(StudioDockDrawer, {
-        dockOpen: true,
-        onToggleDock: () => {},
-        mode: 'draw',
-        tool: selectedTool,
-        onSelectDrawTool: (t) => {
-          selectedTool = t;
-        },
-        onOpenBrushGuide: () => {
-          guideOpened += 1;
-        },
-        blockSize: 1,
-        setBlockSize: () => {},
-        color: '#00f5d4',
-        setColor: () => {},
-        material: 'matte',
-        setMaterial: () => {},
-        reachMeters: 1.8,
-        setReachMeters: () => {}
-      });
+      React.createElement(
+        'div',
+        null,
+        React.createElement('div', { 'data-testid': 'dock-outside-target' }, 'outside'),
+        React.createElement(StudioDockDrawer, {
+          dockOpen,
+          onToggleDock: () => {
+            dockOpen = !dockOpen;
+          },
+          onCloseDock: () => {
+            dockOpen = false;
+          },
+          tool: selectedTool,
+          onOpenBrushGuide: () => {
+            guideOpened += 1;
+          },
+          blockSize: 1,
+          setBlockSize: () => {},
+          color: '#00f5d4',
+          setColor: () => {},
+          material: 'matte',
+          setMaterial: () => {},
+          reachMeters: 1.8,
+          setReachMeters: () => {}
+        })
+      );
     const dockView = RTL.render(renderDock());
-    assert.ok(dockView.getByTestId('palette-select-brush'));
-    assert.ok(dockView.getByTestId('palette-select-pencil'));
-    assert.ok(dockView.getByTestId('palette-select-erase'));
+    assert.equal(dockView.queryByTestId('palette-select-brush'), null);
+    assert.equal(dockView.queryByTestId('palette-select-pencil'), null);
+    assert.equal(dockView.queryByTestId('palette-select-erase'), null);
     RTL.fireEvent.click(dockView.getByTestId('palette-brush-guide-btn'));
     assert.equal(guideOpened, 1);
-    RTL.fireEvent.click(dockView.getByTestId('palette-select-erase'));
-    assert.equal(selectedTool, 'erase');
+    selectedTool = 'erase';
     dockView.rerender(renderDock());
-    assert.ok(dockView.getByText(/Tap or hold on blocks to erase/i));
+    assert.ok(dockView.getByText(/Eraser active below/i));
+    RTL.fireEvent.pointerDown(dockView.getByTestId('dock-outside-target'));
+    dockView.rerender(renderDock());
+    assert.equal(dockOpen, false);
+    assert.equal(dockView.queryByTestId('brush-options-popup'), null);
     cleanup();
 
     // 2) SprayBrushIntroModal explains how to use phone like a spray can & dismisses cleanly
@@ -4218,6 +4241,37 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         hookApi.applyVoxelAction(eraseTarget);
       });
       assert.equal(hookApi.voxels.length, 1);
+
+      // 4) Human drawing & Lock & Scale strictly enforce the 250ft x 250ft (76.2m x 76.2m) horizontal cap
+      await RTL.act(async () => {
+        // Adding a block 70m away along +X stays under 76.2m (250ft) -> allowed
+        hookApi.applyVoxelBatch([{ action: 'add', x: 70, y: 0, z: 0.4, scale: 1 }]);
+      });
+      assert.equal(hookApi.voxels.length, 2);
+
+      await RTL.act(async () => {
+        // Adding a block at x = 76.5m would make width 76.55m (> 76.2m / 250ft) -> rejected
+        hookApi.applyVoxelBatch([{ action: 'add', x: 76.5, y: 0, z: 0.4, scale: 1 }]);
+      });
+      assert.equal(hookApi.voxels.length, 2, 'Blocks exceeding 250ft width must be blocked');
+
+      await RTL.act(async () => {
+        // Adding a block at z = 77.0m would make depth > 76.2m (250ft) -> rejected
+        hookApi.applyVoxelBatch([{ action: 'add', x: 0, y: 0, z: 77.0, scale: 1 }]);
+      });
+      assert.equal(hookApi.voxels.length, 2, 'Blocks exceeding 250ft depth must be blocked');
+
+      // Entering Lock & Scale and requesting 2.0x on a 70m sculpture clamps scale <= 76.2 / 70 (~1.088)
+      await RTL.act(async () => {
+        hookApi.enterTransformMode();
+      });
+      await RTL.act(async () => {
+        hookApi.setArtTransform((p) => ({ ...p, scale: 2 }));
+      });
+      assert.ok(
+        hookApi.artTransform.scale <= 1.09 && hookApi.artTransform.scale >= 1.05,
+        `Expected Lock & Scale to clamp 70m sculpture <= 250ft (scale ~1.088), got ${hookApi.artTransform.scale}`
+      );
     } finally {
       CanvasCtor.prototype.getContext = origGetContext;
       cleanup();

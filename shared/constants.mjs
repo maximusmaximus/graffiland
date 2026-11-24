@@ -2,6 +2,9 @@ export const VOXEL_RESOLUTION_SCALE = 4;
 export const VOXEL_STEP = 0.05; // 4x resolution vs original 0.2m block size
 export const AREA_LIMIT_BLOCKS = 10000; // 10000 x 10000 x 10000 blocks max area per axis
 export const AREA_HALF_SPAN_METERS = (AREA_LIMIT_BLOCKS / 2) * VOXEL_STEP; // 250m from origin -> 500m total span
+export const HUMAN_MAX_DRAW_SPAN_FEET = 250; // 250ft x 250ft max human sculpture/drawing footprint
+export const HUMAN_MAX_DRAW_SPAN_METERS = 76.2; // Exact 250 ft (250 * 0.3048 m)
+export const HUMAN_MAX_DRAW_HALF_SPAN_METERS = HUMAN_MAX_DRAW_SPAN_METERS / 2; // 38.1 m
 
 export const GRAFFITI_PALETTE = [
   '#00f5d4',
@@ -143,6 +146,9 @@ export const POLICY = {
   voxelStepMeters: VOXEL_STEP,
   areaHalfSpanMeters: AREA_HALF_SPAN_METERS,
   areaLimitBlocks: [AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS, AREA_LIMIT_BLOCKS],
+  humanMaxDrawSpanFeet: HUMAN_MAX_DRAW_SPAN_FEET,
+  humanMaxDrawSpanMeters: HUMAN_MAX_DRAW_SPAN_METERS,
+  humanMaxDrawHalfSpanMeters: HUMAN_MAX_DRAW_HALF_SPAN_METERS,
   landVolumeLimits: LAND_VOLUME_LIMITS,
   inPersonHumanInteractions: IN_PERSON_HUMAN_INTERACTIONS,
   nonQualifyingInteractions: NON_QUALIFYING_INTERACTIONS,

@@ -841,6 +841,31 @@ describe('AR Camera Refresh on Disconnect & Reconnect (React Hooks + UI)', () =>
     assert.equal(hookApi.sceneScan.scannedCount, 0);
     assert.equal(hookApi.sceneScan.coveragePct, 0);
     assert.equal(hookApi.sceneScan.optimal, false);
+    assert.equal(hookApi.scanBoxCollapsed, false);
+
+    // 4. Reaching 100% LOCKED auto-closes the mapping window, and resync/movement re-opens it automatically
+    await RTL.act(async () => {
+      hookApi.polRef.current.cameraFrames = 4;
+      hookApi.polRef.current.sceneContrast = 14;
+      hookApi.polRef.current.recordViewPose({ yawDeg: 0, pitchDeg: 0, hasCamera: true });
+      for (const yaw of [-45, -15, 15, 45]) {
+        for (const pitch of [-20, 0, 20]) {
+          hookApi.polRef.current.recordViewPose({ yawDeg: yaw, pitchDeg: pitch, hasCamera: true });
+        }
+      }
+      hookApi.setSceneScan(hookApi.polRef.current.getSceneCoverage());
+    });
+    assert.equal(hookApi.sceneScan.optimal, true);
+    assert.equal(hookApi.scanBoxCollapsed, true);
+
+    // Leaving and returning after moving substantially auto-opens the mapping window to resync
+    await RTL.act(async () => {
+      hookApi.notifyMappingViewLeft();
+      hookApi.locationRef.current = { lat: 39.729, lng: -121.8375, accuracy: 5 };
+      hookApi.notifyMappingViewReturned();
+    });
+    assert.ok(hookApi.mappingRestartPrompt);
+    assert.equal(hookApi.scanBoxCollapsed, false);
 
     view.unmount();
   });

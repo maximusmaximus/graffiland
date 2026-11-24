@@ -1,5 +1,9 @@
 import { ethers } from 'ethers';
-import { POLICY } from '../constants.mjs';
+import {
+  HUMAN_MAX_DRAW_SPAN_FEET,
+  HUMAN_MAX_DRAW_SPAN_METERS,
+  POLICY
+} from '../constants.mjs';
 import {
   buildDefaultVolumeFromBounds,
   buildMultiObjectFittedLandVolume,
@@ -38,7 +42,8 @@ import {
   extractSculptureScale,
   normalizeBaseDimensions,
   resolveParcelVolumeForPlacement,
-  resolveSculpturePlacement
+  resolveSculpturePlacement,
+  yawToRadians
 } from '../sculpturePlacement.mjs';
 import { getLandSecurityPolicy } from '../landmarkService.mjs';
 import {
@@ -1002,6 +1007,36 @@ export async function applyUpdateSculpture(
           effectiveTargetDims
         )
       );
+    }
+
+    if (!activeCustomModel) {
+      const targetItem = placementItems.find((it) => it.id === sculptureRow.id);
+      const baseW = Number(targetItem?.baseWidth || effectiveTargetDims?.width || 0);
+      const baseD = Number(targetItem?.baseDepth || effectiveTargetDims?.depth || 0);
+      const yawRad = yawToRadians(anchorOffset.yaw);
+      const cosY = Math.abs(Math.cos(yawRad));
+      const sinY = Math.abs(Math.sin(yawRad));
+      const scaledW = (baseW * cosY + baseD * sinY) * targetScale;
+      const scaledD = (baseW * sinY + baseD * cosY) * targetScale;
+      if (
+        scaledW > HUMAN_MAX_DRAW_SPAN_METERS + 1e-3 ||
+        scaledD > HUMAN_MAX_DRAW_SPAN_METERS + 1e-3
+      ) {
+        const effW = Math.max(0.01, baseW * cosY + baseD * sinY);
+        const effD = Math.max(0.01, baseW * sinY + baseD * cosY);
+        const maxHumanScale = Math.floor(
+          Math.min(HUMAN_MAX_DRAW_SPAN_METERS / effW, HUMAN_MAX_DRAW_SPAN_METERS / effD) * 1000
+        ) / 1000;
+        throw new McpServiceError(
+          `Human voxel sculptures cannot exceed ${HUMAN_MAX_DRAW_SPAN_FEET}ft x ${HUMAN_MAX_DRAW_SPAN_FEET}ft (${HUMAN_MAX_DRAW_SPAN_METERS}m x ${HUMAN_MAX_DRAW_SPAN_METERS}m).`,
+          400,
+          {
+            code: 'HUMAN_DRAW_FOOTPRINT_EXCEEDED',
+            maxSafeScale: maxHumanScale,
+            suggestedScale: maxHumanScale
+          }
+        );
+      }
     }
 
     const siblingCount = placementItems.filter((it) => it.id !== sculptureRow.id).length;
