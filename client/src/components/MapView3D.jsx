@@ -419,6 +419,7 @@ export default function MapView3D({
   userLocation = null,
   focusArea: _focusArea = false,
   selectedSculptureId = '',
+  selectedParcelId = '',
   initialView = null,
   config = null,
   onViewportChange = null,
@@ -481,6 +482,7 @@ export default function MapView3D({
   // Latest props kept in refs for synchronous MapLibre event handlers & 60fps Canvas2D rendering
   const sculpturesRef = useRef(sculptures);
   const selectedSculptureIdRef = useRef(selectedSculptureId);
+  const selectedParcelIdRef = useRef(selectedParcelId);
   const parcelsRef = useRef(parcels);
   const draftsRef = useRef(draftParcels);
   const selectedDraftIdRef = useRef(selectedDraftId);
@@ -522,6 +524,9 @@ export default function MapView3D({
   useEffect(() => {
     selectedSculptureIdRef.current = selectedSculptureId;
   }, [selectedSculptureId]);
+  useEffect(() => {
+    selectedParcelIdRef.current = selectedParcelId;
+  }, [selectedParcelId]);
   useEffect(() => {
     parcelsRef.current = parcels;
   }, [parcels]);
@@ -628,14 +633,31 @@ export default function MapView3D({
       if (!geom) continue;
       const isDormant = p?.stewardStatus === 'dormant';
       const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
-      const outerColor = isFrozen ? '#7dd3fc' : isDormant ? '#ff4da6' : '#ff1f8f';
-      const innerColor = isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#ffd6ec';
+      const pidUpper = String(p?.parcelId || '').toUpperCase();
+      const isSelectedParcel =
+        Boolean(selectedParcelIdRef.current) &&
+        pidUpper === String(selectedParcelIdRef.current).toUpperCase();
+      const outerColor = isSelectedParcel
+        ? '#ffd166'
+        : isFrozen
+        ? '#7dd3fc'
+        : isDormant
+        ? '#ff4da6'
+        : '#ff1f8f';
+      const innerColor = isSelectedParcel
+        ? '#fff3c4'
+        : isFrozen
+        ? '#e0f2fe'
+        : isDormant
+        ? '#ffc2dc'
+        : '#ffd6ec';
       projectedParcels.push({
-        pid: String(p?.parcelId || '').toUpperCase(),
+        pid: pidUpper,
         vol,
         geom,
         outerColor,
-        innerColor
+        innerColor,
+        isSelectedParcel
       });
     }
     const mapPitch = Number(map.getPitch?.() || 0);
@@ -646,8 +668,8 @@ export default function MapView3D({
         drawGlowingPrism(ctx, item.geom, {
           outerColor: item.outerColor,
           innerColor: item.innerColor,
-          lineWidth: 1.8,
-          glowBlur: 10,
+          lineWidth: item.isSelectedParcel ? 2.5 : 1.8,
+          glowBlur: item.isSelectedParcel ? 16 : 10,
           includeBottomEdges: isElevated
         });
       }
@@ -1229,17 +1251,22 @@ export default function MapView3D({
       ? 16.5
       : 16;
 
-    const map = new maplibregl.Map({
-      container: mapHostRef.current,
-      style: OPENFREEMAP_LIBERTY_STYLE,
-      center: centerLngLat,
-      zoom: startZoom,
-      pitch: initPitch,
-      bearing: initBearing,
-      maxPitch: 68,
-      antialias: true,
-      attributionControl: true
-    });
+    let map;
+    try {
+      map = new maplibregl.Map({
+        container: mapHostRef.current,
+        style: OPENFREEMAP_LIBERTY_STYLE,
+        center: centerLngLat,
+        zoom: startZoom,
+        pitch: initPitch,
+        bearing: initBearing,
+        maxPitch: 68,
+        antialias: true,
+        attributionControl: true
+      });
+    } catch {
+      return undefined;
+    }
 
     map.addControl(
       new maplibregl.NavigationControl({ showCompass: true, showZoom: true, visualizePitch: true }),
@@ -1410,6 +1437,10 @@ export default function MapView3D({
       drawWireframes();
     }
   }, [drawMode, drawWireframes]);
+
+  useEffect(() => {
+    drawWireframes();
+  }, [selectedParcelId, drawWireframes]);
 
   // Respond cleanly to parent viewMode switches ('2d' | '3d' | 'isometric')
   useEffect(() => {
@@ -2424,6 +2455,7 @@ export default function MapView3D({
       data-rendered-3d-sculptures={rendered3dSculptureCount}
       data-three-3d-models={loadedThree3dCount}
       data-selected-draft-id={selectedDraftId || ''}
+      data-selected-parcel-id={selectedParcelId || ''}
       data-hovered-draft-id={hoveredDraftId || ''}
       data-active-handle={activeHandle || ''}
       style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', flex: 1, minHeight: 0 }}
