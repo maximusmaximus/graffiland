@@ -300,6 +300,24 @@ export function createSculptureThreeLayer({
     entries.delete(scId);
   }
 
+  function createGroundContactShadow(widthM, depthM) {
+    const w = Math.max(0.5, Number(widthM) || 1);
+    const d = Math.max(0.5, Number(depthM) || 1);
+    const geo = new THREE.CircleGeometry(0.5, 32);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x050814,
+      transparent: true,
+      opacity: 0.24,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const disc = new THREE.Mesh(geo, mat);
+    disc.rotation.x = -Math.PI / 2;
+    disc.scale.set(w * 1.12, d * 1.12, 1);
+    disc.position.y = 0.015;
+    return disc;
+  }
+
   function createSelectionFrame(widthM, depthM) {
     const w = Math.max(0.6, Number(widthM) || 1);
     const d = Math.max(0.6, Number(depthM) || 1);
@@ -376,6 +394,18 @@ export function createSculptureThreeLayer({
         pivot.rotation.y = transform.worldYawRad;
       }
     }
+    // Subtle ground contact shadow right beneath the model base so it sits unmistakably ON TOP of the land floor
+    const groundShadow = createGroundContactShadow(
+      transform.renderedSize.x,
+      transform.renderedSize.z
+    );
+    groundShadow.position.set(transform.worldDx, 0.015, transform.worldDz);
+    groundShadow.renderOrder = -1;
+    if (transform.worldYawRad !== 0) {
+      groundShadow.rotation.z = transform.worldYawRad;
+    }
+    container.add(groundShadow);
+
     pivot.scale.setScalar(transform.scale);
     pivot.position.set(transform.worldDx, 0, transform.worldDz);
     container.add(pivot);

@@ -157,12 +157,15 @@ export function drawDepthFadedPrismEdges(
     dashed = false,
     darkHalo = true,
     nearAlpha = DEFAULT_BOUNDARY_NEAR_ALPHA,
-    farAlpha = DEFAULT_BOUNDARY_FAR_ALPHA
+    farAlpha = DEFAULT_BOUNDARY_FAR_ALPHA,
+    includeBottomEdges = true
   }
 ) {
   if (!ctx || !geom?.bottom || !geom?.top) return null;
   const fade = computePrismCornerFadeAlphas(geom.bottom, geom.top, { nearAlpha, farAlpha });
-  const { edges } = fade;
+  const edges = includeBottomEdges
+    ? fade.edges
+    : fade.edges.filter((edge) => edge.kind !== 'bottom');
 
   const drawPass = ({
     color,

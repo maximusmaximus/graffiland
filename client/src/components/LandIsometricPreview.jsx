@@ -82,6 +82,7 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
     : isDormant
       ? '#ff4da6'
       : '#ff1f8f';
+  const innerColor = isFrozen ? '#e0f2fe' : isSelected ? '#ffe0f2' : '#ffd6ec';
   return {
     type: 'Feature',
     properties: {
@@ -89,6 +90,7 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
       heightMeters: Number(vol.heightMeters || 18),
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
       color,
+      innerColor,
       isSelected: isSelected ? 1 : 0
     },
     geometry: {
@@ -101,30 +103,12 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
 function drawPreviewPrism(
   ctx,
   geom,
-  { outerColor, innerColor, lineWidth = 2.1, glowBlur = 12, dashed = false, showGroundHalo = false }
+  { outerColor, innerColor, lineWidth = 2.1, glowBlur = 12, dashed = false, includeBottomEdges = true }
 ) {
   if (!geom) return;
-  const { bottom } = geom;
 
-  if (showGroundHalo) {
-    const cx = (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4;
-    const cy = (bottom[0].y + bottom[1].y + bottom[2].y + bottom[3].y) / 4;
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 31, 143, 0.14)';
-    ctx.beginPath();
-    ctx.moveTo(bottom[0].x, bottom[0].y);
-    for (let i = 1; i < 4; i++) ctx.lineTo(bottom[i].x, bottom[i].y);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = outerColor;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
+  // Never paint a translucent floor polygon on the foreground 2D canvas — the pink land base
+  // renders on MapLibre's ground layers strictly BEHIND the 3D sculptures.
   // Depth-faded 3D boundary wireframe: lines closest to user stay crisp, far-side lines fade >=25%
   drawDepthFadedPrismEdges(ctx, geom, {
     outerColor,
@@ -134,7 +118,8 @@ function drawPreviewPrism(
     dashed,
     darkHalo: !dashed,
     nearAlpha: 1.0,
-    farAlpha: 0.32
+    farAlpha: 0.32,
+    includeBottomEdges
   });
 }
 
@@ -224,10 +209,7 @@ function IsometricFallbackBlueprint({
             <line x1={b0[0]} y1={b0[1]} x2={t0[0]} y2={t0[1]} stroke={stroke} strokeWidth="1.15" opacity="0.4" />
             <line x1={t0[0]} y1={t0[1]} x2={t1[0]} y2={t1[1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
             <line x1={t0[0]} y1={t0[1]} x2={t3[0]} y2={t3[1]} stroke={stroke} strokeWidth="1.2" opacity="0.46" />
-            {/* Front translucent walls */}
-            <polygon points={pts([b1, b2, t2, t1])} fill={fill} stroke="none" opacity="0.72" />
-            <polygon points={pts([b2, b3, t3, t2])} fill={fill} stroke="none" opacity="0.58" />
-            <polygon points={pts([t0, t1, t2, t3])} fill={fill} stroke="none" opacity="0.45" />
+            {/* Bottom floor stays on the ground behind the interior — never veil the foreground */}
             {/* Front-side boundary edges closest to viewer (crisp 100%) */}
             <line x1={b1[0]} y1={b1[1]} x2={t1[0]} y2={t1[1]} stroke={stroke} strokeWidth="1.6" opacity="0.82" />
             <line x1={b3[0]} y1={b3[1]} x2={t3[0]} y2={t3[1]} stroke={stroke} strokeWidth="1.6" opacity="0.82" />
@@ -635,13 +617,17 @@ export default function LandIsometricPreview({
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
         const outerColor = isFrozenNow ? '#7dd3fc' : '#ff1f8f';
         const innerColor = isFrozenNow ? '#e0f2fe' : '#ffd6ec';
-        drawPreviewPrism(ctx, geom, {
-          outerColor,
-          innerColor,
-          lineWidth: 2.3,
-          glowBlur: 14,
-          showGroundHalo: true
-        });
+        const mapPitch = Number(map.getPitch?.() || 0);
+        const isElevated = Number(curVol.baseAltitudeM || 0) > 0.25;
+        if (mapPitch >= 2 || isElevated) {
+          drawPreviewPrism(ctx, geom, {
+            outerColor,
+            innerColor,
+            lineWidth: 2.3,
+            glowBlur: 14,
+            includeBottomEdges: isElevated
+          });
+        }
         primaryLabel = {
           geom,
           outerColor,
@@ -903,16 +889,26 @@ export default function LandIsometricPreview({
         if (!map.getSource('preview-other-lands')) {
           map.addSource('preview-other-lands', { type: 'geojson', data: EMPTY_FC });
         }
-        if (!map.getLayer('preview-other-lands-extrusion')) {
+        if (!map.getLayer('preview-other-lands-floor-fill')) {
           map.addLayer({
-            id: 'preview-other-lands-extrusion',
-            type: 'fill-extrusion',
+            id: 'preview-other-lands-floor-fill',
+            type: 'fill',
             source: 'preview-other-lands',
             paint: {
-              'fill-extrusion-color': ['get', 'color'],
-              'fill-extrusion-height': ['get', 'heightMeters'],
-              'fill-extrusion-base': ['get', 'baseAltitudeM'],
-              'fill-extrusion-opacity': 0.14
+              'fill-color': ['get', 'color'],
+              'fill-opacity': 0.13
+            }
+          });
+        }
+        if (!map.getLayer('preview-other-lands-floor-outline')) {
+          map.addLayer({
+            id: 'preview-other-lands-floor-outline',
+            type: 'line',
+            source: 'preview-other-lands',
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': 1.8,
+              'line-opacity': 0.72
             }
           });
         }
@@ -920,21 +916,58 @@ export default function LandIsometricPreview({
         if (!map.getSource('preview-selected-land')) {
           map.addSource('preview-selected-land', { type: 'geojson', data: EMPTY_FC });
         }
-        if (!map.getLayer('preview-selected-land-extrusion')) {
+        // Render the land bottom floor + glowing ground perimeter strictly BEFORE 3D sculptures
+        // so the pink land base ALWAYS sits underneath/behind the models, never in the foreground.
+        if (!map.getLayer('preview-selected-land-floor-fill')) {
           map.addLayer({
-            id: 'preview-selected-land-extrusion',
-            type: 'fill-extrusion',
+            id: 'preview-selected-land-floor-fill',
+            type: 'fill',
             source: 'preview-selected-land',
             paint: {
-              'fill-extrusion-color': ['get', 'color'],
-              'fill-extrusion-height': ['get', 'heightMeters'],
-              'fill-extrusion-base': ['get', 'baseAltitudeM'],
-              'fill-extrusion-opacity': 0.08
+              'fill-color': ['get', 'color'],
+              'fill-opacity': 0.22
+            }
+          });
+        }
+        if (!map.getLayer('preview-selected-land-floor-glow')) {
+          map.addLayer({
+            id: 'preview-selected-land-floor-glow',
+            type: 'line',
+            source: 'preview-selected-land',
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': 8,
+              'line-blur': 5,
+              'line-opacity': 0.36
+            }
+          });
+        }
+        if (!map.getLayer('preview-selected-land-floor-outline')) {
+          map.addLayer({
+            id: 'preview-selected-land-floor-outline',
+            type: 'line',
+            source: 'preview-selected-land',
+            paint: {
+              'line-color': ['get', 'color'],
+              'line-width': 2.6,
+              'line-opacity': 0.94
+            }
+          });
+        }
+        if (!map.getLayer('preview-selected-land-floor-core')) {
+          map.addLayer({
+            id: 'preview-selected-land-floor-core',
+            type: 'line',
+            source: 'preview-selected-land',
+            paint: {
+              'line-color': ['get', 'innerColor'],
+              'line-width': 1,
+              'line-opacity': 0.72
             }
           });
         }
 
-        // Mount real un-pixelated Three.js 3D models BEFORE translucent land prisms
+        // Mount real un-pixelated Three.js 3D models STRICTLY AFTER the ground land floor layers
         let threeMounted = Boolean(map.getLayer('preview-sculptures-three-3d'));
         if (!threeMounted && maplibreRef.current) {
           try {
@@ -948,14 +981,7 @@ export default function LandIsometricPreview({
               }
             });
             threeLayerRef.current = threeLayer;
-            map.addLayer(
-              threeLayer,
-              map.getLayer('preview-other-lands-extrusion')
-                ? 'preview-other-lands-extrusion'
-                : map.getLayer('preview-selected-land-extrusion')
-                ? 'preview-selected-land-extrusion'
-                : undefined
-            );
+            map.addLayer(threeLayer);
             threeMounted = Boolean(map.getLayer('preview-sculptures-three-3d'));
           } catch {
             threeLayerRef.current = null;
@@ -1063,7 +1089,7 @@ export default function LandIsometricPreview({
         map.on('rotatestart', () => setUserMovedCamera(true));
 
         // Clicking another owned land right inside the preview switches Land Management to it
-        map.on('click', 'preview-other-lands-extrusion', (e) => {
+        map.on('click', 'preview-other-lands-floor-fill', (e) => {
           const clickedPid = e?.features?.[0]?.properties?.parcelId;
           if (!clickedPid || !onSelectParcelRef.current) return;
           const match = (otherEntriesRef.current || []).find(
@@ -1074,10 +1100,10 @@ export default function LandIsometricPreview({
           }
         });
 
-        map.on('mouseenter', 'preview-other-lands-extrusion', () => {
+        map.on('mouseenter', 'preview-other-lands-floor-fill', () => {
           map.getCanvas().style.cursor = 'pointer';
         });
-        map.on('mouseleave', 'preview-other-lands-extrusion', () => {
+        map.on('mouseleave', 'preview-other-lands-floor-fill', () => {
           map.getCanvas().style.cursor = '';
         });
 
