@@ -82,6 +82,8 @@ function ARViewportCanvasInner({
   lastScanUiRef,
   lastUnmappedMaskRef,
   mappingCompletedNoticeShownRef,
+  mappingPausedRef = null,
+  mappingRestartRequired = false,
   setSceneScan,
   setUnmappedGrid,
   setOrbStatus,
@@ -637,26 +639,40 @@ function ARViewportCanvasInner({
       }
 
       const isTransform = modeRef.current === 'transform';
-      const isSceneLocked = Boolean(
-        sceneScanOptimalRef.current || polRef.current.getSceneCoverage().optimal
+      const isMappingPaused = Boolean(
+        mappingPausedRef?.current ||
+          (typeof document !== 'undefined' && document.visibilityState === 'hidden')
       );
+      const isSceneLocked = Boolean(polRef.current.getSceneCoverage().optimal);
+      sceneScanOptimalRef.current = isSceneLocked;
       if (isSceneLocked) {
-        sceneScanOptimalRef.current = true;
-        if (!arViewOnly && !isTransform && !mappingCompletedNoticeShownRef.current) {
+        if (!arViewOnly && !isTransform && !isMappingPaused && !mappingCompletedNoticeShownRef.current) {
           mappingCompletedNoticeShownRef.current = true;
           showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
         }
       }
 
-      if (!arViewOnly && !isTransform && !isSceneLocked && now - lastScanPosePush > 110) {
+      if (
+        !arViewOnly &&
+        !isTransform &&
+        !isMappingPaused &&
+        !isSceneLocked &&
+        now - lastScanPosePush > 110
+      ) {
         lastScanPosePush = now;
         scanFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
         const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
         const pitchDeg = (Math.asin(Math.max(-1, Math.min(1, scanFwdVec.y))) * 180) / Math.PI;
+        const hasLiveCameraFrame = Boolean(
+          videoRef.current &&
+            videoRef.current.readyState >= 2 &&
+            videoRef.current.videoWidth > 0 &&
+            !videoRef.current.paused
+        );
         const cov = polRef.current.recordViewPose({
           yawDeg,
           pitchDeg,
-          hasCamera: Boolean(videoRef.current && videoRef.current.readyState >= 2)
+          hasCamera: hasLiveCameraFrame
         });
         const prev = lastScanUiRef.current;
         if (!prev.optimal && cov.optimal && !mappingCompletedNoticeShownRef.current) {
@@ -704,7 +720,7 @@ function ARViewportCanvasInner({
           !cov.optimal &&
           now - lastOrbExtractPush > 920 &&
           !orbExtractBusy &&
-          videoRef.current?.readyState >= 2 &&
+          hasLiveCameraFrame &&
           orbKeyframesRef.current.size < 3
         ) {
           const bucket = yawDeg < -18 ? 'left' : yawDeg > 18 ? 'right' : 'center';
@@ -1064,6 +1080,7 @@ function ARViewportCanvasInner({
     lastUnmappedMaskRef,
     locationRef,
     mappingCompletedNoticeShownRef,
+    mappingPausedRef,
     modeRef,
     nearbyGroupRef,
     occlusionCanvasRef,
@@ -1099,7 +1116,7 @@ function ARViewportCanvasInner({
   return (
     <>
       <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
-      {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && (
+      {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && (
         <div
           className="mapping-grayscale-grid"
           data-testid="mapping-grayscale-grid"
@@ -1126,6 +1143,7 @@ function ARViewportCanvasInner({
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         data-transform-mode={isTransformMode ? 'true' : 'false'}
         data-scene-locked={sceneScanOptimal ? 'true' : 'false'}
+        data-mapping-restart-required={mappingRestartRequired ? 'true' : 'false'}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
         onPointerUp={onCanvasPointerUp}

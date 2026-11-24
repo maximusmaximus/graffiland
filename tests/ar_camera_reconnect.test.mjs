@@ -12,6 +12,12 @@ import {
   inspectCameraFeedHealth,
   stopMediaStreamTracks
 } from '../client/src/utils/cameraRecovery.js';
+import {
+  computeHexHammingDistance,
+  evaluateSubstantialDeviceMovement,
+  ProofOfLocationTracker,
+  shortestAngleDeltaDeg
+} from '../client/src/components/ProofOfLocation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -633,5 +639,291 @@ describe('AR Camera Refresh on Disconnect & Reconnect (React Hooks + UI)', () =>
     assert.ok(hudView.getByTestId('camera-recovering-banner'));
     assert.equal(hudView.queryByTestId('mobile-error-banner'), null);
     hudView.unmount();
+  });
+
+  test('ProofOfLocationTracker detects substantial movement on leave/return and resets cleanly', () => {
+    assert.equal(computeHexHammingDistance('0000000000000000', 'ffffffffffffffff'), 64);
+    assert.equal(computeHexHammingDistance('f0f0f0f0f0f0f0f0', 'f0f0f0f0f0f0f0f0'), 0);
+    assert.equal(shortestAngleDeltaDeg(5, 355), 10);
+    assert.equal(shortestAngleDeltaDeg(355, 5), -10);
+    assert.equal(Math.abs(shortestAngleDeltaDeg(10, 190)), 180);
+
+    const baseCheckpoint = {
+      lat: 39.7285,
+      lng: -121.8375,
+      accuracy: 5,
+      yawDeg: 100,
+      pitchDeg: 0,
+      visualDHash: 'a5a5a5a5a5a5a5a5',
+      scannedCount: 5,
+      optimal: false,
+      capturedAt: 10000
+    };
+
+    // Small hand jitter should NOT prompt restart
+    const jitter = evaluateSubstantialDeviceMovement({
+      checkpoint: baseCheckpoint,
+      current: {
+        lat: 39.728515,
+        lng: -121.8375,
+        accuracy: 5,
+        yawDeg: 112,
+        pitchDeg: 6,
+        visualDHash: 'a5a5a5a5a5a5a5a4'
+      },
+      nowMs: 14000
+    });
+    assert.equal(jitter.movedSubstantially, false);
+
+    // Walking >= 12m triggers gps_moved
+    const gpsMoved = evaluateSubstantialDeviceMovement({
+      checkpoint: baseCheckpoint,
+      current: {
+        lat: 39.72864,
+        lng: -121.8375,
+        accuracy: 5,
+        yawDeg: 105,
+        pitchDeg: 2,
+        visualDHash: 'a5a5a5a5a5a5a5a5'
+      },
+      nowMs: 18000
+    });
+    assert.equal(gpsMoved.movedSubstantially, true);
+    assert.equal(gpsMoved.reason, 'gps_moved');
+    assert.ok(gpsMoved.distanceMeters >= 12);
+
+    // Turning device >= 55 deg triggers orientation_changed
+    const turned = evaluateSubstantialDeviceMovement({
+      checkpoint: baseCheckpoint,
+      current: {
+        lat: 39.7285,
+        lng: -121.8375,
+        accuracy: 5,
+        yawDeg: 175,
+        pitchDeg: 0,
+        visualDHash: 'a5a5a5a5a5a5a5a5'
+      },
+      nowMs: 15000
+    });
+    assert.equal(turned.movedSubstantially, true);
+    assert.equal(turned.reason, 'orientation_changed');
+    assert.equal(turned.yawDeltaDeg, 75);
+
+    // Completely different camera view (dHash >= 22 bits) triggers scene_changed
+    const sceneChanged = evaluateSubstantialDeviceMovement({
+      checkpoint: baseCheckpoint,
+      current: {
+        lat: 39.7285,
+        lng: -121.8375,
+        accuracy: 5,
+        yawDeg: 105,
+        pitchDeg: 1,
+        visualDHash: '5a5a5a5a5a5a5a5a'
+      },
+      nowMs: 15000
+    });
+    assert.equal(sceneChanged.movedSubstantially, true);
+    assert.equal(sceneChanged.reason, 'scene_changed');
+    assert.equal(sceneChanged.visualHammingBits, 64);
+
+    // Tracker resetSceneScan clears sectors, fine grid, and anchor while keeping GPS fix
+    const tracker = new ProofOfLocationTracker();
+    tracker.recordGps({
+      coords: { latitude: 39.7285, longitude: -121.8375, accuracy: 4, altitude: 60 }
+    });
+    tracker.recordGyro(120, 90, 0);
+    tracker.cameraFrames = 4;
+    tracker.sceneContrast = 12;
+    tracker.visualDHash = 'a5a5a5a5a5a5a5a5';
+    tracker.recordViewPose({ yawDeg: 0, pitchDeg: 0, hasCamera: true });
+    for (const yaw of [-45, -15, 15, 45]) {
+      for (const pitch of [-20, 0, 20]) {
+        tracker.recordViewPose({ yawDeg: yaw, pitchDeg: pitch, hasCamera: true });
+      }
+    }
+    assert.equal(tracker.getSceneCoverage().optimal, true);
+    assert.equal(tracker.gpsSamples.length, 1);
+
+    const resetCov = tracker.resetSceneScan({ preserveGps: true });
+    assert.equal(resetCov.optimal, false);
+    assert.equal(resetCov.scannedCount, 0);
+    assert.equal(resetCov.coveragePct, 0);
+    assert.equal(tracker.anchorYawDeg, null);
+    assert.equal(tracker.cameraFrames, 0);
+    assert.equal(tracker.visualDHash, '');
+    assert.equal(tracker.gpsSamples.length, 1);
+  });
+
+  test('useProofOfLocation resumes mapping cleanly on leave/return, prompts restart on substantial movement, and resets on restartSceneMapping', async () => {
+    const { useProofOfLocation } = await loadJsxModule(
+      'client/src/hooks/useProofOfLocation.js'
+    );
+
+    const streams = [];
+    Object.defineProperty(dom.window.navigator, 'mediaDevices', {
+      value: {
+        async getUserMedia() {
+          const s = createMockStream(`map-${streams.length + 1}`);
+          streams.push(s);
+          return s;
+        }
+      },
+      configurable: true
+    });
+
+    let hookApi = null;
+    function Harness() {
+      const dirLightRef = React.useRef(null);
+      const pol = useProofOfLocation({ user: null, dirLightRef });
+      hookApi = pol;
+      return React.createElement('video', {
+        ref: (el) => {
+          if (el) {
+            el.play = () => Promise.resolve();
+            el.pause = () => {};
+            Object.defineProperty(el, 'readyState', { value: 4, configurable: true });
+            Object.defineProperty(el, 'videoWidth', { value: 1280, configurable: true });
+            Object.defineProperty(el, 'videoHeight', { value: 720, configurable: true });
+          }
+          pol.videoRef.current = el;
+        }
+      });
+    }
+
+    const view = RTL.render(React.createElement(Harness));
+    await RTL.waitFor(() => {
+      assert.equal(hookApi.cameraReady, true);
+    });
+
+    // Seed partial scene mapping progress
+    await RTL.act(async () => {
+      hookApi.locationRef.current = { lat: 39.7285, lng: -121.8375, accuracy: 5 };
+      hookApi.polRef.current.recordGps({
+        coords: { latitude: 39.7285, longitude: -121.8375, accuracy: 5 }
+      });
+      hookApi.polRef.current.recordGyro(90, 90, 0);
+      hookApi.polRef.current.cameraFrames = 3;
+      hookApi.polRef.current.sceneContrast = 14;
+      hookApi.polRef.current.recordViewPose({ yawDeg: 0, pitchDeg: 0, hasCamera: true });
+      hookApi.polRef.current.recordViewPose({ yawDeg: 40, pitchDeg: 0, hasCamera: true });
+      hookApi.setSceneScan(hookApi.polRef.current.getSceneCoverage());
+    });
+    assert.ok(hookApi.sceneScan.scannedCount >= 2);
+    assert.equal(hookApi.mappingRestartPrompt, null);
+
+    // 1. Leave & return without moving -> does not prompt restart, invalidates stale preview cache
+    await RTL.act(async () => {
+      hookApi.notifyMappingViewLeft();
+      hookApi.lastUnmappedMaskRef.current = 'stale-mask';
+      hookApi.notifyMappingViewReturned();
+    });
+    assert.equal(hookApi.mappingRestartPrompt, null);
+    assert.notEqual(hookApi.lastUnmappedMaskRef.current, 'stale-mask');
+
+    // 2. Leave, move device substantially (rotate 85 deg & walk 20m), and return -> prompts restart
+    await RTL.act(async () => {
+      hookApi.notifyMappingViewLeft();
+      hookApi.polRef.current.recordGyro(175, 90, 0);
+      hookApi.locationRef.current = { lat: 39.7287, lng: -121.8375, accuracy: 5 };
+      hookApi.setScanBoxCollapsed(true);
+      hookApi.notifyMappingViewReturned();
+    });
+    assert.ok(hookApi.mappingRestartPrompt);
+    assert.equal(hookApi.mappingRestartPrompt.movedSubstantially, true);
+    assert.equal(hookApi.scanBoxCollapsed, false);
+    assert.equal(hookApi.unmappedGrid.every((v) => v === false), true);
+
+    // 3. Restart mapping clears prompt and resets progress cleanly
+    await RTL.act(async () => {
+      await hookApi.restartSceneMapping({ reason: 'device_moved', refreshCameraFeed: false });
+    });
+    assert.equal(hookApi.mappingRestartPrompt, null);
+    assert.equal(hookApi.sceneScan.scannedCount, 0);
+    assert.equal(hookApi.sceneScan.coveragePct, 0);
+    assert.equal(hookApi.sceneScan.optimal, false);
+
+    view.unmount();
+  });
+
+  test('SceneCoverageWidget renders Refresh icon to manually restart mapping and displays Restart Mapping prompt when moved', async () => {
+    const { default: SceneCoverageWidget } = await loadJsxModule(
+      'client/src/components/studio/SceneCoverageWidget.jsx'
+    );
+
+    const restartCalls = [];
+    const baseScan = {
+      coveragePct: 56,
+      scannedCount: 5,
+      targetCount: 9,
+      sectors: Array.from({ length: 12 }, (_, i) => i < 5),
+      cursorX: 0.5,
+      cursorY: 0.5,
+      optimal: false,
+      precisionMeters: 1.15,
+      hint: 'Pan right to sharpen lock'
+    };
+    const baseOrb = { engine: 'ORB-SLAM', keyframes: 2, relocalizedInliers: 0 };
+
+    // 1. Expanded scanning state shows manual Refresh icon button
+    const view1 = RTL.render(
+      React.createElement(SceneCoverageWidget, {
+        sceneScan: baseScan,
+        orbStatus: baseOrb,
+        scanBoxCollapsed: false,
+        onToggleCollapse: () => {},
+        dockOpen: false,
+        mode: 'draw',
+        mappingRestartPrompt: null,
+        onRestartMapping: (reason) => restartCalls.push(reason)
+      })
+    );
+    const refreshBtn = view1.getByTestId('scene-scan-refresh-btn');
+    assert.ok(refreshBtn);
+    assert.equal(view1.getByTestId('scene-coverage-widget').getAttribute('data-needs-restart'), 'false');
+    RTL.fireEvent.click(refreshBtn);
+    assert.deepEqual(restartCalls, ['manual']);
+    view1.unmount();
+
+    // 2. Collapsed LOCKED state still keeps manual Refresh icon accessible
+    const view2 = RTL.render(
+      React.createElement(SceneCoverageWidget, {
+        sceneScan: { ...baseScan, coveragePct: 100, scannedCount: 9, optimal: true },
+        orbStatus: baseOrb,
+        scanBoxCollapsed: true,
+        onToggleCollapse: () => {},
+        dockOpen: false,
+        mode: 'draw',
+        mappingRestartPrompt: null,
+        onRestartMapping: (reason) => restartCalls.push(reason)
+      })
+    );
+    RTL.fireEvent.click(view2.getByTestId('scene-scan-refresh-btn'));
+    assert.deepEqual(restartCalls, ['manual', 'manual']);
+    view2.unmount();
+
+    // 3. Substantial movement prompt shows MOVED badge, alert banner, and Restart Mapping CTA
+    const view3 = RTL.render(
+      React.createElement(SceneCoverageWidget, {
+        sceneScan: baseScan,
+        orbStatus: baseOrb,
+        scanBoxCollapsed: false,
+        onToggleCollapse: () => {},
+        dockOpen: false,
+        mode: 'draw',
+        mappingRestartPrompt: {
+          movedSubstantially: true,
+          reason: 'gps_moved',
+          summary: 'Device moved ~18m — restart mapping for accurate AR alignment.'
+        },
+        onRestartMapping: (reason) => restartCalls.push(reason)
+      })
+    );
+    assert.equal(view3.getByTestId('scene-coverage-widget').getAttribute('data-needs-restart'), 'true');
+    assert.ok(view3.getByText('MOVED'));
+    assert.ok(view3.getByTestId('scene-scan-restart-banner'));
+    assert.ok(view3.getByText(/Device moved ~18m/i));
+    RTL.fireEvent.click(view3.getByTestId('scene-scan-restart-btn'));
+    assert.deepEqual(restartCalls, ['manual', 'manual', 'gps_moved']);
+    view3.unmount();
   });
 });
