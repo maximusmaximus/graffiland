@@ -273,6 +273,8 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
         sculptureCount: Number(p.sculptureCount || 0),
         stewardStatus: p.stewardStatus || 'awakened',
         leaseExpiresAt: p.leaseExpiresAt || '',
+        inactivityExpiresAt: p.inactivityExpiresAt || '',
+        hadHumanInteraction: Boolean(p.hadHumanInteraction),
         awakenedAt: p.awakenedAt || '',
         frozen: Boolean(p.frozen),
         openQuestCount: Number(p.openQuestCount || 0),

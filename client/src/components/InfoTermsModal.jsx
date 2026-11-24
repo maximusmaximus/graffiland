@@ -213,7 +213,10 @@ export default function InfoTermsModal({
                       scale, drag <strong>side bars</strong> to stretch edges, hold &amp; drag{' '}
                       <strong>vertical corner bars</strong> to rotate, or drag the{' '}
                       <strong>center</strong> to move. Limits: 4–120m sides, max 5,000 m² area,
-                      4–250m height, max 500,000 m³ volume, 3 free human starter claims.
+                      4–250m height, max 500,000 m³ volume, 3 free human starter claims. Plots
+                      drawn on the map first start with a 28-day timer until a human visits in
+                      person on Mobile AR and adds art to fully mint &amp; permanently own them
+                      (land minted directly from manual Mobile AR art has no timer).
                     </InfoTip>
                   </div>
                   <p>
@@ -338,27 +341,40 @@ export default function InfoTermsModal({
             >
               <div className="info-simple-title">
                 <XeroIcon emoji="⏳" size={16} />
-                <strong>Land Expiry, In-Person Human Rules &amp; Archive</strong>
-                <InfoTip title="72h Agent Reclaim, 28-Day Inactivity & Free Slots">
-                  Agent-created lands are archived and destroyed if no verified human interacts with
-                  them in person within {STEWARD_DEFAULTS.dormantLeaseTtlHours} hours — even if the
-                  agent places 3D models or stages on the land. Any land without an in-person human
-                  interaction for {STEWARD_DEFAULTS.inactivityArchiveDays} consecutive days is also
-                  archived and destroyed. Owners receive an alert{' '}
-                  {STEWARD_DEFAULTS.expiryWarningHours} hours before expiry. Free mint slots used by
-                  lands that expire without in-person human users do not open back up.
+                <strong>Permanent Art-Minted Land vs. Pre-Claimed Land Timers &amp; Archive</strong>
+                <InfoTip title="Art-Minted Permanent Land vs. 72h / 28-Day Timers">
+                  When a human stands on-site in Mobile AR and manually draws art to mint land,
+                  no expiry timer is needed or displayed and the land never expires or gets
+                  recycled. Expiry counters apply only to land made first without physical human
+                  art/interaction: {STEWARD_DEFAULTS.inactivityArchiveDays} days for human
+                  map-drawn plots and {STEWARD_DEFAULTS.dormantLeaseTtlHours} hours for AI
+                  agent-created plots (even if the agent adds 3D models). A human must visit in
+                  person on Mobile AR and add art to fully mint &amp; permanently own it (clearing
+                  the timer forever). Owners receive an alert{' '}
+                  {STEWARD_DEFAULTS.expiryWarningHours} hours before expiry; free mint slots used
+                  by lands that expire without in-person human users do not open back up.
                 </InfoTip>
               </div>
               <p style={{ marginBottom: 6 }}>
-                <strong>72-Hour Agent Limit:</strong> Agent-created lands must get a verified{' '}
-                <strong>in-person human interaction within 72 hours</strong> of minting (even if the
-                agent puts 3D models on the land) or they are <strong>archived and destroyed</strong>{' '}
-                and their free mint slot does not reopen.
+                <strong>Land Minted From Manual Human Art (No Timer — Permanent):</strong> When a
+                human draws manually in person on Mobile AR to create art and mint land,{' '}
+                <strong>no countdown timer is needed or displayed</strong> — the land is{' '}
+                <strong>fully minted and permanently owned</strong> and will never expire or get
+                recycled.
+              </p>
+              <p style={{ marginBottom: 6 }}>
+                <strong>Land Made First (Map-Drawn or AI Agent Land — Needs Physical Visit &amp; Art):</strong>{' '}
+                The countdown counter applies only to land that has <strong>not had physical human interaction yet</strong>.{' '}
+                If you create land first on the map (<strong>28-day timer</strong>) or an AI agent
+                claims land first (<strong>72-hour timer</strong>, even with 3D models placed), a
+                human must physically go to the land on Mobile AR and add art to{' '}
+                <strong>fully mint and permanently own it</strong> (removing the timer forever).
               </p>
               <p style={{ marginBottom: 8 }}>
-                <strong>28-Day Activity Rule &amp; 3-Hour Alerts:</strong> Any land with no
-                in-person human interaction for <strong>28 days</strong> is archived and destroyed.
-                Owners are notified <strong>3 hours before</strong> expiry.
+                <strong>Expiry, 3-Hour Alerts &amp; Free Slots:</strong> Unvisited pre-claimed
+                lands send a warning <strong>3 hours before</strong> expiry and are{' '}
+                <strong>archived, destroyed, and recycled</strong> when the timer runs out. Free
+                mint slots used by lands that expire without in-person human users do not reopen.
               </p>
               <div style={{ fontSize: 12, marginBottom: 8 }}>
                 <strong>Exact Ways a Human Interacts In Person (Mobile Camera + GPS):</strong>
@@ -436,11 +452,14 @@ export default function InfoTermsModal({
               <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong> Every
               sale allocates <strong>5% Platform</strong>, <strong>3% Land Steward</strong>,{' '}
               <strong>2% Human Contributor Pool</strong> (&ge;3 voxels IRL), and{' '}
-              <strong>90% Net Seller</strong>. Agent-created lands expire after{' '}
-              <strong>72 hours</strong> without an in-person human interaction (even with 3D models
-              placed), and any land inactive for <strong>28 days</strong> without an in-person human
-              visit is archived and destroyed. Consumed free slots without human users do not reopen.
-              Owners receive a notification <strong>3 hours</strong> before expiry.{' '}
+              <strong>90% Net Seller</strong>. Lands minted from manual human Mobile AR art are
+              permanently owned with no expiry timer and never recycle. Lands made first without
+              physical human interaction carry a timer (<strong>72 hours</strong> for AI agent
+              lands, even with 3D models placed; <strong>28 days</strong> for human map-drawn
+              lands) until a human visits in person on Mobile AR and adds art to fully mint &amp;
+              permanently own them. Unvisited lands are archived and destroyed when their timer
+              expires, consumed free slots without human users do not reopen, and owners receive a
+              notification <strong>3 hours</strong> before expiry.{' '}
               <a
                 href="?archive=1"
                 style={{ color: 'var(--accent)', fontWeight: 600 }}

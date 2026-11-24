@@ -895,7 +895,7 @@ export default function DesktopHub({
       setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== draft.id));
       setSelectedDraftId(`owned:${res.parcelId}`);
       setLandStatus({
-        text: `Minted "${mintedParcelRecord.customName}" (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}!`
+        text: `Minted "${mintedParcelRecord.customName}" (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}! Visit in person on Mobile AR and add art within 28 days to clear the timer and permanently own it.`
       });
       setNotifRefreshSignal((n) => n + 1);
       await Promise.all([refreshData(), refreshMyLands()]);

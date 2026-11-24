@@ -642,4 +642,131 @@ describe('GRAFFILAND Agentic-First Ecosystem, Quests & 5%/3%/2% Marketplace', ()
     assert.equal(rec28.archiveReason, 'inactivity_28d_no_human_interaction');
     assert.equal(rec28.hadHumanInteraction, true);
   });
+
+  test('Human art-minted land has NO expiry timer (permanent); map-created-first land starts with 28d timer until human adds AR art to own permanently', async () => {
+    const loginArtHuman = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'art-pioneer@graffiland.test', name: 'Art Pioneer' }
+      })
+    });
+    assert.equal(loginArtHuman.status, 200);
+    const artHumanToken = loginArtHuman.body.token;
+
+    const loginMapHuman = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'map-pioneer@graffiland.test', name: 'Map Pioneer' }
+      })
+    });
+    assert.equal(loginMapHuman.status, 200);
+    const mapHumanToken = loginMapHuman.body.token;
+
+    // 1) Human manually draws art in Mobile AR on an unclaimed spot -> permanent land, ZERO timer!
+    const artLat = 37.8125;
+    const artLng = -122.4425;
+    const artPublish = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${artHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148'
+      },
+      body: JSON.stringify({
+        title: 'Human Hand Drawn Totem',
+        description: 'Manually drawn outdoors on Mobile AR to mint permanent land.',
+        termsAccepted: true,
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'neon' },
+          { x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'neon' },
+          { x: 0, y: 0.1, z: 0, color: '#ffd166', material: 'neon' }
+        ],
+        location: { lat: artLat, lng: artLng, accuracy: 5, altitude: 10 },
+        proofOfLocation: makePolPayload(artLat, artLng),
+        deviceProfile: { isMobile: true, hasCamera: true }
+      })
+    });
+    assert.equal(artPublish.status, 201, JSON.stringify(artPublish.body));
+    const artParcelId = artPublish.body.sculpture.parcelId;
+
+    const artLandsRes = await apiJson('/api/lands');
+    const artLand = (artLandsRes.body.parcels || []).find((p) => p.parcelId === artParcelId);
+    assert.ok(artLand, 'Art-minted land must appear in /api/lands');
+    assert.equal(artLand.stewardStatus, 'awakened');
+    assert.equal(artLand.hadHumanInteraction, true);
+    assert.equal(artLand.leaseExpiresAt, '', 'Art-minted human land must have no 72h timer');
+    assert.equal(artLand.inactivityExpiresAt, '', 'Art-minted human land must have no 28d timer');
+
+    // Subsequent AR check-in on an already-permanent art-minted land MUST NOT re-add a timer
+    const checkInOnPerm = await apiJson(`/api/lands/${artParcelId}/checkin`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${artHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148'
+      },
+      body: JSON.stringify({
+        location: { lat: artLat, lng: artLng },
+        proofOfLocation: makePolPayload(artLat, artLng),
+        deviceProfile: { isMobile: true, hasCamera: true }
+      })
+    });
+    assert.equal(checkInOnPerm.status, 200);
+    assert.equal(checkInOnPerm.body.inactivityExpiresAt, '');
+
+    // 2) Land made FIRST on Desktop/Mobile Map -> starts with 28-day countdown (no physical visit yet)
+    const mapLat = 37.8195;
+    const mapLng = -122.4495;
+    const preClaim = await apiJson('/api/lands/claim', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${mapHumanToken}` },
+      body: JSON.stringify({
+        lat: mapLat,
+        lng: mapLng,
+        customName: 'Map First Plaza',
+        volume: { centerLat: mapLat, centerLng: mapLng, widthMeters: 16, depthMeters: 16 }
+      })
+    });
+    assert.equal(preClaim.status, 201, JSON.stringify(preClaim.body));
+    assert.equal(preClaim.body.hadHumanInteraction, false);
+    assert.equal(preClaim.body.requiresInPersonVisit, true);
+    assert.equal(preClaim.body.permanentOwnership, false);
+    assert.ok(preClaim.body.inactivityExpiresAt, 'Land made first must start with a 28-day timer');
+    const preClaimParcelId = preClaim.body.parcelId;
+
+    // 3) Human physically goes to the map-first land on Mobile AR and draws art -> timer CLEARS forever!
+    const visitPublish = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${mapHumanToken}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148'
+      },
+      body: JSON.stringify({
+        title: 'First Physical Artwork',
+        description: 'Human visited the pre-claimed map land in person and added manual AR art.',
+        termsAccepted: true,
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4', material: 'matte' },
+          { x: 0.05, y: 0, z: 0, color: '#ff3e7f', material: 'matte' },
+          { x: 0.1, y: 0, z: 0, color: '#ffd166', material: 'matte' }
+        ],
+        location: { lat: mapLat, lng: mapLng, accuracy: 5, altitude: 10 },
+        proofOfLocation: makePolPayload(mapLat, mapLng),
+        deviceProfile: { isMobile: true, hasCamera: true }
+      })
+    });
+    assert.equal(visitPublish.status, 201, JSON.stringify(visitPublish.body));
+    assert.equal(visitPublish.body.sculpture.parcelId, preClaimParcelId);
+
+    const afterVisitLands = await apiJson('/api/lands');
+    const ownedNow = (afterVisitLands.body.parcels || []).find(
+      (p) => p.parcelId === preClaimParcelId
+    );
+    assert.ok(ownedNow);
+    assert.equal(ownedNow.hadHumanInteraction, true);
+    assert.equal(ownedNow.leaseExpiresAt, '');
+    assert.equal(
+      ownedNow.inactivityExpiresAt,
+      '',
+      'Adding in-person Mobile AR art must clear the 28-day timer so land is permanently owned'
+    );
+  });
 });

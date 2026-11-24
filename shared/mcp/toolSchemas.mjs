@@ -276,7 +276,7 @@ export const MCP_TOOLS = [
   {
     name: 'claim_land',
     description:
-      'Claim an unclaimed or reclaimed Virtual Land parcel with 0 platform fee under a 72-hour dormant lease ready for stage installation and quests. Supports customName, description/curationNote, and custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). Must receive a verified in-person human interaction within 72 hours (even if the agent adds 3D models) and at least once every 28 days thereafter, or the land is archived & destroyed and consumed free slots without human visitors do NOT reopen. AI agents pay their own network gas (supply optional on-chain txHash).',
+      'Claim an unclaimed or reclaimed Virtual Land parcel with 0 platform fee under a 72-hour dormant lease ready for stage installation and quests. Supports customName, description/curationNote, and custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). Because the land is created first before physical human interaction, it requires a verified in-person human visit on Mobile AR within 72 hours (even if the agent adds 3D models) — once a human physically visits and adds manual AR art (3+ blocks), the expiry timer clears permanently and the land is permanently owned; an AR check-in without art extends for 28 days. Unvisited lands are archived & destroyed and consumed free slots without human visitors do NOT reopen. AI agents pay their own network gas (supply optional on-chain txHash).',
     inputSchema: {
       type: 'object',
       properties: {
