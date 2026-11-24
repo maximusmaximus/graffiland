@@ -867,6 +867,42 @@ export default function MobileStudio({
     [ensureArCameraLive, refreshArCamera]
   );
 
+  const handleSignatureExecuted = useCallback(
+    (_res, reqItem) => {
+      lands.refreshMyLands();
+      ar.loadPublicMapData();
+      const loc = pol.locationRef.current || pol.location;
+      if (loc) {
+        api
+          .listSculptures({ lat: loc.lat, lng: loc.lng, radiusMeters: 300, includeVoxels: false })
+          .then((nRes) => ar.hydrateNearbyList(nRes.sculptures || [], loc))
+          .catch(() => {});
+      }
+      const targetParcelId = String(reqItem?.parcelId || '').trim().toUpperCase();
+      if (targetParcelId) {
+        setParcelVisit((prev) => {
+          if (!prev?.parcel?.parcelId || prev.parcel.parcelId.toUpperCase() !== targetParcelId) {
+            return prev;
+          }
+          api
+            .getLandDetail(prev.parcel.parcelId)
+            .then((fresh) => {
+              if (fresh?.parcel) {
+                setParcelVisit((cur) =>
+                  cur?.parcel?.parcelId?.toUpperCase() === targetParcelId
+                    ? { ...cur, parcel: fresh.parcel, sculptures: fresh.sculptures || [] }
+                    : cur
+                );
+              }
+            })
+            .catch(() => {});
+          return prev;
+        });
+      }
+    },
+    [ar, lands, pol]
+  );
+
   const pairing = usePairing({
     user,
     voxels: brush.voxels,
@@ -877,6 +913,7 @@ export default function MobileStudio({
     onOpenLogin: () => setLoginOpen(true),
     onDesktopCommand: handleDesktopCommand,
     onDelegatedPublishExecuted: resetFormAfterPublish,
+    onSignatureExecuted: handleSignatureExecuted,
     onConnectionStateChange: handlePairingConnectionChange
   });
   openPairModalRef.current = () => pairing.setPairOpen(true);
@@ -1280,6 +1317,7 @@ export default function MobileStudio({
           pendingSignatures={pairing.pendingSignatures}
           signatureHistory={pairing.signatureHistory}
           pendingSigBusyId={pairing.pendingSigBusyId}
+          pendingSigErrors={pairing.pendingSigErrors}
           onMobileSignPending={pairing.handleMobileSignPending}
           onMobileRejectPending={pairing.handleMobileRejectPending}
           onRefreshSignatures={pairing.refreshPendingSignatures}

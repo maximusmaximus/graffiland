@@ -2014,7 +2014,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       'f 2 4 3'
     ].join('\n');
 
-    // Guardrail check: placing an oversized OBJ (1.6×1.2×1.6m × 1.3 = 2.08m) onto a 0.6×0.6×0.6m land is hard-rejected (409) with exact maxSafeScale!
+    // Guardrail check: placing an oversized OBJ (1.6×1.2×1.6m × 1.3 = 2.08m) onto a 0.6×0.6×0.6m land is hard-rejected (409) immediately at MCP preflight with exact maxSafeScale!
     const oversizedStep1 = await apiJson('/api/mcp', {
       method: 'POST',
       headers: { 'X-Graffiland-Pairing-Code': pairingCode },
@@ -2035,25 +2035,9 @@ describe('GRAFFILAND Full-Stack Verification', () => {
         }
       })
     });
-    assert.equal(oversizedStep1.status, 200);
-    const oversizedReq = oversizedStep1.body.result.structuredContent.request;
-    const oversizedSig = await holderSigner.signMessage(oversizedReq.canonicalMessage);
-    const oversizedExec = await apiJson('/api/mcp', {
-      method: 'POST',
-      headers: { 'X-Graffiland-Pairing-Code': pairingCode },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 3,
-        method: 'tools/call',
-        params: {
-          name: 'sign_and_execute_pending',
-          arguments: { requestId: oversizedReq.id, signature: oversizedSig }
-        }
-      })
-    });
-    assert.equal(oversizedExec.status, 409, JSON.stringify(oversizedExec.body));
-    const maxFitScale = Number(oversizedExec.body?.error?.data?.maxSafeScale || 0);
-    assert.equal(oversizedExec.body?.error?.data?.code, 'exceeds_land_bounds');
+    assert.equal(oversizedStep1.status, 409, JSON.stringify(oversizedStep1.body));
+    const maxFitScale = Number(oversizedStep1.body?.error?.data?.maxSafeScale || 0);
+    assert.equal(oversizedStep1.body?.error?.data?.code, 'exceeds_land_bounds');
     assert.ok(maxFitScale > 0 && maxFitScale < 0.4, `Expected exact maxSafeScale, got ${maxFitScale}`);
 
     // Retrying with modelScale <= maxSafeScale succeeds cleanly (leaving room for a sibling artwork too)!

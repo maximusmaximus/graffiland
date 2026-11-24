@@ -738,17 +738,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   };
 }
 
-export async function applyUpdateSculpture(
-  db,
-  {
-    sculptureRow,
-    payload,
-    pinSculptureFn,
-    emitMetadataUpdateFn = null,
-    editorUser = null,
-    editorRole = 'owner'
-  }
-) {
+export async function preflightUpdateSculpture(db, { sculptureRow, payload }) {
   const existingAnchor = await db.get(
     'SELECT * FROM sculpture_anchors WHERE sculpture_id = ?',
     [sculptureRow.id]
@@ -882,6 +872,7 @@ export async function applyUpdateSculpture(
   let cleanVoxels = JSON.parse(sculptureRow.voxels_json || '[]');
   let activeCustomModel = null;
   let existingModelSnapshot = null;
+  let shouldClearExistingModel = false;
 
   if (modelExtract.provided) {
     activeCustomModel = await resolveCustomModelBytes(modelExtract.customModel);
@@ -892,7 +883,7 @@ export async function applyUpdateSculpture(
       throw new McpServiceError(voxelCheck.errors[0], 400, { errors: voxelCheck.errors });
     }
     cleanVoxels = voxelCheck.cleanVoxels;
-    await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id]);
+    shouldClearExistingModel = true;
   } else {
     const existingModelRow = await db.get(
       'SELECT * FROM sculpture_models WHERE sculpture_id = ?',
@@ -1040,9 +1031,10 @@ export async function applyUpdateSculpture(
       ) {
         const effW = Math.max(0.01, unitRot.effW);
         const effD = Math.max(0.01, unitRot.effD);
-        const maxHumanScale = Math.floor(
-          Math.min(HUMAN_MAX_DRAW_SPAN_METERS / effW, HUMAN_MAX_DRAW_SPAN_METERS / effD) * 1000
-        ) / 1000;
+        const maxHumanScale =
+          Math.floor(
+            Math.min(HUMAN_MAX_DRAW_SPAN_METERS / effW, HUMAN_MAX_DRAW_SPAN_METERS / effD) * 1000
+          ) / 1000;
         throw new McpServiceError(
           `Human voxel sculptures cannot exceed ${HUMAN_MAX_DRAW_SPAN_FEET}ft x ${HUMAN_MAX_DRAW_SPAN_FEET}ft (${HUMAN_MAX_DRAW_SPAN_METERS}m x ${HUMAN_MAX_DRAW_SPAN_METERS}m).`,
           400,
@@ -1129,6 +1121,60 @@ export async function applyUpdateSculpture(
       pushedSiblings = placement.pushedSiblings || [];
       resolvedPlacement = placement;
     }
+  }
+
+  return {
+    existingAnchor,
+    currentRev,
+    existingMeshStats,
+    parcelVolume,
+    anchorOffset,
+    targetScale,
+    rawRequestedScale,
+    requestedBaseDims,
+    title,
+    description,
+    modelExtract,
+    cleanVoxels,
+    activeCustomModel,
+    existingModelSnapshot,
+    shouldClearExistingModel,
+    pushedSiblings,
+    resolvedPlacement
+  };
+}
+
+export async function applyUpdateSculpture(
+  db,
+  {
+    sculptureRow,
+    payload,
+    pinSculptureFn,
+    emitMetadataUpdateFn = null,
+    editorUser = null,
+    editorRole = 'owner'
+  }
+) {
+  const {
+    currentRev,
+    existingMeshStats,
+    anchorOffset,
+    targetScale,
+    rawRequestedScale,
+    requestedBaseDims,
+    title,
+    description,
+    modelExtract,
+    cleanVoxels,
+    activeCustomModel,
+    existingModelSnapshot,
+    shouldClearExistingModel,
+    pushedSiblings,
+    resolvedPlacement
+  } = await preflightUpdateSculpture(db, { sculptureRow, payload });
+
+  if (shouldClearExistingModel) {
+    await db.run('DELETE FROM sculpture_models WHERE sculpture_id = ?', [sculptureRow.id]);
   }
 
   let ipfsMetadataCid = sculptureRow.ipfs_metadata_cid;
@@ -1349,19 +1395,7 @@ export async function applyUpdateSculpture(
   };
 }
 
-export async function applyCreateSculptureOnLand(
-  db,
-  {
-    parcelCtx,
-    ownerUser,
-    ownerAddress,
-    payload,
-    pinSculptureFn,
-    mintSculptureFn,
-    proofSeed = '',
-    layerRole = ''
-  }
-) {
+export async function preflightCreateSculptureOnLand(db, { parcelCtx, payload }) {
   const landSettings = await getLandSettingsInternal(db, parcelCtx.parcelId);
   if (landSettings.frozen) {
     const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
@@ -1573,6 +1607,51 @@ export async function applyCreateSculptureOnLand(
     activeCustomModel.scale = targetScale;
   }
   const pushedSiblings = placement.pushedSiblings || [];
+
+  return {
+    sculptureId,
+    title,
+    description,
+    cleanVoxels,
+    activeCustomModel,
+    anchorOffset,
+    targetScale,
+    candidateNativeDims,
+    lat,
+    lng,
+    parcelVolume,
+    placement,
+    pushedSiblings
+  };
+}
+
+export async function applyCreateSculptureOnLand(
+  db,
+  {
+    parcelCtx,
+    ownerUser,
+    ownerAddress,
+    payload,
+    pinSculptureFn,
+    mintSculptureFn,
+    proofSeed = '',
+    layerRole = ''
+  }
+) {
+  const {
+    sculptureId,
+    title,
+    description,
+    cleanVoxels,
+    activeCustomModel,
+    anchorOffset,
+    targetScale,
+    candidateNativeDims,
+    lat,
+    lng,
+    placement,
+    pushedSiblings
+  } = await preflightCreateSculptureOnLand(db, { parcelCtx, payload });
 
   const seedSculpture = parcelCtx.visibleRows[0] || null;
   const seedPol = seedSculpture ? JSON.parse(seedSculpture.pol_json || '{}') : {};

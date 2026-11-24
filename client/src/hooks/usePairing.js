@@ -3,6 +3,7 @@ import { api, API_BASE } from '../utils/api.js';
 import { getWsUrl } from '../utils/device.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import { recordUserAction } from '../utils/userHistory.js';
 
 /**
  * Manages desktop WebSocket live-mirror pairing, robust MCP agent pairing lifecycle,
@@ -18,11 +19,13 @@ export function usePairing({
   onOpenLogin,
   onDesktopCommand,
   onDelegatedPublishExecuted,
+  onSignatureExecuted = null,
   onConnectionStateChange = null
 }) {
   const wsRef = useRef(null);
   const onDesktopCommandRef = useRef(onDesktopCommand);
   const onDelegatedPublishRef = useRef(onDelegatedPublishExecuted);
+  const onSignatureExecutedRef = useRef(onSignatureExecuted);
   const showHintRef = useRef(showTemporaryHint);
   const onConnectionStateChangeRef = useRef(onConnectionStateChange);
   const activePairCodeRef = useRef('');
@@ -34,9 +37,16 @@ export function usePairing({
   useEffect(() => {
     onDesktopCommandRef.current = onDesktopCommand;
     onDelegatedPublishRef.current = onDelegatedPublishExecuted;
+    onSignatureExecutedRef.current = onSignatureExecuted;
     showHintRef.current = showTemporaryHint;
     onConnectionStateChangeRef.current = onConnectionStateChange;
-  }, [onDesktopCommand, onDelegatedPublishExecuted, showTemporaryHint, onConnectionStateChange]);
+  }, [
+    onDesktopCommand,
+    onDelegatedPublishExecuted,
+    onSignatureExecuted,
+    showTemporaryHint,
+    onConnectionStateChange
+  ]);
 
   const [pairOpen, setPairOpen] = useState(false);
   const [pairCodeInput, setPairCodeInput] = useState(() => {
@@ -63,6 +73,7 @@ export function usePairing({
   const [pendingSignatures, setPendingSignatures] = useState([]);
   const [signatureHistory, setSignatureHistory] = useState([]);
   const [pendingSigBusyId, setPendingSigBusyId] = useState('');
+  const [pendingSigErrors, setPendingSigErrors] = useState({});
   const [agentPublishPrompt, setAgentPublishPrompt] = useState(null);
 
   useEffect(() => {
@@ -526,15 +537,26 @@ export function usePairing({
   }, []);
 
   const handleMobileSignPending = useCallback(
-    async (reqItem) => {
+    async (reqItem, options = {}) => {
       if (!reqItem?.id) return;
+      const autoFitScale = Boolean(options?.autoFitScale);
+      const overrideScale = options?.overrideScale ?? null;
       setPendingSigBusyId(reqItem.id);
+      setPendingSigErrors((prev) => {
+        if (!prev[reqItem.id]) return prev;
+        const next = { ...prev };
+        delete next[reqItem.id];
+        return next;
+      });
       try {
         let extSig = '';
         if (
+          !autoFitScale &&
+          !overrideScale &&
           user?.walletAddress &&
           reqItem.ownerAddress &&
           user.walletAddress.toLowerCase() !== reqItem.ownerAddress.toLowerCase() &&
+          typeof window !== 'undefined' &&
           window.ethereum
         ) {
           extSig = await window.ethereum.request({
@@ -542,29 +564,75 @@ export function usePairing({
             params: [reqItem.canonicalMessage, reqItem.ownerAddress]
           });
         }
-        await api.mobileSignRequest(reqItem.id, extSig ? { signature: extSig } : {});
+        const payload = {
+          ...(extSig ? { signature: extSig } : {}),
+          ...(autoFitScale ? { autoFitScale: true } : {}),
+          ...(overrideScale ? { overrideScale } : {})
+        };
+        const res = await api.mobileSignRequest(reqItem.id, payload);
         await refreshPendingSignatures();
-        showHintRef.current?.(
-          `✅ Signed & executed ${reqItem.action.replace(/_/g, ' ')} on ${reqItem.parcelId}`
-        );
+        onSignatureExecutedRef.current?.(res, reqItem);
+        const label =
+          reqItem.summaryTitle ||
+          String(reqItem.action || 'land action').replace(/_/g, ' ');
+        const landLabel = reqItem.landDisplayName || reqItem.parcelName || reqItem.parcelId || 'your land';
+        const fitSuffix = res?.autoFittedScale ? ` (auto-fitted to ${res.autoFittedScale}×)` : '';
+        const msg = `✅ Approved & executed ${label}${fitSuffix} on ${landLabel}!`;
+        if (user?.id) {
+          recordUserAction(user.id, {
+            type: 'approve_land_tx',
+            icon: '✅',
+            title: `Approved ${label}${fitSuffix}`,
+            detail: landLabel,
+            parcelId: reqItem.parcelId || '',
+            sculptureId: res?.result?.sculpture?.id || reqItem.sculptureId || '',
+            linkLabel: 'Land'
+          });
+        }
+        notifySettingsSaved(msg, { tone: 'success', durationMs: 4500 });
+        showHintRef.current?.(msg);
       } catch (err) {
-        showHintRef.current?.(err.message || 'Could not sign request');
+        const errMsg = err?.message || 'Could not sign request';
+        const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);
+        setPendingSigErrors((prev) => ({
+          ...prev,
+          [reqItem.id]: {
+            message: errMsg,
+            code: String(err?.data?.code || ''),
+            maxSafeScale: Number.isFinite(maxSafe) && maxSafe > 0 ? maxSafe : null
+          }
+        }));
+        notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 6500 });
+        showHintRef.current?.(errMsg);
       } finally {
         setPendingSigBusyId('');
       }
     },
-    [user?.walletAddress, refreshPendingSignatures]
+    [user?.id, user?.walletAddress, refreshPendingSignatures]
   );
 
   const handleMobileRejectPending = useCallback(
     async (reqId) => {
       setPendingSigBusyId(reqId);
+      setPendingSigErrors((prev) => {
+        if (!prev[reqId]) return prev;
+        const next = { ...prev };
+        delete next[reqId];
+        return next;
+      });
       try {
         await api.rejectSignatureRequest(reqId);
         await refreshPendingSignatures();
+        notifySettingsSaved('Signature request rejected.');
         showHintRef.current?.('Signature request rejected.');
       } catch (err) {
-        showHintRef.current?.(err.message || 'Could not reject request');
+        const errMsg = err?.message || 'Could not reject request';
+        setPendingSigErrors((prev) => ({
+          ...prev,
+          [reqId]: { message: errMsg, code: String(err?.data?.code || ''), maxSafeScale: null }
+        }));
+        notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 5500 });
+        showHintRef.current?.(errMsg);
       } finally {
         setPendingSigBusyId('');
       }
@@ -594,6 +662,7 @@ export function usePairing({
     pendingSignatures,
     signatureHistory,
     pendingSigBusyId,
+    pendingSigErrors,
     refreshPendingSignatures,
     handleMobileSignPending,
     handleMobileRejectPending,

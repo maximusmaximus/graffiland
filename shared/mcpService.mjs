@@ -52,6 +52,8 @@ import {
   listLandsWithCurations,
   listOwnerLandsAndSculptures,
   listSculptureRevisions,
+  preflightCreateSculptureOnLand,
+  preflightUpdateSculpture,
   removeLandContributor,
   updateLandSettings
 } from './mcp/landMutations.mjs';
@@ -321,20 +323,22 @@ export async function handleMcpJsonRpc(
           title: args.title !== undefined ? args.title : scRow.title,
           description: args.description !== undefined ? args.description : scRow.description
         });
+        const updatePayload = {
+          title: checkedMeta.title,
+          description: checkedMeta.description,
+          ...modelPayloadFields,
+          ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
+          ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
+          ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
+        };
+        await preflightUpdateSculpture(db, { sculptureRow: scRow, payload: updatePayload });
         toolResult = await handlePairedLandMutationViaMcp(db, {
           pairing,
           ownerUser,
           action: 'update_sculpture',
           parcelId: parcelCtx.parcelId,
           sculptureId: scRow.id,
-          payload: {
-            title: checkedMeta.title,
-            description: checkedMeta.description,
-            ...modelPayloadFields,
-            ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
-            ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
-            ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
-          },
+          payload: updatePayload,
           signature: args.signature || '',
           auth: args.auth || null,
           txHash: args.txHash || '',
@@ -383,6 +387,7 @@ export async function handleMcpJsonRpc(
             ...(args.txHash ? { txHash: args.txHash } : {})
           };
         }
+        await preflightCreateSculptureOnLand(db, { parcelCtx, payload: createPayload });
         toolResult = await handlePairedLandMutationViaMcp(db, {
           pairing,
           ownerUser,
@@ -418,34 +423,36 @@ export async function handleMcpJsonRpc(
         }
         nextVoxels = voxelRes.cleanVoxels;
       }
+      const updatePayload = {
+        title: checkedMeta.title,
+        description: checkedMeta.description,
+        ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
+        ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
+        ...(nextVoxels ? { voxels: nextVoxels } : {}),
+        ...(modelCheck.provided
+          ? {
+              modelFormat: modelCheck.customModel.format,
+              ...(args.modelBase64 || args.model?.dataBase64
+                ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
+                : {}),
+              ...(args.modelData || args.model?.data || args.model?.dataText
+                ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
+                : {}),
+              ...(args.modelUrl || args.model?.url ? { modelUrl: args.modelUrl || args.model?.url } : {}),
+              modelScale: modelCheck.customModel.scale,
+              modelRotationY: modelCheck.customModel.rotationY
+            }
+          : {}),
+        ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
+      };
+      await preflightUpdateSculpture(db, { sculptureRow: scRow, payload: updatePayload });
       toolResult = await handlePairedLandMutationViaMcp(db, {
         pairing,
         ownerUser,
         action: 'update_sculpture',
         parcelId: scRow.parcel_id,
         sculptureId: scRow.id,
-        payload: {
-          title: checkedMeta.title,
-          description: checkedMeta.description,
-          ...(args.expectedRev !== undefined ? { expectedRev: args.expectedRev } : {}),
-          ...(args.anchorOffset !== undefined ? { anchorOffset: args.anchorOffset } : {}),
-          ...(nextVoxels ? { voxels: nextVoxels } : {}),
-          ...(modelCheck.provided
-            ? {
-                modelFormat: modelCheck.customModel.format,
-                ...(args.modelBase64 || args.model?.dataBase64
-                  ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
-                  : {}),
-                ...(args.modelData || args.model?.data || args.model?.dataText
-                  ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
-                  : {}),
-                ...(args.modelUrl || args.model?.url ? { modelUrl: args.modelUrl || args.model?.url } : {}),
-                modelScale: modelCheck.customModel.scale,
-                modelRotationY: modelCheck.customModel.rotationY
-              }
-            : {}),
-          ...(args.previewDataUrl ? { previewDataUrl: args.previewDataUrl } : {})
-        },
+        payload: updatePayload,
         signature: args.signature || '',
         auth: args.auth || null,
         txHash: args.txHash || '',
