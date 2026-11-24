@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 import {
   computeItemLocalBox,
   computeMaxFeasibleScale,
+  computeRotatedBoxDimensions,
   evaluateModelFitInParcel,
   latLngToParcelLocalMeters,
   parcelLocalMetersToWorldMeters,
@@ -309,5 +310,184 @@ describe('3D Artwork Transform, Scaling & Non-Intersecting Push Solver', () => {
         `GeoJSON corner localZ=${local.baseZ} expected within ±38.75m`
       );
     }
+  });
+
+  test('Vertical rotation (pitch X / roll Z) updates measured vertical height, enforces ceiling bounds & matches Map 3D transform', () => {
+    const flatDims = { width: 4, height: 0.5, depth: 10 };
+
+    const flat = computeRotatedBoxDimensions({ ...flatDims, yaw: 0, pitch: 0, roll: 0, scale: 1 });
+    assert.ok(Math.abs(flat.effW - 4) < 1e-4);
+    assert.ok(Math.abs(flat.effH - 0.5) < 1e-4);
+    assert.ok(Math.abs(flat.effD - 10) < 1e-4);
+
+    // Pitch +90° stands the 10m depth straight up vertically so vertical height measures 10m
+    const pitched = computeRotatedBoxDimensions({ ...flatDims, yaw: 0, pitch: 90, roll: 0, scale: 1 });
+    assert.ok(Math.abs(pitched.effW - 4) < 1e-4);
+    assert.ok(Math.abs(pitched.effH - 10) < 1e-4);
+    assert.ok(Math.abs(pitched.effD - 0.5) < 1e-4);
+
+    // Roll +90° stands the 4m width straight up vertically so vertical height measures 4m
+    const rolled = computeRotatedBoxDimensions({ ...flatDims, yaw: 0, pitch: 0, roll: 90, scale: 1 });
+    assert.ok(Math.abs(rolled.effW - 0.5) < 1e-4);
+    assert.ok(Math.abs(rolled.effH - 4) < 1e-4);
+    assert.ok(Math.abs(rolled.effD - 10) < 1e-4);
+
+    // 45° diagonal pitch matches exact trigonometric projection
+    const diag = computeRotatedBoxDimensions({ ...flatDims, yaw: 0, pitch: 45, roll: 0, scale: 1 });
+    const expectedDiagH = (0.5 + 10) * Math.SQRT1_2;
+    assert.ok(Math.abs(diag.effH - expectedDiagH) < 1e-4);
+
+    // Standing 10m sculpture vertically inside a 6m-tall parcel rejects with exact maxScaleForLand (~0.598)
+    const lowVol = { widthMeters: 16, depthMeters: 16, heightMeters: 6, centerLat: 39.72, centerLng: -121.84 };
+    const lowRes = resolveSculpturePlacement({
+      parcelVolume: lowVol,
+      targetId: 'board',
+      targetTransform: { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 90, roll: 0, scale: 1 },
+      items: [
+        {
+          id: 'board',
+          title: 'Surfboard',
+          baseX: 0,
+          baseZ: 0,
+          dx: 0,
+          dy: 0,
+          dz: 0,
+          yaw: 0,
+          pitch: 0,
+          roll: 0,
+          scale: 1,
+          baseWidth: 4,
+          baseHeight: 0.5,
+          baseDepth: 10
+        }
+      ]
+    });
+    assert.equal(lowRes.ok, false);
+    assert.equal(lowRes.reason, 'exceeds_land_bounds');
+    assert.ok(lowRes.maxScaleForLand >= 0.59 && lowRes.maxScaleForLand <= 0.6);
+
+    // Inside a 14m-tall parcel it fits cleanly and Map 3D transform reports exact 10m vertical height + 5m center lift
+    const tallVol = { widthMeters: 16, depthMeters: 16, heightMeters: 14, centerLat: 39.72, centerLng: -121.84 };
+    const tallRes = resolveSculpturePlacement({
+      parcelVolume: tallVol,
+      targetId: 'board',
+      targetTransform: { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 90, roll: 0, scale: 1 },
+      items: [
+        {
+          id: 'board',
+          title: 'Surfboard',
+          baseX: 0,
+          baseZ: 0,
+          dx: 0,
+          dy: 0,
+          dz: 0,
+          yaw: 0,
+          pitch: 0,
+          roll: 0,
+          scale: 1,
+          baseWidth: 4,
+          baseHeight: 0.5,
+          baseDepth: 10
+        }
+      ]
+    });
+    assertAllInsideAndNonOverlapping(tallRes, tallVol);
+    assert.equal(tallRes.target.pitch, 90);
+    assert.ok(Math.abs(tallRes.target.box.effH - 10) < 1e-4);
+
+    const mapT = computeSculptureMapTransform(
+      {
+        id: 'board',
+        lat: 39.72,
+        lng: -121.84,
+        scale: 1,
+        anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 90, roll: 0, scale: 1 }
+      },
+      tallVol,
+      { min: { x: -2, y: 0, z: -5 }, max: { x: 2, y: 0.5, z: 5 } }
+    );
+    assert.ok(Math.abs(mapT.pitchRad - Math.PI / 2) < 1e-6);
+    assert.ok(Math.abs(mapT.renderedSize.y - 10) < 0.01);
+    assert.ok(Math.abs(mapT.rotatedLiftY - 5) < 0.01);
+  });
+
+  test('Pushed sculptures NEVER intersect each other across multi-sibling chains, corner clusters, or impossible squeezes', () => {
+    // 1) Obstacle-aware push: Target pushes Sibling A while Sibling B blocks directly behind Sibling A along +X
+    const vol1 = { widthMeters: 10, depthMeters: 8, heightMeters: 12, centerLat: 39.72, centerLng: -121.84 };
+    const chainItems = [
+      { id: 'target', title: 'Target', baseX: 0, baseZ: 0, dx: -2.2, dy: 0, dz: 0, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 },
+      { id: 'sibA', title: 'Sibling A', baseX: 0, baseZ: 0, dx: 0.5, dy: 0, dz: 0, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 },
+      { id: 'sibB', title: 'Sibling B', baseX: 0, baseZ: 0, dx: 3.1, dy: 0, dz: 0, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 },
+      { id: 'sibC', title: 'Sibling C', baseX: 0, baseZ: 0, dx: 3.1, dy: 0, dz: 2.5, yaw: 0, scale: 1, baseWidth: 2.0, baseHeight: 2, baseDepth: 2.0 }
+    ];
+    const chainRes = resolveSculpturePlacement({
+      parcelVolume: vol1,
+      targetId: 'target',
+      targetTransform: { dx: 0.6, dy: 0, dz: 0, yaw: 0, scale: 1.2 },
+      items: chainItems
+    });
+    assertAllInsideAndNonOverlapping(chainRes, vol1);
+    assert.ok(chainRes.pushedSiblings.length >= 1);
+
+    // 2) Corner cluster deadlock repack: 3 siblings huddled in the +X/+Z corner when Target moves directly onto them
+    const cornerItems = [
+      { id: 'mover', title: 'Mover', baseX: 0, baseZ: 0, dx: -3.2, dy: 0, dz: -2.2, yaw: 0, scale: 1, baseWidth: 2.4, baseHeight: 2, baseDepth: 2.4 },
+      { id: 'c1', title: 'Corner 1', baseX: 0, baseZ: 0, dx: 2.2, dy: 0, dz: 2.0, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 },
+      { id: 'c2', title: 'Corner 2', baseX: 0, baseZ: 0, dx: 3.6, dy: 0, dz: 0.0, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 },
+      { id: 'c3', title: 'Corner 3', baseX: 0, baseZ: 0, dx: 0.2, dy: 0, dz: 2.5, yaw: 0, scale: 1, baseWidth: 2.2, baseHeight: 2, baseDepth: 2.2 }
+    ];
+    const cornerRes = resolveSculpturePlacement({
+      parcelVolume: vol1,
+      targetId: 'mover',
+      targetTransform: { dx: 2.4, dy: 0, dz: 1.8, yaw: 0, scale: 1.25 },
+      items: cornerItems
+    });
+    assertAllInsideAndNonOverlapping(cornerRes, vol1);
+
+    // 3) Physically impossible squeeze: three 2.8m × 2.8m cubes in a 5m × 5m parcel CANNOT fit without intersecting
+    const tinyVol = { widthMeters: 5, depthMeters: 5, heightMeters: 10, centerLat: 39.72, centerLng: -121.84 };
+    const impossibleRes = resolveSculpturePlacement({
+      parcelVolume: tinyVol,
+      targetId: 't1',
+      targetTransform: { dx: 0, dy: 0, dz: 0, yaw: 0, scale: 1 },
+      items: [
+        { id: 't1', title: 'Block 1', baseX: 0, baseZ: 0, dx: -1, dy: 0, dz: -1, yaw: 0, scale: 1, baseWidth: 2.8, baseHeight: 2, baseDepth: 2.8 },
+        { id: 't2', title: 'Block 2', baseX: 0, baseZ: 0, dx: 1, dy: 0, dz: 1, yaw: 0, scale: 1, baseWidth: 2.8, baseHeight: 2, baseDepth: 2.8 },
+        { id: 't3', title: 'Block 3', baseX: 0, baseZ: 0, dx: 1, dy: 0, dz: -1, yaw: 0, scale: 1, baseWidth: 2.8, baseHeight: 2, baseDepth: 2.8 }
+      ]
+    });
+    assert.equal(impossibleRes.ok, false, 'Physically impossible squeeze must be rejected, never intersect');
+    assert.equal(impossibleRes.reason, 'collision_out_of_bounds');
+
+    // 4) Adversarial sweep: 20 positions & scales across a crowded 4-item parcel — every ok:true MUST have zero overlap
+    const sweepVol = { widthMeters: 9, depthMeters: 9, heightMeters: 12, centerLat: 39.72, centerLng: -121.84 };
+    const sweepBase = [
+      { id: 'a', title: 'Alpha', baseX: 0, baseZ: 0, dx: -2.2, dy: 0, dz: -2.2, yaw: 15, scale: 1, baseWidth: 2.1, baseHeight: 2, baseDepth: 2.1 },
+      { id: 'b', title: 'Beta', baseX: 0, baseZ: 0, dx: 2.2, dy: 0, dz: -2.2, yaw: 30, scale: 1, baseWidth: 2.1, baseHeight: 2, baseDepth: 2.1 },
+      { id: 'c', title: 'Gamma', baseX: 0, baseZ: 0, dx: -2.2, dy: 0, dz: 2.2, yaw: 0, scale: 1, baseWidth: 2.1, baseHeight: 2, baseDepth: 2.1 },
+      { id: 'd', title: 'Delta', baseX: 0, baseZ: 0, dx: 2.2, dy: 0, dz: 2.2, yaw: 45, scale: 1, baseWidth: 2.1, baseHeight: 2, baseDepth: 2.1 }
+    ];
+    let okCount = 0;
+    for (let step = 0; step < 20; step += 1) {
+      const angle = (step / 20) * Math.PI * 2;
+      const res = resolveSculpturePlacement({
+        parcelVolume: sweepVol,
+        targetId: 'a',
+        targetTransform: {
+          dx: Math.cos(angle) * 2.4,
+          dy: 0,
+          dz: Math.sin(angle) * 2.4,
+          yaw: step * 18,
+          pitch: step % 4 === 0 ? 90 : 0,
+          scale: 1 + (step % 5) * 0.25
+        },
+        items: sweepBase
+      });
+      if (res.ok) {
+        okCount += 1;
+        assertAllInsideAndNonOverlapping(res, sweepVol);
+      }
+    }
+    assert.ok(okCount >= 10, `Expected at least 10 valid push placements in sweep, got ${okCount}`);
   });
 });

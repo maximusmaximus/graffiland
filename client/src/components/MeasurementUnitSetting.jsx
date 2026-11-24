@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import XeroIcon from './XeroIcon.jsx';
 
 const UNIT_OPTIONS = [
@@ -18,6 +19,26 @@ export default function MeasurementUnitSetting({
 }) {
   const { preference, unitSystem, detectedSystem, detectedSource, setPreference } =
     useMeasurementUnits(location);
+  const [savedNotice, setSavedNotice] = useState('');
+  const savedTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    };
+  }, []);
+
+  const handleSelectUnit = (opt) => {
+    setPreference(opt.id);
+    const msg = `Measurement units saved: ${opt.label}`;
+    setSavedNotice(`Saved (${opt.shortLabel})`);
+    notifySettingsSaved(msg);
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => {
+      setSavedNotice('');
+      savedTimerRef.current = null;
+    }, 3000);
+  };
 
   const detectedSummary =
     detectedSystem === 'imperial'
@@ -48,6 +69,15 @@ export default function MeasurementUnitSetting({
               : 'Always showing meters, km & m²'}
           </span>
         </div>
+        {savedNotice && (
+          <span
+            className="unit-setting-saved-badge"
+            data-testid="unit-setting-saved"
+            role="status"
+          >
+            ✓ {savedNotice}
+          </span>
+        )}
       </div>
       <div
         className="unit-setting-segmented"
@@ -64,7 +94,7 @@ export default function MeasurementUnitSetting({
               aria-checked={active}
               data-testid={`unit-pref-btn-${opt.id}`}
               className={`btn btn-xs unit-setting-btn ${active ? 'btn-primary' : ''}`}
-              onClick={() => setPreference(opt.id)}
+              onClick={() => handleSelectUnit(opt)}
             >
               {compact ? opt.shortLabel : opt.label}
             </button>

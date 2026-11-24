@@ -3,9 +3,14 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
+  computeRotatedBoxDimensions,
+  extractSculptureBaseDimensions,
+  extractSculptureRotation,
   extractSculptureScale,
+  tiltToRadians,
   yawToRadians
 } from '../../../shared/sculpturePlacement.mjs';
+import { formatShortLength } from '../utils/measurementUnits.js';
 import { resolveApiUrl } from '../utils/api.js';
 import {
   enforceCrispTexturesAndShading,
@@ -53,11 +58,13 @@ export default function SculptureViewer3D({
   maxSafeScale = 60,
   moveRanges = null,
   placementBlocked = false,
+  unitSystem = 'imperial',
   onModelBoundsMeasured = null,
   onTransformChange = null
 }) {
   const hostRef = useRef(null);
   const groupRef = useRef(null);
+  const modelRotatorRef = useRef(null);
   const modelContentRef = useRef(null);
   const landOverlayRef = useRef(null);
   const siblingOverlayRef = useRef(null);
@@ -169,8 +176,11 @@ export default function SculptureViewer3D({
     scene.add(shadowGround);
 
     const modelPivot = new THREE.Group();
+    const modelRotator = new THREE.Group();
+    modelRotator.rotation.order = 'YXZ';
     const modelContent = new THREE.Group();
-    modelPivot.add(modelContent);
+    modelRotator.add(modelContent);
+    modelPivot.add(modelRotator);
     scene.add(modelPivot);
 
     const landOverlay = new THREE.Group();
@@ -190,6 +200,7 @@ export default function SculptureViewer3D({
     scene.add(cursorMesh);
 
     groupRef.current = modelPivot;
+    modelRotatorRef.current = modelRotator;
     modelContentRef.current = modelContent;
     landOverlayRef.current = landOverlay;
     siblingOverlayRef.current = siblingOverlay;
@@ -434,6 +445,7 @@ export default function SculptureViewer3D({
         host.removeChild(renderer.domElement);
       }
       groupRef.current = null;
+      modelRotatorRef.current = null;
       modelContentRef.current = null;
       landOverlayRef.current = null;
       siblingOverlayRef.current = null;
@@ -568,21 +580,45 @@ export default function SculptureViewer3D({
   // Fast 60fps transform, land-bounds wireframe, sibling collision boxes & 3D artwork gizmo bars/points
   useEffect(() => {
     const pivot = groupRef.current;
+    const rotator = modelRotatorRef.current;
+    const content = modelContentRef.current;
     const landOverlay = landOverlayRef.current;
     const siblingOverlay = siblingOverlayRef.current;
     const gizmoOverlay = gizmoOverlayRef.current;
-    if (!pivot || !landOverlay || !siblingOverlay || !gizmoOverlay) return;
+    if (!pivot || !rotator || !content || !landOverlay || !siblingOverlay || !gizmoOverlay) return;
 
     const effScale = Math.max(
       0.001,
       Number(liveTransform?.scale ?? extractSculptureScale(sculpture) ?? 1)
     );
-    const yawRad = yawToRadians(
-      liveTransform?.yaw !== undefined ? liveTransform.yaw : sculpture?.anchorOffset?.yaw || 0
-    );
+    const savedRot = extractSculptureRotation(sculpture);
+    const yawDeg = liveTransform?.yaw !== undefined ? Number(liveTransform.yaw) : savedRot.yaw;
+    const pitchDeg =
+      liveTransform?.pitch !== undefined ? Number(liveTransform.pitch) : savedRot.pitch;
+    const rollDeg = liveTransform?.roll !== undefined ? Number(liveTransform.roll) : savedRot.roll;
+    const yawRad = yawToRadians(yawDeg);
+    const pitchRad = tiltToRadians(pitchDeg);
+    const rollRad = tiltToRadians(rollDeg);
+
+    const baseDims = modelBaseSizeRef.current || { width: 1.4, height: 1.4, depth: 1.4 };
+    const unscaledYawLocal = computeRotatedBoxDimensions({
+      width: baseDims.width,
+      height: baseDims.height,
+      depth: baseDims.depth,
+      yaw: 0,
+      pitch: pitchDeg,
+      roll: rollDeg,
+      scale: 1
+    });
+
+    // Rotate around the sculpture's 3D centroid and seat its rotated bottom flush on y = dy
+    content.position.set(0, -baseDims.height / 2, 0);
+    rotator.rotation.order = 'YXZ';
+    rotator.rotation.set(pitchRad, yawRad, rollRad);
+    rotator.position.set(0, unscaledYawLocal.effH / 2, 0);
 
     pivot.scale.setScalar(effScale);
-    pivot.rotation.y = yawRad;
+    pivot.rotation.set(0, 0, 0);
 
     clearGroup(landOverlay);
     clearGroup(siblingOverlay);
@@ -608,10 +644,9 @@ export default function SculptureViewer3D({
 
     pivot.position.set(baseX + dx, dy, baseZ + dz);
 
-    const baseDims = modelBaseSizeRef.current || { width: 1.4, height: 1.4, depth: 1.4 };
-    const footW = Math.max(0.32, baseDims.width * effScale);
-    const footH = Math.max(0.32, baseDims.height * effScale);
-    const footD = Math.max(0.32, baseDims.depth * effScale);
+    const footW = Math.max(0.32, unscaledYawLocal.effW * effScale);
+    const footH = Math.max(0.32, unscaledYawLocal.effH * effScale);
+    const footD = Math.max(0.32, unscaledYawLocal.effD * effScale);
 
     // 0) Interactive 3D Bars & Drag Points (matching Land Builder handles) directly around the artwork!
     if (showEditGizmo) {
@@ -748,6 +783,35 @@ export default function SculptureViewer3D({
       hitTop.userData = { gizmoRole: 'height' };
       gizmoRoot.add(hitTop);
       hitList.push(hitTop);
+
+      // (E) Vertical Height Measurement Ruler alongside the rotated artwork (0 -> rotated top)
+      const rulerOffset = Math.max(0.14, knobR * 1.4);
+      const rulerX = hw + rulerOffset;
+      const rulerZ = hd + rulerOffset * 0.4;
+      const rulerPts = [
+        new THREE.Vector3(rulerX, 0, rulerZ),
+        new THREE.Vector3(rulerX, footH, rulerZ)
+      ];
+      const tickLen = Math.max(0.08, Math.min(0.28, maxSpan * 0.08));
+      const tickSteps = 4;
+      for (let t = 0; t <= tickSteps; t += 1) {
+        const ty = (footH * t) / tickSteps;
+        const len = t === 0 || t === tickSteps ? tickLen * 1.35 : tickLen * 0.7;
+        rulerPts.push(
+          new THREE.Vector3(rulerX - len, ty, rulerZ),
+          new THREE.Vector3(rulerX + len * 0.45, ty, rulerZ)
+        );
+      }
+      const rulerGeo = new THREE.BufferGeometry().setFromPoints(rulerPts);
+      const rulerLines = new THREE.LineSegments(
+        rulerGeo,
+        new THREE.LineBasicMaterial({
+          color: 0xffd166,
+          transparent: true,
+          opacity: 0.92
+        })
+      );
+      gizmoRoot.add(rulerLines);
 
       gizmoOverlay.add(gizmoRoot);
       gizmoHitMeshesRef.current = hitList;
@@ -897,6 +961,31 @@ export default function SculptureViewer3D({
     }
   }, [liveCursor, liveQuaternion]);
 
+  const savedRotForHud = extractSculptureRotation(sculpture);
+  const hudScale = Math.max(
+    0.001,
+    Number(liveTransform?.scale ?? extractSculptureScale(sculpture) ?? 1)
+  );
+  const hudPitch =
+    liveTransform?.pitch !== undefined ? Number(liveTransform.pitch) : savedRotForHud.pitch;
+  const hudRoll =
+    liveTransform?.roll !== undefined ? Number(liveTransform.roll) : savedRotForHud.roll;
+  const hudDy = Math.max(0, Number(liveTransform?.dy ?? sculpture?.anchorOffset?.dy ?? 0));
+  const hudBaseDims =
+    modelBoundsVersion > 0
+      ? modelBaseSizeRef.current || { width: 1.4, height: 1.4, depth: 1.4 }
+      : extractSculptureBaseDimensions(sculpture);
+  const hudDims = computeRotatedBoxDimensions({
+    width: hudBaseDims.width,
+    height: hudBaseDims.height,
+    depth: hudBaseDims.depth,
+    yaw: 0,
+    pitch: hudPitch,
+    roll: hudRoll,
+    scale: hudScale
+  });
+  const isTilted = Math.abs(hudPitch) > 0.05 || Math.abs(hudRoll) > 0.05;
+
   return (
     <div
       className="sculpture-viewer-wrap"
@@ -905,6 +994,7 @@ export default function SculptureViewer3D({
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
       data-model-status={modelStatus}
       data-model-format={scFormat || 'voxel'}
+      data-measured-height-m={hudDims.effH.toFixed(3)}
       style={{
         position: 'relative',
         width: '100%',
@@ -921,6 +1011,25 @@ export default function SculptureViewer3D({
       }}
     >
       <div ref={hostRef} style={{ width: '100%', height: '100%' }} />
+      {(showEditGizmo || isTilted) && (
+        <div
+          className="sculpture-vertical-ruler-badge mono"
+          data-testid="sculpture-vertical-height-badge"
+          title="Live measured vertical height at current rotation & scale"
+        >
+          <span>↕ Height: {formatShortLength(hudDims.effH, unitSystem)}</span>
+          {hudDy > 0.01 && (
+            <span className="sculpture-ruler-sep">
+              · Top: {formatShortLength(hudDy + hudDims.effH, unitSystem)}
+            </span>
+          )}
+          {isTilted && (
+            <span className="sculpture-ruler-tilt">
+              · Tilt X {Math.round(hudPitch)}° / Z {Math.round(hudRoll)}°
+            </span>
+          )}
+        </div>
+      )}
       {scFormat && modelStatus === 'loading' && (
         <div
           className="sculpture-viewer-status-pill"

@@ -37,13 +37,14 @@ import {
 import {
   buildPlacementItemFromSculpture,
   computeMaxFeasibleScale,
+  computeRotatedBoxDimensions,
   evaluateModelFitInParcel,
   extractSculptureBaseDimensions,
   extractSculptureScale,
   normalizeBaseDimensions,
   resolveParcelVolumeForPlacement,
   resolveSculpturePlacement,
-  yawToRadians
+  tiltToDegrees
 } from '../sculpturePlacement.mjs';
 import { getLandSecurityPolicy } from '../landmarkService.mjs';
 import {
@@ -353,7 +354,9 @@ async function loadParcelVolumeAndSiblings(db, { parcelId, geohash = '', bounds 
           dx: Number(row.anchor_dx || 0),
           dy: Number(row.anchor_dy || 0),
           dz: Number(row.anchor_dz || 0),
-          yaw: Number(row.anchor_yaw || 0)
+          yaw: Number(row.anchor_yaw || 0),
+          pitch: tiltToDegrees(parsedStats?.transformPitch || 0),
+          roll: tiltToDegrees(parsedStats?.transformRoll || 0)
         }
       },
       parcelVolume
@@ -810,7 +813,9 @@ export async function applyUpdateSculpture(
     dx: Number(existingAnchor?.dx || 0),
     dy: Number(existingAnchor?.dy || 0),
     dz: Number(existingAnchor?.dz || 0),
-    yaw: Number(existingAnchor?.yaw || 0)
+    yaw: Number(existingAnchor?.yaw || 0),
+    pitch: tiltToDegrees(existingMeshStats?.transformPitch || 0),
+    roll: tiltToDegrees(existingMeshStats?.transformRoll || 0)
   };
   let targetScale = extractSculptureScale({
     meshStats: existingMeshStats,
@@ -840,7 +845,9 @@ export async function applyUpdateSculpture(
       dx: offRes.offset.dx,
       dy: offRes.offset.dy,
       dz: offRes.offset.dz,
-      yaw: offRes.offset.yaw
+      yaw: offRes.offset.yaw,
+      pitch: offRes.offset.pitch !== undefined ? offRes.offset.pitch : anchorOffset.pitch,
+      roll: offRes.offset.roll !== undefined ? offRes.offset.roll : anchorOffset.roll
     };
     if (offRes.offset.scale !== undefined) {
       targetScale = offRes.offset.scale;
@@ -976,7 +983,9 @@ export async function applyUpdateSculpture(
           dx: Number(row.anchor_dx || 0),
           dy: Number(row.anchor_dy || 0),
           dz: Number(row.anchor_dz || 0),
-          yaw: Number(row.anchor_yaw || 0)
+          yaw: Number(row.anchor_yaw || 0),
+          pitch: tiltToDegrees(parsedStats?.transformPitch || 0),
+          roll: tiltToDegrees(parsedStats?.transformRoll || 0)
         }
       };
       return buildPlacementItemFromSculpture(
@@ -1012,18 +1021,25 @@ export async function applyUpdateSculpture(
     if (!activeCustomModel) {
       const targetItem = placementItems.find((it) => it.id === sculptureRow.id);
       const baseW = Number(targetItem?.baseWidth || effectiveTargetDims?.width || 0);
+      const baseH = Number(targetItem?.baseHeight || effectiveTargetDims?.height || 0);
       const baseD = Number(targetItem?.baseDepth || effectiveTargetDims?.depth || 0);
-      const yawRad = yawToRadians(anchorOffset.yaw);
-      const cosY = Math.abs(Math.cos(yawRad));
-      const sinY = Math.abs(Math.sin(yawRad));
-      const scaledW = (baseW * cosY + baseD * sinY) * targetScale;
-      const scaledD = (baseW * sinY + baseD * cosY) * targetScale;
+      const unitRot = computeRotatedBoxDimensions({
+        width: baseW || 0.05,
+        height: baseH || 0.05,
+        depth: baseD || 0.05,
+        yaw: anchorOffset.yaw,
+        pitch: anchorOffset.pitch,
+        roll: anchorOffset.roll,
+        scale: 1
+      });
+      const scaledW = unitRot.effW * targetScale;
+      const scaledD = unitRot.effD * targetScale;
       if (
         scaledW > HUMAN_MAX_DRAW_SPAN_METERS + 1e-3 ||
         scaledD > HUMAN_MAX_DRAW_SPAN_METERS + 1e-3
       ) {
-        const effW = Math.max(0.01, baseW * cosY + baseD * sinY);
-        const effD = Math.max(0.01, baseW * sinY + baseD * cosY);
+        const effW = Math.max(0.01, unitRot.effW);
+        const effD = Math.max(0.01, unitRot.effD);
         const maxHumanScale = Math.floor(
           Math.min(HUMAN_MAX_DRAW_SPAN_METERS / effW, HUMAN_MAX_DRAW_SPAN_METERS / effD) * 1000
         ) / 1000;
@@ -1054,6 +1070,8 @@ export async function applyUpdateSculpture(
           dy: anchorOffset.dy,
           dz: anchorOffset.dz,
           yaw: anchorOffset.yaw,
+          pitch: anchorOffset.pitch,
+          roll: anchorOffset.roll,
           scale: targetScale
         },
         items: placementItems
@@ -1067,7 +1085,9 @@ export async function applyUpdateSculpture(
             dx: anchorOffset.dx,
             dy: anchorOffset.dy,
             dz: anchorOffset.dz,
-            yaw: anchorOffset.yaw
+            yaw: anchorOffset.yaw,
+            pitch: anchorOffset.pitch,
+            roll: anchorOffset.roll
           },
           items: placementItems
         });
@@ -1098,7 +1118,9 @@ export async function applyUpdateSculpture(
         dx: placement.target.dx,
         dy: placement.target.dy,
         dz: placement.target.dz,
-        yaw: placement.target.yaw
+        yaw: placement.target.yaw,
+        pitch: placement.target.pitch,
+        roll: placement.target.roll
       };
       targetScale = placement.target.scale;
       if (activeCustomModel) {
@@ -1264,7 +1286,9 @@ export async function applyUpdateSculpture(
     ...existingMeshStats,
     ...(activeCustomModel?.stats || {}),
     ...(requestedBaseDims ? { bbox: requestedBaseDims } : {}),
-    transformScale: targetScale
+    transformScale: targetScale,
+    transformPitch: tiltToDegrees(anchorOffset.pitch || 0),
+    transformRoll: tiltToDegrees(anchorOffset.roll || 0)
   };
 
   await upsertAnchorAndRevision(db, {
@@ -1355,7 +1379,7 @@ export async function applyCreateSculptureOnLand(
   let description = '';
   let cleanVoxels = [];
   let activeCustomModel = null;
-  let anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 };
+  let anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, roll: 0 };
 
   const { parcelVolume, existingItems } = await loadParcelVolumeAndSiblings(db, {
     parcelId: parcelCtx.parcelId,
@@ -1366,7 +1390,15 @@ export async function applyCreateSculptureOnLand(
   if (payload.anchorOffset !== undefined) {
     const offRes = validateAnchorOffset(payload.anchorOffset, { parcelVolume });
     if (offRes.error) throw new McpServiceError(offRes.error, 400);
-    anchorOffset = offRes.offset;
+    anchorOffset = {
+      dx: offRes.offset.dx,
+      dy: offRes.offset.dy,
+      dz: offRes.offset.dz,
+      yaw: offRes.offset.yaw,
+      pitch: offRes.offset.pitch ?? 0,
+      roll: offRes.offset.roll ?? 0,
+      ...(offRes.offset.scale !== undefined ? { scale: offRes.offset.scale } : {})
+    };
   }
 
   if (modelExtract.provided) {
@@ -1479,6 +1511,8 @@ export async function applyCreateSculptureOnLand(
       dy: anchorOffset.dy,
       dz: anchorOffset.dz,
       yaw: anchorOffset.yaw,
+      pitch: anchorOffset.pitch || 0,
+      roll: anchorOffset.roll || 0,
       scale: targetScale
     },
     items: placementItems
@@ -1492,7 +1526,9 @@ export async function applyCreateSculptureOnLand(
         dx: anchorOffset.dx,
         dy: anchorOffset.dy,
         dz: anchorOffset.dz,
-        yaw: anchorOffset.yaw
+        yaw: anchorOffset.yaw,
+        pitch: anchorOffset.pitch || 0,
+        roll: anchorOffset.roll || 0
       },
       items: placementItems
     });
@@ -1528,6 +1564,8 @@ export async function applyCreateSculptureOnLand(
     dy: placement.target.dy,
     dz: placement.target.dz,
     yaw: placement.target.yaw,
+    pitch: placement.target.pitch,
+    roll: placement.target.roll,
     scale: placement.target.scale
   };
   targetScale = placement.target.scale;
@@ -1682,9 +1720,12 @@ export async function applyCreateSculptureOnLand(
     parcelId: parcelCtx.parcelId,
     revNum: 1,
     anchorOffset,
-    meshStats: activeCustomModel?.stats
-      ? { ...activeCustomModel.stats, transformScale: targetScale }
-      : { transformScale: targetScale },
+    meshStats: {
+      ...(activeCustomModel?.stats || {}),
+      transformScale: targetScale,
+      transformPitch: tiltToDegrees(anchorOffset.pitch || 0),
+      transformRoll: tiltToDegrees(anchorOffset.roll || 0)
+    },
     editorUser: ownerUser,
     editorRole: 'mcp-agent',
     modelType: activeCustomModel ? 'custom-3d' : 'voxel',
@@ -2395,11 +2436,29 @@ export async function applyRollbackSculptureRevision(
     } catch {}
   }
 
+  const existingAnchorRow = await db
+    .get('SELECT mesh_stats_json FROM sculpture_anchors WHERE sculpture_id = ?', [sculptureRow.id])
+    .catch(() => null);
+  const existingRestoreStats = (() => {
+    try {
+      const p = JSON.parse(existingAnchorRow?.mesh_stats_json || '{}');
+      return p && typeof p === 'object' ? p : {};
+    } catch {
+      return {};
+    }
+  })();
+
   await upsertAnchorAndRevision(db, {
     sculptureId: sculptureRow.id,
     parcelId: sculptureRow.parcel_id,
     revNum: newRev,
     anchorOffset: restoredOffset,
+    meshStats: {
+      ...existingRestoreStats,
+      ...(restoredOffset?.scale !== undefined ? { transformScale: Number(restoredOffset.scale) } : {}),
+      transformPitch: tiltToDegrees(restoredOffset?.pitch || 0),
+      transformRoll: tiltToDegrees(restoredOffset?.roll || 0)
+    },
     erc4906TxHash,
     editorUser: ownerUser,
     editorRole: 'owner',

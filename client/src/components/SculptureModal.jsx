@@ -8,14 +8,17 @@ import { HUMAN_MAX_DRAW_SPAN_METERS } from '../../../shared/constants.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import {
   buildPlacementItemFromSculpture,
+  computeItemLocalBox,
   computeMaxFeasibleScale,
   computeMaxScaleForParcel,
+  computeRotatedBoxDimensions,
   extractSculptureBaseDimensions,
+  extractSculptureRotation,
   extractSculptureScale,
   MIN_ARTWORK_SCALE,
   resolveParcelVolumeForPlacement,
   resolveSculpturePlacement,
-  yawToDegrees
+  tiltToDegrees
 } from '../../../shared/sculpturePlacement.mjs';
 import {
   buildTransferAuthMessage,
@@ -43,6 +46,7 @@ import {
   formatShortLength,
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
@@ -107,11 +111,16 @@ export default function SculptureModal({
   const [listingError, setListingError] = useState('');
   const [editTitle, setEditTitle] = useState(initialSculpture?.title || '');
   const [editDesc, setEditDesc] = useState(initialSculpture?.description || '');
-  const [editOffset, setEditOffset] = useState({
-    dx: Number(initialSculpture?.anchorOffset?.dx || 0),
-    dy: Number(initialSculpture?.anchorOffset?.dy || 0),
-    dz: Number(initialSculpture?.anchorOffset?.dz || 0),
-    yaw: yawToDegrees(initialSculpture?.anchorOffset?.yaw || 0)
+  const [editOffset, setEditOffset] = useState(() => {
+    const rot = extractSculptureRotation(initialSculpture);
+    return {
+      dx: Number(initialSculpture?.anchorOffset?.dx || 0),
+      dy: Number(initialSculpture?.anchorOffset?.dy || 0),
+      dz: Number(initialSculpture?.anchorOffset?.dz || 0),
+      yaw: rot.yaw,
+      pitch: rot.pitch,
+      roll: rot.roll
+    };
   });
   const [editScale, setEditScale] = useState(() => extractSculptureScale(initialSculpture));
   const [measuredBaseDims, setMeasuredBaseDims] = useState(null);
@@ -140,11 +149,14 @@ export default function SculptureModal({
     setSculpture(initialSculpture);
     setEditTitle(initialSculpture?.title || '');
     setEditDesc(initialSculpture?.description || '');
+    const initRot = extractSculptureRotation(initialSculpture);
     setEditOffset({
       dx: Number(initialSculpture?.anchorOffset?.dx || 0),
       dy: Number(initialSculpture?.anchorOffset?.dy || 0),
       dz: Number(initialSculpture?.anchorOffset?.dz || 0),
-      yaw: yawToDegrees(initialSculpture?.anchorOffset?.yaw || 0)
+      yaw: initRot.yaw,
+      pitch: initRot.pitch,
+      roll: initRot.roll
     });
     setEditScale(extractSculptureScale(initialSculpture));
     setMeasuredBaseDims(null);
@@ -170,11 +182,14 @@ export default function SculptureModal({
           setSculpture(res.sculpture);
           setEditTitle(res.sculpture.title || '');
           setEditDesc(res.sculpture.description || '');
+          const fetchedRot = extractSculptureRotation(res.sculpture);
           setEditOffset({
             dx: Number(res.sculpture.anchorOffset?.dx || 0),
             dy: Number(res.sculpture.anchorOffset?.dy || 0),
             dz: Number(res.sculpture.anchorOffset?.dz || 0),
-            yaw: yawToDegrees(res.sculpture.anchorOffset?.yaw || 0)
+            yaw: fetchedRot.yaw,
+            pitch: fetchedRot.pitch,
+            roll: fetchedRot.roll
           });
           setEditScale(extractSculptureScale(res.sculpture));
           setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
@@ -288,6 +303,8 @@ export default function SculptureModal({
         dy: Math.max(0, Number(editOffset.dy || 0)),
         dz: Number(editOffset.dz || 0),
         yaw: Number(editOffset.yaw || 0),
+        pitch: tiltToDegrees(editOffset.pitch || 0),
+        roll: tiltToDegrees(editOffset.roll || 0),
         scale: Number(editScale || 1)
       },
       items: placementItems
@@ -297,27 +314,32 @@ export default function SculptureModal({
   const maxScaleForLand = useMemo(() => {
     if (!targetBaseItem) return 10;
     const landCap = computeMaxScaleForParcel(
-      { ...targetBaseItem, yaw: Number(editOffset.yaw || 0) },
+      {
+        ...targetBaseItem,
+        yaw: Number(editOffset.yaw || 0),
+        pitch: tiltToDegrees(editOffset.pitch || 0),
+        roll: tiltToDegrees(editOffset.roll || 0)
+      },
       placementVolume
     );
     if (sculpture?.modelType === 'custom-3d') return landCap;
-    const yawRad = (Number(editOffset.yaw || 0) * Math.PI) / 180;
-    const cosY = Math.abs(Math.cos(yawRad));
-    const sinY = Math.abs(Math.sin(yawRad));
-    const effW = Math.max(
-      0.01,
-      Number(targetBaseItem.baseWidth || 0.05) * cosY + Number(targetBaseItem.baseDepth || 0.05) * sinY
-    );
-    const effD = Math.max(
-      0.01,
-      Number(targetBaseItem.baseWidth || 0.05) * sinY + Number(targetBaseItem.baseDepth || 0.05) * cosY
-    );
+    const unitRot = computeRotatedBoxDimensions({
+      width: Number(targetBaseItem.baseWidth || 0.05),
+      height: Number(targetBaseItem.baseHeight || 0.05),
+      depth: Number(targetBaseItem.baseDepth || 0.05),
+      yaw: Number(editOffset.yaw || 0),
+      pitch: tiltToDegrees(editOffset.pitch || 0),
+      roll: tiltToDegrees(editOffset.roll || 0),
+      scale: 1
+    });
+    const effW = Math.max(0.01, unitRot.effW);
+    const effD = Math.max(0.01, unitRot.effD);
     const humanCap = Math.min(
       HUMAN_MAX_DRAW_SPAN_METERS / effW,
       HUMAN_MAX_DRAW_SPAN_METERS / effD
     );
     return Math.max(MIN_ARTWORK_SCALE, Math.min(landCap, Math.floor(humanCap * 1000) / 1000));
-  }, [editOffset.yaw, placementVolume, sculpture?.modelType, targetBaseItem]);
+  }, [editOffset.pitch, editOffset.roll, editOffset.yaw, placementVolume, sculpture?.modelType, targetBaseItem]);
 
   const maxSafeScale = useMemo(() => {
     if (!sculpture?.id || placementItems.length === 0) return maxScaleForLand;
@@ -328,7 +350,9 @@ export default function SculptureModal({
         dx: Number(editOffset.dx || 0),
         dy: Math.max(0, Number(editOffset.dy || 0)),
         dz: Number(editOffset.dz || 0),
-        yaw: Number(editOffset.yaw || 0)
+        yaw: Number(editOffset.yaw || 0),
+        pitch: tiltToDegrees(editOffset.pitch || 0),
+        roll: tiltToDegrees(editOffset.roll || 0)
       },
       items: placementItems
     });
@@ -465,6 +489,8 @@ export default function SculptureModal({
       dy: resolved ? resolved.dy : Math.max(0, Number(editOffset.dy || 0)),
       dz: resolved ? resolved.dz : Number(editOffset.dz || 0),
       yaw: resolved ? resolved.yaw : Number(editOffset.yaw || 0),
+      pitch: resolved ? resolved.pitch : tiltToDegrees(editOffset.pitch || 0),
+      roll: resolved ? resolved.roll : tiltToDegrees(editOffset.roll || 0),
       scale: resolved ? resolved.scale : Number(editScale || 1)
     };
   }, [editOffset, editScale, livePlacement, targetBaseItem?.baseX, targetBaseItem?.baseZ]);
@@ -485,35 +511,32 @@ export default function SculptureModal({
     const collidingSet = new Set(livePlacement?.collidingIds || []);
     return placementItems
       .filter((it) => it.id !== sculpture.id)
-      .map((it) => {
-        const halfW = (it.baseWidth * it.scale) / 2;
-        const halfD = (it.baseDepth * it.scale) / 2;
-        const effH = it.baseHeight * it.scale;
-        return {
-          id: it.id,
-          title: it.title,
-          box: {
-            cx: it.baseX + it.dx,
-            cy: Math.max(0, it.dy) + effH / 2,
-            cz: it.baseZ + it.dz,
-            effW: halfW * 2,
-            effD: halfD * 2,
-            effH
-          },
-          wasPushed: false,
-          isColliding: collidingSet.has(it.id)
-        };
-      });
+      .map((it) => ({
+        id: it.id,
+        title: it.title,
+        box: computeItemLocalBox(it),
+        wasPushed: false,
+        isColliding: collidingSet.has(it.id)
+      }));
   }, [livePlacement, placementItems, sculpture?.id]);
 
   const activeScaleDims = useMemo(() => {
     const s = Math.max(MIN_ARTWORK_SCALE, Number(editScale || 1));
+    const rot = computeRotatedBoxDimensions({
+      width: effectiveBaseDims.width,
+      height: effectiveBaseDims.height,
+      depth: effectiveBaseDims.depth,
+      yaw: Number(editOffset.yaw || 0),
+      pitch: tiltToDegrees(editOffset.pitch || 0),
+      roll: tiltToDegrees(editOffset.roll || 0),
+      scale: s
+    });
     return {
-      w: Math.round(effectiveBaseDims.width * s * 100) / 100,
-      h: Math.round(effectiveBaseDims.height * s * 100) / 100,
-      d: Math.round(effectiveBaseDims.depth * s * 100) / 100
+      w: Math.round(rot.effW * 100) / 100,
+      h: Math.round(rot.effH * 100) / 100,
+      d: Math.round(rot.effD * 100) / 100
     };
-  }, [editScale, effectiveBaseDims]);
+  }, [editOffset.pitch, editOffset.roll, editOffset.yaw, editScale, effectiveBaseDims]);
 
   const moveRanges = useMemo(() => {
     const halfW = Math.max(0.5, Number(placementVolume.widthMeters || 14) / 2);
@@ -591,6 +614,12 @@ export default function SculptureModal({
       const targetDy = livePlacement?.ok ? livePlacement.target.dy : Math.max(0, Number(editOffset.dy || 0));
       const targetDz = livePlacement?.ok ? livePlacement.target.dz : Number(editOffset.dz || 0);
       const targetYaw = livePlacement?.ok ? livePlacement.target.yaw : Number(editOffset.yaw || 0);
+      const targetPitch = livePlacement?.ok
+        ? livePlacement.target.pitch
+        : tiltToDegrees(editOffset.pitch || 0);
+      const targetRoll = livePlacement?.ok
+        ? livePlacement.target.roll
+        : tiltToDegrees(editOffset.roll || 0);
       const targetScaleVal = livePlacement?.ok ? livePlacement.target.scale : Number(editScale || 1);
 
       const res = await api.updateSculpture(sculpture.id, {
@@ -603,17 +632,22 @@ export default function SculptureModal({
           dy: targetDy,
           dz: targetDz,
           yaw: targetYaw,
+          pitch: targetPitch,
+          roll: targetRoll,
           scale: targetScaleVal
         }
       });
       if (res?.sculpture) {
         const merged = { ...sculpture, ...res.sculpture };
         setSculpture(merged);
+        const savedRot = extractSculptureRotation(res.sculpture);
         setEditOffset({
           dx: Number(res.sculpture.anchorOffset?.dx || 0),
           dy: Number(res.sculpture.anchorOffset?.dy || 0),
           dz: Number(res.sculpture.anchorOffset?.dz || 0),
-          yaw: yawToDegrees(res.sculpture.anchorOffset?.yaw || 0)
+          yaw: savedRot.yaw,
+          pitch: savedRot.pitch,
+          roll: savedRot.roll
         });
         setEditScale(extractSculptureScale(res.sculpture));
 
@@ -638,16 +672,14 @@ export default function SculptureModal({
         );
 
         onSculptureUpdated?.(merged, { pushedSiblings: pushedList });
-        if (pushedList.length > 0) {
-          const names = pushedList.map((p) => `"${p.title}"`).join(', ');
-          setPropNotice(
-            `Saved transform & updated IPFS bundle! Safely shifted ${pushedList.length} neighboring artwork${
-              pushedList.length === 1 ? '' : 's'
-            } (${names}) inside "${scLandDisplayName}".`
-          );
-        } else {
-          setPropNotice('Sculpture metadata, scale, position & IPFS bundle updated.');
-        }
+        const savedMsg =
+          pushedList.length > 0
+            ? `Saved transform & updated IPFS bundle! Safely shifted ${pushedList.length} neighboring artwork${
+                pushedList.length === 1 ? '' : 's'
+              } (${pushedList.map((p) => `"${p.title}"`).join(', ')}) inside "${scLandDisplayName}".`
+            : 'Artwork settings, rotation, scale & position saved.';
+        setPropNotice(savedMsg);
+        notifySettingsSaved(savedMsg);
       }
     } catch (err) {
       setPropError(err.message || 'Update failed');
@@ -670,11 +702,11 @@ export default function SculptureModal({
         setSculpture((prev) => ({ ...prev, ...res.sculpture }));
         onSculptureUpdated?.({ ...sculpture, ...res.sculpture });
       }
-      setPropNotice(
-        nextHidden
-          ? 'Artwork hidden from public map, gallery, and AR feeds.'
-          : 'Artwork restored to public map, gallery, and AR feeds.'
-      );
+      const visMsg = nextHidden
+        ? 'Artwork hidden from public map, gallery, and AR feeds.'
+        : 'Artwork restored to public map, gallery, and AR feeds.';
+      setPropNotice(visMsg);
+      notifySettingsSaved(visMsg);
     } catch (err) {
       setPropError(err.message || 'Could not update artwork visibility.');
     } finally {
@@ -693,11 +725,11 @@ export default function SculptureModal({
       setParcelFrozen(actualFrozen);
       setSculpture((prev) => ({ ...prev, parcelFrozen: actualFrozen }));
       onSculptureUpdated?.({ ...sculpture, parcelFrozen: actualFrozen });
-      setPropNotice(
-        actualFrozen
-          ? `Frozen "${scLandDisplayName}" — no new sculptures can be placed on this land.`
-          : `Unfrozen "${scLandDisplayName}" — new sculptures are allowed again.`
-      );
+      const freezeMsg = actualFrozen
+        ? `Frozen "${scLandDisplayName}" — no new sculptures can be placed on this land.`
+        : `Unfrozen "${scLandDisplayName}" — new sculptures are allowed again.`;
+      setPropNotice(freezeMsg);
+      notifySettingsSaved(freezeMsg);
     } catch (err) {
       setPropError(err.message || 'Could not update land freeze setting.');
     } finally {
@@ -733,7 +765,9 @@ export default function SculptureModal({
         parcelName: res?.parcel?.customName ?? landCustomName,
         landDisplayName: updatedName
       });
-      setPropNotice(`Saved land curation for "${updatedName}".`);
+      const curMsg = `Saved land curation settings for "${updatedName}".`;
+      setPropNotice(curMsg);
+      notifySettingsSaved(curMsg);
     } catch (err) {
       setPropError(err.message || 'Land update failed');
     } finally {
@@ -977,13 +1011,17 @@ export default function SculptureModal({
       patch.dx !== undefined ||
       patch.dy !== undefined ||
       patch.dz !== undefined ||
-      patch.yaw !== undefined
+      patch.yaw !== undefined ||
+      patch.pitch !== undefined ||
+      patch.roll !== undefined
     ) {
       setEditOffset((prev) => ({
         dx: patch.dx !== undefined ? Number(patch.dx) : prev.dx,
         dy: patch.dy !== undefined ? Number(patch.dy) : prev.dy,
         dz: patch.dz !== undefined ? Number(patch.dz) : prev.dz,
-        yaw: patch.yaw !== undefined ? Number(patch.yaw) : prev.yaw
+        yaw: patch.yaw !== undefined ? Number(patch.yaw) : prev.yaw,
+        pitch: patch.pitch !== undefined ? tiltToDegrees(patch.pitch) : prev.pitch,
+        roll: patch.roll !== undefined ? tiltToDegrees(patch.roll) : prev.roll
       }));
     }
   };
@@ -1035,6 +1073,7 @@ export default function SculptureModal({
             maxSafeScale={maxSafeScale}
             moveRanges={moveRanges}
             placementBlocked={Boolean(canModifySculpture && livePlacement && !livePlacement.ok)}
+            unitSystem={unitSystem}
             onModelBoundsMeasured={handleMeasuredBounds}
             onTransformChange={canModifySculpture ? handleGizmoTransformChange : null}
           />
@@ -1062,8 +1101,11 @@ export default function SculptureModal({
                 </button>
               </div>
               <span className="mono sculpture-sticky-readout">
-                {Number(editScale || 1).toFixed(2)}× · X {Number(editOffset.dx || 0).toFixed(1)}m · Z{' '}
-                {Number(editOffset.dz || 0).toFixed(1)}m · {Math.round(Number(editOffset.yaw || 0))}°
+                {Number(editScale || 1).toFixed(2)}× · ↕ {formatShortLength(activeScaleDims.h, unitSystem)} · Yaw{' '}
+                {Math.round(Number(editOffset.yaw || 0))}°
+                {Math.abs(Number(editOffset.pitch || 0)) > 0.1 || Math.abs(Number(editOffset.roll || 0)) > 0.1
+                  ? ` · Tilt ${Math.round(Number(editOffset.pitch || 0))}°/${Math.round(Number(editOffset.roll || 0))}°`
+                  : ''}
               </span>
             </div>
           )}
@@ -1306,6 +1348,150 @@ export default function SculptureModal({
                       />
                     </div>
                   </label>
+
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>↕ Tilt Vertical (Pitch X)</span>
+                      <span className="mono">{Math.round(Number(editOffset.pitch || 0))}°</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-rotate-pitch"
+                        aria-label="Tilt Vertical Pitch X Degrees"
+                        min={-180}
+                        max={180}
+                        step="5"
+                        value={Math.min(180, Math.max(-180, Number(editOffset.pitch || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, pitch: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        data-testid="sculpture-rotate-pitch-input"
+                        aria-label="pitch (°)"
+                        min={-180}
+                        max={180}
+                        step="5"
+                        value={editOffset.pitch}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, pitch: tiltToDegrees(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+
+                  <label className="sculpture-axis-control">
+                    <div className="sculpture-axis-label">
+                      <span>🔄 Tilt Sideways (Roll Z)</span>
+                      <span className="mono">{Math.round(Number(editOffset.roll || 0))}°</span>
+                    </div>
+                    <div className="sculpture-slider-line">
+                      <input
+                        type="range"
+                        data-testid="sculpture-rotate-roll"
+                        aria-label="Tilt Sideways Roll Z Degrees"
+                        min={-180}
+                        max={180}
+                        step="5"
+                        value={Math.min(180, Math.max(-180, Number(editOffset.roll || 0)))}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, roll: Number(e.target.value) }));
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="input mono sculpture-num-input"
+                        data-testid="sculpture-rotate-roll-input"
+                        aria-label="roll (°)"
+                        min={-180}
+                        max={180}
+                        step="5"
+                        value={editOffset.roll}
+                        onChange={(e) => {
+                          setShowLandBoundsPreview(true);
+                          setEditOffset((p) => ({ ...p, roll: tiltToDegrees(e.target.value || 0) }));
+                        }}
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {/* Vertical Tilt Presets & Live Vertical Height Measurement Bar */}
+                <div
+                  className="sculpture-vertical-measure-bar"
+                  data-testid="sculpture-vertical-measure-readout"
+                >
+                  <div className="sculpture-vertical-measure-stats">
+                    <strong>
+                      📏 Vertical Height:{' '}
+                      <span className="mono" data-testid="sculpture-vertical-height-value">
+                        {formatShortLength(activeScaleDims.h, unitSystem)}
+                      </span>
+                    </strong>
+                    <span className="mono sculpture-vertical-dims-sub">
+                      ({activeScaleDims.w}m W × {activeScaleDims.h}m H × {activeScaleDims.d}m D ·
+                      ceiling {formatShortLength(placementVolume.heightMeters, unitSystem)})
+                    </span>
+                  </div>
+                  <div className="sculpture-vertical-presets">
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${
+                        Math.abs(Number(editOffset.pitch || 0) - 90) < 1 &&
+                        Math.abs(Number(editOffset.roll || 0)) < 1
+                          ? 'btn-primary'
+                          : ''
+                      }`}
+                      data-testid="sculpture-stand-vertical-x-btn"
+                      onClick={() => {
+                        setShowLandBoundsPreview(true);
+                        setEditOffset((p) => ({ ...p, pitch: 90, roll: 0 }));
+                      }}
+                      title="Stand sculpture upright 90° around X axis to measure vertical height"
+                    >
+                      ↕ Stand Vertical (+90° X)
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${
+                        Math.abs(Number(editOffset.roll || 0) - 90) < 1 &&
+                        Math.abs(Number(editOffset.pitch || 0)) < 1
+                          ? 'btn-primary'
+                          : ''
+                      }`}
+                      data-testid="sculpture-stand-vertical-z-btn"
+                      onClick={() => {
+                        setShowLandBoundsPreview(true);
+                        setEditOffset((p) => ({ ...p, pitch: 0, roll: 90 }));
+                      }}
+                      title="Stand sculpture upright 90° around Z axis to measure side length vertically"
+                    >
+                      ↕ Stand Side (+90° Z)
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${
+                        Math.abs(Number(editOffset.pitch || 0)) < 1 &&
+                        Math.abs(Number(editOffset.roll || 0)) < 1
+                          ? 'btn-primary'
+                          : ''
+                      }`}
+                      data-testid="sculpture-level-flat-btn"
+                      onClick={() => {
+                        setShowLandBoundsPreview(true);
+                        setEditOffset((p) => ({ ...p, pitch: 0, roll: 0 }));
+                      }}
+                      title="Reset vertical tilt (Pitch & Roll) back to 0°"
+                    >
+                      📐 Level Flat (0°)
+                    </button>
+                  </div>
                 </div>
 
                 {/* Live Collision & Bounds Status Pill */}
@@ -1393,7 +1579,7 @@ export default function SculptureModal({
                     data-testid="sculpture-reset-transform-btn"
                     disabled={propBusy !== ''}
                     onClick={() => {
-                      setEditOffset({ dx: 0, dy: 0, dz: 0, yaw: 0 });
+                      setEditOffset({ dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, roll: 0 });
                       setEditScale(1);
                     }}
                   >
@@ -1458,8 +1644,12 @@ export default function SculptureModal({
                 </div>
 
                 {propNotice && (
-                  <div className="mono" role="status" style={{ fontSize: 12, color: 'var(--accent)' }}>
-                    {propNotice}
+                  <div
+                    className="mono settings-inline-saved"
+                    data-testid="sculpture-save-notice"
+                    role="status"
+                  >
+                    ✅ {propNotice}
                   </div>
                 )}
                 {propError && (
@@ -2161,9 +2351,20 @@ export default function SculptureModal({
                 onChange={(e) => setLandCurationNote(e.target.value)}
                 placeholder="Land note or curator statement"
               />
-              <button type="submit" className="btn" disabled={propBusy !== ''}>
-                <XeroIcon emoji="🗺️" size={14} /> Save Land Curations
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <button type="submit" className="btn" disabled={propBusy !== ''}>
+                  <XeroIcon emoji="🗺️" size={14} /> Save Land Curations
+                </button>
+                {propNotice && (
+                  <span
+                    className="mono settings-inline-saved"
+                    data-testid="sculpture-land-curation-saved"
+                    role="status"
+                  >
+                    ✅ {propNotice}
+                  </span>
+                )}
+              </div>
             </form>
 
             <div

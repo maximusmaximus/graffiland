@@ -4885,4 +4885,347 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(drawerView.container.textContent.includes('Land Chat'));
     cleanup();
   });
+
+  test('SculptureModal lets user rotate sculpture vertically to measure its height and notifies on save', async () => {
+    const { default: SculptureModal } = await loadJsxModule(
+      'client/src/components/SculptureModal.jsx'
+    );
+    const { default: SettingsSavedToast } = await loadJsxModule(
+      'client/src/components/SettingsSavedToast.jsx'
+    );
+
+    const flatSculpture = {
+      id: 'sc-vert-measure',
+      title: 'Long Surfboard',
+      description: 'Flat board for vertical measurement',
+      creatorSub: 'user-vert-1',
+      creatorName: 'VertArtist',
+      recipientAddress: '0x1111111111111111111111111111111111111111',
+      ownerAddress: '0x1111111111111111111111111111111111111111',
+      modelType: 'custom-3d',
+      scale: 1,
+      lat: 39.7307,
+      lng: -121.8383,
+      parcelId: 'GLAND-VERT01',
+      parcelName: 'Measure Plaza',
+      geohash: '9r1658b0',
+      anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 },
+      meshStats: { bbox: { width: 4, height: 0.5, depth: 6 } },
+      customModel: { format: 'glb', scale: 1, rotationY: 0 },
+      chain: { chainId: 46630, contractAddress: '0x000', tokenId: 1, txHash: '0xabc', simulated: true, royaltyPercent: 5 },
+      ipfs: { metadataCid: 'bafy1', modelCid: 'bafy2', imageCid: 'bafy3' },
+      voxels: []
+    };
+
+    const savedPayloads = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url);
+      const method = String(init.method || 'GET').toUpperCase();
+      if (u.includes('/api/sculptures/sc-vert-measure') && method === 'PUT') {
+        const body = JSON.parse(init.body || '{}');
+        savedPayloads.push(body);
+        return {
+          ok: true,
+          json: async () => ({
+            sculpture: {
+              ...flatSculpture,
+              title: body.title,
+              description: body.description,
+              scale: body.scale,
+              anchorOffset: body.anchorOffset,
+              meshStats: {
+                ...flatSculpture.meshStats,
+                transformScale: body.scale,
+                transformPitch: body.anchorOffset?.pitch || 0,
+                transformRoll: body.anchorOffset?.roll || 0
+              }
+            },
+            pushedSiblings: []
+          })
+        };
+      }
+      if (u.includes('/api/sculptures/sc-vert-measure')) {
+        return { ok: true, json: async () => ({ sculpture: flatSculpture }) };
+      }
+      if (u.includes('/api/lands/GLAND-VERT01')) {
+        return {
+          ok: true,
+          json: async () => ({
+            parcel: {
+              parcelId: 'GLAND-VERT01',
+              customName: 'Measure Plaza',
+              ownerSub: 'user-vert-1',
+              volume: {
+                centerLat: 39.7307,
+                centerLng: -121.8383,
+                widthMeters: 16,
+                depthMeters: 16,
+                heightMeters: 18,
+                rotationDeg: 0
+              }
+            },
+            sculptures: [flatSculpture]
+          })
+        };
+      }
+      if (u.includes('/pins/seal')) {
+        return { ok: true, json: async () => ({ meta: null, encryptedBatch: null }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(SculptureModal, {
+            sculpture: flatSculpture,
+            user: { id: 'user-vert-1', walletAddress: '0x1111111111111111111111111111111111111111' },
+            config: {},
+            onClose: () => {}
+          }),
+          React.createElement(SettingsSavedToast)
+        )
+      );
+
+      // Initial flat orientation: height is 0.5m
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '0.500');
+      });
+      assert.ok(view.getByTestId('sculpture-rotate-pitch'));
+      assert.ok(view.getByTestId('sculpture-rotate-roll'));
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('0.5m H'));
+
+      // Click Stand Vertical (+90° X) -> depth (6m) stands vertically!
+      RTL.fireEvent.click(view.getByTestId('sculpture-stand-vertical-x-btn'));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '6.000');
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('6m H'));
+      assert.ok(view.getByTestId('sculpture-vertical-height-badge').textContent.includes('Tilt X 90°'));
+
+      // Click Stand Side (+90° Z) -> width (4m) stands vertically!
+      RTL.fireEvent.click(view.getByTestId('sculpture-stand-vertical-z-btn'));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '4.000');
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('4m H'));
+      assert.ok(view.getByTestId('sculpture-vertical-height-badge').textContent.includes('Z 90°'));
+
+      // Save artwork changes -> sends roll: 90 and notifies BOTH inline and via global SettingsSavedToast
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('sculpture-save-transform-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(savedPayloads.length, 1);
+        assert.equal(savedPayloads[0].anchorOffset.pitch, 0);
+        assert.equal(savedPayloads[0].anchorOffset.roll, 90);
+        assert.ok(view.getByTestId('sculpture-save-notice').textContent.includes('saved'));
+        assert.ok(view.getByTestId('settings-saved-toast').textContent.includes('saved'));
+      });
+
+      // Reset to flat 0° restores 0.5m height
+      RTL.fireEvent.click(view.getByTestId('sculpture-level-flat-btn'));
+      assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '0.500');
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('Saving settings displays visible inline and floating toast notifications across all settings controls', async () => {
+    const { default: MeasurementUnitSetting } = await loadJsxModule(
+      'client/src/components/MeasurementUnitSetting.jsx'
+    );
+    const { default: NotificationCenter } = await loadJsxModule(
+      'client/src/components/NotificationCenter.jsx'
+    );
+    const { default: LandManagementModal } = await loadJsxModule(
+      'client/src/components/LandManagementModal.jsx'
+    );
+    const { default: InfoTermsModal } = await loadJsxModule(
+      'client/src/components/InfoTermsModal.jsx'
+    );
+    const { default: SettingsSavedToast } = await loadJsxModule(
+      'client/src/components/SettingsSavedToast.jsx'
+    );
+
+    // 1) MeasurementUnitSetting notifies inline + floating toast
+    const unitView = RTL.render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(MeasurementUnitSetting),
+        React.createElement(SettingsSavedToast)
+      )
+    );
+    RTL.fireEvent.click(unitView.getByTestId('unit-pref-btn-metric'));
+    assert.ok(unitView.getByTestId('unit-setting-saved').textContent.includes('Saved'));
+    assert.ok(unitView.getByTestId('settings-saved-toast').textContent.includes('Measurement units saved'));
+    cleanup();
+
+    // 2) NotificationCenter Settings tab notifies when toggling a category preference
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url);
+      const method = String(init.method || 'GET').toUpperCase();
+      if (u.includes('/api/notifications/preferences') && method === 'PATCH') {
+        const patch = JSON.parse(init.body || '{}');
+        return {
+          ok: true,
+          json: async () => ({
+            preferences: {
+              sculpture_on_land: true,
+              mint_slots_unlocked: true,
+              mint_limit_reached: true,
+              land_expiring: true,
+              land_activity: true,
+              browser_push_enabled: false,
+              ...patch
+            }
+          })
+        };
+      }
+      if (u.includes('/api/notifications')) {
+        return {
+          ok: true,
+          json: async () => ({
+            notifications: [],
+            unreadCount: 0,
+            preferences: {
+              sculpture_on_land: true,
+              mint_slots_unlocked: true,
+              mint_limit_reached: true,
+              land_expiring: true,
+              land_activity: true,
+              browser_push_enabled: false
+            }
+          })
+        };
+      }
+      if (u.includes('/api/lands/mine')) {
+        return {
+          ok: true,
+          json: async () => ({
+            parcels: [
+              {
+                parcelId: 'GLAND-SET01',
+                customName: 'Settings Park',
+                description: 'Original',
+                centerLat: 37.7793,
+                centerLng: -122.4193,
+                settings: { allowAgentErase: true, allowContributorEdits: true, frozen: false },
+                securityPolicy: { requirePasskeyUnlock: false, requireOrbUnlock: false, minOrbInliers: 8 },
+                sculptures: [],
+                contributors: [],
+                eligibleVisitors: []
+              }
+            ]
+          })
+        };
+      }
+      if (u.includes('/api/passkeys/status')) {
+        return { ok: true, json: async () => ({ passkeys: [] }) };
+      }
+      if (u.includes('/api/auth/payout')) {
+        return {
+          ok: true,
+          json: async () => ({
+            user: {
+              id: 'u-settings',
+              email: 'settings@graffiland.test',
+              walletAddress: '0x1111111111111111111111111111111111111111',
+              customPayoutAddress: ''
+            }
+          })
+        };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const notifView = RTL.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(NotificationCenter, { user: { id: 'u-settings', name: 'Tester' } }),
+          React.createElement(SettingsSavedToast)
+        )
+      );
+      RTL.fireEvent.click(notifView.getByRole('button', { name: /Notifications/i }));
+      RTL.fireEvent.click(notifView.getByRole('tab', { name: /Settings/i }));
+      const checkboxes = notifView.container.querySelectorAll('.notif-pref-list input[type="checkbox"]');
+      assert.ok(checkboxes.length >= 1);
+      await RTL.act(async () => {
+        RTL.fireEvent.click(checkboxes[0]);
+      });
+      await RTL.waitFor(() => {
+        assert.ok(notifView.getByTestId('notif-settings-saved').textContent.includes('Saved:'));
+        assert.ok(notifView.getByTestId('settings-saved-toast').textContent.includes('Saved:'));
+      });
+      cleanup();
+
+      // 3) LandManagementModal notifies right next to Save Land Settings button + global toast
+      const landView = RTL.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(LandManagementModal, {
+            user: { id: 'u-settings', walletAddress: '0x1111' },
+            onClose: () => {}
+          }),
+          React.createElement(SettingsSavedToast)
+        )
+      );
+      await RTL.waitFor(() => {
+        assert.ok(landView.getByTestId('land-mgmt-save-settings-btn'));
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(landView.getByTestId('land-mgmt-save-settings-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(
+          landView.getByTestId('land-settings-saved-inline').textContent.includes('Saved settings for')
+        );
+        assert.ok(
+          landView.getByTestId('settings-saved-toast').textContent.includes('Saved settings for')
+        );
+      });
+      cleanup();
+
+      // 4) InfoTermsModal Account & Settings tab notifies when saving payout recipient setting
+      const infoView = RTL.render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(InfoTermsModal, {
+            config: {},
+            user: {
+              id: 'u-settings',
+              email: 'settings@graffiland.test',
+              walletAddress: '0x1111111111111111111111111111111111111111',
+              customPayoutAddress: ''
+            },
+            initialTab: 'account',
+            onUserUpdate: () => {},
+            onClose: () => {}
+          }),
+          React.createElement(SettingsSavedToast)
+        )
+      );
+      await RTL.act(async () => {
+        RTL.fireEvent.click(infoView.getByRole('button', { name: /Save Recipient/i }));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(
+          infoView.getByTestId('account-settings-saved').textContent.includes('embedded wallet')
+        );
+        assert.ok(
+          infoView.getByTestId('settings-saved-toast').textContent.includes('embedded wallet')
+        );
+      });
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

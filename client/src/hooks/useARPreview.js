@@ -11,9 +11,12 @@ import {
   computeProximitySharpness
 } from '../utils/arLandGuidance.js';
 import {
+  computeRotatedBoxDimensions,
+  extractSculptureRotation,
   extractSculptureScale,
   parcelLocalMetersToWorldMeters,
-  parcelLocalYawToWorldYawRad
+  parcelLocalYawToWorldYawRad,
+  tiltToRadians
 } from '../../../shared/sculpturePlacement.mjs';
 import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
@@ -438,15 +441,41 @@ export function useARPreview({
           sc.voxels.length > 350 &&
           sharpness.simplifyVoxelLod;
         const voxelMeshGroup = buildVoxelGroup(sc.voxels || [], { simplifyLod: useCoarseLod });
+        const scRot = extractSculptureRotation(sc);
+        const pitchRad = tiltToRadians(scRot.pitch);
+        const rollRad = tiltToRadians(scRot.roll);
         // Horizontally center voxel clouds on their own anchor (matching 3D Map, GeoJSON, and 3D Viewer)
         // so legacy off-origin AR sculptures ALWAYS render dead-center inside their land volume!
         const rawVoxelBounds = new THREE.Box3().setFromObject(voxelMeshGroup);
         if (!rawVoxelBounds.isEmpty()) {
           const rawCenter = new THREE.Vector3();
+          const rawSize = new THREE.Vector3();
           rawVoxelBounds.getCenter(rawCenter);
-          voxelMeshGroup.position.set(-rawCenter.x, 0, -rawCenter.z);
+          rawVoxelBounds.getSize(rawSize);
+          if (pitchRad !== 0 || rollRad !== 0) {
+            const tiltWrap = new THREE.Group();
+            tiltWrap.rotation.order = 'YXZ';
+            voxelMeshGroup.position.set(-rawCenter.x, -rawCenter.y, -rawCenter.z);
+            tiltWrap.add(voxelMeshGroup);
+            tiltWrap.rotation.set(pitchRad, 0, rollRad);
+            const rotDims = computeRotatedBoxDimensions({
+              width: rawSize.x,
+              height: rawSize.y,
+              depth: rawSize.z,
+              yaw: 0,
+              pitch: scRot.pitch,
+              roll: scRot.roll,
+              scale: 1
+            });
+            tiltWrap.position.y = rawVoxelBounds.min.y + rotDims.effH / 2;
+            sub.add(tiltWrap);
+          } else {
+            voxelMeshGroup.position.set(-rawCenter.x, 0, -rawCenter.z);
+            sub.add(voxelMeshGroup);
+          }
+        } else {
+          sub.add(voxelMeshGroup);
         }
-        sub.add(voxelMeshGroup);
       }
       sub.traverse((obj) => {
         if (obj.isMesh) {
@@ -492,19 +521,48 @@ export function useARPreview({
                 if (parentLand) obj.userData.parcel = parentLand;
               }
             });
-            sub.add(loaded.object3d);
-            applyProximitySharpnessToObject3D(sub, computeProximitySharpness(dist), 8);
+            const scRot = extractSculptureRotation(sc);
+            const pitchRad = tiltToRadians(scRot.pitch);
+            const rollRad = tiltToRadians(scRot.roll);
             const loadedCenter = new THREE.Vector3();
             const loadedSize = new THREE.Vector3();
             loaded.bounds.getCenter(loadedCenter);
             loaded.bounds.getSize(loadedSize);
-            hitProxy.geometry.dispose();
-            hitProxy.geometry = new THREE.BoxGeometry(
-              Math.max(1.0, loadedSize.x + 0.55),
-              Math.max(1.0, loadedSize.y + 0.55),
-              Math.max(1.0, loadedSize.z + 0.55)
-            );
-            hitProxy.position.copy(loadedCenter);
+            if (pitchRad !== 0 || rollRad !== 0) {
+              const tiltWrap = new THREE.Group();
+              tiltWrap.rotation.order = 'YXZ';
+              loaded.object3d.position.set(-loadedCenter.x, -loadedCenter.y, -loadedCenter.z);
+              tiltWrap.add(loaded.object3d);
+              tiltWrap.rotation.set(pitchRad, 0, rollRad);
+              const rotDims = computeRotatedBoxDimensions({
+                width: loadedSize.x,
+                height: loadedSize.y,
+                depth: loadedSize.z,
+                yaw: 0,
+                pitch: scRot.pitch,
+                roll: scRot.roll,
+                scale: 1
+              });
+              tiltWrap.position.y = loaded.bounds.min.y + rotDims.effH / 2;
+              sub.add(tiltWrap);
+              hitProxy.geometry.dispose();
+              hitProxy.geometry = new THREE.BoxGeometry(
+                Math.max(1.0, rotDims.effW + 0.55),
+                Math.max(1.0, rotDims.effH + 0.55),
+                Math.max(1.0, rotDims.effD + 0.55)
+              );
+              hitProxy.position.set(0, loaded.bounds.min.y + rotDims.effH / 2, 0);
+            } else {
+              sub.add(loaded.object3d);
+              hitProxy.geometry.dispose();
+              hitProxy.geometry = new THREE.BoxGeometry(
+                Math.max(1.0, loadedSize.x + 0.55),
+                Math.max(1.0, loadedSize.y + 0.55),
+                Math.max(1.0, loadedSize.z + 0.55)
+              );
+              hitProxy.position.copy(loadedCenter);
+            }
+            applyProximitySharpnessToObject3D(sub, computeProximitySharpness(dist), 8);
           })
           .catch(() => {})
           .finally(() => {

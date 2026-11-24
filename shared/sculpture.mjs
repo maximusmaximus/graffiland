@@ -169,6 +169,16 @@ export function serializeSculptureRow(
     ? `?cid=${encodeURIComponent(String(customModelCid).slice(0, 16))}`
     : `?rev=${Number(row.current_rev || 1)}`;
 
+  const normalizeTilt = (raw) => {
+    const n = Number(raw ?? 0);
+    if (!Number.isFinite(n) || n === 0) return 0;
+    let wrapped = ((n + 180) % 360 + 360) % 360 - 180;
+    if (wrapped === -180 && n > 0) wrapped = 180;
+    return Math.round(wrapped * 100) / 100;
+  };
+  const effectivePitch = normalizeTilt(parsedMeshStats?.transformPitch);
+  const effectiveRoll = normalizeTilt(parsedMeshStats?.transformRoll);
+
   return {
     id: row.id,
     title: row.title,
@@ -225,6 +235,8 @@ export function serializeSculptureRow(
       dy: Number(row.anchor_dy || 0),
       dz: Number(row.anchor_dz || 0),
       yaw: Number(row.anchor_yaw || 0),
+      pitch: effectivePitch,
+      roll: effectiveRoll,
       scale: effectiveScale
     },
     currentRev: Number(row.current_rev || 1),

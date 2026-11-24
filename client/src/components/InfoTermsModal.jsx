@@ -12,6 +12,7 @@ import {
   registerHardwarePasskey,
   requestPasskeyAssertion
 } from '../utils/passkeyClient.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -81,7 +82,11 @@ export default function InfoTermsModal({
       }
       const res = await api.setPayoutAddress(address, proof);
       onUserUpdate(res.user);
-      setStatusMsg('Mint recipient address updated.');
+      const savedMsg = address
+        ? 'Mint recipient address saved.'
+        : 'Reverted mint recipient to your embedded wallet.';
+      setStatusMsg(savedMsg);
+      notifySettingsSaved(savedMsg);
     } catch (err) {
       setStatusMsg(err.message);
     } finally {
@@ -95,7 +100,9 @@ export default function InfoTermsModal({
     try {
       await registerHardwarePasskey('Wallet Export Passkey');
       setNeedsPasskey(false);
-      setStatusMsg('Passkey registered. Click Export Embedded Key to unlock.');
+      const pkMsg = 'Passkey registered. Click Export Embedded Key to unlock.';
+      setStatusMsg(pkMsg);
+      notifySettingsSaved('Wallet export passkey saved.');
     } catch (err) {
       setStatusMsg(err.message);
     } finally {
@@ -691,7 +698,11 @@ export default function InfoTermsModal({
                     )}
                   </div>
                   {statusMsg && (
-                    <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>
+                    <div
+                      className="mono settings-inline-saved"
+                      data-testid="account-settings-saved"
+                      role="status"
+                    >
                       {statusMsg}
                     </div>
                   )}

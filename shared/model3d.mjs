@@ -721,10 +721,23 @@ export function validateAnchorOffset(raw = {}, { parcelVolume = null } = {}) {
   const dy = Number(src.dy ?? 0);
   const dz = Number(src.dz ?? 0);
   const yaw = Number(src.yaw ?? 0);
+  const hasPitch = src.pitch !== undefined && src.pitch !== null && src.pitch !== '';
+  const hasRoll = src.roll !== undefined && src.roll !== null && src.roll !== '';
+  const rawPitch = hasPitch ? Number(src.pitch) : 0;
+  const rawRoll = hasRoll ? Number(src.roll) : 0;
   const hasScale = src.scale !== undefined && src.scale !== null && src.scale !== '';
   const scale = hasScale ? Number(src.scale) : null;
-  if (![dx, dy, dz, yaw].every(Number.isFinite)) {
-    return { error: 'anchorOffset coordinates (dx, dy, dz, yaw) must be finite numbers.', offset: null };
+  if (![dx, dy, dz, yaw, rawPitch, rawRoll].every(Number.isFinite)) {
+    return {
+      error: 'anchorOffset coordinates (dx, dy, dz, yaw, pitch, roll) must be finite numbers.',
+      offset: null
+    };
+  }
+  if (Math.abs(rawPitch) > 360 || Math.abs(rawRoll) > 360) {
+    return {
+      error: 'anchorOffset tilt angles (pitch, roll) must be between -360° and 360°.',
+      offset: null
+    };
   }
   if (hasScale && (!Number.isFinite(scale) || scale < 0.001 || scale > 60)) {
     return {
@@ -732,6 +745,11 @@ export function validateAnchorOffset(raw = {}, { parcelVolume = null } = {}) {
       offset: null
     };
   }
+  const normalizeDeg = (deg) => {
+    let wrapped = (((deg + 180) % 360) + 360) % 360 - 180;
+    if (wrapped === -180 && deg > 0) wrapped = 180;
+    return Math.round(wrapped * 100) / 100;
+  };
   const maxHoriz = parcelVolume
     ? Math.max(
         20,
@@ -757,6 +775,8 @@ export function validateAnchorOffset(raw = {}, { parcelVolume = null } = {}) {
       dy: Math.round(dy * 1000) / 1000,
       dz: Math.round(dz * 1000) / 1000,
       yaw: Math.round(yaw * 10000) / 10000,
+      ...(hasPitch ? { pitch: normalizeDeg(rawPitch) } : {}),
+      ...(hasRoll ? { roll: normalizeDeg(rawRoll) } : {}),
       ...(hasScale ? { scale: Math.round(scale * 10000) / 10000 } : {})
     }
   };
