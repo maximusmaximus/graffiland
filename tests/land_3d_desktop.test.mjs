@@ -1471,4 +1471,141 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(badRes.status, 409, JSON.stringify(badBody));
     assert.ok(Number(badBody.maxSafeScale) > 0 && Number(badBody.maxSafeScale) < 15);
   });
+
+  test('MapLibre v6 3D projection culls behind-camera lands, artwork labels sit strictly above lines, land leaders point to top center, and same-owner land overlap is rejected', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { projectLngLatAltToScreen, computePrismScreenGeometry } = await import(
+      '../client/src/utils/map3dProjection.js'
+    );
+
+    // 1) MapLibre v6 matrix resolution (`map._camera.projectedCamera.mercatorMatrix`, no `map.transform`)
+    // Column-major matrix where clip w = 1 - 10 * y (so y < 0.1 is in front of camera, y >= 0.1 is behind camera!)
+    const mercatorMatrix = [
+      1, 0, 0, 0,
+      0, 1, 0, -10,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    ];
+    let projectFallbackCalled = 0;
+    const mockMapV6 = {
+      _camera: { projectedCamera: { mercatorMatrix } },
+      getCanvas: () => ({ clientWidth: 1000, clientHeight: 600 }),
+      project: () => {
+        projectFallbackCalled += 1;
+        return { x: 500, y: 700 };
+      }
+    };
+    const mockMapLibre = {
+      MercatorCoordinate: {
+        fromLngLat: ([lng, lat], alt = 0) => ({
+          x: lng,
+          y: lat,
+          z: alt * 0.001
+        })
+      }
+    };
+
+    const inFront = projectLngLatAltToScreen(mockMapV6, mockMapLibre, 0.02, 0.02, 10);
+    assert.equal(inFront.visible, true);
+    assert.ok(inFront.depth > 0.5);
+    assert.equal(projectFallbackCalled, 0, 'Must use MapLibre v6 mercatorMatrix without falling back to map.project');
+
+    const behindCamera = projectLngLatAltToScreen(mockMapV6, mockMapLibre, 0.02, 0.25, 100);
+    assert.equal(behindCamera.visible, false, 'Points behind camera (cw <= 0) must be strictly culled');
+    assert.equal(projectFallbackCalled, 0, 'Behind-camera points must NEVER fall back to 2D map.project');
+
+    const behindPrism = computePrismScreenGeometry(mockMapV6, mockMapLibre, {
+      centerLng: 0.02,
+      centerLat: 0.25,
+      heightMeters: 100,
+      corners: [
+        [0.01, 0.24],
+        [0.03, 0.24],
+        [0.03, 0.26],
+        [0.01, 0.26]
+      ]
+    });
+    assert.equal(behindPrism, null, 'Behind-camera land prisms must return null so they never overlap foreground lands');
+
+    const frontPrism = computePrismScreenGeometry(mockMapV6, mockMapLibre, {
+      centerLng: 0.02,
+      centerLat: 0.02,
+      heightMeters: 18,
+      corners: [
+        [0.01, 0.01],
+        [0.03, 0.01],
+        [0.03, 0.03],
+        [0.01, 0.03]
+      ]
+    });
+    assert.ok(frontPrism && frontPrism.topCenter?.visible);
+    assert.ok(Number.isFinite(frontPrism.avgDepth) && frontPrism.avgDepth > 0);
+
+    // 2) Verify MapView3D land label leader targets exact top center (roofCenter) and artwork labels sit in z-index 10 layer above wireframes (z-index 5)
+    const map3dSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'client/src/components/MapView3D.jsx'),
+      'utf8'
+    );
+    assert.match(
+      map3dSrc,
+      /drawFloatingCenterArrow\(ctx,\s*\{\s*fromX:\s*anchor\.roofCenter\.x,\s*fromY:\s*pinBottomY,\s*toX:\s*anchor\.roofCenter\.x,\s*toY:\s*anchor\.roofCenter\.y,/
+    );
+    assert.match(map3dSrc, /className="map3d-floating-artwork-layer"/);
+
+    const cssSrc = fs.readFileSync(path.resolve(process.cwd(), 'client/src/styles.css'), 'utf8');
+    const wireZ = Number(cssSrc.match(/\.map3d-wireframe-canvas\s*\{[\s\S]*?z-index:\s*(\d+)/)?.[1] || 0);
+    const pinZ = Number(cssSrc.match(/\.map3d-floating-pins-layer\s*\{[\s\S]*?z-index:\s*(\d+)/)?.[1] || 0);
+    const artZ = Number(cssSrc.match(/\.map3d-floating-artwork-layer\s*\{[\s\S]*?z-index:\s*(\d+)/)?.[1] || 0);
+    assert.ok(artZ > wireZ && artZ > pinZ, `Expected artwork label layer z-index (${artZ}) > pins (${pinZ}) > wireframes (${wireZ})`);
+
+    // 3) Same owner cannot claim a second land whose boundary overlaps their own existing land (409)
+    const authRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devProfile: { email: 'no-self-overlap@graffiland.test', name: 'No Overlap Owner' } })
+    }).then((r) => r.json());
+    const tok = authRes.token;
+    assert.ok(tok);
+
+    const firstClaim = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        lat: 37.7855,
+        lng: -122.4165,
+        customName: 'North Boundary Plaza',
+        volume: {
+          centerLat: 37.7855,
+          centerLng: -122.4165,
+          widthMeters: 20,
+          depthMeters: 20,
+          heightMeters: 18,
+          rotationDeg: 0
+        }
+      })
+    });
+    assert.equal(firstClaim.status, 201);
+
+    const overlapClaim = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({
+        lat: 37.78564,
+        lng: -122.4165,
+        customName: 'Overlapping Neighbor Plot',
+        volume: {
+          centerLat: 37.78564,
+          centerLng: -122.4165,
+          widthMeters: 20,
+          depthMeters: 20,
+          heightMeters: 18,
+          rotationDeg: 0
+        }
+      })
+    });
+    const overlapBody = await overlapClaim.json();
+    assert.equal(overlapClaim.status, 409, `Same-owner overlapping boundary must be rejected with 409: ${JSON.stringify(overlapBody)}`);
+    assert.match(String(overlapBody.error || ''), /overlaps existing Virtual Land/i);
+  });
 });

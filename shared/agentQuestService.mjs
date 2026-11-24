@@ -309,23 +309,20 @@ async function saveLandVolumeRow(db, vol, now) {
   );
 }
 
-async function assertNoFootprintOverlap(db, targetVol, claimantSub) {
+async function assertNoFootprintOverlap(db, targetVol) {
   const existingRows = await db
     .all(
-      `SELECT lp.parcel_id, lp.geohash, lp.first_claimant_sub, st.steward_sub,
+      `SELECT lp.parcel_id, lp.geohash,
               lv.center_lat, lv.center_lng, lv.width_meters, lv.depth_meters,
               lv.rotation_deg, lv.corners_json
        FROM land_parcels lp
        LEFT JOIN land_volumes lv ON lv.parcel_id = lp.parcel_id
-       LEFT JOIN land_steward_state st ON st.parcel_id = lp.parcel_id
        WHERE lp.parcel_id != ?`,
       [targetVol.parcelId]
     )
     .catch(() => []);
 
   for (const row of existingRows || []) {
-    const ownerSub = row.steward_sub || row.first_claimant_sub || '';
-    if (ownerSub && ownerSub === claimantSub) continue;
     let otherVol = null;
     if (Number.isFinite(Number(row.width_meters)) && Number(row.width_meters) > 0) {
       let corners = [];
@@ -472,7 +469,7 @@ export async function claimDormantLand(
       });
     }
     resolvedVolume = volCheck.volume;
-    await assertNoFootprintOverlap(db, resolvedVolume, agentUser.id);
+    await assertNoFootprintOverlap(db, resolvedVolume);
   }
 
   const existingSteward = await db.get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [
@@ -777,7 +774,7 @@ export async function updateLandVolume(db, { parcelId, user, volume }) {
     });
   }
 
-  await assertNoFootprintOverlap(db, volCheck.volume, user.id);
+  await assertNoFootprintOverlap(db, volCheck.volume);
   const now = new Date().toISOString();
   await saveLandVolumeRow(db, volCheck.volume, now);
   return { parcelId: parcelCtx.parcelId, volume: volCheck.volume };
