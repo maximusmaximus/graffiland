@@ -544,15 +544,39 @@ export default function DesktopHub({
     }
   }
 
-  function handleNotificationAction(item) {
+  async function handleNotificationAction(item) {
     if (!item) return;
     if (item.actionType === 'open_pair_mobile') {
       openPairModal();
     } else if (item.actionType === 'open_mint') {
-      openMintLandMode();
+      setInfoInitialTab('mint');
+      setInfoOpen(true);
     } else if (item.actionType === 'open_archive') {
       setArchiveInitialId(String(item.meta?.archiveId || ''));
       setArchiveOpen(true);
+    } else if (
+      (item.actionType === 'open_sculpture' ||
+        (item.sculptureId && item.actionType !== 'open_land')) &&
+      item.sculptureId
+    ) {
+      const localMatch = (sculptures || []).find((s) => s.id === item.sculptureId);
+      if (localMatch) {
+        openSculpture(localMatch);
+        return;
+      }
+      try {
+        const res = await api.getSculpture(item.sculptureId);
+        if (res?.sculpture) {
+          openSculpture(res.sculpture);
+          return;
+        }
+      } catch {
+        // Fallback to opening land if sculpture fetch fails
+      }
+      if (item.parcelId) {
+        setLandManageParcelId(item.parcelId);
+        setLandManageOpen(true);
+      }
     } else if (item.actionType === 'open_land' && item.parcelId) {
       setLandManageParcelId(item.parcelId);
       setLandManageOpen(true);
@@ -2255,6 +2279,11 @@ export default function DesktopHub({
           onOpenArchive={(archId = '') => {
             setArchiveInitialId(archId || '');
             setArchiveOpen(true);
+          }}
+          onStartMapMint={() => {
+            setInfoOpen(false);
+            setInfoInitialTab('guide');
+            openMintLandMode();
           }}
           onLogout={() => {
             onLogout();

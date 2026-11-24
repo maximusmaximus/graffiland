@@ -497,4 +497,102 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(selectedCallout?.targetX, 440);
     assert.equal(selectedCallout?.targetY, 192);
   });
+
+  test('seenLands hides seen/navigated lands from the map icon counter and surfaces newly minted art', async () => {
+    const { countUnseenMapItems, isLandSeen, markLandSeenInMap } = await import(
+      '../client/src/utils/seenLands.js'
+    );
+
+    const loc = { lat: 37.7749, lng: -122.4194 };
+    const sculptures = [
+      { id: 'sc-a1', parcelId: 'GLAND-LANDA', lat: 37.7749, lng: -122.4194 },
+      { id: 'sc-a2', parcelId: 'GLAND-LANDA', lat: 37.77491, lng: -122.41941 },
+      { id: 'sc-b1', parcelId: 'GLAND-LANDB', lat: 37.775, lng: -122.4195 }
+    ];
+    const parcels = [
+      { parcelId: 'GLAND-LANDA', centerLat: 37.7749, centerLng: -122.4194 },
+      { parcelId: 'GLAND-LANDB', centerLat: 37.775, centerLng: -122.4195 },
+      { parcelId: 'GLAND-EMPTY1', centerLat: 37.7751, centerLng: -122.4194 },
+      { parcelId: 'GLAND-FARAWAY', centerLat: 39.728, centerLng: -121.838 }
+    ];
+
+    // Nothing seen yet: 3 nearby sculptures + 1 nearby empty land (faraway parcel excluded) = 4
+    let seenMap = {};
+    assert.equal(
+      countUnseenMapItems({ sculptures, parcels, location: loc, radiusMeters: 300, seenMap }),
+      4
+    );
+
+    // User sees/navigates Land A (2 artworks) -> those 2 items drop out of counter (4 -> 2)
+    seenMap = markLandSeenInMap(seenMap, 'GLAND-LANDA', { artCount: 2 });
+    assert.equal(isLandSeen('GLAND-LANDA', 2, seenMap), true);
+    assert.equal(
+      countUnseenMapItems({ sculptures, parcels, location: loc, radiusMeters: 300, seenMap }),
+      2
+    );
+
+    // User sees Land B and Empty Land -> counter hits 0 so badge hides
+    seenMap = markLandSeenInMap(seenMap, 'GLAND-LANDB', { artCount: 1 });
+    seenMap = markLandSeenInMap(seenMap, 'GLAND-EMPTY1', { artCount: 0 });
+    assert.equal(
+      countUnseenMapItems({ sculptures, parcels, location: loc, radiusMeters: 300, seenMap }),
+      0
+    );
+
+    // New art minted on Land A -> counter surfaces the 1 new unseen item until viewed again
+    const updatedSculptures = [
+      ...sculptures,
+      { id: 'sc-a3', parcelId: 'GLAND-LANDA', lat: 37.77492, lng: -122.41942 }
+    ];
+    assert.equal(isLandSeen('GLAND-LANDA', 3, seenMap), false);
+    assert.equal(
+      countUnseenMapItems({
+        sculptures: updatedSculptures,
+        parcels,
+        location: loc,
+        radiusMeters: 300,
+        seenMap
+      }),
+      1
+    );
+  });
+
+  test('measureVoxelHorizontalFootprint and computeMaxHumanDrawScale account for Z-axis rotation', async () => {
+    const { computeMaxHumanDrawScale, measureVoxelHorizontalFootprint } = await import(
+      '../shared/voxelStroke.mjs'
+    );
+    // Tall vertical bar (0m wide horizontally, 60m tall vertically)
+    const verticalBar = [
+      { x: 0, y: 0, z: 0, scale: 1 },
+      { x: 0, y: 60, z: 0, scale: 1 }
+    ];
+    const upright = measureVoxelHorizontalFootprint(verticalBar, {
+      step: 0.2,
+      rotYDeg: 0,
+      rotZDeg: 0,
+      maxSpanMeters: 76.2
+    });
+    const tilted90Z = measureVoxelHorizontalFootprint(verticalBar, {
+      step: 0.2,
+      rotYDeg: 0,
+      rotZDeg: 90,
+      maxSpanMeters: 76.2
+    });
+    assert.ok(upright.widthMeters < 1, 'Upright bar has tiny horizontal X width');
+    assert.ok(
+      tilted90Z.widthMeters >= 59.5,
+      `Rotating 90 deg around Z lays vertical bar horizontally along X (got ${tilted90Z.widthMeters})`
+    );
+    const maxScaleTilted = computeMaxHumanDrawScale(verticalBar, {
+      step: 0.2,
+      rotYDeg: 0,
+      rotZDeg: 90,
+      maxSpanMeters: 76.2,
+      maxScale: 2
+    });
+    assert.ok(
+      maxScaleTilted < 1.3 && maxScaleTilted > 1.2,
+      `Expected Z-rotated max scale to clamp near 76.2/60 (~1.26), got ${maxScaleTilted}`
+    );
+  });
 });

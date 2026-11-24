@@ -2273,6 +2273,25 @@ export async function applyPublishOnBehalf(
     await consumeDraftOnPublish(db, { draftId: payload.draftId, user: ownerUser });
   }
 
+  try {
+    const visibleCntRow = await db
+      .get('SELECT COUNT(*) AS cnt FROM sculptures WHERE parcel_id = ? AND hidden = 0', [
+        locBundle.parcelId
+      ])
+      .catch(() => null);
+    await notifyAfterSculpturePublished(db, {
+      parcelId: locBundle.parcelId,
+      sculptureId,
+      sculptureTitle: payload.title,
+      creatorSub: ownerUser?.id || '',
+      creatorName: resolveAuthorHandleForStorage(ownerUser, 'Creator'),
+      awakenedParcel: false,
+      wasPreviouslyEmpty: Number(visibleCntRow?.cnt || 0) <= 1
+    });
+  } catch {
+    // Non-fatal notification failure
+  }
+
   const saved = await fetchSculptureWithModelRow(db, sculptureId);
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),

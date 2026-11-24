@@ -131,60 +131,78 @@ export default function ToolCarouselBar({
           <div className="transform-bar-top">
             <span className="transform-bar-title">
               <XeroIcon emoji="📐" size={14} />
-              <span>Lock &amp; Transform ({voxelsLength})</span>
+              <span>Lock &amp; Scale ({voxelsLength})</span>
             </span>
-            <div className="transform-nudge-row">
-              <button
-                type="button"
-                className="transform-chip-btn"
-                onClick={() =>
-                  onSetArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY - 0.1).toFixed(2)) }))
-                }
-                title="Lower art (-10cm)"
-              >
-                -Y
-              </button>
-              <button
-                type="button"
-                className="transform-chip-btn"
-                onClick={() =>
-                  onSetArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY + 0.1).toFixed(2)) }))
-                }
-                title="Raise art (+10cm)"
-              >
-                +Y
-              </button>
-              <button
-                type="button"
-                className="transform-chip-btn"
-                onClick={() =>
-                  onSetArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ + 0.15).toFixed(2)) }))
-                }
-                title="Bring closer"
-              >
-                Near
-              </button>
-              <button
-                type="button"
-                className="transform-chip-btn"
-                onClick={() =>
-                  onSetArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ - 0.15).toFixed(2)) }))
-                }
-                title="Push further"
-              >
-                Far
-              </button>
-              <button
-                type="button"
-                className="transform-chip-btn"
-                onClick={() =>
-                  onSetArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 })
-                }
-                title="Reset transform"
-              >
-                Reset
-              </button>
-            </div>
+            <button
+              type="button"
+              className="transform-done-btn"
+              onClick={onToggleTransformLock}
+              title="Confirm transform & return to drawing mode"
+            >
+              <XeroIcon emoji="✅" size={14} />
+              <span>Draw</span>
+            </button>
+          </div>
+
+          <div className="transform-nudge-row">
+            <button
+              type="button"
+              className="transform-chip-btn"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY - 0.1).toFixed(2)) }))
+              }
+              title="Lower art (-10cm)"
+            >
+              -Y
+            </button>
+            <button
+              type="button"
+              className="transform-chip-btn"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetY: Number((p.offsetY + 0.1).toFixed(2)) }))
+              }
+              title="Raise art (+10cm)"
+            >
+              +Y
+            </button>
+            <button
+              type="button"
+              className="transform-chip-btn"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ + 0.15).toFixed(2)) }))
+              }
+              title="Bring closer"
+            >
+              Near
+            </button>
+            <button
+              type="button"
+              className="transform-chip-btn"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetZ: Number((p.offsetZ - 0.15).toFixed(2)) }))
+              }
+              title="Push further"
+            >
+              Far
+            </button>
+            <button
+              type="button"
+              className="transform-chip-btn"
+              onClick={() =>
+                onSetArtTransform({
+                  scale: 1,
+                  rotYDeg: 0,
+                  rotZDeg: 0,
+                  offsetX: 0,
+                  offsetY: 0,
+                  offsetZ: 0
+                })
+              }
+              title="Reset transform"
+            >
+              Reset
+            </button>
+            <span className="transform-gesture-note">2-finger twist = Z</span>
           </div>
 
           <div className="transform-sliders">
@@ -201,36 +219,46 @@ export default function ToolCarouselBar({
                 onChange={(e) =>
                   onSetArtTransform((p) => ({ ...p, scale: Number(e.target.value) }))
                 }
+                data-testid="transform-scale-slider"
                 aria-label="Scale sculpture"
               />
             </label>
 
             <label className="transform-slider-field">
               <span>
-                <XeroIcon emoji="🔄" size={12} /> {artTransform.rotYDeg}°
+                <XeroIcon emoji="🔄" size={12} /> Y {artTransform.rotYDeg || 0}°
               </span>
               <input
                 type="range"
                 min={-180}
                 max={180}
                 step={2}
-                value={artTransform.rotYDeg}
+                value={artTransform.rotYDeg || 0}
                 onChange={(e) =>
                   onSetArtTransform((p) => ({ ...p, rotYDeg: Number(e.target.value) }))
                 }
-                aria-label="Rotate sculpture"
+                data-testid="transform-roty-slider"
+                aria-label="Rotate sculpture Y axis"
               />
             </label>
 
-            <button
-              type="button"
-              className="transform-done-btn"
-              onClick={onToggleTransformLock}
-              title="Confirm transform & return to drawing mode"
-            >
-              <XeroIcon emoji="✅" size={14} />
-              <span>Draw</span>
-            </button>
+            <label className="transform-slider-field">
+              <span>
+                <XeroIcon emoji="🌀" size={12} /> Z {artTransform.rotZDeg || 0}°
+              </span>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                step={2}
+                value={artTransform.rotZDeg || 0}
+                onChange={(e) =>
+                  onSetArtTransform((p) => ({ ...p, rotZDeg: Number(e.target.value) }))
+                }
+                data-testid="transform-rotz-slider"
+                aria-label="Rotate sculpture Z axis"
+              />
+            </label>
           </div>
         </div>
       )}

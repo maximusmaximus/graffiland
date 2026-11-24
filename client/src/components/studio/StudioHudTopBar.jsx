@@ -746,7 +746,11 @@ export default function StudioHudTopBar({
           title="Nearest Lands, Sculptures & Google Maps Directions"
         >
           <XeroIcon emoji="🗺️" size={22} />
-          {nearbyCount > 0 && <span className="floating-map-badge">{nearbyCount}</span>}
+          {nearbyCount > 0 && (
+            <span className="floating-map-badge" data-testid="floating-map-badge">
+              {nearbyCount}
+            </span>
+          )}
         </button>
       )}
     </>

@@ -5,8 +5,9 @@ import { normalizeParcelId } from './mcp/helpers.mjs';
 export const NOTIFICATION_CATEGORIES = [
   {
     key: 'sculpture_on_land',
-    label: 'Sculptures on your lands',
-    description: 'Alerts whenever an artist or agent places a sculpture on one of your lands.'
+    label: 'New art on your lands & contributions',
+    description:
+      'Alerts with direct links whenever new art is minted on any Virtual Land you own or have contributed to.'
   },
   {
     key: 'mint_slots_unlocked',
@@ -548,11 +549,75 @@ async function resolveParcelOwnerInfo(db, parcelId) {
 }
 
 /**
+ * Resolves all unique owners & contributors for a parcel (deduped) so every stakeholder
+ * who owns or has contributed to the land is notified when new art is minted there.
+ */
+async function resolveParcelStakeholders(db, parcelId, primaryOwnerSub = '') {
+  const cleanParcel = normalizeParcelId(parcelId);
+  const rolesBySub = new Map();
+
+  const register = (sub, role) => {
+    const clean = String(sub || '').trim();
+    if (!clean) return;
+    if (!rolesBySub.has(clean) || role === 'owner') {
+      rolesBySub.set(clean, role);
+    }
+  };
+
+  register(primaryOwnerSub, 'owner');
+
+  const [parcelRow, curationRow, stewardRow, explicitContribs, sculptureAuthors, questArtists] =
+    await Promise.all([
+      db
+        .get('SELECT first_claimant_sub FROM land_parcels WHERE parcel_id = ?', [cleanParcel])
+        .catch(() => null),
+      db
+        .get('SELECT owner_sub FROM parcel_curations WHERE parcel_id = ?', [cleanParcel])
+        .catch(() => null),
+      db
+        .get('SELECT steward_sub, first_human_sub FROM land_steward_state WHERE parcel_id = ?', [
+          cleanParcel
+        ])
+        .catch(() => null),
+      db
+        .all(
+          'SELECT DISTINCT contributor_sub AS sub FROM land_contributors WHERE parcel_id = ?',
+          [cleanParcel]
+        )
+        .catch(() => []),
+      db
+        .all(
+          'SELECT DISTINCT creator_sub AS sub FROM sculptures WHERE parcel_id = ? AND hidden = 0',
+          [cleanParcel]
+        )
+        .catch(() => []),
+      db
+        .all(
+          'SELECT DISTINCT artist_sub AS sub FROM land_quest_completions WHERE parcel_id = ?',
+          [cleanParcel]
+        )
+        .catch(() => [])
+    ]);
+
+  register(stewardRow?.steward_sub, 'owner');
+  register(curationRow?.owner_sub, 'owner');
+  register(parcelRow?.first_claimant_sub, 'owner');
+  register(stewardRow?.first_human_sub, 'contributor');
+
+  for (const row of explicitContribs || []) register(row?.sub, 'contributor');
+  for (const row of sculptureAuthors || []) register(row?.sub, 'contributor');
+  for (const row of questArtists || []) register(row?.sub, 'contributor');
+
+  return Array.from(rolesBySub.entries()).map(([userSub, role]) => ({ userSub, role }));
+}
+
+/**
  * Emits notifications after a sculpture is published on a parcel:
- *  1) Alerts the land owner when someone builds on their land (`sculpture_on_land`).
- *  2) Alerts a human land owner when placing the first sculpture on an unbuilt land frees up
+ *  1) Alerts the land owner AND every user who has contributed to that land (`sculpture_on_land`)
+ *     with direct links to the newly minted artwork.
+ *  2) Alerts the land owner if a dormant land was awakened permanently (`mint_slots_unlocked`).
+ *  3) Alerts a human land owner when placing the first sculpture on an unbuilt land frees up
  *     a Desktop starter mint slot (`mint_slots_unlocked`)!
- *  3) Alerts the land owner if a dormant land was awakened permanently (`land_activity`).
  */
 export async function notifyAfterSculpturePublished(
   db,
@@ -568,28 +633,50 @@ export async function notifyAfterSculpturePublished(
 ) {
   const info = await resolveParcelOwnerInfo(db, parcelId);
   const created = [];
-  if (!info.ownerSub) return created;
 
   const cleanCreatorSub = String(creatorSub || '').trim();
+  const cleanSculptureId = String(sculptureId || '').trim();
   const safeCreatorName = String(creatorName || 'A creator').trim();
   const safeScTitle = String(sculptureTitle || 'Untitled Sculpture').trim();
+  const sculptureUrl = cleanSculptureId
+    ? `?sculpture=${encodeURIComponent(cleanSculptureId)}`
+    : '';
+  const parcelUrl = info.parcelId ? `?parcel=${encodeURIComponent(info.parcelId)}` : '';
 
-  // 1) Someone else built on the owner's land
-  if (cleanCreatorSub && cleanCreatorSub !== info.ownerSub) {
+  // 1) Notify land owner(s) + every contributor on this parcel with direct links to the new art
+  const stakeholders = await resolveParcelStakeholders(db, info.parcelId, info.ownerSub);
+  for (const recipient of stakeholders) {
+    if (!recipient.userSub) continue;
+    if (cleanCreatorSub && recipient.userSub === cleanCreatorSub) continue;
+    const isOwner = recipient.role === 'owner';
     const n = await createNotification(db, {
-      userSub: info.ownerSub,
+      userSub: recipient.userSub,
       category: 'sculpture_on_land',
       severity: 'info',
-      title: `🎨 New sculpture on "${info.landTitle}"`,
-      message: `${safeCreatorName} published "${safeScTitle}" on your Virtual Land "${info.landTitle}".`,
+      title: `🎨 New art "${safeScTitle}" on "${info.landTitle}"`,
+      message: isOwner
+        ? `${safeCreatorName} minted "${safeScTitle}" on your Virtual Land "${info.landTitle}".`
+        : `${safeCreatorName} minted "${safeScTitle}" on "${info.landTitle}", a Virtual Land you contributed to.`,
       parcelId: info.parcelId,
-      sculptureId,
-      actionType: 'open_land',
-      actionLabel: 'Inspect Land',
-      meta: { creatorName: safeCreatorName, sculptureTitle: safeScTitle, landTitle: info.landTitle }
+      sculptureId: cleanSculptureId,
+      actionType: cleanSculptureId ? 'open_sculpture' : 'open_land',
+      actionLabel: cleanSculptureId ? 'View Art' : 'Inspect Land',
+      meta: {
+        creatorName: safeCreatorName,
+        sculptureTitle: safeScTitle,
+        landTitle: info.landTitle,
+        sculptureId: cleanSculptureId,
+        parcelId: info.parcelId,
+        sculptureUrl,
+        parcelUrl,
+        recipientRole: recipient.role
+      },
+      dedupeKey: cleanSculptureId ? `art:${cleanSculptureId}:${recipient.userSub}` : ''
     }).catch(() => null);
     if (n) created.push(n);
   }
+
+  if (!info.ownerSub) return created;
 
   // 2) Dormant land awakened by an in-person human
   if (awakenedParcel && info.ownerSub) {
@@ -600,10 +687,16 @@ export async function notifyAfterSculpturePublished(
       title: `✨ "${info.landTitle}" awakened & permanently owned!`,
       message: `"${safeScTitle}" awakened "${info.landTitle}", cleared its expiry timer (now permanently owned), and unlocked +${STEWARD_DEFAULTS.slotsPerAwakenedLand} steward slots.`,
       parcelId: info.parcelId,
-      sculptureId,
-      actionType: 'open_land',
-      actionLabel: 'View Land',
-      meta: { awakenedParcel: true, landTitle: info.landTitle }
+      sculptureId: cleanSculptureId,
+      actionType: cleanSculptureId ? 'open_sculpture' : 'open_land',
+      actionLabel: cleanSculptureId ? 'View Art' : 'View Land',
+      meta: {
+        awakenedParcel: true,
+        landTitle: info.landTitle,
+        sculptureId: cleanSculptureId,
+        sculptureUrl,
+        parcelUrl
+      }
     }).catch(() => null);
     if (n) created.push(n);
   }
@@ -619,14 +712,16 @@ export async function notifyAfterSculpturePublished(
         title: `🎉 You can mint more land! (${capacity.remainingSlots}/${capacity.maxSlots} slots open)`,
         message: `"${safeScTitle}" activated "${info.landTitle}". You now have ${capacity.remainingSlots} open Desktop starter land slot${capacity.remainingSlots === 1 ? '' : 's'} ready to mint.`,
         parcelId: info.parcelId,
-        sculptureId,
+        sculptureId: cleanSculptureId,
         actionType: 'open_mint',
-        actionLabel: 'Mint New Land',
+        actionLabel: 'How to Mint Land',
         meta: {
           remainingSlots: capacity.remainingSlots,
           usedSlots: capacity.usedSlots,
           maxSlots: capacity.maxSlots,
-          landTitle: info.landTitle
+          landTitle: info.landTitle,
+          sculptureUrl,
+          parcelUrl
         }
       }).catch(() => null);
       if (n) created.push(n);
