@@ -4,6 +4,11 @@ import {
   buildParcelShareUrl,
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
+import {
+  buildPlacementItemFromSculpture,
+  evaluateModelFitInParcel,
+  resolveParcelVolumeForPlacement
+} from '../../../shared/sculpturePlacement.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
@@ -174,6 +179,7 @@ export default function AddLandItemModal({
   const [visBusyId, setVisBusyId] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
+  const [serverFitHint, setServerFitHint] = useState(null);
   const [pairingOverride, setPairingOverride] = useState('');
 
   const apiOrigin =
@@ -235,6 +241,29 @@ export default function AddLandItemModal({
     ]
   );
 
+  const liveLandFit = useMemo(() => {
+    const validatedData = validationState?.status === 'valid' ? validationState.data : null;
+    if (!validatedData || !parcel) return null;
+    const bbox = validatedData.stats?.bbox || null;
+    if (!bbox) return validatedData.landFit || null;
+    const vol = resolveParcelVolumeForPlacement(parcel);
+    const existingItems = (existingSculptures || [])
+      .filter((sc) => sc && !sc.hidden)
+      .map((sc) => buildPlacementItemFromSculpture(sc, vol));
+    return evaluateModelFitInParcel({
+      parcelVolume: vol,
+      bbox,
+      modelScale: Number(modelScale || 1),
+      anchorOffset: {
+        dx: Number(dx || 0),
+        dy: Number(dy || 0),
+        dz: Number(dz || 0),
+        yaw: Number(yaw || 0)
+      },
+      existingItems
+    });
+  }, [validationState, parcel, existingSculptures, modelScale, dx, dy, dz, yaw]);
+
   if (!parcel) return null;
 
   async function handleValidateModelLink() {
@@ -249,8 +278,19 @@ export default function AddLandItemModal({
     setValidationState({ status: 'checking' });
     setStatusMsg('');
     setStatusIsError(false);
+    setServerFitHint(null);
     try {
-      const res = await api.validateModelUrl({ modelUrl: cleanUrl });
+      const res = await api.validateModelUrl({
+        modelUrl: cleanUrl,
+        parcelId: parcel.parcelId,
+        modelScale: Number(modelScale || 1),
+        anchorOffset: {
+          dx: Number(dx || 0),
+          dy: Number(dy || 0),
+          dz: Number(dz || 0),
+          yaw: Number(yaw || 0)
+        }
+      });
       if (res?.valid) {
         if (res.format && SUPPORTED_ITEM_TYPES.some((t) => t.id === res.format)) {
           setItemFormat(res.format);
@@ -283,6 +323,7 @@ export default function AddLandItemModal({
     setUploadBusy(true);
     setStatusMsg('');
     setStatusIsError(false);
+    setServerFitHint(null);
     try {
       const validated =
         validationState?.status === 'valid' && validationState?.data?.modelUrl === modelUrl.trim()
@@ -314,6 +355,7 @@ export default function AddLandItemModal({
       });
 
       setStatusIsError(false);
+      setServerFitHint(null);
       setStatusMsg(
         `Uploaded "${res?.sculpture?.title || finalTitle}" (.${resolvedFormat.toUpperCase()}) onto "${landDisplayName}"!`
       );
@@ -324,6 +366,12 @@ export default function AddLandItemModal({
       await onSculptureUploaded?.(res?.sculpture);
     } catch (err) {
       setStatusIsError(true);
+      if (err?.data?.maxSafeScale !== undefined) {
+        setServerFitHint({
+          maxSafeScale: Number(err.data.maxSafeScale || 0),
+          message: err?.data?.error || err?.message || '3D model exceeds land bounds.'
+        });
+      }
       setStatusMsg(err?.data?.error || err?.message || '3D model upload failed.');
     } finally {
       setUploadBusy(false);
@@ -567,10 +615,50 @@ export default function AddLandItemModal({
               {formatByteSize(validationState.data.byteLength)}
               {validationState.data.stats?.triangleCount
                 ? ` · ${Number(validationState.data.stats.triangleCount).toLocaleString()} tris`
+                : ''}
+              {validationState.data.stats?.bbox
+                ? ` · ${Number(validationState.data.stats.bbox.width).toFixed(2)}×${Number(
+                    validationState.data.stats.bbox.depth
+                  ).toFixed(2)}×${Number(validationState.data.stats.bbox.height).toFixed(2)}m`
                 : ''}{' '}
-              — Ready to upload!
+              {liveLandFit && !liveLandFit.fits ? '— Exceeds land bounds at current scale' : '— Ready to upload!'}
             </div>
           )}
+          {((liveLandFit && !liveLandFit.fits) || serverFitHint) && (() => {
+            const fitMsg =
+              (liveLandFit && !liveLandFit.fits ? liveLandFit.message : '') ||
+              serverFitHint?.message ||
+              'Model exceeds this land boundary at current scale.';
+            const fitMaxScale =
+              liveLandFit && !liveLandFit.fits
+                ? Number(liveLandFit.maxSafeScale || 0)
+                : Number(serverFitHint?.maxSafeScale || 0);
+            return (
+              <div
+                className="status-banner status-banner-error"
+                role="alert"
+                data-testid="model-land-fit-warning"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}
+              >
+                <span>⚠️ {fitMsg}</span>
+                {fitMaxScale >= 0.001 && (
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-primary"
+                    data-testid="fit-model-to-land-btn"
+                    onClick={() => {
+                      setModelScale(fitMaxScale);
+                      setServerFitHint(null);
+                      setStatusMsg('');
+                      setStatusIsError(false);
+                    }}
+                  >
+                    📐 Fit to Land ({fitMaxScale}×)
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {validationState?.status === 'invalid' && (
             <div className="status-banner status-banner-error" role="alert">
               ❌ {validationState.error}
@@ -611,11 +699,14 @@ export default function AddLandItemModal({
               <span>Model Scale</span>
               <input
                 type="number"
-                min={0.1}
-                max={20}
-                step={0.1}
+                min={0.001}
+                max={60}
+                step={0.01}
                 value={modelScale}
-                onChange={(e) => setModelScale(Number(e.target.value || 1))}
+                onChange={(e) => {
+                  setModelScale(Number(e.target.value || 1));
+                  if (serverFitHint) setServerFitHint(null);
+                }}
               />
             </label>
           )}

@@ -119,21 +119,101 @@ export function validateModelBytesByFormat(format, bytes) {
   return `Unsupported 3D model format "${format}". Supported formats: ${SUPPORTED_3D_FORMATS.join(', ')}.`;
 }
 
+function mat4Identity() {
+  return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+}
+
+function mat4Multiply(a, b) {
+  const out = new Array(16);
+  for (let col = 0; col < 4; col += 1) {
+    const b0 = b[col * 4];
+    const b1 = b[col * 4 + 1];
+    const b2 = b[col * 4 + 2];
+    const b3 = b[col * 4 + 3];
+    out[col * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    out[col * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    out[col * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    out[col * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+  return out;
+}
+
+function mat4FromTRS(translation, rotation, scale) {
+  const tx = Array.isArray(translation) && Number.isFinite(Number(translation[0])) ? Number(translation[0]) : 0;
+  const ty = Array.isArray(translation) && Number.isFinite(Number(translation[1])) ? Number(translation[1]) : 0;
+  const tz = Array.isArray(translation) && Number.isFinite(Number(translation[2])) ? Number(translation[2]) : 0;
+  const sx = Array.isArray(scale) && Number.isFinite(Number(scale[0])) ? Number(scale[0]) : 1;
+  const sy = Array.isArray(scale) && Number.isFinite(Number(scale[1])) ? Number(scale[1]) : 1;
+  const sz = Array.isArray(scale) && Number.isFinite(Number(scale[2])) ? Number(scale[2]) : 1;
+  let qx = Array.isArray(rotation) && Number.isFinite(Number(rotation[0])) ? Number(rotation[0]) : 0;
+  let qy = Array.isArray(rotation) && Number.isFinite(Number(rotation[1])) ? Number(rotation[1]) : 0;
+  let qz = Array.isArray(rotation) && Number.isFinite(Number(rotation[2])) ? Number(rotation[2]) : 0;
+  let qw = Array.isArray(rotation) && Number.isFinite(Number(rotation[3])) ? Number(rotation[3]) : 1;
+  const qLen = Math.hypot(qx, qy, qz, qw);
+  if (qLen > 0) {
+    qx /= qLen;
+    qy /= qLen;
+    qz /= qLen;
+    qw /= qLen;
+  }
+  const x2 = qx + qx;
+  const y2 = qy + qy;
+  const z2 = qz + qz;
+  const xx = qx * x2;
+  const xy = qx * y2;
+  const xz = qx * z2;
+  const yy = qy * y2;
+  const yz = qy * z2;
+  const zz = qz * z2;
+  const wx = qw * x2;
+  const wy = qw * y2;
+  const wz = qw * z2;
+
+  return [
+    (1 - (yy + zz)) * sx,
+    (xy + wz) * sx,
+    (xz - wy) * sx,
+    0,
+    (xy - wz) * sy,
+    (1 - (xx + zz)) * sy,
+    (yz + wx) * sy,
+    0,
+    (xz + wy) * sz,
+    (yz - wx) * sz,
+    (1 - (xx + yy)) * sz,
+    0,
+    tx,
+    ty,
+    tz,
+    1
+  ];
+}
+
+function finalizeBbox(minX, minY, minZ, maxX, maxY, maxZ) {
+  if (![minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) return null;
+  const rawW = Math.max(0.01, maxX - minX);
+  const rawH = Math.max(0.01, maxY - minY);
+  const rawD = Math.max(0.01, maxZ - minZ);
+  return {
+    width: Math.round(rawW * 10000) / 10000,
+    height: Math.round(rawH * 10000) / 10000,
+    depth: Math.round(rawD * 10000) / 10000
+  };
+}
+
 function inspectGltfJsonStats(parsed) {
   const accessors = Array.isArray(parsed?.accessors) ? parsed.accessors : [];
   const meshes = Array.isArray(parsed?.meshes) ? parsed.meshes : [];
+  const nodes = Array.isArray(parsed?.nodes) ? parsed.nodes : [];
+  const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
   const textures = Array.isArray(parsed?.textures) ? parsed.textures : [];
   const images = Array.isArray(parsed?.images) ? parsed.images : [];
   const extensionsUsed = Array.isArray(parsed?.extensionsUsed) ? parsed.extensionsUsed : [];
   let triangleCount = 0;
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
 
-  for (const mesh of meshes) {
+  // Collect per-mesh local primitive AABBs so node transforms (scale/rotation/matrix) apply accurately
+  const meshBoxes = meshes.map((mesh) => {
+    const boxes = [];
     for (const prim of mesh?.primitives || []) {
       const mode = prim?.mode ?? 4;
       if (prim?.indices !== undefined && accessors[prim.indices]) {
@@ -145,41 +225,437 @@ function inspectGltfJsonStats(parsed) {
       }
       const posAcc =
         prim?.attributes?.POSITION !== undefined ? accessors[prim.attributes.POSITION] : null;
-      if (Array.isArray(posAcc?.min) && Array.isArray(posAcc?.max) && posAcc.min.length >= 3 && posAcc.max.length >= 3) {
+      if (
+        Array.isArray(posAcc?.min) &&
+        Array.isArray(posAcc?.max) &&
+        posAcc.min.length >= 3 &&
+        posAcc.max.length >= 3
+      ) {
         const [x0, y0, z0] = posAcc.min.map(Number);
         const [x1, y1, z1] = posAcc.max.map(Number);
         if ([x0, y0, z0, x1, y1, z1].every(Number.isFinite)) {
-          if (x0 < minX) minX = x0;
-          if (y0 < minY) minY = y0;
-          if (z0 < minZ) minZ = z0;
-          if (x1 > maxX) maxX = x1;
-          if (y1 > maxY) maxY = y1;
-          if (z1 > maxZ) maxZ = z1;
+          boxes.push({ x0, y0, z0, x1, y1, z1 });
         }
+      }
+    }
+    return boxes;
+  });
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  let visitedMeshViaNodes = false;
+
+  const expandTransformedBox = (m, b) => {
+    const xs = [b.x0, b.x1];
+    const ys = [b.y0, b.y1];
+    const zs = [b.z0, b.z1];
+    for (let ix = 0; ix < 2; ix += 1) {
+      for (let iy = 0; iy < 2; iy += 1) {
+        for (let iz = 0; iz < 2; iz += 1) {
+          const x = xs[ix];
+          const y = ys[iy];
+          const z = zs[iz];
+          const wx = m[0] * x + m[4] * y + m[8] * z + m[12];
+          const wy = m[1] * x + m[5] * y + m[9] * z + m[13];
+          const wz = m[2] * x + m[6] * y + m[10] * z + m[14];
+          if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) continue;
+          if (wx < minX) minX = wx;
+          if (wy < minY) minY = wy;
+          if (wz < minZ) minZ = wz;
+          if (wx > maxX) maxX = wx;
+          if (wy > maxY) maxY = wy;
+          if (wz > maxZ) maxZ = wz;
+        }
+      }
+    }
+  };
+
+  if (nodes.length > 0) {
+    let rootNodes = [];
+    if (scenes.length > 0) {
+      const activeScene = scenes[Number.isInteger(parsed?.scene) ? parsed.scene : 0] || scenes[0];
+      if (Array.isArray(activeScene?.nodes) && activeScene.nodes.length > 0) {
+        rootNodes = activeScene.nodes;
+      } else {
+        for (const sc of scenes) {
+          if (Array.isArray(sc?.nodes)) rootNodes.push(...sc.nodes);
+        }
+      }
+    }
+    if (rootNodes.length === 0) {
+      const childSet = new Set();
+      for (const n of nodes) {
+        for (const ch of n?.children || []) childSet.add(ch);
+      }
+      for (let i = 0; i < nodes.length; i += 1) {
+        if (!childSet.has(i)) rootNodes.push(i);
+      }
+    }
+
+    const walk = (nodeIdx, parentMat, pathSet) => {
+      if (!Number.isInteger(nodeIdx) || nodeIdx < 0 || nodeIdx >= nodes.length) return;
+      if (pathSet.has(nodeIdx)) return;
+      const node = nodes[nodeIdx];
+      if (!node || typeof node !== 'object') return;
+      pathSet.add(nodeIdx);
+
+      const localMat =
+        Array.isArray(node.matrix) &&
+        node.matrix.length === 16 &&
+        node.matrix.every((v) => Number.isFinite(Number(v)))
+          ? node.matrix.map(Number)
+          : mat4FromTRS(node.translation, node.rotation, node.scale);
+      const worldMat = mat4Multiply(parentMat, localMat);
+
+      if (Number.isInteger(node.mesh) && meshBoxes[node.mesh]) {
+        for (const b of meshBoxes[node.mesh]) {
+          visitedMeshViaNodes = true;
+          expandTransformedBox(worldMat, b);
+        }
+      }
+
+      for (const ch of node.children || []) {
+        walk(ch, worldMat, pathSet);
+      }
+      pathSet.delete(nodeIdx);
+    };
+
+    const ident = mat4Identity();
+    for (const rootIdx of rootNodes) {
+      walk(rootIdx, ident, new Set());
+    }
+  }
+
+  // Fallback for minimal mesh-only glTF JSON lacking scene/nodes references
+  if (!visitedMeshViaNodes) {
+    const ident = mat4Identity();
+    for (const boxes of meshBoxes) {
+      for (const b of boxes) {
+        expandTransformedBox(ident, b);
       }
     }
   }
 
-  let bbox = null;
-  if ([minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) {
-    const rawW = Math.max(0.01, maxX - minX);
-    const rawH = Math.max(0.01, maxY - minY);
-    const rawD = Math.max(0.01, maxZ - minZ);
-    // Preserve native 1:1 model dimensions without autoscaling objects placed into lands
-    bbox = {
-      width: Math.round(Math.max(0.01, rawW) * 10000) / 10000,
-      height: Math.round(Math.max(0.01, rawH) * 10000) / 10000,
-      depth: Math.round(Math.max(0.01, rawD) * 10000) / 10000
-    };
-  }
+  const bbox = finalizeBbox(minX, minY, minZ, maxX, maxY, maxZ);
 
   return {
     triangleCount,
     textureCount: Math.max(textures.length, images.length),
     hasDraco: extensionsUsed.includes('KHR_draco_mesh_compression'),
     hasMeshopt: extensionsUsed.includes('EXT_meshopt_compression'),
-    ...(bbox ? { bbox } : {})
+    ...(bbox ? { bbox, bboxUnits: 'native-meters' } : {})
   };
+}
+
+function inspectObjStats(text) {
+  let triangleCount = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (!line || line[0] === '#') continue;
+    if (line[0] === 'v' && (line[1] === ' ' || line[1] === '\t')) {
+      const parts = line.split(/\s+/);
+      if (parts.length >= 4) {
+        const x = Number(parts[1]);
+        const y = Number(parts[2]);
+        const z = Number(parts[3]);
+        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (z < minZ) minZ = z;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+          if (z > maxZ) maxZ = z;
+        }
+      }
+    } else if (line[0] === 'f' && (line[1] === ' ' || line[1] === '\t')) {
+      triangleCount += 1;
+    }
+  }
+
+  const bbox = finalizeBbox(minX, minY, minZ, maxX, maxY, maxZ);
+  return {
+    triangleCount,
+    ...(bbox ? { bbox, bboxUnits: 'native-meters' } : {})
+  };
+}
+
+function inspectStlStats(bytes) {
+  let triangleCount = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  const headText = new TextDecoder('utf-8', { fatal: false }).decode(
+    bytes.subarray(0, Math.min(512, bytes.length))
+  );
+  let isBinary = false;
+  if (bytes.length >= 134) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const binTriCount = view.getUint32(80, true);
+    const expectedLen = 84 + binTriCount * 50;
+    const looksAscii =
+      headText.trimStart().toLowerCase().startsWith('solid') &&
+      /facet\s+normal/i.test(headText) &&
+      /vertex\s+/i.test(headText);
+    if (!looksAscii && binTriCount >= 1 && bytes.length >= expectedLen && bytes.length <= expectedLen + 64) {
+      isBinary = true;
+      triangleCount = binTriCount;
+      const limit = Math.min(binTriCount, MAX_CUSTOM_MODEL_TRIANGLES + 1);
+      for (let i = 0; i < limit; i += 1) {
+        const base = 84 + i * 50;
+        for (let v = 0; v < 3; v += 1) {
+          const off = base + 12 + v * 12;
+          const x = view.getFloat32(off, true);
+          const y = view.getFloat32(off + 4, true);
+          const z = view.getFloat32(off + 8, true);
+          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (z < minZ) minZ = z;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+            if (z > maxZ) maxZ = z;
+          }
+        }
+      }
+    }
+  }
+
+  if (!isBinary) {
+    const fullText = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    triangleCount = (fullText.match(/facet\s+normal/gi) || []).length;
+    const vertRe = /vertex\s+([-+\d.eE]+)\s+([-+\d.eE]+)\s+([-+\d.eE]+)/gi;
+    let m;
+    while ((m = vertRe.exec(fullText)) !== null) {
+      const x = Number(m[1]);
+      const y = Number(m[2]);
+      const z = Number(m[3]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
+      }
+    }
+  }
+
+  const bbox = finalizeBbox(minX, minY, minZ, maxX, maxY, maxZ);
+  return {
+    triangleCount,
+    ...(bbox ? { bbox, bboxUnits: 'native-meters' } : {})
+  };
+}
+
+const PLY_TYPE_SIZE = {
+  char: 1,
+  int8: 1,
+  uchar: 1,
+  uint8: 1,
+  short: 2,
+  int16: 2,
+  ushort: 2,
+  uint16: 2,
+  int: 4,
+  int32: 4,
+  uint: 4,
+  uint32: 4,
+  float: 4,
+  float32: 4,
+  double: 8,
+  float64: 8
+};
+
+function readPlyScalar(view, offset, type, littleEndian) {
+  switch (type) {
+    case 'char':
+    case 'int8':
+      return view.getInt8(offset);
+    case 'uchar':
+    case 'uint8':
+      return view.getUint8(offset);
+    case 'short':
+    case 'int16':
+      return view.getInt16(offset, littleEndian);
+    case 'ushort':
+    case 'uint16':
+      return view.getUint16(offset, littleEndian);
+    case 'int':
+    case 'int32':
+      return view.getInt32(offset, littleEndian);
+    case 'uint':
+    case 'uint32':
+      return view.getUint32(offset, littleEndian);
+    case 'double':
+    case 'float64':
+      return view.getFloat64(offset, littleEndian);
+    case 'float':
+    case 'float32':
+    default:
+      return view.getFloat32(offset, littleEndian);
+  }
+}
+
+function inspectPlyStats(bytes) {
+  const headerScanLen = Math.min(bytes.length, 65536);
+  const headerSlice = new TextDecoder('utf-8', { fatal: false }).decode(
+    bytes.subarray(0, headerScanLen)
+  );
+  const endMatch = /end_header\r?\n/i.exec(headerSlice);
+  if (!endMatch) {
+    return { triangleCount: 0 };
+  }
+  const headerText = headerSlice.slice(0, endMatch.index);
+  const dataOffset = new TextEncoder().encode(headerSlice.slice(0, endMatch.index + endMatch[0].length)).length;
+
+  let format = 'ascii';
+  let vertexCount = 0;
+  let triangleCount = 0;
+  let currentElement = '';
+  const vertexProps = [];
+
+  for (const rawLine of headerText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('comment')) continue;
+    const parts = line.split(/\s+/);
+    if (parts[0] === 'format' && parts[1]) {
+      format = parts[1].toLowerCase();
+    } else if (parts[0] === 'element' && parts[1]) {
+      currentElement = parts[1].toLowerCase();
+      if (currentElement === 'vertex') vertexCount = Number(parts[2] || 0);
+      if (currentElement === 'face') triangleCount = Number(parts[2] || 0);
+    } else if (parts[0] === 'property' && currentElement === 'vertex' && parts[1] !== 'list') {
+      const type = String(parts[1] || '').toLowerCase();
+      const name = String(parts[2] || '').toLowerCase();
+      vertexProps.push({ type, name, size: PLY_TYPE_SIZE[type] || 0 });
+    }
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  const xIdx = vertexProps.findIndex((p) => p.name === 'x');
+  const yIdx = vertexProps.findIndex((p) => p.name === 'y');
+  const zIdx = vertexProps.findIndex((p) => p.name === 'z');
+
+  if (vertexCount > 0 && xIdx >= 0 && yIdx >= 0 && zIdx >= 0) {
+    const safeVertCount = Math.min(vertexCount, 500000);
+    if (format === 'ascii') {
+      const bodyText = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(dataOffset));
+      const lines = bodyText.split(/\r?\n/);
+      let parsedVerts = 0;
+      for (let i = 0; i < lines.length && parsedVerts < safeVertCount; i += 1) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const cols = line.split(/\s+/);
+        if (cols.length <= Math.max(xIdx, yIdx, zIdx)) continue;
+        const x = Number(cols[xIdx]);
+        const y = Number(cols[yIdx]);
+        const z = Number(cols[zIdx]);
+        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (z < minZ) minZ = z;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+          if (z > maxZ) maxZ = z;
+        }
+        parsedVerts += 1;
+      }
+    } else if (
+      (format === 'binary_little_endian' || format === 'binary_big_endian') &&
+      vertexProps.every((p) => p.size > 0)
+    ) {
+      const littleEndian = format === 'binary_little_endian';
+      let stride = 0;
+      const offsets = [];
+      for (const p of vertexProps) {
+        offsets.push(stride);
+        stride += p.size;
+      }
+      if (stride > 0 && dataOffset + stride <= bytes.length) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const maxPossible = Math.min(safeVertCount, Math.floor((bytes.length - dataOffset) / stride));
+        for (let i = 0; i < maxPossible; i += 1) {
+          const base = dataOffset + i * stride;
+          const x = readPlyScalar(view, base + offsets[xIdx], vertexProps[xIdx].type, littleEndian);
+          const y = readPlyScalar(view, base + offsets[yIdx], vertexProps[yIdx].type, littleEndian);
+          const z = readPlyScalar(view, base + offsets[zIdx], vertexProps[zIdx].type, littleEndian);
+          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (z < minZ) minZ = z;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+            if (z > maxZ) maxZ = z;
+          }
+        }
+      }
+    }
+  }
+
+  const bbox = finalizeBbox(minX, minY, minZ, maxX, maxY, maxZ);
+  return {
+    triangleCount,
+    ...(bbox ? { bbox, bboxUnits: 'native-meters' } : {})
+  };
+}
+
+/**
+ * Compensates legacy custom-3D DB records whose persisted `scale` was calibrated under the
+ * pre-1:1 `autoFit` rule (which shrank models > 3.2m or < 0.28m to 1.4m before applying scale).
+ * Newly placed models carry `bboxUnits: 'native-meters'` and ALWAYS return 1 (zero autoscaling).
+ */
+export function computeLegacyAutoFitCompensation(meshStats, nativeSize) {
+  if (!meshStats || !nativeSize || meshStats.bboxUnits === 'native-meters') return 1;
+  const nw = Number(nativeSize.x ?? nativeSize.width);
+  const nh = Number(nativeSize.y ?? nativeSize.height);
+  const nd = Number(nativeSize.z ?? nativeSize.depth);
+  if (![nw, nh, nd].every((v) => Number.isFinite(v) && v > 0)) return 1;
+
+  const nativeMax = Math.max(nw, nh, nd);
+  if (!(nativeMax > 3.2 || nativeMax < 0.28)) return 1;
+
+  const stored = meshStats.bbox;
+  if (!stored || typeof stored !== 'object') return 1;
+  const sw = Number(stored.width);
+  const sh = Number(stored.height);
+  const sd = Number(stored.depth);
+  if (![sw, sh, sd].every((v) => Number.isFinite(v) && v > 0)) return 1;
+
+  const storedMax = Math.max(sw, sh, sd);
+  if (Math.abs(storedMax - 1.4) > 0.03 || Math.abs(nativeMax - storedMax) <= 0.1) return 1;
+
+  // Confirm aspect ratios match so only genuine legacy 1.4/maxDim autoFit records are compensated
+  const tol = 0.06;
+  if (
+    Math.abs(sw / storedMax - nw / nativeMax) > tol ||
+    Math.abs(sh / storedMax - nh / nativeMax) > tol ||
+    Math.abs(sd / storedMax - nd / nativeMax) > tol
+  ) {
+    return 1;
+  }
+  return 1.4 / nativeMax;
 }
 
 export function inspectCustomModelStats(format, bytes) {
@@ -217,21 +693,11 @@ export function inspectCustomModelStats(format, bytes) {
     }
   } else if (format === 'obj') {
     const text = new TextDecoder().decode(bytes);
-    const faces = text.match(/^\s*f\s+.+/gm) || [];
-    stats.triangleCount = faces.length;
+    Object.assign(stats, inspectObjStats(text));
   } else if (format === 'stl') {
-    const text = new TextDecoder().decode(bytes.subarray(0, Math.min(256, bytes.length)));
-    if (text.trimStart().toLowerCase().startsWith('solid')) {
-      const fullText = new TextDecoder().decode(bytes);
-      stats.triangleCount = (fullText.match(/facet\s+normal/gi) || []).length;
-    } else if (bytes.length >= 84) {
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      stats.triangleCount = view.getUint32(80, true);
-    }
+    Object.assign(stats, inspectStlStats(bytes));
   } else if (format === 'ply') {
-    const head = new TextDecoder().decode(bytes.subarray(0, Math.min(1024, bytes.length)));
-    const faceMatch = head.match(/element\s+face\s+(\d+)/i);
-    if (faceMatch) stats.triangleCount = Number(faceMatch[1] || 0);
+    Object.assign(stats, inspectPlyStats(bytes));
   }
 
   if (stats.triangleCount > MAX_CUSTOM_MODEL_TRIANGLES) {
@@ -260,9 +726,9 @@ export function validateAnchorOffset(raw = {}, { parcelVolume = null } = {}) {
   if (![dx, dy, dz, yaw].every(Number.isFinite)) {
     return { error: 'anchorOffset coordinates (dx, dy, dz, yaw) must be finite numbers.', offset: null };
   }
-  if (hasScale && (!Number.isFinite(scale) || scale < 0.1 || scale > 60)) {
+  if (hasScale && (!Number.isFinite(scale) || scale < 0.001 || scale > 60)) {
     return {
-      error: 'Artwork scale must be a finite number between 0.1 and 60.',
+      error: 'Artwork scale must be a finite number between 0.001 and 60.',
       offset: null
     };
   }
@@ -396,7 +862,7 @@ export function extractCustomModelInput(input = {}) {
   }
 
   const mimeType = FORMAT_MIME_TYPES[effectiveFormat] || 'application/octet-stream';
-  const scale = Number.isFinite(rawScale) ? Math.min(20, Math.max(0.05, rawScale)) : 1;
+  const scale = Number.isFinite(rawScale) ? Math.min(60, Math.max(0.001, rawScale)) : 1;
   const rotationY = Number.isFinite(rawRotY) ? rawRotY : 0;
 
   return {

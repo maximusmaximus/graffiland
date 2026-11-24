@@ -101,7 +101,7 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
 
   // Never autoscale objects placed into lands: strictly preserve native 1:1 size × explicit userScale
-  const scale = Math.max(0.05, Number(userScale.toFixed(5)));
+  const scale = Math.max(0.001, Number(userScale.toFixed(5)));
   const renderedH = safeSizeY * scale;
   let altitudeMeters = baseAlt + anchorDy;
 

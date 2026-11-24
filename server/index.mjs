@@ -140,6 +140,7 @@ import {
   getLandSettingsInternal,
   getMyLandsWorkspace,
   getPublicParcelDetail,
+  inspectParcelFitForModel,
   getSignatureRequest,
   handleMcpJsonRpc,
   isUserLandOwner,
@@ -1502,7 +1503,19 @@ export function createAppServer(serverOptions = {}) {
   app.post('/api/models/validate-url', requireAuth, async (req, res) => {
     const modelUrl = String(req.body?.modelUrl || req.body?.url || '').trim();
     const formatHint = String(req.body?.modelFormat || req.body?.format || '').trim();
+    const parcelId = String(req.body?.parcelId || '').trim();
+    const modelScale = Number(req.body?.modelScale ?? req.body?.scale ?? 1);
+    const anchorOffset = req.body?.anchorOffset && typeof req.body.anchorOffset === 'object' ? req.body.anchorOffset : {};
     const checked = await validate3dModelUrl(modelUrl, { formatHint });
+    let landFit = null;
+    if (checked.valid && parcelId) {
+      landFit = await inspectParcelFitForModel(chatDb, {
+        parcelId,
+        bbox: checked.stats?.bbox || null,
+        modelScale: Number.isFinite(modelScale) && modelScale > 0 ? modelScale : 1,
+        anchorOffset
+      });
+    }
     const payload = {
       valid: Boolean(checked.valid),
       error: checked.error || null,
@@ -1511,7 +1524,8 @@ export function createAppServer(serverOptions = {}) {
       byteLength: checked.byteLength || 0,
       stats: checked.stats || null,
       suggestedTitle: checked.suggestedTitle || '',
-      modelUrl
+      modelUrl,
+      ...(landFit ? { landFit } : {})
     };
     return res.status(checked.valid ? 200 : 400).json(payload);
   });

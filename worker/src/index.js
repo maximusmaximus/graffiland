@@ -110,6 +110,7 @@ import {
   getPublicParcelDetail,
   getSignatureRequest,
   handleMcpJsonRpc,
+  inspectParcelFitForModel,
   isUserLandOwner,
   isUserParcelContributor,
   listLandContributorsAndEligible,
@@ -2086,7 +2087,19 @@ export default {
       const body = await request.json().catch(() => ({}));
       const modelUrl = String(body?.modelUrl || body?.url || '').trim();
       const formatHint = String(body?.modelFormat || body?.format || '').trim();
+      const parcelId = String(body?.parcelId || '').trim();
+      const modelScale = Number(body?.modelScale ?? body?.scale ?? 1);
+      const anchorOffset = body?.anchorOffset && typeof body.anchorOffset === 'object' ? body.anchorOffset : {};
       const checked = await validate3dModelUrl(modelUrl, { formatHint });
+      let landFit = null;
+      if (checked.valid && parcelId) {
+        landFit = await inspectParcelFitForModel(d1Adapter, {
+          parcelId,
+          bbox: checked.stats?.bbox || null,
+          modelScale: Number.isFinite(modelScale) && modelScale > 0 ? modelScale : 1,
+          anchorOffset
+        });
+      }
       return jsonResponse(
         {
           valid: Boolean(checked.valid),
@@ -2096,7 +2109,8 @@ export default {
           byteLength: checked.byteLength || 0,
           stats: checked.stats || null,
           suggestedTitle: checked.suggestedTitle || '',
-          modelUrl
+          modelUrl,
+          ...(landFit ? { landFit } : {})
         },
         checked.valid ? 200 : 400,
         request

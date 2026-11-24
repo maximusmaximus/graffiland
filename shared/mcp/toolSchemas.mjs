@@ -21,7 +21,7 @@ export const MCP_TOOLS = [
   {
     name: 'put_sculpture_on_land',
     description:
-      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
+      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Strict 1 unit = 1 meter scale (zero autoscaling): placements exceeding the land W×D×H bounds or overlapping existing artworks are rejected (409) with exact maxSafeScale and parcelDimensions. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,7 +47,7 @@ export const MCP_TOOLS = [
   {
     name: 'load_3d_model_on_land',
     description:
-      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Strict 1 unit = 1 meter scale (no autoscaling): models larger than the land W×D×H boundary are rejected (409) with exact maxSafeScale. Call validate_3d_model_url with parcelId first to pre-check fit. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -74,12 +74,15 @@ export const MCP_TOOLS = [
   {
     name: 'validate_3d_model_url',
     description:
-      'Validate an external https:// or ipfs:// 3D model URL before uploading, checking format support (.glb/.gltf/.obj/.stl/.ply), 4 MB size limit, 150k triangle budget, and 8-texture mobile WebGL limit.',
+      'Validate an external https:// or ipfs:// 3D model URL before uploading, checking format support (.glb/.gltf/.obj/.stl/.ply), 4 MB size limit, 150k triangle budget, 8-texture mobile WebGL limit, exact native bounding box in meters, and optional fit against a target parcelId (returning landFit + maxSafeScale).',
     inputSchema: {
       type: 'object',
       properties: {
         modelUrl: { type: 'string' },
-        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] }
+        modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
+        parcelId: { type: 'string' },
+        modelScale: { type: 'number' },
+        anchorOffset: { type: 'object' }
       },
       required: ['modelUrl']
     }

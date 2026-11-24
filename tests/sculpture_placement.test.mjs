@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 import {
   computeItemLocalBox,
   computeMaxFeasibleScale,
+  evaluateModelFitInParcel,
   resolveSculpturePlacement
 } from '../shared/sculpturePlacement.mjs';
 import { computeSculptureMapTransform } from '../client/src/utils/map3dSculptureLayer.js';
@@ -153,5 +154,26 @@ describe('3D Artwork Transform, Scaling & Non-Intersecting Push Solver', () => {
     );
     assert.ok(tHalf.scale < tOne.scale && tOne.scale < tTwo.scale, 'Map scale must increase monotonically with user scale');
     assert.ok(tTwo.renderedSize.x <= vol.widthMeters + 0.01 && tTwo.renderedSize.y <= vol.heightMeters + 0.01);
+  });
+
+  test('evaluateModelFitInParcel rejects oversized cm-unit models with exact sub-0.1 maxSafeScale and enforces sibling spacing', () => {
+    const vol = { widthMeters: 10, depthMeters: 10, heightMeters: 8, centerLat: 37.77, centerLng: -122.42 };
+    // Model exported in centimeters (180×200×160 units -> 200m tall at 1x) inside 10×10×8m land
+    const cmFit = evaluateModelFitInParcel({
+      parcelVolume: vol,
+      bbox: { width: 180, height: 200, depth: 160 },
+      modelScale: 1
+    });
+    assert.equal(cmFit.fits, false);
+    assert.equal(cmFit.reason, 'exceeds_land_bounds');
+    assert.ok(cmFit.maxSafeScale >= 0.035 && cmFit.maxSafeScale <= 0.04, `Expected maxSafeScale ~0.0399, got ${cmFit.maxSafeScale}`);
+
+    // Applying suggested maxSafeScale fits strictly inside the land
+    const fixedFit = evaluateModelFitInParcel({
+      parcelVolume: vol,
+      bbox: { width: 180, height: 200, depth: 160 },
+      modelScale: cmFit.maxSafeScale
+    });
+    assert.equal(fixedFit.fits, true);
   });
 });

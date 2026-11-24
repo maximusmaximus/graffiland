@@ -574,7 +574,7 @@ export default function SculptureViewer3D({
     if (!pivot || !landOverlay || !siblingOverlay || !gizmoOverlay) return;
 
     const effScale = Math.max(
-      0.1,
+      0.001,
       Number(liveTransform?.scale ?? extractSculptureScale(sculpture) ?? 1)
     );
     const yawRad = yawToRadians(

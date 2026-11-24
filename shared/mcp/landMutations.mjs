@@ -32,6 +32,8 @@ import {
 import {
   buildPlacementItemFromSculpture,
   computeMaxFeasibleScale,
+  evaluateModelFitInParcel,
+  extractSculptureBaseDimensions,
   extractSculptureScale,
   normalizeBaseDimensions,
   resolveParcelVolumeForPlacement,
@@ -267,6 +269,105 @@ export async function listLandsWithCurations(db) {
 
   parcels.sort((a, b) => (b.sculptureCount - a.sculptureCount) || (b.latestAt || '').localeCompare(a.latestAt || ''));
   return parcels;
+}
+
+async function loadParcelVolumeAndSiblings(db, { parcelId, geohash = '', bounds = null }) {
+  const cleanId = normalizeParcelId(parcelId);
+  const vr = await db
+    .get('SELECT * FROM land_volumes WHERE parcel_id = ?', [cleanId])
+    .catch(() => null);
+  const fallbackGeo = geohash || cleanId.replace(/^GLAND-/, '').toLowerCase();
+  const fallbackBounds = bounds || (fallbackGeo ? decodeGeohashBounds(fallbackGeo) : null);
+
+  let parcelVolume = null;
+  if (vr) {
+    parcelVolume = resolveParcelVolumeForPlacement({
+      volume: {
+        parcelId: cleanId,
+        geohash: fallbackGeo,
+        centerLat: Number(vr.center_lat),
+        centerLng: Number(vr.center_lng),
+        widthMeters: Number(vr.width_meters),
+        depthMeters: Number(vr.depth_meters),
+        heightMeters: Number(vr.height_meters),
+        rotationDeg: Number(vr.rotation_deg || 0),
+        baseAltitudeM: Number(vr.base_altitude_m || 0)
+      }
+    });
+  } else if (fallbackBounds) {
+    parcelVolume = resolveParcelVolumeForPlacement({
+      volume: buildDefaultVolumeFromBounds(fallbackBounds, cleanId, fallbackGeo)
+    });
+  } else {
+    parcelVolume = resolveParcelVolumeForPlacement({});
+  }
+
+  const siblingRows = await db
+    .all(
+      `SELECT s.id, s.title, s.lat, s.lng, s.voxels_json, s.voxel_count,
+        m.model_format AS custom_model_format, m.scale AS custom_model_scale,
+        a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+        a.mesh_stats_json AS mesh_stats_json
+       FROM sculptures s
+       LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+       LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+       WHERE s.parcel_id = ? AND s.hidden = 0`,
+      [cleanId]
+    )
+    .catch(() => []);
+
+  const existingItems = (siblingRows || []).map((row) => {
+    const parsedStats = (() => {
+      try {
+        const p = JSON.parse(row.mesh_stats_json || '{}');
+        return p && typeof p === 'object' ? p : {};
+      } catch {
+        return {};
+      }
+    })();
+    return buildPlacementItemFromSculpture(
+      {
+        id: row.id,
+        title: row.title,
+        lat: row.lat,
+        lng: row.lng,
+        modelType: row.custom_model_format ? 'custom-3d' : 'voxel',
+        customModel: row.custom_model_format
+          ? { format: row.custom_model_format, scale: Number(row.custom_model_scale || 1) }
+          : null,
+        voxels: JSON.parse(row.voxels_json || '[]'),
+        voxelCount: Number(row.voxel_count || 0),
+        meshStats: parsedStats,
+        anchorOffset: {
+          dx: Number(row.anchor_dx || 0),
+          dy: Number(row.anchor_dy || 0),
+          dz: Number(row.anchor_dz || 0),
+          yaw: Number(row.anchor_yaw || 0)
+        }
+      },
+      parcelVolume
+    );
+  });
+
+  return { parcelVolume, siblingRows: siblingRows || [], existingItems };
+}
+
+export async function inspectParcelFitForModel(
+  db,
+  { parcelId, bbox, modelScale = 1, anchorOffset = {} }
+) {
+  const cleanId = normalizeParcelId(parcelId);
+  if (!cleanId) return null;
+  const { parcelVolume, existingItems } = await loadParcelVolumeAndSiblings(db, {
+    parcelId: cleanId
+  });
+  return evaluateModelFitInParcel({
+    parcelVolume,
+    bbox,
+    modelScale,
+    anchorOffset,
+    existingItems
+  });
 }
 
 async function resolveCustomModelBytes(customModel) {
@@ -788,6 +889,13 @@ export async function applyUpdateSculpture(
     }
   }
 
+  if (modelExtract.provided && activeCustomModel && !activeCustomModel.stats?.bbox) {
+    throw new McpServiceError(
+      'Could not measure 3D model bounding box dimensions — ensure POSITION bounds or valid vertices are present so land-boundary fit can be verified.',
+      400
+    );
+  }
+
   if (activeCustomModel && rawRequestedScale !== undefined) {
     activeCustomModel.scale = targetScale;
   }
@@ -795,7 +903,11 @@ export async function applyUpdateSculpture(
   // Enforce land bounds + non-intersecting collision-push against other placed artworks on this parcel
   let pushedSiblings = [];
   let resolvedPlacement = null;
-  if (transformProvided && sculptureRow.parcel_id && parcelVolume) {
+  if (
+    (transformProvided || modelExtract.provided || payload.voxels !== undefined) &&
+    sculptureRow.parcel_id &&
+    parcelVolume
+  ) {
     const siblingRows = await db
       .all(
         `SELECT s.id, s.title, s.lat, s.lng, s.voxels_json, s.voxel_count,
@@ -813,7 +925,7 @@ export async function applyUpdateSculpture(
     const effectiveTargetDims =
       requestedBaseDims ||
       normalizeBaseDimensions(activeCustomModel?.stats?.bbox) ||
-      normalizeBaseDimensions(existingMeshStats?.bbox) ||
+      (!modelExtract.provided ? normalizeBaseDimensions(existingMeshStats?.bbox) : null) ||
       null;
 
     const placementItems = (siblingRows || []).map((row) => {
@@ -912,9 +1024,25 @@ export async function applyUpdateSculpture(
           },
           items: placementItems
         });
+        const targetItem = placementItems.find((it) => it.id === sculptureRow.id);
+        const nativeDims = targetItem
+          ? {
+              width: targetItem.baseWidth,
+              height: targetItem.baseHeight,
+              depth: targetItem.baseDepth
+            }
+          : effectiveTargetDims;
         throw new McpServiceError(placement.message, 409, {
           code: placement.reason,
           maxSafeScale,
+          suggestedScale: maxSafeScale,
+          parcelDimensions: {
+            widthMeters: Number(parcelVolume.widthMeters),
+            depthMeters: Number(parcelVolume.depthMeters),
+            heightMeters: Number(parcelVolume.heightMeters)
+          },
+          modelNativeDimensions: nativeDims,
+          requestedScale: targetScale,
           collidingIds: placement.collidingIds || []
         });
       }
@@ -1182,8 +1310,14 @@ export async function applyCreateSculptureOnLand(
   let activeCustomModel = null;
   let anchorOffset = { dx: 0, dy: 0, dz: 0, yaw: 0 };
 
+  const { parcelVolume, existingItems } = await loadParcelVolumeAndSiblings(db, {
+    parcelId: parcelCtx.parcelId,
+    geohash: parcelCtx.geohash,
+    bounds: parcelCtx.bounds
+  });
+
   if (payload.anchorOffset !== undefined) {
-    const offRes = validateAnchorOffset(payload.anchorOffset);
+    const offRes = validateAnchorOffset(payload.anchorOffset, { parcelVolume });
     if (offRes.error) throw new McpServiceError(offRes.error, 400);
     anchorOffset = offRes.offset;
   }
@@ -1196,6 +1330,12 @@ export async function applyCreateSculptureOnLand(
     title = checkedMeta.title;
     description = checkedMeta.description;
     activeCustomModel = await resolveCustomModelBytes(modelExtract.customModel);
+    if (!activeCustomModel?.stats?.bbox) {
+      throw new McpServiceError(
+        'Could not measure 3D model bounding box dimensions — ensure POSITION bounds or valid vertices are present so land-boundary fit can be verified.',
+        400
+      );
+    }
   } else {
     const validation = validatePublishPayload({
       title: payload.title,
@@ -1211,22 +1351,17 @@ export async function applyCreateSculptureOnLand(
     cleanVoxels = validation.cleanVoxels;
   }
 
-  const parcelVolRow = await db
-    .get('SELECT center_lat, center_lng FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId])
-    .catch(() => null);
   const defaultLat =
-    parcelVolRow &&
-    Number.isFinite(Number(parcelVolRow.center_lat)) &&
-    encodeGeohash(Number(parcelVolRow.center_lat), Number(parcelVolRow.center_lng), 8).toUpperCase() ===
+    Number.isFinite(Number(parcelVolume?.centerLat)) &&
+    encodeGeohash(Number(parcelVolume.centerLat), Number(parcelVolume.centerLng), 8).toUpperCase() ===
       parcelCtx.geohash.toUpperCase()
-      ? Number(parcelVolRow.center_lat)
+      ? Number(parcelVolume.centerLat)
       : parcelCtx.bounds.center[0];
   const defaultLng =
-    parcelVolRow &&
-    Number.isFinite(Number(parcelVolRow.center_lng)) &&
-    encodeGeohash(Number(parcelVolRow.center_lat), Number(parcelVolRow.center_lng), 8).toUpperCase() ===
+    Number.isFinite(Number(parcelVolume?.centerLng)) &&
+    encodeGeohash(Number(parcelVolume.centerLat), Number(parcelVolume.centerLng), 8).toUpperCase() ===
       parcelCtx.geohash.toUpperCase()
-      ? Number(parcelVolRow.center_lng)
+      ? Number(parcelVolume.centerLng)
       : parcelCtx.bounds.center[1];
 
   const hasPayloadLat = payload.lat !== undefined && payload.lat !== null && payload.lat !== '';
@@ -1248,15 +1383,120 @@ export async function applyCreateSculptureOnLand(
     );
   }
 
+  const sculptureId = globalThis.crypto.randomUUID();
+
+  // Strict land-boundary & non-overlap guardrail BEFORE IPFS pin, chain mint, or DB write
+  let targetScale = extractSculptureScale({
+    scale:
+      payload.scale !== undefined
+        ? payload.scale
+        : payload.anchorOffset?.scale !== undefined
+        ? payload.anchorOffset.scale
+        : payload.modelScale !== undefined
+        ? payload.modelScale
+        : activeCustomModel?.scale ?? 1
+  });
+  if (activeCustomModel) {
+    activeCustomModel.scale = targetScale;
+  }
+
+  const candidateNativeDims = activeCustomModel
+    ? normalizeBaseDimensions(activeCustomModel.stats?.bbox)
+    : extractSculptureBaseDimensions({ voxels: cleanVoxels });
+
+  const candidateItem = buildPlacementItemFromSculpture(
+    {
+      id: sculptureId,
+      title,
+      lat,
+      lng,
+      modelType: activeCustomModel ? 'custom-3d' : 'voxel',
+      customModel: activeCustomModel
+        ? { format: activeCustomModel.format, scale: targetScale }
+        : null,
+      voxels: cleanVoxels,
+      voxelCount: cleanVoxels.length,
+      meshStats: activeCustomModel?.stats || {},
+      anchorOffset: { ...anchorOffset, scale: targetScale }
+    },
+    parcelVolume,
+    candidateNativeDims
+  );
+
+  const placementItems = [...existingItems, candidateItem];
+  const placement = resolveSculpturePlacement({
+    parcelVolume,
+    targetId: sculptureId,
+    targetTransform: {
+      dx: anchorOffset.dx,
+      dy: anchorOffset.dy,
+      dz: anchorOffset.dz,
+      yaw: anchorOffset.yaw,
+      scale: targetScale
+    },
+    items: placementItems
+  });
+
+  if (!placement.ok) {
+    const maxSafeScale = computeMaxFeasibleScale({
+      parcelVolume,
+      targetId: sculptureId,
+      targetTransform: {
+        dx: anchorOffset.dx,
+        dy: anchorOffset.dy,
+        dz: anchorOffset.dz,
+        yaw: anchorOffset.yaw
+      },
+      items: placementItems
+    });
+    const scaledDims = candidateNativeDims
+      ? {
+          widthMeters: Math.round(candidateNativeDims.width * targetScale * 1000) / 1000,
+          depthMeters: Math.round(candidateNativeDims.depth * targetScale * 1000) / 1000,
+          heightMeters: Math.round(candidateNativeDims.height * targetScale * 1000) / 1000
+        }
+      : null;
+    const fitGuidance =
+      maxSafeScale >= 0.001
+        ? ` Maximum safe scale for this land is ${maxSafeScale}×.`
+        : ' Object is too large even at minimum scale (0.001×) — re-export smaller in meters.';
+    throw new McpServiceError(`${placement.message}${fitGuidance}`, 409, {
+      code: placement.reason,
+      maxSafeScale,
+      suggestedScale: maxSafeScale,
+      parcelDimensions: {
+        widthMeters: Number(parcelVolume.widthMeters),
+        depthMeters: Number(parcelVolume.depthMeters),
+        heightMeters: Number(parcelVolume.heightMeters)
+      },
+      modelNativeDimensions: candidateNativeDims,
+      scaledDimensions: scaledDims,
+      requestedScale: targetScale,
+      collidingIds: placement.collidingIds || []
+    });
+  }
+
+  anchorOffset = {
+    dx: placement.target.dx,
+    dy: placement.target.dy,
+    dz: placement.target.dz,
+    yaw: placement.target.yaw,
+    scale: placement.target.scale
+  };
+  targetScale = placement.target.scale;
+  if (activeCustomModel) {
+    activeCustomModel.scale = targetScale;
+  }
+  const pushedSiblings = placement.pushedSiblings || [];
+
   const seedSculpture = parcelCtx.visibleRows[0] || null;
   const seedPol = seedSculpture ? JSON.parse(seedSculpture.pol_json || '{}') : {};
   const verticalBounds = activeCustomModel
-    ? { minY: 0, maxY: 1.5 }
+    ? { minY: 0, maxY: Math.round((candidateNativeDims?.height || 1.4) * targetScale * 1000) / 1000 }
     : computeVerticalBounds(cleanVoxels);
   const alt =
     Number.isFinite(Number(payload.altitude)) ? Number(payload.altitude) : seedSculpture?.altitude ?? null;
   const now = new Date().toISOString();
-  const sculptureId = globalThis.crypto.randomUUID();
   const parcelBytes32 = ethers.keccak256(ethers.toUtf8Bytes(parcelCtx.parcelId));
   const proofHash = ethers.keccak256(
     ethers.toUtf8Bytes(
@@ -1395,7 +1635,9 @@ export async function applyCreateSculptureOnLand(
     parcelId: parcelCtx.parcelId,
     revNum: 1,
     anchorOffset,
-    meshStats: activeCustomModel?.stats || null,
+    meshStats: activeCustomModel?.stats
+      ? { ...activeCustomModel.stats, transformScale: targetScale }
+      : { transformScale: targetScale },
     editorUser: ownerUser,
     editorRole: 'mcp-agent',
     modelType: activeCustomModel ? 'custom-3d' : 'voxel',
@@ -1421,6 +1663,30 @@ export async function applyCreateSculptureOnLand(
         }
       : null
   });
+
+  if (pushedSiblings.length > 0) {
+    for (const sib of pushedSiblings) {
+      await db.run(
+        `INSERT INTO sculpture_anchors (
+          sculpture_id, parcel_id, dx, dy, dz, yaw, current_rev, last_erc4906_tx_hash, mesh_stats_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, '', '{}', ?)
+        ON CONFLICT(sculpture_id) DO UPDATE SET
+          dx = excluded.dx,
+          dy = excluded.dy,
+          dz = excluded.dz,
+          updated_at = excluded.updated_at`,
+        [
+          sib.id,
+          parcelCtx.parcelId,
+          Number(sib.dx || 0),
+          Number(sib.dy || 0),
+          Number(sib.dz || 0),
+          Number(sib.yaw || 0),
+          now
+        ]
+      );
+    }
+  }
 
   await db.run(
     `UPDATE land_parcels
@@ -1480,7 +1746,9 @@ export async function applyCreateSculptureOnLand(
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
     mint: mintResult,
-    ipfs: ipfsResult
+    ipfs: ipfsResult,
+    pushedSiblings,
+    placement
   };
 }
 
