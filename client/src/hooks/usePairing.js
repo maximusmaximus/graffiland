@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, API_BASE } from '../utils/api.js';
 import { getWsUrl } from '../utils/device.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 
 /**
  * Manages desktop WebSocket live-mirror pairing, robust MCP agent pairing lifecycle,
@@ -49,10 +50,16 @@ export function usePairing({
   const [mcpPairingsState, setMcpPairingsState] = useState({
     mcpActive: false,
     activePairing: null,
+    latestPairing: null,
+    needsRepair: false,
+    expiringSoon: false,
+    repairReason: '',
     pairings: []
   });
   const [mcpPairBusy, setMcpPairBusy] = useState(false);
   const [mcpPairNotice, setMcpPairNotice] = useState('');
+  const [repairNotice, setRepairNotice] = useState(null);
+  const notifiedRepairKeysRef = useRef(new Set());
   const [pendingSignatures, setPendingSignatures] = useState([]);
   const [signatureHistory, setSignatureHistory] = useState([]);
   const [pendingSigBusyId, setPendingSigBusyId] = useState('');
@@ -66,12 +73,41 @@ export function usePairing({
 
   const refreshMcpPairings = useCallback(async () => {
     if (!user?.id) {
-      setMcpPairingsState({ mcpActive: false, activePairing: null, pairings: [] });
+      setMcpPairingsState({
+        mcpActive: false,
+        activePairing: null,
+        latestPairing: null,
+        needsRepair: false,
+        expiringSoon: false,
+        repairReason: '',
+        pairings: []
+      });
       return null;
     }
     try {
       const res = await api.listMcpPairings();
       setMcpPairingsState(res);
+      if (res?.needsRepair || res?.expiringSoon) {
+        const code = res.latestPairing?.code || res.activePairing?.code || '';
+        const reason = res.needsRepair ? res.repairReason || 'expired' : 'expiring_soon';
+        const dedupeKey = `mcp:${reason}:${code}`;
+        const msg =
+          reason === 'expiring_soon'
+            ? `Your AI agent pairing (${code || 'MCP'}) expires soon — re-pair to stay connected.`
+            : `Your AI agent pairing (${code || 'MCP'}) ${
+                reason === 'disconnected' ? 'was disconnected' : 'expired'
+              } — tap Pair to re-pair.`;
+        setRepairNotice((prev) =>
+          prev && prev.kind === 'desktop' ? prev : { kind: 'mcp', reason, code, message: msg }
+        );
+        if (!notifiedRepairKeysRef.current.has(dedupeKey)) {
+          notifiedRepairKeysRef.current.add(dedupeKey);
+          notifySettingsSaved(`🔗 Re-pair needed: ${msg}`, { tone: 'warning', durationMs: 6000 });
+          showHintRef.current?.(`🔗 ${msg}`);
+        }
+      } else if (res?.mcpActive) {
+        setRepairNotice((prev) => (prev?.kind === 'mcp' ? null : prev));
+      }
       return res;
     } catch {
       return null;
@@ -262,6 +298,7 @@ export function usePairing({
             activePairCodeRef.current = msg.code || clean;
             setPairedCode(msg.code);
             setPairOpen(false);
+            setRepairNotice((prev) => (prev?.kind === 'desktop' ? null : prev));
             ws.send(JSON.stringify({ type: 'voxels_sync', voxels: voxelsRef.current }));
             onConnectionStateChangeRef.current?.({
               kind: 'desktop',
@@ -271,10 +308,28 @@ export function usePairing({
           } else if (msg.type === 'pair_error') {
             activePairCodeRef.current = '';
             setPairError(msg.error);
+            const errMsg = msg.error || 'Desktop pairing code expired or invalid — please re-pair.';
+            setRepairNotice({
+              kind: 'desktop',
+              reason: 'pair_error',
+              code: clean,
+              message: `${errMsg} Scan a fresh QR code on Desktop to re-pair.`
+            });
+            notifySettingsSaved(`🔗 Re-pair needed: ${errMsg}`, { tone: 'warning', durationMs: 6000 });
+            showHintRef.current?.(`🔗 ${errMsg}`);
           } else if (msg.type === 'pair_ended') {
             activePairCodeRef.current = '';
             hadDisconnectRef.current = true;
             setPairedCode('');
+            const endedMsg = 'Desktop pairing ended — scan QR or enter a new code to re-pair.';
+            setRepairNotice({
+              kind: 'desktop',
+              reason: 'pair_ended',
+              code: clean,
+              message: endedMsg
+            });
+            notifySettingsSaved(`🔗 ${endedMsg}`, { tone: 'warning', durationMs: 6000 });
+            showHintRef.current?.(`🔗 ${endedMsg}`);
             onConnectionStateChangeRef.current?.({
               kind: 'desktop',
               status: 'ended',
@@ -318,6 +373,16 @@ export function usePairing({
                 connectPairCode(clean, { isReconnect: true });
               }
             }, delay);
+          } else if (delay == null) {
+            const lostMsg = 'Desktop live pairing lost — scan QR or enter a new code to re-pair.';
+            setRepairNotice({
+              kind: 'desktop',
+              reason: 'reconnect_failed',
+              code: clean,
+              message: lostMsg
+            });
+            notifySettingsSaved(`🔗 ${lostMsg}`, { tone: 'warning', durationMs: 6000 });
+            showHintRef.current?.(`🔗 ${lostMsg}`);
           }
         }
       };
@@ -389,6 +454,7 @@ export function usePairing({
       const res = await api.createMcpPairing({ apiOrigin: API_BASE || window.location.origin });
       await refreshMcpPairings();
       const copied = res.ownerPrompt ? await copyToClipboard(res.ownerPrompt) : false;
+      setRepairNotice((prev) => (prev?.kind === 'mcp' ? null : prev));
       setMcpPairNotice(
         `Generated ${res.pairing?.code}${copied ? ' & copied full Owner MCP Prompt!' : ''}`
       );
@@ -520,6 +586,8 @@ export function usePairing({
     mcpPairBusy,
     mcpPairNotice,
     setMcpPairNotice,
+    repairNotice,
+    dismissRepairNotice: () => setRepairNotice(null),
     refreshMcpPairings,
     handleCreateMcpPairing,
     handleDisconnectMcpPairing,

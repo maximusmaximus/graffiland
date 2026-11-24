@@ -422,6 +422,165 @@ export async function syncAllExpiringLandNotifications(db, nowIso = new Date().t
   return syncExpiringLandNotifications(db, '', nowIso);
 }
 
+/**
+ * Emits a deduped notification when a user's MCP agent pairing has expired,
+ * was disconnected while an agent tried to use it, or is about to expire so they know to re-pair.
+ */
+export async function notifyMcpRepairNeeded(
+  db,
+  {
+    userSub,
+    code = '',
+    reason = 'expired', // 'expired' | 'disconnected' | 'expiring_soon'
+    agentName = '',
+    expiresAt = '',
+    remainingMs = 0
+  }
+) {
+  const cleanSub = String(userSub || '').trim();
+  const cleanCode = String(code || '').trim().toUpperCase();
+  if (!cleanSub) return null;
+  const label = String(agentName || '').trim() || cleanCode || 'your AI agent';
+
+  let title = `🔗 Re-pair needed: ${label} pairing expired`;
+  let message = `Your pairing (${cleanCode || label}) has expired. Open Pair to generate a fresh code and reconnect your agent.`;
+  let dedupeSuffix = `expired:${cleanCode || 'latest'}`;
+
+  if (reason === 'disconnected') {
+    title = `🔗 Re-pair needed: ${label} was disconnected`;
+    message = `${label} tried to act on your land using a disconnected pairing (${cleanCode || 'old code'}). Open Pair to generate a fresh pairing code.`;
+    dedupeSuffix = `disconnected:${cleanCode || 'latest'}`;
+  } else if (reason === 'expiring_soon') {
+    const remLabel = formatRemainingShort(Math.max(60000, Number(remainingMs || 0)));
+    title = `🔗 Pairing expires in ${remLabel} — re-pair soon`;
+    message = `Your active pairing with ${label} (${cleanCode}) expires in ${remLabel}. Open Pair to refresh your pairing code without interrupting your agent.`;
+    dedupeSuffix = `expiring:${cleanCode || 'latest'}`;
+  }
+
+  return createNotification(db, {
+    userSub: cleanSub,
+    category: 'land_activity',
+    severity: 'warning',
+    title,
+    message,
+    actionType: 'open_pair_mobile',
+    actionLabel: 'Re-pair Now',
+    meta: {
+      needsRepair: true,
+      repairReason: reason,
+      pairingCode: cleanCode,
+      agentName: String(agentName || '').trim(),
+      expiresAt: String(expiresAt || '')
+    },
+    dedupeKey: `repair:${dedupeSuffix}`,
+    ignorePrefs: true
+  }).catch(() => null);
+}
+
+/**
+ * Emits an actionable notification when a paired agent queues a land transaction
+ * awaiting the land holder's approval.
+ */
+export async function notifyPendingLandApproval(db, { userSub, request }) {
+  const cleanSub = String(userSub || '').trim();
+  if (!cleanSub || !request?.id) return null;
+  const landTitle = resolveLandDisplayName(
+    { customName: request.parcelName || request.landDisplayName || '' },
+    { defaultName: 'your land' }
+  );
+  const agentLabel = String(request.agentName || 'Your paired agent').trim();
+  const parcelUrl = request.parcelId ? `?parcel=${encodeURIComponent(request.parcelId)}` : '';
+  return createNotification(db, {
+    userSub: cleanSub,
+    category: 'land_activity',
+    severity: 'action',
+    title: `✍️ Approval needed: ${request.summaryTitle || 'Land Transaction'}`,
+    message: `${agentLabel} requested "${request.summaryTitle || request.action}" on "${landTitle}". Open the land view to approve or reject.`,
+    parcelId: request.parcelId || '',
+    sculptureId: request.sculptureId || '',
+    actionType: 'open_land_approval',
+    actionLabel: 'Review & Approve',
+    meta: {
+      requestId: request.id,
+      pairingCode: request.pairingCode || '',
+      action: request.action || '',
+      agentName: agentLabel,
+      landTitle,
+      parcelUrl,
+      expiresAt: request.expiresAt || ''
+    },
+    dedupeKey: `sigreq:${request.id}`,
+    ignorePrefs: true
+  }).catch(() => null);
+}
+
+/**
+ * Checks a user's MCP pairing health and notifies them when an active pairing is expiring
+ * within 2 hours or when their most recent pairing has expired and needs re-pairing.
+ */
+export async function syncPairingHealthNotifications(
+  db,
+  userSub = '',
+  nowIso = new Date().toISOString()
+) {
+  const cleanSub = String(userSub || '').trim();
+  if (!cleanSub) return { sentCount: 0 };
+  const parsedNow = Date.parse(nowIso);
+  const nowMs = Number.isFinite(parsedNow) ? parsedNow : Date.now();
+
+  const rows = await db
+    .all(
+      `SELECT code, status, agent_name, connected_at, expires_at
+       FROM mcp_pairings
+       WHERE owner_sub = ?
+       ORDER BY created_at DESC
+       LIMIT 6`,
+      [cleanSub]
+    )
+    .catch(() => []);
+
+  if (!rows || rows.length === 0) return { sentCount: 0 };
+
+  let sentCount = 0;
+  const activeConnected = rows.find(
+    (r) => r.status === 'connected' && Date.parse(String(r.expires_at || '')) > nowMs
+  );
+
+  if (activeConnected) {
+    const expMs = Date.parse(String(activeConnected.expires_at || ''));
+    const diffMs = expMs - nowMs;
+    if (Number.isFinite(diffMs) && diffMs > 0 && diffMs <= 2 * 60 * 60 * 1000) {
+      const n = await notifyMcpRepairNeeded(db, {
+        userSub: cleanSub,
+        code: activeConnected.code,
+        reason: 'expiring_soon',
+        agentName: activeConnected.agent_name,
+        expiresAt: activeConnected.expires_at,
+        remainingMs: diffMs
+      });
+      if (n) sentCount += 1;
+    }
+    return { sentCount };
+  }
+
+  // No active connected pairing — if the latest pairing expired (and wasn't manually replaced by a valid pending one), notify user to re-pair
+  const latest = rows[0];
+  const latestExpMs = Date.parse(String(latest?.expires_at || ''));
+  const latestExpired = Number.isFinite(latestExpMs) && latestExpMs <= nowMs;
+  if (latest && latest.status !== 'disconnected' && latestExpired) {
+    const n = await notifyMcpRepairNeeded(db, {
+      userSub: cleanSub,
+      code: latest.code,
+      reason: 'expired',
+      agentName: latest.agent_name,
+      expiresAt: latest.expires_at
+    });
+    if (n) sentCount += 1;
+  }
+
+  return { sentCount };
+}
+
 export async function listUserNotifications(
   db,
   userSub,
@@ -438,6 +597,7 @@ export async function listUserNotifications(
   }
 
   await syncExpiringLandNotifications(db, cleanSub);
+  await syncPairingHealthNotifications(db, cleanSub);
 
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 40));
   const rows = await db

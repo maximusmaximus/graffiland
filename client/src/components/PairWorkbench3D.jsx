@@ -6,6 +6,7 @@ import {
 } from '../../../shared/voxelStroke.mjs';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { getMobileLaunchUrl, getWsUrl } from '../utils/device.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -28,6 +29,8 @@ export default function PairWorkbench3D({ inModal = false }) {
   const [pairCode, setPairCode] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [mobileConnected, setMobileConnected] = useState(false);
+  const [needsPhoneRepair, setNeedsPhoneRepair] = useState(false);
+  const phoneWasConnectedRef = useRef(false);
   const [liveVoxels, setLiveVoxels] = useState(() => loadSavedPairVoxels());
   const [restoredFromLastSession, setRestoredFromLastSession] = useState(
     () => loadSavedPairVoxels().length > 0
@@ -68,11 +71,20 @@ export default function PairWorkbench3D({ inModal = false }) {
           });
           setQrDataUrl(qr);
         } else if (msg.type === 'pair_connected') {
+          phoneWasConnectedRef.current = true;
           setMobileConnected(true);
+          setNeedsPhoneRepair(false);
           setRestoredFromLastSession(false);
         } else if (msg.type === 'mobile_disconnected') {
           setMobileConnected(false);
           setLiveCursor(null);
+          if (phoneWasConnectedRef.current) {
+            setNeedsPhoneRepair(true);
+            notifySettingsSaved(
+              '🔗 Phone disconnected — scan the QR code or enter the Pair Code on your phone to re-pair.',
+              { tone: 'warning', durationMs: 6000 }
+            );
+          }
         } else if (msg.type === 'voxels_sync') {
           const incoming = Array.isArray(msg.voxels) ? msg.voxels : [];
           setLiveVoxels(incoming);
@@ -189,9 +201,35 @@ export default function PairWorkbench3D({ inModal = false }) {
             <span>Phone QR Pairing</span>
           </div>
           <span className={`badge ${mobileConnected ? 'teal' : 'gold'}`}>
-            {mobileConnected ? '🟢 Phone Connected' : 'Waiting for Phone'}
+            {mobileConnected
+              ? '🟢 Phone Connected'
+              : needsPhoneRepair
+              ? '⚠️ Re-pair Needed'
+              : 'Waiting for Phone'}
           </span>
         </div>
+
+        {needsPhoneRepair && !mobileConnected && (
+          <div
+            className="desktop-repair-banner"
+            data-testid="desktop-phone-repair-banner"
+            role="alert"
+          >
+            <span>
+              🔗 Your phone disconnected — scan the QR code below or tap <strong>New</strong> to generate a fresh Pair Code and re-pair.
+            </span>
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              onClick={() => {
+                setNeedsPhoneRepair(false);
+                startSession();
+              }}
+            >
+              🔄 Fresh Code
+            </button>
+          </div>
+        )}
 
         <ol className="pair-quick-steps">
           <li><strong>Scan QR</strong> on your phone camera (or open Mobile Studio).</li>

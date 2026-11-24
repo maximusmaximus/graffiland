@@ -32,6 +32,7 @@ import {
   updateLandSettings
 } from './landMutations.mjs';
 import { updateLandVolume } from '../agentQuestService.mjs';
+import { notifyPendingLandApproval } from '../notificationService.mjs';
 
 export function describeSignatureAction({
   action,
@@ -552,15 +553,22 @@ export async function listPendingSignaturesForUser(
   { user, includeHistory = false, historyLimit = 30 }
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const wallets = resolveUserWalletAddresses(user);
+  const ownerWhere =
+    wallets.length > 0
+      ? `(sr.owner_sub = ? OR LOWER(sr.owner_address) IN (${wallets.map(() => '?').join(', ')}))`
+      : 'sr.owner_sub = ?';
+  const ownerParams = wallets.length > 0 ? [user.id, ...wallets] : [user.id];
+
   if (includeHistory) {
     const safeLimit = Math.max(1, Math.min(100, Number(historyLimit) || 30));
     const allRows = await db.all(
       `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
        FROM land_signature_requests sr
        LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
-       WHERE sr.owner_sub = ?
+       WHERE ${ownerWhere}
        ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
-      [user.id, safeLimit + 25]
+      [...ownerParams, safeLimit + 25]
     );
     const formatted = (allRows || []).map(formatSignatureRequestRow);
     const pending = formatted.filter((r) => r.status === 'pending').slice(0, 25);
@@ -574,9 +582,9 @@ export async function listPendingSignaturesForUser(
     `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
      FROM land_signature_requests sr
      LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
-     WHERE sr.owner_sub = ? AND sr.status = 'pending'
+     WHERE ${ownerWhere} AND sr.status = 'pending'
      ORDER BY sr.created_at DESC LIMIT 25`,
-    [user.id]
+    ownerParams
   );
   return {
     requests: (rows || [])
@@ -640,7 +648,11 @@ export async function signRequestByMobile(
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
   if (!row) throw new McpServiceError('Signature request not found.', 404);
-  if (row.owner_sub !== user.id) {
+  const callerWallets = resolveUserWalletAddresses(user);
+  const ownsRequest =
+    row.owner_sub === user.id ||
+    (row.owner_address && callerWallets.includes(String(row.owner_address).toLowerCase()));
+  if (!ownsRequest) {
     throw new McpServiceError('Only the property owner can sign this request.', 403);
   }
   if (row.status !== 'pending') {
@@ -755,7 +767,11 @@ export async function rejectSignatureRequest(db, { requestId, user }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
   if (!row) throw new McpServiceError('Signature request not found.', 404);
-  if (row.owner_sub !== user.id) {
+  const callerWallets = resolveUserWalletAddresses(user);
+  const ownsRequest =
+    row.owner_sub === user.id ||
+    (row.owner_address && callerWallets.includes(String(row.owner_address).toLowerCase()));
+  if (!ownsRequest) {
     throw new McpServiceError('Only the property owner can reject this request.', 403);
   }
   if (row.status !== 'pending') {
@@ -877,6 +893,11 @@ export async function handlePairedLandMutationViaMcp(
     };
   }
 
+  await notifyPendingLandApproval(db, {
+    userSub: ownerUser.id,
+    request: reqObj
+  }).catch(() => {});
+
   if (typeof notifyMobileFn === 'function') {
     try {
       await notifyMobileFn({
@@ -891,7 +912,7 @@ export async function handlePairedLandMutationViaMcp(
     status: 'pending_mobile_signature',
     requiresMobileSignature: true,
     message:
-      'Signature notification sent to owner mobile device. Sign in Mobile HUD or supply owner EIP-191 signature.',
+      'Approval request queued for the land holder (approve directly on the land page, Mobile HUD, or supply owner EIP-191 signature).',
     request: reqObj
   };
 }

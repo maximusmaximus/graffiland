@@ -504,7 +504,12 @@ export default function NotificationCenter({
                     const parcelHref =
                       item.meta?.parcelUrl ||
                       (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
-                    const isArtLink = Boolean(artHref) && (item.actionType === 'open_sculpture' || Boolean(item.sculptureId));
+                    const isApprovalLink = item.actionType === 'open_land_approval';
+                    const isRepairAlert = Boolean(item.meta?.needsRepair);
+                    const isArtLink =
+                      !isApprovalLink &&
+                      Boolean(artHref) &&
+                      (item.actionType === 'open_sculpture' || Boolean(item.sculptureId));
                     return (
                       <div
                         key={item.id}
@@ -514,7 +519,11 @@ export default function NotificationCenter({
                         onClick={() => handleNotificationAction(item)}
                       >
                         <div className="notif-item-icon" aria-hidden="true">
-                          {iconForCategory(item.category)}
+                          {isApprovalLink
+                            ? '✍️'
+                            : isRepairAlert
+                            ? '🔗'
+                            : iconForCategory(item.category)}
                         </div>
                         <div className="notif-item-content">
                           <div className="notif-item-top">
@@ -545,6 +554,13 @@ export default function NotificationCenter({
                                 <button
                                   type="button"
                                   className="btn-xs notif-action-btn"
+                                  data-testid={
+                                    isApprovalLink
+                                      ? 'notif-approve-land-btn'
+                                      : isRepairAlert
+                                      ? 'notif-repair-btn'
+                                      : undefined
+                                  }
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleNotificationAction(item);

@@ -79,6 +79,8 @@ export default function MobilePairApprovalDropdown({
   mcpPairBusy,
   mcpPairNotice,
   setMcpPairNotice,
+  repairNotice = null,
+  onDismissRepairNotice = null,
   onCreateMcpPairing,
   onDisconnectMcpPairing,
   onOpenAgentHandoff,
@@ -396,6 +398,53 @@ export default function MobilePairApprovalDropdown({
 
         {activeTab === 'pair' && (
           <div className="mobile-pair-sections" data-testid="mobile-pair-panel">
+            {(repairNotice || mcpPairingsState?.needsRepair || mcpPairingsState?.expiringSoon) && (
+              <div
+                className="mobile-repair-banner"
+                data-testid="mobile-repair-banner"
+                role="alert"
+              >
+                <div className="mobile-repair-banner-text">
+                  <strong>🔗 Re-pair Needed</strong>
+                  <span>
+                    {repairNotice?.message ||
+                      (mcpPairingsState?.expiringSoon
+                        ? 'Your AI agent pairing expires soon — generate a fresh code to stay connected.'
+                        : 'Your previous pairing expired or disconnected — generate a fresh code or scan Desktop QR to re-pair.')}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {repairNotice?.kind === 'desktop' ? (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      onClick={() => setScannerOpen(true)}
+                    >
+                      📷 Scan QR to Re-pair
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      disabled={mcpPairBusy}
+                      onClick={() => onCreateMcpPairing?.()}
+                    >
+                      {mcpPairBusy ? 'Generating…' : '🔑 Generate Fresh Code'}
+                    </button>
+                  )}
+                  {onDismissRepairNotice && repairNotice && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-ghost"
+                      onClick={onDismissRepairNotice}
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Section 1: Desktop Live Mirror + QR Scanner */}
             <div className="mobile-pair-card">
               <div className="mobile-pair-card-head">

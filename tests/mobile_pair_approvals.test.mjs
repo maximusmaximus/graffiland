@@ -269,5 +269,44 @@ describe('Mobile Pairing QR Parser & Signature Approval History', () => {
     assert.equal(hRes.status, 200);
     assert.deepEqual(hRes.body.pending, []);
     assert.deepEqual(hRes.body.history, []);
+
+    // Verify expired/disconnected MCP pairing exposes needsRepair and emits a Re-pair notification
+    const createdPair = await wFetch('/api/mcp/pairings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ expiresHours: 24 })
+    });
+    assert.equal(createdPair.status, 200);
+    const pairCode = createdPair.body.pairing.code;
+
+    // Connect the pairing then force its expires_at into the past -> simulates expired pairing
+    const connRes = await wFetch('/api/mcp/pairings/connect', {
+      method: 'POST',
+      body: JSON.stringify({ pairingCode: pairCode, agentName: 'ExpiryBot' })
+    });
+    assert.equal(connRes.status, 200);
+    db.prepare('UPDATE mcp_pairings SET expires_at = ? WHERE code = ?').run(
+      new Date(Date.now() - 60_000).toISOString(),
+      pairCode
+    );
+
+    const listAfterExpire = await wFetch('/api/mcp/pairings', {
+      headers: { Authorization: `Bearer ${tok}` }
+    });
+    assert.equal(listAfterExpire.status, 200);
+    assert.equal(listAfterExpire.body.mcpActive, false);
+    assert.equal(listAfterExpire.body.needsRepair, true);
+    assert.equal(listAfterExpire.body.repairReason, 'expired');
+
+    const notifRes = await wFetch('/api/notifications', {
+      headers: { Authorization: `Bearer ${tok}` }
+    });
+    assert.equal(notifRes.status, 200);
+    const repairNotif = (notifRes.body.notifications || []).find(
+      (n) => n.meta?.needsRepair === true && n.actionType === 'open_pair_mobile'
+    );
+    assert.ok(repairNotif, 'Expected Re-pair needed notification when pairing expires');
+    assert.ok(repairNotif.title.toLowerCase().includes('re-pair'));
+    assert.equal(repairNotif.actionLabel, 'Re-pair Now');
   });
 });

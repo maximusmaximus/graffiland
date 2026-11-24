@@ -23,6 +23,7 @@ import {
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import { recordUserAction } from '../utils/userHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -31,6 +32,26 @@ import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
 
 function formatDistance(meters, unitSystem = 'metric') {
   return formatDistanceMeters(meters, unitSystem);
+}
+
+function formatApprovalExpiresIn(iso) {
+  if (!iso) return '';
+  const ts = Date.parse(String(iso));
+  if (!Number.isFinite(ts)) return '';
+  const remainMin = Math.max(0, Math.ceil((ts - Date.now()) / 60000));
+  if (remainMin === 0) return 'expiring soon';
+  return `${remainMin}m left`;
+}
+
+function getApprovalActionEmoji(action = '') {
+  if (action === 'create_sculpture' || action === 'publish_sculpture') return '🎨';
+  if (action === 'update_sculpture' || action === 'rollback_sculpture_revision') return '🛠️';
+  if (action === 'set_sculpture_visibility') return '👁️';
+  if (action === 'delete_sculpture' || action === 'erase_land') return '🗑️';
+  if (action === 'update_land_settings') return '❄️';
+  if (action === 'update_land_volume') return '📐';
+  if (action === 'update_parcel') return '🏷️';
+  return '✍️';
 }
 
 /**
@@ -61,6 +82,7 @@ export default function PlotVisitView({
   onSelectNeighborParcel = null,
   onOpenManageLand = null,
   onOpenAddLandItem = null,
+  onOpenPair = null,
   onOpenProfile = null,
   onModifyInCanvas = null,
   onRequestLogin = null,
@@ -118,6 +140,12 @@ export default function PlotVisitView({
 
   // Status feedback
   const [statusBanner, setStatusBanner] = useState({ text: '', isError: false });
+
+  // Owner pending transaction approvals & pairing health on this land
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [approvalBusyId, setApprovalBusyId] = useState('');
+  const [expandedApprovalId, setExpandedApprovalId] = useState('');
+  const [mcpRepairAlert, setMcpRepairAlert] = useState(null);
 
   useEffect(() => {
     setLocalParcel(parcel);
@@ -251,6 +279,140 @@ export default function PlotVisitView({
     () => Boolean(user && activeParcel && isLandOwnedByUser(activeParcel, { user, ownedParcelIds })),
     [activeParcel, ownedParcelIds, user]
   );
+
+  // Load & poll pending agent/land transactions for this land whenever signed in as the land holder
+  const loadOwnerPendingAndPairing = useCallback(async () => {
+    if (!user?.id || !isLandOwner || !activeParcel?.parcelId) {
+      setPendingApprovals([]);
+      setMcpRepairAlert(null);
+      return;
+    }
+    const targetPid = String(activeParcel.parcelId).toUpperCase();
+    try {
+      const [sigRes, pairRes] = await Promise.all([
+        api.listPendingSignatures().catch(() => null),
+        api.listMcpPairings().catch(() => null)
+      ]);
+      if (sigRes && Array.isArray(sigRes.requests)) {
+        const forThisLand = sigRes.requests.filter(
+          (r) =>
+            r &&
+            r.status === 'pending' &&
+            (!r.parcelId || String(r.parcelId).toUpperCase() === targetPid)
+        );
+        setPendingApprovals(forThisLand);
+      }
+      if (pairRes) {
+        if (pairRes.needsRepair) {
+          setMcpRepairAlert({
+            reason: pairRes.repairReason || 'expired',
+            code: pairRes.latestPairing?.code || '',
+            agentName: pairRes.latestPairing?.agentName || ''
+          });
+        } else if (pairRes.expiringSoon) {
+          setMcpRepairAlert({
+            reason: 'expiring_soon',
+            code: pairRes.activePairing?.code || '',
+            agentName: pairRes.activePairing?.agentName || ''
+          });
+        } else {
+          setMcpRepairAlert(null);
+        }
+      }
+    } catch {
+      // ignore transient polling failure
+    }
+  }, [user?.id, isLandOwner, activeParcel?.parcelId]);
+
+  useEffect(() => {
+    if (!user?.id || !isLandOwner || !activeParcel?.parcelId) {
+      setPendingApprovals([]);
+      setMcpRepairAlert(null);
+      return undefined;
+    }
+    loadOwnerPendingAndPairing();
+    const timer = setInterval(loadOwnerPendingAndPairing, 5000);
+    return () => clearInterval(timer);
+  }, [user?.id, isLandOwner, activeParcel?.parcelId, loadOwnerPendingAndPairing]);
+
+  async function handleApprovePendingTx(item) {
+    if (!item?.id || !user?.id || approvalBusyId) return;
+    setApprovalBusyId(item.id);
+    try {
+      let extSig = '';
+      if (
+        user?.walletAddress &&
+        item.ownerAddress &&
+        user.walletAddress.toLowerCase() !== item.ownerAddress.toLowerCase() &&
+        typeof window !== 'undefined' &&
+        window.ethereum
+      ) {
+        extSig = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [item.canonicalMessage, item.ownerAddress]
+        });
+      }
+      await api.mobileSignRequest(item.id, extSig ? { signature: extSig } : {});
+      setPendingApprovals((prev) => prev.filter((r) => r.id !== item.id));
+      const title =
+        item.summaryTitle ||
+        String(item.action || 'Land Transaction')
+          .replace(/_/g, ' ')
+          .replace(/^\w/, (c) => c.toUpperCase());
+      recordUserAction(user?.id, {
+        type: 'approve_land_tx',
+        icon: '✅',
+        title: `Approved "${title}"`,
+        detail: landDisplayName,
+        parcelId: activeParcel?.parcelId || item.parcelId || '',
+        sculptureId: item.sculptureId || '',
+        linkLabel: 'Land'
+      });
+      const msg = `Approved & executed "${title}" on "${landDisplayName}"!`;
+      flashStatus(msg);
+      notifySettingsSaved(msg);
+      let nextParcel = activeParcel;
+      let nextSculptures = activeSculptures;
+      if (activeParcel?.parcelId) {
+        const refreshed = await api.getLandDetail(activeParcel.parcelId).catch(() => null);
+        if (refreshed?.parcel) {
+          nextParcel = refreshed.parcel;
+          nextSculptures = refreshed.sculptures || [];
+          setLocalParcel(nextParcel);
+          setLocalSculptures(nextSculptures);
+        }
+      }
+      onPlotUpdated?.({ parcel: nextParcel, sculptures: nextSculptures });
+      loadOwnerPendingAndPairing();
+    } catch (err) {
+      flashStatus(err?.message || 'Could not approve transaction.', true);
+    } finally {
+      setApprovalBusyId('');
+    }
+  }
+
+  async function handleRejectPendingTx(item) {
+    if (!item?.id || !user?.id || approvalBusyId) return;
+    setApprovalBusyId(item.id);
+    try {
+      await api.rejectSignatureRequest(item.id);
+      setPendingApprovals((prev) => prev.filter((r) => r.id !== item.id));
+      const title = item.summaryTitle || String(item.action || 'Land Transaction').replace(/_/g, ' ');
+      recordUserAction(user?.id, {
+        type: 'reject_land_tx',
+        icon: '❌',
+        title: `Rejected "${title}"`,
+        detail: landDisplayName,
+        parcelId: activeParcel?.parcelId || item.parcelId || ''
+      });
+      flashStatus(`Rejected "${title}".`);
+      loadOwnerPendingAndPairing();
+    } catch (err) {
+      flashStatus(err?.message || 'Could not reject transaction.', true);
+    } finally {
+      setApprovalBusyId('');
+    }
+  }
 
   const isSelectedArtworkOwner = useMemo(() => {
     if (!user || !selectedArtwork) return false;
@@ -1200,6 +1362,17 @@ export default function PlotVisitView({
                     onClick={handleSelectLandTarget}
                   >
                     <span>📍 {landDisplayName}</span>
+                    {isLandOwner && pendingApprovals.length > 0 && (
+                      <span
+                        className="plot-pending-count-pill"
+                        data-testid="plot-pending-pill"
+                        title={`${pendingApprovals.length} pending transaction approval${
+                          pendingApprovals.length === 1 ? '' : 's'
+                        }`}
+                      >
+                        ✍️ {pendingApprovals.length}
+                      </span>
+                    )}
                   </button>
                   {activeSculptures.map((sc) => {
                     const active = selectedTarget === 'artwork' && selectedSculptureId === sc.id;
@@ -1528,6 +1701,102 @@ export default function PlotVisitView({
                   ) : (
                     /* ================= LAND DETAILS + MANAGEMENT ================= */
                     <div className="plot-detail-card" data-testid="plot-land-details">
+                      {/* Land Holder Pending Transaction Approvals */}
+                      {isLandOwner && pendingApprovals.length > 0 && (
+                        <div
+                          className="card plot-pending-approvals-card"
+                          data-testid="plot-pending-approvals"
+                          role="region"
+                          aria-label="Pending land transaction approvals"
+                        >
+                          <div className="plot-mgmt-header">
+                            <span className="plot-mgmt-title">
+                              <XeroIcon emoji="✍️" size={14} /> Pending Transaction
+                              {pendingApprovals.length === 1 ? '' : 's'} ({pendingApprovals.length})
+                            </span>
+                            <span className="badge gold" style={{ fontSize: 10 }}>
+                              Action Required
+                            </span>
+                          </div>
+
+                          <div className="plot-pending-list">
+                            {pendingApprovals.map((item) => {
+                              const busy = approvalBusyId === item.id;
+                              const isExpanded = expandedApprovalId === item.id;
+                              const title =
+                                item.summaryTitle ||
+                                String(item.action || 'Land Transaction')
+                                  .replace(/_/g, ' ')
+                                  .replace(/^\w/, (c) => c.toUpperCase());
+                              const desc =
+                                item.summaryDescription ||
+                                item.payload?.description ||
+                                `Execute ${String(item.action || 'transaction').replace(/_/g, ' ')} on ${landDisplayName}.`;
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="plot-pending-item"
+                                  data-testid="plot-pending-approval-item"
+                                  data-request-id={item.id}
+                                >
+                                  <div className="plot-pending-item-head">
+                                    <strong className="plot-pending-item-title">
+                                      <XeroIcon emoji={getApprovalActionEmoji(item.action)} size={13} />{' '}
+                                      {title}
+                                    </strong>
+                                    <span className="mono plot-pending-item-expiry">
+                                      {formatApprovalExpiresIn(item.expiresAt)}
+                                    </span>
+                                  </div>
+                                  <div className="plot-pending-item-meta">
+                                    🤖 {item.agentName || 'Paired Agent'} · {String(item.action || '').replace(/_/g, ' ')}
+                                  </div>
+                                  <p className="plot-pending-item-desc">{desc}</p>
+                                  {isExpanded && (
+                                    <div className="mobile-approval-details mono">
+                                      <div>Action: {item.action}</div>
+                                      <div>Request: {item.id}</div>
+                                      {item.sculptureId && <div>Sculpture: {item.sculptureId}</div>}
+                                      {item.pairingCode && <div>Pair: {item.pairingCode}</div>}
+                                    </div>
+                                  )}
+                                  <div className="plot-pending-item-actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-xs btn-primary"
+                                      data-testid="plot-approve-tx-btn"
+                                      disabled={Boolean(approvalBusyId)}
+                                      onClick={() => handleApprovePendingTx(item)}
+                                    >
+                                      {busy ? 'Approving…' : '✅ Approve & Execute'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-xs btn-danger"
+                                      data-testid="plot-reject-tx-btn"
+                                      disabled={Boolean(approvalBusyId)}
+                                      onClick={() => handleRejectPendingTx(item)}
+                                    >
+                                      {busy ? 'Working…' : '✕ Reject'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-xs btn-ghost"
+                                      style={{ marginLeft: 'auto' }}
+                                      onClick={() =>
+                                        setExpandedApprovalId(isExpanded ? '' : item.id)
+                                      }
+                                    >
+                                      {isExpanded ? 'Hide' : 'Details'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
                       {activeParcel.description && (
                         <p className="mobile-parcel-desc">{activeParcel.description}</p>
                       )}
@@ -1710,6 +1979,33 @@ export default function PlotVisitView({
                               👑 Your Land
                             </span>
                           </div>
+
+                          {mcpRepairAlert && (
+                            <div
+                              className="plot-repair-banner"
+                              data-testid="plot-repair-notice"
+                              role="alert"
+                            >
+                              <span>
+                                🔗{' '}
+                                {mcpRepairAlert.reason === 'expiring_soon'
+                                  ? `Your agent pairing (${mcpRepairAlert.agentName || mcpRepairAlert.code || 'MCP'}) expires soon — re-pair to stay connected.`
+                                  : `Your agent pairing (${mcpRepairAlert.agentName || mcpRepairAlert.code || 'MCP'}) ${
+                                      mcpRepairAlert.reason === 'disconnected' ? 'was disconnected' : 'expired'
+                                    } — re-pair to let your agent submit actions.`}
+                              </span>
+                              {onOpenPair && (
+                                <button
+                                  type="button"
+                                  className="btn btn-xs btn-primary"
+                                  data-testid="plot-repair-btn"
+                                  onClick={() => onOpenPair({ reason: mcpRepairAlert.reason })}
+                                >
+                                  Re-pair Now
+                                </button>
+                              )}
+                            </div>
+                          )}
 
                           {editingLand ? (
                             <form
