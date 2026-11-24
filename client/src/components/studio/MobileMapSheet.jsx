@@ -54,6 +54,7 @@ export default function MobileMapSheet({
   const [mapDimensionMode, setMapDimensionMode] = useState(() =>
     initialDimensionMode === '2d' ? '2d' : '3d'
   ); // '3d' | '2d'
+  const [localSelectedParcelId, setLocalSelectedParcelId] = useState(selectedParcelId || '');
   const [localFocusTick, setLocalFocusTick] = useState(0);
   const [expandedLandIds, setExpandedLandIds] = useState({});
   const [collapsedLandIds, setCollapsedLandIds] = useState({});
@@ -66,6 +67,12 @@ export default function MobileMapSheet({
   const cardRefs = useRef(new Map());
   const mapCanvasRef = useRef(null);
   const sharedFullViewportRef = useRef(null);
+
+  useEffect(() => {
+    setLocalSelectedParcelId(selectedParcelId || '');
+  }, [selectedParcelId]);
+
+  const effectiveSelectedParcelId = localSelectedParcelId;
 
   const fallbackParcelCoords = useMemo(() => {
     for (const p of mapParcels || []) {
@@ -120,10 +127,10 @@ export default function MobileMapSheet({
   const isFullMap = mapHeightMode === 'fullscreen';
   const focusedLand = useMemo(
     () =>
-      displayedLands.find((l) => l.parcelId === selectedParcelId) ||
+      displayedLands.find((l) => l.parcelId === effectiveSelectedParcelId) ||
       displayedLands[0] ||
       null,
-    [displayedLands, selectedParcelId]
+    [displayedLands, effectiveSelectedParcelId]
   );
 
   function markLandSeenById(parcelId) {
@@ -147,6 +154,7 @@ export default function MobileMapSheet({
   function handleClickLandRank(parcelId) {
     if (!parcelId) return;
     markLandSeenById(parcelId);
+    setLocalSelectedParcelId(parcelId);
     onSelectParcel?.(parcelId);
     setLocalFocusTick((t) => t + 1);
     setExpandedLandIds((prev) => ({ ...prev, [parcelId]: true }));
@@ -164,6 +172,7 @@ export default function MobileMapSheet({
     const pid = parcel?.parcelId || '';
     if (!pid) return;
     markLandSeenById(pid);
+    setLocalSelectedParcelId(pid);
     onSelectParcel?.(pid);
     setExpandedLandIds((prev) => ({ ...prev, [pid]: true }));
     setCollapsedLandIds((prev) => ({ ...prev, [pid]: false }));
@@ -174,13 +183,32 @@ export default function MobileMapSheet({
   }
 
   function handleFocusLandOnMap(parcelId) {
+    if (!parcelId) return;
+    if (editingParcelId && editingParcelId !== parcelId && !renameSaving) {
+      cancelInlineRename();
+    }
     markLandSeenById(parcelId);
+    setLocalSelectedParcelId(parcelId);
     onSelectParcel?.(parcelId);
     setLocalFocusTick((t) => t + 1);
   }
 
+  function handleCardBlankAreaClick(e, parcelId) {
+    if (!parcelId) return;
+    // Preserve clicks on buttons, links, rename inputs/forms, and nested sculpture items
+    const interactive = e.target?.closest?.(
+      'button, a, input, textarea, select, form, [role="button"]'
+    );
+    if (interactive) return;
+    const selection = typeof window !== 'undefined' ? window.getSelection?.() : null;
+    if (selection && String(selection).trim().length > 0) return;
+    handleFocusLandOnMap(parcelId);
+  }
+
   function handleOpenLandIn3D(parcelId) {
+    if (!parcelId) return;
     markLandSeenById(parcelId);
+    setLocalSelectedParcelId(parcelId);
     onSelectParcel?.(parcelId);
     setMapDimensionMode('3d');
     setLocalFocusTick((t) => t + 1);
@@ -319,13 +347,14 @@ export default function MobileMapSheet({
         }`}
         data-testid="mobile-map-canvas"
         data-map-expanded={isFullMap ? 'fullscreen' : 'compact'}
+        data-focused-parcel-id={effectiveSelectedParcelId || ''}
       >
         {mapDimensionMode === '3d' ? (
           <MobileIsometricMap
             parcels={displayedLands}
             sculptures={grouped.displayedSculptures}
             userLocation={location}
-            selectedParcelId={selectedParcelId}
+            selectedParcelId={effectiveSelectedParcelId}
             selectedSculptureId={mapSelectedSculpture?.id || ''}
             focusParcelTick={focusParcelTick + localFocusTick}
             isFullExpanded={isFullMap}
@@ -347,7 +376,7 @@ export default function MobileMapSheet({
             focusArea={areaFilterMode === 'nearby' && !grouped.autoFallbackToAll}
             areaRadiusMeters={5000}
             selectedSculptureId={mapSelectedSculpture?.id || ''}
-            selectedParcelId={selectedParcelId}
+            selectedParcelId={effectiveSelectedParcelId}
             focusParcelTick={focusParcelTick + localFocusTick}
             initialView={isFullMap ? sharedFullViewportRef.current : null}
             onViewportChange={(vp) => {
@@ -452,7 +481,8 @@ export default function MobileMapSheet({
         ) : (
           <div className="mobile-land-stack">
             {displayedLands.map((land, index) => {
-              const isSelected = Boolean(selectedParcelId) && selectedParcelId === land.parcelId;
+              const isSelected =
+                Boolean(effectiveSelectedParcelId) && effectiveSelectedParcelId === land.parcelId;
               const isOwned = isLandOwnedByUser(land, { user, ownedParcelIds });
               const isRenaming = isOwned && editingParcelId === land.parcelId;
               const isExpanded = Boolean(expandedLandIds[land.parcelId]);
@@ -486,7 +516,9 @@ export default function MobileMapSheet({
                   data-testid="mobile-land-card"
                   data-parcel-id={land.parcelId}
                   data-owned={isOwned ? 'true' : 'false'}
+                  data-selected={isSelected ? 'true' : 'false'}
                   data-expanded={isExpanded ? 'true' : 'false'}
+                  onClick={(e) => handleCardBlankAreaClick(e, land.parcelId)}
                 >
                   {/* Compact Header Row: Triangle + Clickable #Rank (Focus Map & Open) + Name + Top-Right Share */}
                   <div className="mobile-land-card-head">

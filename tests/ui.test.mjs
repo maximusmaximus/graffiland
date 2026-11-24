@@ -5228,4 +5228,182 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('MobileMapSheet clicking blank areas of nearest land cards highlights, selects, and centers the land in the map view above without hijacking interactive controls', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+
+    const selectedCalls = [];
+    const seenCalls = [];
+    const managedCalls = [];
+
+    const user = {
+      id: 'google:owner-9',
+      username: 'market_steward',
+      walletAddress: '0x2222222222222222222222222222222222222222'
+    };
+    const parcels = [
+      {
+        parcelId: 'GLAND-FARM01',
+        customName: 'FARMERS MARKET 🌳',
+        description: 'Open market courtyard',
+        centerLat: 39.7285,
+        centerLng: -121.8375,
+        ownerSub: 'google:owner-9',
+        stewardStatus: 'dormant',
+        sculptureCount: 1,
+        volume: {
+          centerLat: 39.7285,
+          centerLng: -121.8375,
+          widthMeters: 28,
+          depthMeters: 96,
+          heightMeters: 18,
+          footprintAreaSqM: 2688
+        }
+      },
+      {
+        parcelId: 'GLAND-DEN02',
+        customName: 'DRUGDEN 🏧',
+        description: 'Downtown corner parcel',
+        centerLat: 39.7299,
+        centerLng: -121.8391,
+        ownerSub: 'google:other-steward',
+        stewardStatus: 'awakened',
+        sculptureCount: 2,
+        volume: {
+          centerLat: 39.7299,
+          centerLng: -121.8391,
+          widthMeters: 67,
+          depthMeters: 73,
+          heightMeters: 100,
+          footprintAreaSqM: 4891
+        }
+      }
+    ];
+    const sculptures = [
+      {
+        id: 'sc-farm-1',
+        title: 'Veggie Row',
+        parcelId: 'GLAND-FARM01',
+        lat: 39.7285,
+        lng: -121.8375,
+        voxelCount: 40
+      },
+      {
+        id: 'sc-den-1',
+        title: 'Santa Bunny',
+        parcelId: 'GLAND-DEN02',
+        lat: 39.7299,
+        lng: -121.8391,
+        voxelCount: 60
+      },
+      {
+        id: 'sc-den-2',
+        title: 'Christmas Tree',
+        parcelId: 'GLAND-DEN02',
+        lat: 39.72995,
+        lng: -121.83905,
+        voxelCount: 80
+      }
+    ];
+
+    const view = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user,
+        ownedParcelIds: ['GLAND-FARM01'],
+        config: {},
+        location: { lat: 39.7284, lng: -121.8374 },
+        areaFilterMode: 'nearby',
+        mapParcels: parcels,
+        displayedMapSculptures: sculptures,
+        areaSculpturesSorted: sculptures,
+        onSelectParcel: (pid) => selectedCalls.push(pid),
+        onMarkLandSeen: (pid, count) => seenCalls.push({ pid, count }),
+        onManageLand: (pid) => managedCalls.push(pid),
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+
+    const cards = view.getAllByTestId('mobile-land-card');
+    assert.equal(cards.length, 2);
+    assert.equal(cards[0].getAttribute('data-parcel-id'), 'GLAND-FARM01');
+    assert.equal(cards[1].getAttribute('data-parcel-id'), 'GLAND-DEN02');
+
+    // Initially neither card is explicitly selected, map focuses closest (#1)
+    assert.equal(cards[0].getAttribute('data-selected'), 'false');
+    assert.equal(cards[1].getAttribute('data-selected'), 'false');
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focus-tick'), '0');
+
+    // 1) Clicking the compact metadata strip (blank non-interactive area) on card #2 highlights, selects & centers #2
+    const metaStrips = view.getAllByTestId('land-compact-meta');
+    RTL.fireEvent.click(metaStrips[1]);
+
+    assert.equal(cards[0].getAttribute('data-selected'), 'false');
+    assert.equal(cards[0].classList.contains('is-selected'), false);
+    assert.equal(cards[1].getAttribute('data-selected'), 'true');
+    assert.equal(cards[1].classList.contains('is-selected'), true);
+    assert.deepEqual(selectedCalls, ['GLAND-DEN02']);
+    assert.deepEqual(seenCalls, [{ pid: 'GLAND-DEN02', count: 2 }]);
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-focused-parcel-id'), 'GLAND-DEN02');
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focused-parcel-id'), 'GLAND-DEN02');
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focus-tick'), '1');
+    assert.ok(view.getByTestId('mobile-iso-3d-map').textContent.includes('DRUGDEN'));
+
+    // 2) Clicking the outer blank card area of owned card #1 switches highlight & re-centers map on #1
+    RTL.fireEvent.click(cards[0]);
+    assert.equal(cards[0].getAttribute('data-selected'), 'true');
+    assert.equal(cards[0].classList.contains('is-selected'), true);
+    assert.equal(cards[1].getAttribute('data-selected'), 'false');
+    assert.equal(cards[1].classList.contains('is-selected'), false);
+    assert.deepEqual(selectedCalls, ['GLAND-DEN02', 'GLAND-FARM01']);
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focused-parcel-id'), 'GLAND-FARM01');
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focus-tick'), '2');
+    assert.ok(view.getByTestId('mobile-iso-3d-map').textContent.includes('FARMERS MARKET'));
+
+    // 3) Clicking card #1 blank area again advances focus tick so map re-centers even if dragged away
+    RTL.fireEvent.click(metaStrips[0]);
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focus-tick'), '3');
+    assert.equal(selectedCalls.length, 3);
+
+    // 4) Interactive controls inside the card (expand triangle, manage gear, inline rename trigger + input)
+    //    must NOT trigger card blank-area selection or duplicate onSelectParcel calls
+    const countBeforeButtons = selectedCalls.length;
+    const expandBtns = view.getAllByTestId('land-card-expand-toggle');
+    RTL.fireEvent.click(expandBtns[1]);
+    assert.equal(cards[1].getAttribute('data-expanded'), 'true');
+    assert.equal(selectedCalls.length, countBeforeButtons);
+
+    RTL.fireEvent.click(view.getByTestId('land-manage-gear-btn'));
+    assert.deepEqual(managedCalls, ['GLAND-FARM01']);
+    assert.equal(selectedCalls.length, countBeforeButtons);
+
+    // Open inline rename on owned card #1 and click inside the input — must stay open and not fire onSelectParcel
+    RTL.fireEvent.click(view.getByTestId('land-title-edit-trigger'));
+    const renameInput = view.getByLabelText('Rename land');
+    RTL.fireEvent.click(renameInput);
+    assert.ok(view.getByTestId('land-inline-rename-form'));
+    assert.equal(selectedCalls.length, countBeforeButtons);
+
+    // Clicking blank area of card #2 while card #1 is renaming closes card #1's rename form and centers card #2
+    RTL.fireEvent.click(cards[1]);
+    assert.equal(view.queryByTestId('land-inline-rename-form'), null);
+    assert.equal(cards[1].getAttribute('data-selected'), 'true');
+    assert.equal(view.getByTestId('mobile-iso-3d-map').getAttribute('data-focused-parcel-id'), 'GLAND-DEN02');
+    assert.equal(selectedCalls.length, countBeforeButtons + 1);
+
+    // 5) Clicking the non-owned title button still calls onSelectParcel exactly once (no double fire from article onClick)
+    const countBeforeTitle = selectedCalls.length;
+    RTL.fireEvent.click(view.getByTestId('land-title-target-trigger'));
+    assert.equal(selectedCalls.length, countBeforeTitle + 1);
+    assert.equal(selectedCalls[selectedCalls.length - 1], 'GLAND-DEN02');
+
+    // 6) Also works identically in 2D map mode
+    RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
+    RTL.fireEvent.click(cards[0]);
+    assert.equal(cards[0].getAttribute('data-selected'), 'true');
+    assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-focused-parcel-id'), 'GLAND-FARM01');
+    cleanup();
+  });
 });
