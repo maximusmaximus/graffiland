@@ -55,6 +55,7 @@ function ARViewportCanvasInner({
   occlusionRef,
   originStatusRef,
   setOriginStatus,
+  occlusionEnabled = false,
   occlusionEnabledRef,
   rawOrientationRef,
   yawOffsetRef,
@@ -102,6 +103,10 @@ function ARViewportCanvasInner({
   onCanvasPointerCancel
 }) {
   const [contextLost, setContextLost] = useState(false);
+  const isTransformMode = mode === 'transform';
+  const sceneScanOptimalRef = useRef(Boolean(sceneScanOptimal));
+  sceneScanOptimalRef.current = Boolean(sceneScanOptimal);
+  const hasCapturedEnvRef = useRef(false);
   const onCameraRefreshNeededRef = useRef(onCameraRefreshNeeded);
   const onArLandGuidanceRef = useRef(onArLandGuidance);
 
@@ -115,8 +120,19 @@ function ARViewportCanvasInner({
   }, [onVideoMounted]);
 
   useEffect(() => {
-    if (isArViewOnly) {
+    const occlusionActive = !isArViewOnly && !isTransformMode && occlusionEnabled;
+    if (!occlusionActive) {
       occlusionRef.current?.reset?.();
+      const occ = occlusionCanvasRef.current;
+      if (occ) {
+        const ctx = occ.getContext?.('2d');
+        ctx?.clearRect?.(0, 0, occ.width, occ.height);
+      }
+      if (originStatusRef.current?.originBlocked) {
+        const clearStatus = { originBlocked: false, originVisible: true, reason: '' };
+        originStatusRef.current = clearStatus;
+        setOriginStatus?.(clearStatus);
+      }
       return;
     }
     const host = canvasHostRef.current;
@@ -130,7 +146,16 @@ function ARViewportCanvasInner({
       occ.width = occW;
       occ.height = occH;
     }
-  }, [canvasHostRef, isArViewOnly, occlusionCanvasRef, occlusionRef]);
+  }, [
+    canvasHostRef,
+    isArViewOnly,
+    isTransformMode,
+    occlusionCanvasRef,
+    occlusionEnabled,
+    occlusionRef,
+    originStatusRef,
+    setOriginStatus
+  ]);
 
   useEffect(() => {
     const host = canvasHostRef.current;
@@ -611,7 +636,19 @@ function ARViewportCanvasInner({
         beaconMats.dotMat.color.setHex(isBlk ? 0xff3e7f : 0xffd166);
       }
 
-      if (!arViewOnly && now - lastScanPosePush > 110) {
+      const isTransform = modeRef.current === 'transform';
+      const isSceneLocked = Boolean(
+        sceneScanOptimalRef.current || polRef.current.getSceneCoverage().optimal
+      );
+      if (isSceneLocked) {
+        sceneScanOptimalRef.current = true;
+        if (!arViewOnly && !isTransform && !mappingCompletedNoticeShownRef.current) {
+          mappingCompletedNoticeShownRef.current = true;
+          showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
+        }
+      }
+
+      if (!arViewOnly && !isTransform && !isSceneLocked && now - lastScanPosePush > 110) {
         lastScanPosePush = now;
         scanFwdVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
         const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
@@ -625,6 +662,9 @@ function ARViewportCanvasInner({
         if (!prev.optimal && cov.optimal && !mappingCompletedNoticeShownRef.current) {
           mappingCompletedNoticeShownRef.current = true;
           showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
+        }
+        if (cov.optimal) {
+          sceneScanOptimalRef.current = true;
         }
         if (
           cov.coveragePct !== prev.coveragePct ||
@@ -645,14 +685,23 @@ function ARViewportCanvasInner({
           setSceneScan(cov);
         }
 
-        const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
-        const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
-        if (lastUnmappedMaskRef.current !== vpKey) {
-          lastUnmappedMaskRef.current = vpKey;
-          setUnmappedGrid(vpGrid);
+        if (cov.optimal) {
+          const clearKey = '0'.repeat(48);
+          if (lastUnmappedMaskRef.current !== clearKey) {
+            lastUnmappedMaskRef.current = clearKey;
+            setUnmappedGrid(Array(48).fill(false));
+          }
+        } else {
+          const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+          const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
+          if (lastUnmappedMaskRef.current !== vpKey) {
+            lastUnmappedMaskRef.current = vpKey;
+            setUnmappedGrid(vpGrid);
+          }
         }
 
         if (
+          !cov.optimal &&
           now - lastOrbExtractPush > 920 &&
           !orbExtractBusy &&
           videoRef.current?.readyState >= 2 &&
@@ -686,10 +735,14 @@ function ARViewportCanvasInner({
         }
       }
 
-      const envRefreshMs = polRef.current.getSceneCoverage().optimal ? 2200 : 1100;
-      if (
+      const envRefreshMs = 1100;
+      const shouldRefreshEnv =
         !arViewOnly &&
+        !isTransform &&
         !paintingRef.current &&
+        (!isSceneLocked || !hasCapturedEnvRef.current);
+      if (
+        shouldRefreshEnv &&
         now - lastEnvPush > envRefreshMs &&
         videoRef.current &&
         envUpdaterRef.current
@@ -697,13 +750,20 @@ function ARViewportCanvasInner({
         lastEnvPush = now;
         const envData = envUpdaterRef.current.update(videoRef.current);
         if (envData) {
+          hasCapturedEnvRef.current = true;
           scene.environment = envData.envTexture;
           hemiLight.color.setHex(envData.skyColor);
           hemiLight.groundColor.setHex(envData.groundColor);
         }
       }
 
-      if (!arViewOnly && now - lastOcclusionPush > 110 && occlusionCanvasRef.current) {
+      if (
+        !arViewOnly &&
+        !isTransform &&
+        occlusionEnabledRef.current &&
+        now - lastOcclusionPush > 110 &&
+        occlusionCanvasRef.current
+      ) {
         lastOcclusionPush = now;
         let originScreen = { x: 0.5, y: 0.5, onScreen: true, requiredVisible: false };
         if (originX !== null && originY !== null && originZ !== null) {
@@ -1039,7 +1099,7 @@ function ARViewportCanvasInner({
   return (
     <>
       <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
-      {!isArViewOnly && cameraReady && !sceneScanOptimal && (
+      {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && (
         <div
           className="mapping-grayscale-grid"
           data-testid="mapping-grayscale-grid"
@@ -1053,16 +1113,25 @@ function ARViewportCanvasInner({
           ))}
         </div>
       )}
+      {!isArViewOnly && isTransformMode && (
+        <div
+          className="transform-camera-fade"
+          data-testid="transform-camera-fade"
+          aria-hidden="true"
+        />
+      )}
       <div
         ref={canvasHostRef}
         className="webgl-overlay"
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
+        data-transform-mode={isTransformMode ? 'true' : 'false'}
+        data-scene-locked={sceneScanOptimal ? 'true' : 'false'}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
         onPointerUp={onCanvasPointerUp}
         onPointerCancel={onCanvasPointerCancel}
       />
-      {!isArViewOnly && (
+      {!isArViewOnly && !isTransformMode && occlusionEnabled && (
         <canvas
           ref={occlusionCanvasRef}
           className="occlusion-overlay"

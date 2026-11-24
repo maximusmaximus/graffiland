@@ -271,12 +271,15 @@ export default function MobileStudio({
   });
 
   const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
+  const isTransformMode = brush.mode === 'transform';
   const isArViewOnly = Boolean(
     arViewSession || isInteractingWithLand || brush.mode === 'preview'
   );
   isInteractingWithLandRef.current = isInteractingWithLand;
   isArViewOnlyRef.current = isArViewOnly;
-  mappingPausedRef.current = Boolean(isArViewOnly || parcelVisit || ar.mapOpen);
+  mappingPausedRef.current = Boolean(
+    isArViewOnly || isTransformMode || pol.sceneScan.optimal || parcelVisit || ar.mapOpen
+  );
 
   const arExitLabel =
     arViewSession?.source === 'plot'
@@ -954,6 +957,7 @@ export default function MobileStudio({
         occlusionRef={brush.occlusionRef}
         originStatusRef={brush.originStatusRef}
         setOriginStatus={brush.setOriginStatus}
+        occlusionEnabled={brush.occlusionEnabled}
         occlusionEnabledRef={brush.occlusionEnabledRef}
         rawOrientationRef={pol.rawOrientationRef}
         yawOffsetRef={pol.yawOffsetRef}
@@ -1132,7 +1136,7 @@ export default function MobileStudio({
           />
         )}
 
-        {!isArViewOnly && (
+        {!isArViewOnly && !isTransformMode && (
           <SceneCoverageWidget
             sceneScan={pol.sceneScan}
             orbStatus={pol.orbStatus}
