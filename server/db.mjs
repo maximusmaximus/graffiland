@@ -489,6 +489,7 @@ export function getDb() {
       endpoint_url TEXT NOT NULL DEFAULT '',
       max_slots INTEGER NOT NULL DEFAULT 3,
       used_slots INTEGER NOT NULL DEFAULT 0,
+      forfeited_slots INTEGER NOT NULL DEFAULT 0,
       activated_lands_count INTEGER NOT NULL DEFAULT 0,
       total_xp INTEGER NOT NULL DEFAULT 0,
       reputation_score INTEGER NOT NULL DEFAULT 100,
@@ -519,6 +520,11 @@ export function getDb() {
       claimed_at TEXT NOT NULL,
       lease_expires_at TEXT NOT NULL DEFAULT '',
       awakened_at TEXT NOT NULL DEFAULT '',
+      last_human_interaction_at TEXT NOT NULL DEFAULT '',
+      last_human_interaction_type TEXT NOT NULL DEFAULT '',
+      last_human_interaction_sub TEXT NOT NULL DEFAULT '',
+      inactivity_expires_at TEXT NOT NULL DEFAULT '',
+      had_human_interaction INTEGER NOT NULL DEFAULT 0,
       first_human_sub TEXT NOT NULL DEFAULT '',
       first_human_address TEXT NOT NULL DEFAULT '',
       human_contributor_count INTEGER NOT NULL DEFAULT 0,
@@ -532,8 +538,46 @@ export function getDb() {
     CREATE INDEX IF NOT EXISTS idx_land_steward_status_lease
       ON land_steward_state (status, lease_expires_at);
 
+    CREATE INDEX IF NOT EXISTS idx_land_steward_inactivity
+      ON land_steward_state (status, inactivity_expires_at);
+
     CREATE INDEX IF NOT EXISTS idx_land_steward_sub
       ON land_steward_state (steward_sub, status);
+
+    CREATE TABLE IF NOT EXISTS land_archives (
+      id TEXT PRIMARY KEY,
+      parcel_id TEXT NOT NULL,
+      geohash TEXT NOT NULL,
+      land_name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      steward_sub TEXT NOT NULL DEFAULT '',
+      steward_name TEXT NOT NULL DEFAULT '',
+      steward_address TEXT NOT NULL DEFAULT '',
+      steward_type TEXT NOT NULL DEFAULT 'agent',
+      archive_reason TEXT NOT NULL,
+      archive_reason_label TEXT NOT NULL DEFAULT '',
+      center_lat REAL NOT NULL DEFAULT 0,
+      center_lng REAL NOT NULL DEFAULT 0,
+      volume_json TEXT NOT NULL DEFAULT '{}',
+      sculpture_count INTEGER NOT NULL DEFAULT 0,
+      sculptures_snapshot_json TEXT NOT NULL DEFAULT '[]',
+      human_contributor_count INTEGER NOT NULL DEFAULT 0,
+      had_human_interaction INTEGER NOT NULL DEFAULT 0,
+      claimed_at TEXT NOT NULL DEFAULT '',
+      awakened_at TEXT NOT NULL DEFAULT '',
+      last_human_interaction_at TEXT NOT NULL DEFAULT '',
+      expired_at TEXT NOT NULL,
+      archived_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_land_archives_archived_at
+      ON land_archives (archived_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_land_archives_parcel
+      ON land_archives (parcel_id, archived_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_land_archives_steward
+      ON land_archives (steward_sub, had_human_interaction);
 
     CREATE TABLE IF NOT EXISTS land_quests (
       id TEXT PRIMARY KEY,
@@ -708,13 +752,36 @@ export function getDb() {
     "ALTER TABLE users ADD COLUMN username_updated_at TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN avatar_image TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE users ADD COLUMN header_image TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE users ADD COLUMN user_number INTEGER NOT NULL DEFAULT 0'
+    'ALTER TABLE users ADD COLUMN user_number INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE agent_accounts ADD COLUMN forfeited_slots INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE land_steward_state ADD COLUMN last_human_interaction_at TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_steward_state ADD COLUMN last_human_interaction_type TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_steward_state ADD COLUMN last_human_interaction_sub TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_steward_state ADD COLUMN inactivity_expires_at TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE land_steward_state ADD COLUMN had_human_interaction INTEGER NOT NULL DEFAULT 0'
   ]) {
     try {
       db.exec(ddl);
     } catch {
       // Column already exists on upgraded SQLite DBs
     }
+  }
+
+  try {
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_land_steward_inactivity ON land_steward_state (status, inactivity_expires_at)'
+    );
+    const nowIso = new Date().toISOString();
+    const grace28dIso = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      `UPDATE land_steward_state
+       SET last_human_interaction_at = COALESCE(NULLIF(last_human_interaction_at, ''), NULLIF(awakened_at, ''), ?),
+           inactivity_expires_at = ?,
+           had_human_interaction = CASE WHEN had_human_interaction = 1 OR steward_type = 'human' OR human_contributor_count > 0 THEN 1 ELSE had_human_interaction END
+       WHERE status = 'awakened' AND COALESCE(inactivity_expires_at, '') = ''`
+    ).run(nowIso, grace28dIso);
+  } catch {
+    // Ignore backfill errors on fresh/empty DBs
   }
 
   try {

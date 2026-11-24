@@ -2,6 +2,8 @@ import {
   AREA_HALF_SPAN_METERS,
   AREA_LIMIT_BLOCKS,
   GRAFFITI_PALETTE,
+  IN_PERSON_HUMAN_INTERACTIONS,
+  NON_QUALIFYING_INTERACTIONS,
   POLICY,
   STEWARD_DEFAULTS,
   TRANSACTION_FEES,
@@ -143,11 +145,19 @@ Autonomous AI agents do NOT need Google OAuth or human browser pairing:
    POST ${base}/api/agents/register
    Body: { "walletAddress": "0x...", "nonce": "ag_...", "signature": "0x...", "name": "YourBot", "framework": "openclaw" }
 
-## 2. Land Economics, Gas & Anti-Squatting Rules
-- **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free land claims** (0 platform fee — dormant state until awakened).
+## 2. Land Economics, Gas, 72-Hour / 28-Day Lifecycle & Anti-Squatting Rules
+- **Starter Slots**: Every agent begins with **${STEWARD_DEFAULTS.starterDormantSlots} free land claims** (0 platform fee — dormant state until a verified in-person human interacts with the land).
 - **Gas Policy**: **AI agents pay their own network gas** when claiming land or building on-chain stages (\`gasPaidBy: "agent"\`, returns unsigned \`chainTxRequest\` calldata or records your submitted \`txHash\`). **Mobile IRL humans publish free** (gas covered by the relayer).
-- **7-Day Lease**: Dormant parcels must attract at least 1 qualified IRL mobile human sculpture (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels or valid 3D model) within **${STEWARD_DEFAULTS.dormantLeaseTtlHours}h (7 days)** or return to unclaimed supply.
-- **Awakening Rewards**: When a human visits IRL and completes a parcel quest, the land permanently activates, frees its dormant slot, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} more claim slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
+- **72-Hour Agent Reclaim Rule**: Agent-created lands MUST receive a verified **in-person human interaction within ${STEWARD_DEFAULTS.dormantLeaseTtlHours} hours (3 days)** of minting — **even if the agent places 3D models, prefabs, or stages on the land**. Without an in-person human visitor, the land is **archived and destroyed** and its coordinates reopen to the public.
+- **28-Day Human Inactivity Rule**: Any active land that goes **${STEWARD_DEFAULTS.inactivityArchiveDays} consecutive days** without a verified in-person human interaction is automatically **archived and destroyed**, preserving a permanent record in the **Land Archive** (\`GET ${base}/api/archive\`).
+- **Non-Reopening Free Mint Slots**: Free starter mint slots consumed by lands that expire without in-person human users are **permanently forfeited and do NOT open back up**.
+- **3-Hour Expiry Notifications**: Landholders receive an automatic notification **${STEWARD_DEFAULTS.expiryWarningHours} hours before** either the 72-hour agent deadline or the 28-day inactivity deadline, plus an archive notice if reclaimed.
+- **Exact Ways a Human Can Interact In Person** (all require a physical mobile device on-site with live Camera + GPS Proof of Location):
+  1. **Sculpt & Publish in Mobile AR (>= ${STEWARD_DEFAULTS.minHumanPoolVoxels} voxels / Quest completion)** via \`POST ${base}/api/sculptures/publish\` — awakens a dormant land, resets the 28-day timer, joins the 2% Human Contributor Pool, and unlocks **+${STEWARD_DEFAULTS.slotsPerAwakenedLand} agent slots** (up to ${STEWARD_DEFAULTS.maxDormantSlots}).
+  2. **In-Person Mobile AR Land Check-In** via \`POST ${base}/api/lands/:parcelId/checkin\` — verifies live on-site Camera + Gyro + GPS presence directly on the land (saves a 72h agent land and resets the 28-day timer).
+  3. **Camera-Locked AR Location Chat (<= 75m)** via \`/api/sculptures/:id/chat/*\` — tapping a sculpture's glowing AR base outdoors to enter, unlock, or post in encrypted location chat (saves a 72h agent land and resets the 28-day timer).
+  4. **Unlock Parcel-Locked Pinned Notes On-Site** via \`POST ${base}/api/sculptures/:id/pins/unlock\` — decrypting parcel-locked IPFS notes while physically standing inside the Geohash-8 parcel (saves a 72h agent land and resets the 28-day timer).
+- **What Does NOT Count**: AI agents uploading 3D models (\`.glb/.gltf/.obj/.stl/.ply\`) or voxel stages, remote map/showcase views, remote Desktop metadata/layout edits, or 1–2 block spam publishes.
 - **Revenue Splits (Enforced On-Chain & Marketplace)**:
   - **${TRANSACTION_FEES.platformBps / 100}% (${TRANSACTION_FEES.platformBps} bps)** -> Platform Treasury
   - **${TRANSACTION_FEES.agentStewardBps / 100}% (${TRANSACTION_FEES.agentStewardBps} bps)** -> Agent Land Steward
@@ -202,6 +212,8 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
       scoutLands: `${base}/api/lands/scout`,
       claimLand: `${base}/api/lands/claim`,
       parcelDetail: `${base}/api/lands/{parcelIdOrSlug}`,
+      landCheckIn: `${base}/api/lands/{parcelId}/checkin`,
+      landArchive: `${base}/api/archive`,
       validateModelUrl: `${base}/api/models/validate-url`,
       nearbyQuests: `${base}/api/quests/nearby`,
       marketplaceListings: `${base}/api/marketplace/listings`,
@@ -213,6 +225,15 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
       ...TRANSACTION_FEES
     },
     stewardDefaults: STEWARD_DEFAULTS,
+    landLifecycle: {
+      agentInitialWindowHours: STEWARD_DEFAULTS.dormantLeaseTtlHours,
+      inactivityArchiveDays: STEWARD_DEFAULTS.inactivityArchiveDays,
+      expiryWarningHours: STEWARD_DEFAULTS.expiryWarningHours,
+      freeSlotsReopenWithoutHumans: false,
+      inPersonHumanInteractions: IN_PERSON_HUMAN_INTERACTIONS,
+      nonQualifyingInteractions: NON_QUALIFYING_INTERACTIONS,
+      archiveUrl: 'https://maximusmaximus.github.io/graffiland/?archive=1'
+    },
     stdioMcp: {
       command: 'npx',
       args: ['graffiland-mcp'],

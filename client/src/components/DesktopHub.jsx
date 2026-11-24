@@ -29,6 +29,7 @@ import DesktopIntroBanner from './DesktopIntroBanner.jsx';
 import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import LandArchiveModal from './LandArchiveModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
@@ -153,6 +154,24 @@ export default function DesktopHub({
   const [pairOpen, setPairOpen] = useState(() => initialSession.activeView === 'pair');
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
   const [infoInitialTab, setInfoInitialTab] = useState('guide');
+  const [archiveOpen, setArchiveOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const p = new URLSearchParams(window.location.search).get('archive');
+      return Boolean(p && p !== '0' && p !== 'false');
+    } catch {
+      return false;
+    }
+  });
+  const [archiveInitialId, setArchiveInitialId] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = new URLSearchParams(window.location.search).get('archive') || '';
+      return p && p !== '1' && p !== 'true' ? p : '';
+    } catch {
+      return '';
+    }
+  });
   const [profileHandle, setProfileHandle] = useState(() =>
     parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
   );
@@ -531,6 +550,9 @@ export default function DesktopHub({
       openPairModal();
     } else if (item.actionType === 'open_mint') {
       openMintLandMode();
+    } else if (item.actionType === 'open_archive') {
+      setArchiveInitialId(String(item.meta?.archiveId || ''));
+      setArchiveOpen(true);
     } else if (item.actionType === 'open_land' && item.parcelId) {
       setLandManageParcelId(item.parcelId);
       setLandManageOpen(true);
@@ -2230,6 +2252,10 @@ export default function DesktopHub({
           initialTab={infoInitialTab}
           onUserUpdate={onUserUpdate}
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
+          onOpenArchive={(archId = '') => {
+            setArchiveInitialId(archId || '');
+            setArchiveOpen(true);
+          }}
           onLogout={() => {
             onLogout();
             setInfoOpen(false);
@@ -2241,6 +2267,27 @@ export default function DesktopHub({
           onClose={() => {
             setInfoOpen(false);
             setInfoInitialTab('guide');
+          }}
+        />
+      )}
+
+      {archiveOpen && (
+        <LandArchiveModal
+          initialArchiveId={archiveInitialId}
+          onJumpToLocation={(lat, lng, label) => {
+            if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+              setMapFocusTarget({
+                lat: Number(lat),
+                lng: Number(lng),
+                zoom: 18.2,
+                label: label || 'Archived Land Spot',
+                nonce: Date.now()
+              });
+            }
+          }}
+          onClose={() => {
+            setArchiveOpen(false);
+            setArchiveInitialId('');
           }}
         />
       )}

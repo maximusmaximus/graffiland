@@ -276,7 +276,7 @@ export const MCP_TOOLS = [
   {
     name: 'claim_land',
     description:
-      'Claim an unclaimed or expired Virtual Land parcel with 0 platform fee under a 7-day dormant lease ready for stage installation and quests. Supports customName, description/curationNote, and custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). AI agents pay their own network gas (supply optional on-chain txHash).',
+      'Claim an unclaimed or reclaimed Virtual Land parcel with 0 platform fee under a 72-hour dormant lease ready for stage installation and quests. Supports customName, description/curationNote, and custom 3D volume ({ widthMeters, depthMeters, heightMeters, zScale, rotationDeg }). Must receive a verified in-person human interaction within 72 hours (even if the agent adds 3D models) and at least once every 28 days thereafter, or the land is archived & destroyed and consumed free slots without human visitors do NOT reopen. AI agents pay their own network gas (supply optional on-chain txHash).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -348,13 +348,29 @@ export const MCP_TOOLS = [
   {
     name: 'get_land_telemetry',
     description:
-      'Read live Virtual Land stewardship metrics, 7-day lease status, quest completions, qualified IRL human contributors, and 5%/3%/2% revenue split totals.',
+      'Read live Virtual Land stewardship metrics, 72-hour agent lease / 28-day human inactivity status, quest completions, qualified IRL human contributors, and 5%/3%/2% revenue split totals.',
     inputSchema: {
       type: 'object',
       properties: {
         parcelId: { type: 'string' }
       },
       required: ['parcelId']
+    }
+  },
+  {
+    name: 'list_archived_lands',
+    description:
+      'List permanently archived Virtual Lands that were reclaimed and destroyed after 72 hours (agent lands with zero in-person human visitors) or 28 days of human inactivity, including preserved snapshots of their 3D models and coordinates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string' },
+        reason: {
+          type: 'string',
+          enum: ['all', 'agent_72h_no_human_interaction', 'inactivity_28d_no_human_interaction']
+        },
+        limit: { type: 'number' }
+      }
     }
   }
 ];

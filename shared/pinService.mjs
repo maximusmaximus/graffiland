@@ -6,6 +6,7 @@ import {
   verifyParcelPresenceSignature
 } from './chatPolicy.mjs';
 import { getLandSecurityPolicy, verifyOrbProofAgainstParcel } from './landmarkService.mjs';
+import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
 import { checkParcelOwnership, checkSculptureOwnership } from './mcpService.mjs';
 import { hasRegisteredPasskey, verifyPasskeyAssertion } from './passkeyService.mjs';
 
@@ -583,6 +584,15 @@ export async function unlockPinnedBatchForParcelVisitor(
   const changed = Number(upd?.changes ?? upd?.meta?.changes ?? 0);
   if (changed < 1) {
     throw new PinServiceError('Parcel presence challenge already consumed (replay blocked).', 403);
+  }
+
+  if (sculpture?.parcel_id) {
+    await recordInPersonHumanInteraction(db, {
+      parcelId: sculpture.parcel_id,
+      user,
+      interactionType: 'pin_unlock',
+      awakenDormant: true
+    }).catch(() => {});
   }
 
   const batchRow = await db.get('SELECT * FROM sculpture_pin_batches WHERE sculpture_id = ?', [

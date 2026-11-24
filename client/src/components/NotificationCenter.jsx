@@ -24,8 +24,8 @@ const CATEGORY_META = [
   {
     key: 'land_expiring',
     icon: '⏳',
-    label: 'Land lease expirations',
-    hint: 'Reminders before a dormant land lease expires.'
+    label: 'Land expiry & archive alerts',
+    hint: 'Alerts 3 hours before a land expires (72h agent limit or 28-day inactivity) and when archived.'
   },
   {
     key: 'land_activity',

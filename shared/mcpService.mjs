@@ -7,6 +7,7 @@ import {
   getLandTelemetry,
   scoutLands
 } from './agentQuestService.mjs';
+import { listArchivedLands } from './landArchiveService.mjs';
 import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
 import { serializeSculptureRow } from './sculpture.mjs';
@@ -682,6 +683,12 @@ export async function handleMcpJsonRpc(
       });
     } else if (toolName === 'get_land_telemetry') {
       toolResult = await getLandTelemetry(db, args.parcelId);
+    } else if (toolName === 'list_archived_lands') {
+      toolResult = await listArchivedLands(db, {
+        q: args.q || '',
+        reason: args.reason || '',
+        limit: args.limit || 30
+      });
     } else {
       throw new McpServiceError(`Unknown MCP tool: ${toolName}`, 404);
     }

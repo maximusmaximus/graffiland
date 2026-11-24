@@ -161,7 +161,7 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         LandLease storage existing = landLeases[landParcelId];
         if (existing.exists) {
             require(!existing.awakened && block.timestamp > existing.expiresAt, "GraffilandNFT: parcel active");
-            _releaseDormantSlot(existing.steward);
+            // Do NOT reopen the previous steward's consumed slot when a lease expires without a human visitor.
             emit DormantLandReleased(landParcelId, existing.steward);
         }
 
@@ -219,7 +219,7 @@ contract GraffilandNFT is ERC721, ERC721Enumerable, ERC721URIStorage, ERC721Roya
         require(lease.exists && !lease.awakened, "GraffilandNFT: not dormant");
         require(block.timestamp > lease.expiresAt, "GraffilandNFT: lease still active");
         address prev = lease.steward;
-        _releaseDormantSlot(prev);
+        // Free mint slots do NOT reopen when a dormant land expires without a human user.
         delete landLeases[landParcelId];
         emit DormantLandReleased(landParcelId, prev);
     }

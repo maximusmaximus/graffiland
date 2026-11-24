@@ -20,8 +20,9 @@ export const NOTIFICATION_CATEGORIES = [
   },
   {
     key: 'land_expiring',
-    label: 'Land lease expirations',
-    description: 'Reminders before a dormant land lease expires so you can awaken it in time.'
+    label: 'Land expiry & archive alerts',
+    description:
+      'Urgent alerts 3 hours before a land expires (72h agent limit or 28-day human inactivity) and when archived.'
   },
   {
     key: 'land_activity',
@@ -153,7 +154,9 @@ export async function getUserMintCapacityStatus(db, userSub) {
        LEFT JOIN parcel_curations pc ON pc.parcel_id = st.parcel_id
        LEFT JOIN land_parcels lp ON lp.parcel_id = st.parcel_id
        LEFT JOIN land_volumes lv ON lv.parcel_id = st.parcel_id
-       WHERE st.steward_sub = ? AND st.steward_type = 'human'
+       WHERE st.steward_sub = ?
+         AND st.steward_type = 'human'
+         AND st.status IN ('dormant', 'awakened')
          AND NOT EXISTS (
            SELECT 1 FROM sculptures s WHERE s.parcel_id = st.parcel_id AND s.hidden = 0
          )
@@ -162,10 +165,20 @@ export async function getUserMintCapacityStatus(db, userSub) {
     )
     .catch(() => []);
 
+  // Consumed free starter slots that expired/archived with zero in-person human users never reopen
+  const forfeitedRow = await db
+    .get(
+      `SELECT COUNT(*) AS cnt
+       FROM land_archives
+       WHERE steward_sub = ? AND steward_type = 'human' AND had_human_interaction = 0`,
+      [cleanSub]
+    )
+    .catch(() => ({ cnt: 0 }));
+
   const totalRow = await db
     .get(
       `SELECT COUNT(DISTINCT parcel_id) AS cnt FROM (
-         SELECT parcel_id FROM land_steward_state WHERE steward_sub = ?
+         SELECT parcel_id FROM land_steward_state WHERE steward_sub = ? AND status IN ('dormant', 'awakened')
          UNION
          SELECT parcel_id FROM land_parcels WHERE first_claimant_sub = ?
          UNION
@@ -183,11 +196,13 @@ export async function getUserMintCapacityStatus(db, userSub) {
     centerLat: Number.isFinite(Number(r.center_lat)) ? Number(r.center_lat) : null,
     centerLng: Number.isFinite(Number(r.center_lng)) ? Number(r.center_lng) : null
   }));
-  const usedSlots = unbuiltParcels.length;
+  const forfeitedSlots = Number(forfeitedRow?.cnt || 0);
+  const usedSlots = unbuiltParcels.length + forfeitedSlots;
   const remainingSlots = Math.max(0, maxSlots - usedSlots);
 
   return {
     usedSlots,
+    forfeitedSlots,
     maxSlots,
     remainingSlots,
     canMintDesktop: remainingSlots > 0,
@@ -281,48 +296,129 @@ export async function createNotification(
   return serializeNotificationRow(saved);
 }
 
+function formatRemainingShort(diffMs) {
+  const totalMins = Math.max(1, Math.round(diffMs / 60000));
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  if (hrs >= 1 && mins > 0) return `${hrs}h ${mins}m`;
+  if (hrs >= 1) return `${hrs}h`;
+  return `${mins}m`;
+}
+
 /**
- * Generates deduped reminders for any dormant lands owned by `userSub` expiring within 48 hours.
+ * Generates deduped 3-hour pre-expiry warning notifications for any active lands
+ * (72-hour agent dormant leases OR 28-day human-inactivity windows) approaching expiry.
+ * When `userSub` is omitted, sweeps ALL landholders globally (used by cron & reaper).
  */
-async function syncExpiringLandNotifications(db, userSub) {
+export async function syncExpiringLandNotifications(
+  db,
+  userSub = '',
+  nowIso = new Date().toISOString()
+) {
   const cleanSub = String(userSub || '').trim();
-  if (!cleanSub) return;
-  const nowMs = Date.now();
-  const thresholdIso = new Date(nowMs + 48 * 60 * 60 * 1000).toISOString();
-  const nowIso = new Date(nowMs).toISOString();
-  const rows = await db
+  const parsedNow = Date.parse(nowIso);
+  const nowMs = Number.isFinite(parsedNow) ? parsedNow : Date.now();
+  const warningWindowHours = Number(STEWARD_DEFAULTS.expiryWarningHours || 3);
+  const thresholdIso = new Date(nowMs + warningWindowHours * 60 * 60 * 1000).toISOString();
+  const effectiveNowIso = new Date(nowMs).toISOString();
+
+  const userClause = cleanSub ? 'AND st.steward_sub = ?' : '';
+  const baseParams = cleanSub
+    ? [effectiveNowIso, thresholdIso, cleanSub]
+    : [effectiveNowIso, thresholdIso];
+
+  // 1) 72-hour agent dormant leases expiring within 3 hours
+  const dormantRows = await db
     .all(
-      `SELECT st.parcel_id, st.lease_expires_at, COALESCE(pc.custom_name, '') AS custom_name
+      `SELECT st.parcel_id, st.steward_sub, st.lease_expires_at,
+              COALESCE(pc.custom_name, '') AS custom_name
        FROM land_steward_state st
        LEFT JOIN parcel_curations pc ON pc.parcel_id = st.parcel_id
-       WHERE st.steward_sub = ?
-         AND st.status = 'dormant'
+       WHERE st.status = 'dormant'
+         AND st.steward_sub != ''
          AND st.lease_expires_at != ''
          AND st.lease_expires_at > ?
-         AND st.lease_expires_at <= ?`,
-      [cleanSub, nowIso, thresholdIso]
+         AND st.lease_expires_at <= ?
+         ${userClause}`,
+      baseParams
     )
     .catch(() => []);
 
-  for (const row of rows || []) {
-    const remainingHrs = Math.max(
-      1,
-      Math.round((new Date(row.lease_expires_at).getTime() - nowMs) / (60 * 60 * 1000))
-    );
+  let sentCount = 0;
+  for (const row of dormantRows || []) {
+    const expMs = Date.parse(row.lease_expires_at);
+    const diffMs = Math.max(60000, expMs - nowMs);
+    const remainingLabel = formatRemainingShort(diffMs);
     const label = resolveLandDisplayName({ customName: row.custom_name || '' });
-    await createNotification(db, {
-      userSub: cleanSub,
+    const utcStr = row.lease_expires_at.slice(0, 16).replace('T', ' ');
+    const created = await createNotification(db, {
+      userSub: row.steward_sub,
       category: 'land_expiring',
       severity: 'warning',
-      title: `⏳ "${label}" lease expires in ~${remainingHrs}h`,
-      message: `Place a verified IRL sculpture (${STEWARD_DEFAULTS.minHumanPoolVoxels}+ voxels) on ${label} before ${row.lease_expires_at.slice(0, 16).replace('T', ' ')} UTC to awaken it permanently.`,
+      title: `⏳ "${label}" expires in ${remainingLabel} (72h limit)`,
+      message: `Agent land "${label}" has no verified in-person human interaction yet and will be archived & destroyed at ${utcStr} UTC (free slot will not reopen). Visit in person on Mobile AR (sculpt ${STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks, Check In, join AR chat, or unlock pinned notes) to keep it live.`,
       parcelId: row.parcel_id,
       actionType: 'open_land',
       actionLabel: 'Inspect Land',
-      meta: { leaseExpiresAt: row.lease_expires_at, remainingHours: remainingHrs },
-      dedupeKey: `expiring:${row.parcel_id}:${row.lease_expires_at.slice(0, 13)}`
-    }).catch(() => {});
+      meta: {
+        expiryKind: 'agent_72h',
+        leaseExpiresAt: row.lease_expires_at,
+        expiresAt: row.lease_expires_at,
+        remainingMinutes: Math.max(1, Math.round(diffMs / 60000))
+      },
+      dedupeKey: `expiring:3h:dormant:${row.parcel_id}:${row.lease_expires_at.slice(0, 16)}`
+    }).catch(() => null);
+    if (created) sentCount += 1;
   }
+
+  // 2) 28-day human inactivity windows expiring within 3 hours
+  const inactiveRows = await db
+    .all(
+      `SELECT st.parcel_id, st.steward_sub, st.inactivity_expires_at,
+              COALESCE(pc.custom_name, '') AS custom_name
+       FROM land_steward_state st
+       LEFT JOIN parcel_curations pc ON pc.parcel_id = st.parcel_id
+       WHERE st.status = 'awakened'
+         AND st.steward_sub != ''
+         AND st.inactivity_expires_at != ''
+         AND st.inactivity_expires_at > ?
+         AND st.inactivity_expires_at <= ?
+         ${userClause}`,
+      baseParams
+    )
+    .catch(() => []);
+
+  for (const row of inactiveRows || []) {
+    const expMs = Date.parse(row.inactivity_expires_at);
+    const diffMs = Math.max(60000, expMs - nowMs);
+    const remainingLabel = formatRemainingShort(diffMs);
+    const label = resolveLandDisplayName({ customName: row.custom_name || '' });
+    const utcStr = row.inactivity_expires_at.slice(0, 16).replace('T', ' ');
+    const created = await createNotification(db, {
+      userSub: row.steward_sub,
+      category: 'land_expiring',
+      severity: 'warning',
+      title: `⏳ "${label}" expires in ${remainingLabel} (28-day inactivity)`,
+      message: `"${label}" has had no verified in-person human interaction for almost ${STEWARD_DEFAULTS.inactivityArchiveDays} days and will be archived & destroyed at ${utcStr} UTC. Have a human interact in person via Mobile AR (sculpt, Check In, AR chat, or unlock pinned notes) to reset the 28-day timer.`,
+      parcelId: row.parcel_id,
+      actionType: 'open_land',
+      actionLabel: 'Inspect Land',
+      meta: {
+        expiryKind: 'inactivity_28d',
+        inactivityExpiresAt: row.inactivity_expires_at,
+        expiresAt: row.inactivity_expires_at,
+        remainingMinutes: Math.max(1, Math.round(diffMs / 60000))
+      },
+      dedupeKey: `expiring:3h:inactivity:${row.parcel_id}:${row.inactivity_expires_at.slice(0, 16)}`
+    }).catch(() => null);
+    if (created) sentCount += 1;
+  }
+
+  return { sentCount };
+}
+
+export async function syncAllExpiringLandNotifications(db, nowIso = new Date().toISOString()) {
+  return syncExpiringLandNotifications(db, '', nowIso);
 }
 
 export async function listUserNotifications(
@@ -495,14 +591,14 @@ export async function notifyAfterSculpturePublished(
     if (n) created.push(n);
   }
 
-  // 2) Dormant land awakened permanently
+  // 2) Dormant land awakened by an in-person human
   if (awakenedParcel && info.ownerSub) {
     const n = await createNotification(db, {
       userSub: info.ownerSub,
       category: 'mint_slots_unlocked',
       severity: 'success',
-      title: `✨ "${info.landTitle}" awakened permanently!`,
-      message: `"${safeScTitle}" awakened "${info.landTitle}" into a permanent parcel and unlocked new steward capacity.`,
+      title: `✨ "${info.landTitle}" awakened by an IRL visitor!`,
+      message: `"${safeScTitle}" awakened "${info.landTitle}", started a fresh ${STEWARD_DEFAULTS.inactivityArchiveDays}-day activity window, and unlocked +${STEWARD_DEFAULTS.slotsPerAwakenedLand} steward slots.`,
       parcelId: info.parcelId,
       sculptureId,
       actionType: 'open_land',

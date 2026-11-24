@@ -21,6 +21,12 @@ import {
   updateLandVolume
 } from '../../shared/agentQuestService.mjs';
 import {
+  checkInToLandInPerson,
+  getArchivedLandDetail,
+  listArchivedLands,
+  reapAndArchiveExpiredLands
+} from '../../shared/landArchiveService.mjs';
+import {
   deleteNotification,
   listUserNotifications,
   markNotificationsRead,
@@ -1666,10 +1672,50 @@ export default {
       }
     }
 
+    if (
+      (pathname === '/api/archive' || pathname === '/api/lands/archive') &&
+      request.method === 'GET'
+    ) {
+      try {
+        const out = await listArchivedLands(d1Adapter, {
+          q: url.searchParams.get('q') || '',
+          reason: url.searchParams.get('reason') || '',
+          steward: url.searchParams.get('steward') || '',
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 50,
+          offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : 0
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not load land archive' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const archiveDetailMatch = pathname.match(/^\/api\/(?:lands\/)?archive\/([^/]+)$/);
+    if (archiveDetailMatch && request.method === 'GET') {
+      try {
+        const out = await getArchivedLandDetail(
+          d1Adapter,
+          decodeURIComponent(archiveDetailMatch[1])
+        );
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Archive record not found' },
+          err?.statusCode || 404,
+          request
+        );
+      }
+    }
+
     if (pathname === '/api/notifications' && request.method === 'GET') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
       try {
+        await reapAndArchiveExpiredLands(d1Adapter).catch(() => {});
         const limitParam = url.searchParams.get('limit');
         const out = await listUserNotifications(d1Adapter, user.id, {
           limit: limitParam ? Number(limitParam) : 40
@@ -1787,6 +1833,28 @@ export default {
       } catch (err) {
         return jsonResponse(
           { error: err.message || 'Could not update 3D land volume', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const landCheckInMatch = pathname.match(/^\/api\/lands\/([^/]+)\/checkin$/);
+    if (landCheckInMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await checkInToLandInPerson(d1Adapter, {
+          parcelId: decodeURIComponent(landCheckInMatch[1]),
+          user,
+          body,
+          userAgent: request.headers.get('User-Agent') || ''
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'In-person check-in failed', ...(err?.extra || {}) },
           err?.statusCode || 400,
           request
         );
@@ -3438,5 +3506,18 @@ export default {
     }
 
     return jsonResponse({ error: 'Not found' }, 404, request);
+  },
+
+  async scheduled(_event, env) {
+    if (!env?.DB) return;
+    const d1Adapter = {
+      get: (sql, params = []) => env.DB.prepare(sql).bind(...params).first(),
+      all: async (sql, params = []) => {
+        const res = await env.DB.prepare(sql).bind(...params).all();
+        return res.results || [];
+      },
+      run: (sql, params = []) => env.DB.prepare(sql).bind(...params).run()
+    };
+    await reapAndArchiveExpiredLands(d1Adapter).catch(() => {});
   }
 };

@@ -28,6 +28,7 @@ export default function ARLandInspectorPanel({
   nearbyLands = [],
   onSelectNearbyLand = null,
   onDrawHere = null,
+  onCheckInLand = null,
   onOpen3DMap = null,
   onManageLand = null,
   onRenameLand = null,
@@ -42,14 +43,18 @@ export default function ARLandInspectorPanel({
   const [renameSaving, setRenameSaving] = useState(false);
   const [renameError, setRenameError] = useState('');
   const [localDisplayName, setLocalDisplayName] = useState('');
+  const [checkInBusy, setCheckInBusy] = useState(false);
+  const [checkedInDone, setCheckedInDone] = useState(false);
   const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
 
-  // Reset inline rename state when switching to a different nearby land
+  // Reset inline rename & check-in state when switching to a different nearby land
   useEffect(() => {
     setIsRenaming(false);
     setRenameDraft('');
     setRenameError('');
     setLocalDisplayName('');
+    setCheckInBusy(false);
+    setCheckedInDone(false);
   }, [land?.parcelId]);
 
   if (!land) return null;
@@ -375,6 +380,28 @@ export default function ARLandInspectorPanel({
             onClick={() => onDrawHere(land)}
           >
             <XeroIcon emoji="🎨" size={13} /> Draw Here
+          </button>
+        )}
+        {typeof onCheckInLand === 'function' && (
+          <button
+            type="button"
+            className={`btn btn-xs ${checkedInDone ? 'btn-primary' : ''}`}
+            data-testid="ar-land-checkin-btn"
+            disabled={checkInBusy}
+            title="Verify your physical in-person presence (Camera + GPS) to keep this land active"
+            onClick={async () => {
+              if (checkInBusy) return;
+              setCheckInBusy(true);
+              try {
+                const ok = await onCheckInLand(land);
+                if (ok) setCheckedInDone(true);
+              } finally {
+                setCheckInBusy(false);
+              }
+            }}
+          >
+            <XeroIcon emoji={checkedInDone ? '✅' : '📍'} size={12} />{' '}
+            {checkInBusy ? 'Verifying…' : checkedInDone ? 'Visited In Person' : 'Check In IRL'}
           </button>
         )}
         {onOpen3DMap && (
