@@ -26,6 +26,14 @@ import {
 import { prepareProfileImageFile } from '../utils/profileImageHelper.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import {
+  clearLastViewedItems,
+  clearUserActionHistory,
+  loadLastViewedItems,
+  loadUserActionHistory,
+  recordUserAction,
+  subscribeUserHistory
+} from '../utils/userHistory.js';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
@@ -72,8 +80,9 @@ export default function ProfileModal({
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [activeTab, setActiveTab] = useState('lands'); // 'lands' | 'sculptures' | 'actions'
+  const [activeTab, setActiveTab] = useState('lands'); // 'lands' | 'sculptures' | 'last-viewed' | 'actions'
   const [editing, setEditing] = useState(Boolean(initialEditing));
+  const [historyTick, setHistoryTick] = useState(0);
 
   const [usernameInput, setUsernameInput] = useState(() =>
     isOwnTarget ? String(user?.username || '') : ''
@@ -126,6 +135,49 @@ export default function ProfileModal({
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  useEffect(() => subscribeUserHistory(() => setHistoryTick((n) => n + 1)), []);
+
+  const lastViewedItems = useMemo(() => {
+    void historyTick;
+    if (!isOwner && !isOwnTarget) return [];
+    const own = user?.id ? loadLastViewedItems(user.id) : [];
+    const guest = user?.id ? loadLastViewedItems('guest') : [];
+    const merged = [];
+    const seen = new Set();
+    for (const item of [...own, ...guest]) {
+      const k = item?.key || `${item?.kind || 'sculpture'}:${item?.id || ''}`;
+      if (!item?.id || seen.has(k)) continue;
+      seen.add(k);
+      merged.push(item);
+    }
+    return merged.sort(
+      (a, b) => (Date.parse(String(b.viewedAt || '')) || 0) - (Date.parse(String(a.viewedAt || '')) || 0)
+    );
+  }, [historyTick, isOwner, isOwnTarget, user?.id]);
+
+  const localActions = useMemo(() => {
+    void historyTick;
+    if (!isOwner && !isOwnTarget) return [];
+    const own = user?.id ? loadUserActionHistory(user.id) : [];
+    const guest = user?.id ? loadUserActionHistory('guest') : [];
+    const merged = [];
+    const seen = new Set();
+    for (const act of [...own, ...guest]) {
+      if (!act?.id || seen.has(act.id)) continue;
+      seen.add(act.id);
+      merged.push(act);
+    }
+    return merged;
+  }, [historyTick, isOwner, isOwnTarget, user?.id]);
+
+  const combinedActions = useMemo(() => {
+    if (!isOwner) return actions;
+    const all = [...localActions, ...actions];
+    return all.sort(
+      (a, b) => (Date.parse(String(b.createdAt || '')) || 0) - (Date.parse(String(a.createdAt || '')) || 0)
+    );
+  }, [isOwner, localActions, actions]);
 
   const loadProfile = useCallback(async () => {
     if (!targetHandle) {
@@ -386,6 +438,12 @@ export default function ProfileModal({
       setEditing(false);
       setSaveNotice('Profile saved!');
       notifySettingsSaved(`Profile settings saved (@${localUsernameValidation.username}).`);
+      recordUserAction(user?.id, {
+        type: 'update_profile',
+        icon: '✏️',
+        title: `Updated profile (@${localUsernameValidation.username})`,
+        detail: 'Saved username, bio, or banner'
+      });
       onShowHint?.(`Profile updated (@${localUsernameValidation.username})`);
 
       // Keep ?u= URL synced if user was viewing their own public URL
@@ -1102,12 +1160,14 @@ export default function ProfileModal({
                 <div className="profile-stat-lbl">3D Blocks</div>
               </div>
               <div className="profile-stat-box">
-                <div className="profile-stat-val">{stats.actionCount}</div>
+                <div className="profile-stat-val">
+                  {isOwner ? Math.max(Number(stats.actionCount || 0), combinedActions.length) : stats.actionCount}
+                </div>
                 <div className="profile-stat-lbl">Actions</div>
               </div>
             </div>
 
-            {/* Public Content Tabs */}
+            {/* Public & Owner Content Tabs */}
             <div className="profile-tabs" role="tablist" aria-label="Profile content">
               <button
                 type="button"
@@ -1127,14 +1187,27 @@ export default function ProfileModal({
               >
                 <XeroIcon emoji="🧊" size={12} /> Sculptures ({sculptures.length})
               </button>
+              {isOwner && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'last-viewed'}
+                  className={`btn btn-xs ${activeTab === 'last-viewed' ? 'btn-primary' : ''}`}
+                  data-testid="profile-tab-last-viewed"
+                  onClick={() => setActiveTab('last-viewed')}
+                >
+                  <XeroIcon emoji="🕒" size={12} /> Last Viewed ({lastViewedItems.length})
+                </button>
+              )}
               <button
                 type="button"
                 role="tab"
                 aria-selected={activeTab === 'actions'}
                 className={`btn btn-xs ${activeTab === 'actions' ? 'btn-primary' : ''}`}
+                data-testid="profile-tab-actions"
                 onClick={() => setActiveTab('actions')}
               >
-                <XeroIcon emoji="⚡" size={12} /> Actions ({actions.length})
+                <XeroIcon emoji="⚡" size={12} /> {isOwner ? 'Actions & History' : 'Actions'} ({combinedActions.length})
               </button>
             </div>
 
@@ -1332,7 +1405,111 @@ export default function ProfileModal({
               </div>
             )}
 
-            {/* Tab 3: Public Activity, Listings & Actions */}
+            {/* Tab 3 (Owner): Last Viewed Items */}
+            {isOwner && activeTab === 'last-viewed' && (
+              <div className="profile-section-list" data-testid="profile-last-viewed-list">
+                <div className="profile-history-bar">
+                  <div className="profile-sub-heading" style={{ margin: 0 }}>
+                    Recently Viewed Sculptures &amp; Lands ({lastViewedItems.length})
+                  </div>
+                  {lastViewedItems.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      data-testid="profile-clear-last-viewed-btn"
+                      onClick={() => {
+                        if (user?.id) clearLastViewedItems(user.id);
+                        clearLastViewedItems('guest');
+                        setHistoryTick((n) => n + 1);
+                      }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {lastViewedItems.length === 0 ? (
+                  <div className="profile-empty-box">
+                    No recently viewed items yet. Open any sculpture or land on the map and it will appear here for quick access.
+                  </div>
+                ) : (
+                  lastViewedItems.map((item) => {
+                    const isLandItem = item.kind === 'land';
+                    const itemUrl = isLandItem
+                      ? buildParcelShareUrl({
+                          origin,
+                          pathname,
+                          parcelId: item.parcelId || item.id,
+                          customName: item.title || '',
+                          compact: true
+                        })
+                      : resolveSculptureUrl(item.sculptureId || item.id);
+                    const canReopen = isLandItem ? Boolean(onOpenLand) : Boolean(onSelectSculpture);
+                    return (
+                      <div
+                        key={item.key || `${item.kind}:${item.id}`}
+                        className="profile-action-row"
+                        data-testid="profile-last-viewed-item"
+                        data-kind={item.kind}
+                      >
+                        <div className="profile-action-icon" aria-hidden="true">
+                          <XeroIcon emoji={isLandItem ? '🗺️' : '🧊'} size={15} />
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div className="profile-action-title">{item.title}</div>
+                          <div className="profile-action-meta">
+                            {isLandItem ? 'Virtual Land' : 'Sculpture'}
+                            {item.subtitle ? ` · ${item.subtitle}` : ''}
+                            {item.viewedAt ? ` · ${formatShortDate(item.viewedAt)}` : ''}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                          {canReopen && (
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-primary"
+                              data-testid="profile-last-viewed-open-btn"
+                              onClick={() => {
+                                onClose?.();
+                                if (isLandItem) {
+                                  onOpenLand?.(
+                                    item.snapshot || {
+                                      parcelId: item.parcelId || item.id,
+                                      customName: item.title
+                                    }
+                                  );
+                                } else {
+                                  onSelectSculpture?.(
+                                    item.snapshot || {
+                                      id: item.sculptureId || item.id,
+                                      title: item.title,
+                                      parcelId: item.parcelId
+                                    }
+                                  );
+                                }
+                              }}
+                            >
+                              Open
+                            </button>
+                          )}
+                          {itemUrl && (
+                            <a
+                              className="btn btn-xs profile-public-link-btn"
+                              href={itemUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <XeroIcon emoji="🔗" size={11} />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {/* Tab 4: History of Actions & Public Activity */}
             {activeTab === 'actions' && (
               <div className="profile-section-list" data-testid="profile-actions-list">
                 {listings.length > 0 && (
@@ -1364,10 +1541,32 @@ export default function ProfileModal({
                   );
                 })}
 
-                {actions.length === 0 ? (
-                  <div className="profile-empty-box">No public account actions recorded yet.</div>
+                {isOwner && (
+                  <div className="profile-history-bar">
+                    <div className="profile-sub-heading" style={{ margin: 0 }}>
+                      History of Actions ({combinedActions.length})
+                    </div>
+                    {localActions.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        data-testid="profile-clear-actions-btn"
+                        onClick={() => {
+                          if (user?.id) clearUserActionHistory(user.id);
+                          clearUserActionHistory('guest');
+                          setHistoryTick((n) => n + 1);
+                        }}
+                      >
+                        Clear Local
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {combinedActions.length === 0 ? (
+                  <div className="profile-empty-box">No account actions recorded yet.</div>
                 ) : (
-                  actions.map((act) => {
+                  combinedActions.map((act) => {
                     const actUrl = resolveActionUrl(act);
                     return (
                       <div key={act.id} className="profile-action-row" data-testid="profile-action-item">
@@ -1378,7 +1577,7 @@ export default function ProfileModal({
                           <div className="profile-action-title">{act.title}</div>
                           <div className="profile-action-meta">
                             {act.detail}
-                            {act.createdAt ? ` · ${formatShortDate(act.createdAt)}` : ''}
+                            {act.createdAt ? `${act.detail ? ' · ' : ''}${formatShortDate(act.createdAt)}` : ''}
                           </div>
                         </div>
                         {actUrl && (

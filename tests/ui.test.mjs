@@ -5561,9 +5561,138 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       RTL.fireEvent.click(sculpturesTab);
       assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
       assert.ok(view.getByTestId('desktop-nearby-sculptures-list').textContent.includes('Neon Archway'));
+
+      // 5) Pair Phone button omits "(QR · Large 3D View)" and Last Viewed does NOT appear in nav or sidebar
+      const pairBtnText = view.getByTestId('nav-pair-phone-btn').textContent.trim();
+      assert.equal(pairBtnText, 'Pair Phone');
+      assert.ok(!pairBtnText.includes('QR') && !pairBtnText.includes('Large 3D View'));
+      const firstSculptureBtn = view
+        .getByTestId('desktop-nearby-sculptures-list')
+        .querySelector('button');
+      assert.ok(firstSculptureBtn);
+      RTL.fireEvent.click(firstSculptureBtn);
+      assert.equal(view.container.querySelector('.desktop-nav').textContent.includes('Last Viewed'), false);
+      assert.equal(
+        view.container.querySelector('.desktop-nearby-panel').textContent.includes('Last Viewed'),
+        false
+      );
     } finally {
       globalThis.fetch = origFetch;
       localStorage.removeItem('graffiland_desktop_session_v1');
+      localStorage.removeItem('graffiland_user_history_v1:google:desk-owner');
+      localStorage.removeItem('graffiland_user_history_v1:guest');
+      cleanup();
+    }
+  });
+
+  test('ProfileModal shows owner Last Viewed items and History of Actions with reopen and clear controls', async () => {
+    const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
+    const historyMod = await import(pathToFileURL(path.join(ROOT, 'client/src/utils/userHistory.js')).href);
+
+    const ownerUser = {
+      id: 'google:hist-user-1',
+      username: 'history_artist'
+    };
+    historyMod.clearLastViewedItems(ownerUser.id);
+    historyMod.clearUserActionHistory(ownerUser.id);
+    historyMod.clearLastViewedItems('guest');
+    historyMod.clearUserActionHistory('guest');
+
+    historyMod.recordLastViewedItem(ownerUser.id, {
+      kind: 'sculpture',
+      id: 'sc-hist-1',
+      sculptureId: 'sc-hist-1',
+      parcelId: 'GLAND-HIST01',
+      title: 'Solar Dragon',
+      subtitle: 'Market Plaza'
+    });
+    historyMod.recordLastViewedItem(ownerUser.id, {
+      kind: 'land',
+      id: 'GLAND-HIST01',
+      parcelId: 'GLAND-HIST01',
+      title: 'Market Plaza',
+      subtitle: '80×80×60 ft'
+    });
+    historyMod.recordUserAction(ownerUser.id, {
+      type: 'mint_land',
+      icon: '🏗️',
+      title: 'Minted land "Market Plaza"',
+      detail: '24×24×18m',
+      parcelId: 'GLAND-HIST01',
+      linkLabel: 'Land'
+    });
+
+    const reopenedSculptures = [];
+    const reopenedLands = [];
+
+    try {
+      const view = RTL.render(
+        React.createElement(ProfileModal, {
+          handle: 'history_artist',
+          user: ownerUser,
+          config: {},
+          fetchProfileFn: async () => ({
+            profile: {
+              id: ownerUser.id,
+              username: ownerUser.username,
+              bio: 'Testing history',
+              userNumber: 12
+            },
+            stats: { landCount: 0, sculptureCount: 0, actionCount: 1, totalBlocks: 0 },
+            lands: [],
+            sculptures: [],
+            listings: [],
+            actions: [
+              {
+                id: 'srv-act-1',
+                icon: '🧊',
+                title: 'Published Solar Dragon',
+                detail: 'Market Plaza',
+                sculptureId: 'sc-hist-1',
+                createdAt: '2026-11-20T12:00:00.000Z'
+              }
+            ]
+          }),
+          onSelectSculpture: (sc) => reopenedSculptures.push(sc),
+          onOpenLand: (land) => reopenedLands.push(land),
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(view.getByTestId('profile-tab-last-viewed'));
+      });
+
+      // 1) Last Viewed tab lists both viewed land & sculpture and allows 1-click reopening
+      RTL.fireEvent.click(view.getByTestId('profile-tab-last-viewed'));
+      const viewedList = view.getByTestId('profile-last-viewed-list');
+      assert.ok(viewedList.textContent.includes('Market Plaza'));
+      assert.ok(viewedList.textContent.includes('Solar Dragon'));
+      const openBtns = view.getAllByTestId('profile-last-viewed-open-btn');
+      assert.equal(openBtns.length, 2);
+      RTL.fireEvent.click(openBtns[0]);
+      RTL.fireEvent.click(openBtns[1]);
+      assert.equal(reopenedLands.length + reopenedSculptures.length, 2);
+
+      // 2) Action History tab combines local action history + server actions
+      RTL.fireEvent.click(view.getByTestId('profile-tab-actions'));
+      const actionsList = view.getByTestId('profile-actions-list');
+      assert.ok(actionsList.textContent.includes('History of Actions'));
+      assert.ok(actionsList.textContent.includes('Minted land "Market Plaza"'));
+      assert.ok(actionsList.textContent.includes('Published Solar Dragon'));
+
+      // 3) Clear Local removes local actions while keeping server actions intact
+      RTL.fireEvent.click(view.getByTestId('profile-clear-actions-btn'));
+      assert.equal(actionsList.textContent.includes('Minted land "Market Plaza"'), false);
+      assert.ok(actionsList.textContent.includes('Published Solar Dragon'));
+
+      // 4) Clear removes Last Viewed items cleanly
+      RTL.fireEvent.click(view.getByTestId('profile-tab-last-viewed'));
+      RTL.fireEvent.click(view.getByTestId('profile-clear-last-viewed-btn'));
+      assert.ok(view.getByTestId('profile-last-viewed-list').textContent.includes('No recently viewed items'));
+    } finally {
+      historyMod.clearLastViewedItems(ownerUser.id);
+      historyMod.clearUserActionHistory(ownerUser.id);
       cleanup();
     }
   });

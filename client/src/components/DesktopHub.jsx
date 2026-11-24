@@ -29,6 +29,7 @@ import {
   resolveLandCoords
 } from '../utils/landMapHelpers.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
@@ -511,6 +512,25 @@ export default function DesktopHub({
     setInfoOpen(false);
     setSelected(sc);
     setLastSculpture(sc);
+    const landName = getLiveLandName(sc);
+    recordLastViewedItem(user?.id, {
+      kind: 'sculpture',
+      id: sc.id,
+      sculptureId: sc.id,
+      parcelId: sc.parcelId || '',
+      title: sc.title || 'Sculpture',
+      subtitle: landName,
+      snapshot: summarizeSculptureSnapshot(sc)
+    });
+    recordUserAction(user?.id, {
+      type: 'view_sculpture',
+      icon: '🧊',
+      title: `Viewed "${sc.title || 'Sculpture'}"`,
+      detail: landName,
+      sculptureId: sc.id,
+      parcelId: sc.parcelId || '',
+      linkLabel: 'View'
+    });
   }
 
   async function handleBuyListing(listing) {
@@ -525,6 +545,15 @@ export default function DesktopHub({
       setMarketNotice(
         `Purchased ${listing.sculptureTitle || 'NFT'}! Splits settled: 5% Platform (${out.splits.platform.amountEth} ETH) · 3% Agent (${out.splits.agentSteward.amountEth} ETH) · 2% Human Pool (${out.splits.humanContributors.poolEth} ETH)`
       );
+      recordUserAction(user?.id, {
+        type: 'buy_listing',
+        icon: '🛒',
+        title: `Purchased "${listing.sculptureTitle || 'NFT'}"`,
+        detail: `${listing.priceEth} ETH`,
+        sculptureId: listing.sculptureId || '',
+        parcelId: listing.parcelId || '',
+        linkLabel: 'Artwork'
+      });
       await refreshData();
     } catch (err) {
       setMarketNotice(err.message || 'Purchase failed');
@@ -582,11 +611,35 @@ export default function DesktopHub({
       setMapFocusTarget({ lat: coords.lat, lng: coords.lng, zoom: 17.8, ts: Date.now() });
       setMapViewport((prev) => ({ ...(prev || {}), lat: coords.lat, lng: coords.lng, zoom: 17.8 }));
     }
+    const title = getLiveLandName(land, land.displayName || 'Virtual Land');
+    recordLastViewedItem(user?.id, {
+      kind: 'land',
+      id: land.parcelId,
+      parcelId: land.parcelId,
+      title,
+      subtitle: land.compactDimensionsLabel || '',
+      snapshot: {
+        parcelId: land.parcelId,
+        customName: land.customName || title,
+        centerLat: coords?.lat ?? land.centerLat ?? null,
+        centerLng: coords?.lng ?? land.centerLng ?? null,
+        volume: land.volume || null
+      }
+    });
   }
 
   function openLandShowcase(land) {
     if (!land?.parcelId) return;
     focusLandOnMap(land);
+    const title = getLiveLandName(land, land.displayName || 'Virtual Land');
+    recordUserAction(user?.id, {
+      type: 'view_land',
+      icon: '🗺️',
+      title: `Inspected land "${title}"`,
+      detail: land.compactDimensionsLabel || '3D Land Showcase',
+      parcelId: land.parcelId,
+      linkLabel: 'Land'
+    });
     setPairOpen(false);
     setInfoOpen(false);
     setSelected(null);
@@ -988,6 +1041,14 @@ export default function DesktopHub({
       setLandStatus({
         text: `Minted "${mintedParcelRecord.customName}" (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}! Visit in person on Mobile AR and add art within 28 days to clear the timer and permanently own it.`
       });
+      recordUserAction(user?.id, {
+        type: 'mint_land',
+        icon: '🏗️',
+        title: `Minted land "${mintedParcelRecord.customName}"`,
+        detail: `${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m`,
+        parcelId: res.parcelId,
+        linkLabel: 'Land'
+      });
       setNotifRefreshSignal((n) => n + 1);
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
@@ -1081,6 +1142,18 @@ export default function DesktopHub({
       });
       setDraftParcelsRaw((prev) => prev.filter((item) => !mintedSet.has(item.id)));
       setSelectedDraftId(`owned:${mintedIds[mintedIds.length - 1]}`);
+      for (const rec of mintedRecords) {
+        recordUserAction(user?.id, {
+          type: 'mint_land',
+          icon: '🏗️',
+          title: `Minted land "${rec.customName}"`,
+          detail: rec.volume
+            ? `${Math.round(rec.volume.widthMeters)}×${Math.round(rec.volume.depthMeters)}×${Math.round(rec.volume.heightMeters)}m`
+            : 'Virtual Land',
+          parcelId: rec.parcelId,
+          linkLabel: 'Land'
+        });
+      }
       setNotifRefreshSignal((n) => n + 1);
       await Promise.all([refreshData(), refreshMyLands()]);
     }
@@ -1113,7 +1186,16 @@ export default function DesktopHub({
     setLandStatus('');
     try {
       await api.updateLandVolume(parcelId, nextVolume);
-      setLandStatus({ text: `Saved updated 3D bounds for "${getLiveLandName(parcelId)}".` });
+      const updatedLandName = getLiveLandName(parcelId);
+      setLandStatus({ text: `Saved updated 3D bounds for "${updatedLandName}".` });
+      recordUserAction(user?.id, {
+        type: 'update_land_volume',
+        icon: '📐',
+        title: `Updated 3D bounds for "${updatedLandName}"`,
+        detail: 'Saved land dimensions',
+        parcelId,
+        linkLabel: 'Land'
+      });
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
       setLandStatus({ text: err?.message || 'Could not update 3D volume.', isError: true });
@@ -1133,6 +1215,14 @@ export default function DesktopHub({
         : `Unfrozen "${landName}" — new sculptures are allowed again.`;
       setLandStatus({ text: freezeMsg });
       notifySettingsSaved(freezeMsg);
+      recordUserAction(user?.id, {
+        type: nextFrozen ? 'freeze_land' : 'unfreeze_land',
+        icon: nextFrozen ? '❄️' : '☀️',
+        title: `${nextFrozen ? 'Froze' : 'Unfroze'} "${landName}"`,
+        detail: nextFrozen ? 'Locked new placements' : 'Allowed new placements',
+        parcelId,
+        linkLabel: 'Land'
+      });
       await Promise.all([refreshData(), refreshMyLands()]);
     } catch (err) {
       setLandStatus({ text: err?.message || 'Could not update freeze setting.', isError: true });
@@ -1180,9 +1270,19 @@ export default function DesktopHub({
           ? `Renamed land to "${customName}".`
           : `Saved details for "${getLiveLandName(parcelId)}".`
       });
+      recordUserAction(user?.id, {
+        type: 'rename_land',
+        icon: '✏️',
+        title: customName
+          ? `Renamed land to "${customName}"`
+          : `Updated details for "${getLiveLandName(parcelId)}"`,
+        detail: 'Saved land metadata',
+        parcelId,
+        linkLabel: 'Land'
+      });
       await Promise.all([refreshData(), refreshMyLands()]);
     },
-    [refreshData, refreshMyLands, getLiveLandName]
+    [refreshData, refreshMyLands, getLiveLandName, user?.id]
   );
 
   const handleOpenAddLandItem = useCallback((parcelOrId) => {
@@ -1217,16 +1317,6 @@ export default function DesktopHub({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {lastSculpture && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => openSculpture(lastSculpture)}
-              title={`Reopen last interacted sculpture: ${lastSculpture.title}`}
-            >
-              <XeroIcon emoji="🕒" size={15} /> Last Viewed: {lastSculpture.title}
-            </button>
-          )}
           <button
             type="button"
             className="btn btn-primary btn-pair-glow"
@@ -1234,7 +1324,7 @@ export default function DesktopHub({
             onClick={openPairModal}
             title="Pair your mobile phone via QR for live 3D drawing & in-person AR sculpting"
           >
-            <XeroIcon emoji="🔗" size={16} /> Pair Phone (QR · Large 3D View)
+            <XeroIcon emoji="🔗" size={16} /> Pair Phone
           </button>
           <button
             type="button"
@@ -1520,26 +1610,6 @@ export default function DesktopHub({
                   No lands within {nearbyRadiusLabel} yet — showing all {groupedLands.allLands.length} global lands sorted closest first.
                 </div>
               )}
-
-            {sidebarTab === 'list' && nearbyCategory === 'sculptures' && lastSculpture && (
-              <button
-                type="button"
-                className="desktop-nearby-item is-last-viewed"
-                onClick={() => openSculpture(lastSculpture)}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                  <strong style={{ fontSize: 12 }}>
-                    <XeroIcon emoji="🕒" size={12} /> Last Viewed: {lastSculpture.title}
-                  </strong>
-                  <span className="badge gold" style={{ fontSize: 10 }}>
-                    {getLiveLandName(lastSculpture)}
-                  </span>
-                </div>
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  Click to reopen 3D view, land parcel &amp; on-chain deed
-                </span>
-              </button>
-            )}
 
             {sidebarTab === 'land' ? (
               <DesktopLandBuilderPanel
