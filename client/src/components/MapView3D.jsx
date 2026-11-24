@@ -15,6 +15,10 @@ import {
   resolveLandDisplayName,
   scaleDraftFromCorner
 } from '../../../shared/landVolume.mjs';
+import {
+  extractSculptureBaseDimensions,
+  extractSculptureScale
+} from '../../../shared/sculpturePlacement.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
@@ -24,14 +28,15 @@ import {
 } from '../utils/landMapHelpers.js';
 import {
   computePrismScreenGeometry,
-  pointInPolygon2D
+  pointInPolygon2D,
+  projectLngLatAltToScreen
 } from '../utils/map3dProjection.js';
 import {
   drawFloatingCenterArrow,
   drawFloatingLandLabel,
   getPrismLabelAnchor
 } from '../utils/map3dLabelOverlay.js';
-import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
+import { buildDefaultHudReservedRects, rectsOverlap } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
@@ -429,6 +434,8 @@ export default function MapView3D({
   const wireCanvasRef = useRef(null);
   const floatingPinsLayerRef = useRef(null);
   const floatingPinMapRef = useRef(new Map());
+  const floatingArtworkLayerRef = useRef(null);
+  const floatingArtworkMapRef = useRef(new Map());
   const searchBoxRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -605,7 +612,8 @@ export default function MapView3D({
     const parcelGeomMap = new Map();
     const pendingFloatingLabels = [];
 
-    // 1) Existing owned parcels -> glowing Amber/Gold (Icy Blue when frozen, Magenta for dormant quests)
+    // 1) Existing owned parcels -> depth-sorted back-to-front so nearer lands draw cleanly ahead of farther ones
+    const projectedParcels = [];
     for (const p of parcelsRef.current || []) {
       const vol =
         p?.volume ||
@@ -617,15 +625,29 @@ export default function MapView3D({
       const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
       const outerColor = isFrozen ? '#7dd3fc' : isDormant ? '#ff4da6' : '#ff1f8f';
       const innerColor = isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#ffd6ec';
-      drawGlowingPrism(ctx, geom, {
+      projectedParcels.push({
+        pid: String(p?.parcelId || '').toUpperCase(),
+        vol,
+        geom,
         outerColor,
-        innerColor,
+        innerColor
+      });
+    }
+    projectedParcels.sort((a, b) => (b.geom.avgDepth || 0) - (a.geom.avgDepth || 0));
+    for (const item of projectedParcels) {
+      drawGlowingPrism(ctx, item.geom, {
+        outerColor: item.outerColor,
+        innerColor: item.innerColor,
         lineWidth: 1.8,
         glowBlur: 10
       });
-      const pid = String(p?.parcelId || '').toUpperCase();
-      if (pid) {
-        parcelGeomMap.set(pid, { geom, outerColor, innerColor });
+      if (item.pid) {
+        parcelGeomMap.set(item.pid, {
+          vol: item.vol,
+          geom: item.geom,
+          outerColor: item.outerColor,
+          innerColor: item.innerColor
+        });
       }
     }
 
@@ -744,7 +766,8 @@ export default function MapView3D({
       }
     }
 
-    // PASS 2: Floating labels & center leader arrows strictly ON TOP of every wireframe
+    // PASS 2: Floating land labels & top-center leader arrows strictly ON TOP of every wireframe
+    const placedOverlayRects = [];
     for (const [pid, pinInfo] of floatingPinMapRef.current.entries()) {
       const entry = parcelGeomMap.get(pid);
       const el = pinInfo?.el;
@@ -754,23 +777,157 @@ export default function MapView3D({
         continue;
       }
       const anchor = getPrismLabelAnchor(entry.geom);
-      if (!anchor || !anchor.visible || anchor.roofCenter.x < -80 || anchor.roofCenter.x > w + 80 || anchor.highestTopY < -60 || anchor.baseCenter.y > h + 80) {
+      if (
+        !anchor ||
+        !anchor.visible ||
+        anchor.roofCenter.x < -80 ||
+        anchor.roofCenter.x > w + 80 ||
+        anchor.highestTopY < -60 ||
+        anchor.roofCenter.y > h + 80
+      ) {
         el.style.display = 'none';
         continue;
       }
-      const pinBottomY = Math.max(46, anchor.highestTopY - 22);
+      const pinBottomY = Math.max(46, Math.min(anchor.highestTopY, anchor.roofCenter.y) - 22);
       el.style.display = 'flex';
       el.style.transform = `translate3d(${Math.round(anchor.roofCenter.x)}px, ${Math.round(
         pinBottomY
       )}px, 0) translate(-50%, -100%)`;
 
+      const pinW = el.offsetWidth || 132;
+      const pinH = el.offsetHeight || 52;
+      placedOverlayRects.push({
+        x: anchor.roofCenter.x - pinW / 2,
+        y: pinBottomY - pinH,
+        w: pinW,
+        h: pinH
+      });
+
+      // Extend land leader line strictly to the exact top center of the land boundary
       drawFloatingCenterArrow(ctx, {
         fromX: anchor.roofCenter.x,
         fromY: pinBottomY,
-        toX: anchor.baseCenter.x,
-        toY: anchor.baseCenter.y,
+        toX: anchor.roofCenter.x,
+        toY: anchor.roofCenter.y,
         color: entry.outerColor,
         dotColor: entry.innerColor
+      });
+    }
+
+    // PASS 2b: Floating artwork labels strictly ABOVE all wireframe & leader lines (z-index 10)
+    const metersPerDegLat = 111320;
+    const artworkEntries = [];
+    for (const [scId, info] of floatingArtworkMapRef.current.entries()) {
+      const el = info?.el;
+      const sc = info?.sculpture;
+      if (!el || !sc) continue;
+      const liveTransform = threeLayerRef.current?.getTransform?.(scId) || null;
+      const scPid = String(sc.parcelId || '').toUpperCase();
+      const parentVol = scPid ? parcelGeomMap.get(scPid)?.vol || null : null;
+
+      let artLat;
+      let artLng;
+      let artTopAlt;
+      if (
+        liveTransform &&
+        Number.isFinite(Number(liveTransform.lat)) &&
+        Number.isFinite(Number(liveTransform.lng))
+      ) {
+        const refLat = Number(liveTransform.lat);
+        const mPerDegLng =
+          metersPerDegLat * Math.max(0.08, Math.cos((refLat * Math.PI) / 180));
+        artLat = refLat - Number(liveTransform.anchorDz || 0) / metersPerDegLat;
+        artLng = Number(liveTransform.lng) + Number(liveTransform.anchorDx || 0) / mPerDegLng;
+        const renderedH = Math.max(0.2, Number(liveTransform.renderedSize?.y || 1));
+        artTopAlt = Number(liveTransform.altitudeMeters || 0) + renderedH;
+      } else {
+        const rawLat = Number(sc.lat);
+        const rawLng = Number(sc.lng);
+        if (!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) {
+          el.style.display = 'none';
+          continue;
+        }
+        const mPerDegLng =
+          metersPerDegLat * Math.max(0.08, Math.cos((rawLat * Math.PI) / 180));
+        const dxM = Number(sc.anchorOffset?.dx || 0);
+        const dyM = Math.max(0, Number(sc.anchorOffset?.dy || 0));
+        const dzM = Number(sc.anchorOffset?.dz || 0);
+        artLat = rawLat - dzM / metersPerDegLat;
+        artLng = rawLng + dxM / mPerDegLng;
+        const baseDims = extractSculptureBaseDimensions(sc);
+        const userScale = extractSculptureScale(sc);
+        const baseAlt = Number(parentVol?.baseAltitudeM || 0);
+        artTopAlt = baseAlt + dyM + Math.max(0.2, baseDims.height * userScale);
+      }
+
+      const pt = projectLngLatAltToScreen(map, maplibregl, artLng, artLat, artTopAlt);
+      if (
+        !pt ||
+        !pt.visible ||
+        !Number.isFinite(pt.x) ||
+        !Number.isFinite(pt.y) ||
+        pt.x < -80 ||
+        pt.x > w + 80 ||
+        pt.y < -60 ||
+        pt.y > h + 80
+      ) {
+        el.style.display = 'none';
+        continue;
+      }
+      artworkEntries.push({
+        scId,
+        el,
+        isSelected: scId === selectedSculptureIdRef.current,
+        pt
+      });
+    }
+    artworkEntries.sort((a, b) => (b.pt.depth || 0) - (a.pt.depth || 0));
+
+    for (const item of artworkEntries) {
+      const { el, pt, isSelected } = item;
+      el.style.display = 'inline-flex';
+      const elW = el.offsetWidth || 124;
+      const elH = el.offsetHeight || 28;
+      const minCenterX = Math.min(w / 2, elW / 2 + 10);
+      const maxCenterX = Math.max(w / 2, w - elW / 2 - 10);
+      const baseCenterX = Math.max(minCenterX, Math.min(maxCenterX, pt.x));
+      const baseBottomY = Math.max(elH + 12, Math.min(h - 14, pt.y - 18));
+
+      // Avoid blocking land labels or sibling artwork pills
+      const candidates = [
+        { cx: baseCenterX, by: baseBottomY },
+        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - (elH + 8)) },
+        { cx: Math.min(maxCenterX, baseCenterX + elW * 0.65), by: baseBottomY },
+        { cx: Math.max(minCenterX, baseCenterX - elW * 0.65), by: baseBottomY },
+        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18) }
+      ];
+      let chosen = candidates[0];
+      for (const cand of candidates) {
+        const rect = { x: cand.cx - elW / 2, y: cand.by - elH, w: elW, h: elH };
+        if (!placedOverlayRects.some((r) => rectsOverlap(rect, r, 6))) {
+          chosen = cand;
+          break;
+        }
+      }
+      placedOverlayRects.push({
+        x: chosen.cx - elW / 2,
+        y: chosen.by - elH,
+        w: elW,
+        h: elH
+      });
+
+      el.style.transform = `translate3d(${Math.round(chosen.cx)}px, ${Math.round(
+        chosen.by
+      )}px, 0) translate(-50%, -100%)`;
+
+      const stemFromY = chosen.by < pt.y ? chosen.by : chosen.by - elH;
+      drawFloatingCenterArrow(ctx, {
+        fromX: chosen.cx,
+        fromY: stemFromY,
+        toX: pt.x,
+        toY: pt.y,
+        color: isSelected ? '#ffd166' : '#00f5d4',
+        dotColor: isSelected ? '#fff8dc' : '#eafffc'
       });
     }
 
@@ -936,7 +1093,10 @@ export default function MapView3D({
             id: 'sculptures-three-3d',
             maplibregl,
             resolveUrlFn: resolveApiUrl,
-            onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+            onStatsChange: (stats) => {
+              setLoadedThree3dCount(stats?.loadedCount || 0);
+              drawWireframes();
+            }
           });
           threeLayerRef.current = threeLayer;
           map.addLayer(
@@ -973,7 +1133,7 @@ export default function MapView3D({
     }
 
     syncGeoJsonSources();
-  }, [syncGeoJsonSources]);
+  }, [drawWireframes, syncGeoJsonSources]);
 
   useEffect(() => {
     if (!mapHostRef.current || mapRef.current) return undefined;
@@ -1252,104 +1412,104 @@ export default function MapView3D({
     }
   }, [parcels, sculptures, userLocation, drawWireframes]);
 
-  // Render sculpture pin markers with XeroEmoji icons & Popup previews
+  // Render floating sculpture label pills strictly ABOVE wireframe & leader lines (z-index 10)
+  // and keep the GPS user-location dot on the ground layer.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return undefined;
+    const artLayer = floatingArtworkLayerRef.current;
+    const artMap = floatingArtworkMapRef.current;
 
     for (const mk of markersRef.current) mk.remove();
     markersRef.current = [];
+    for (const { el } of artMap.values()) {
+      el.remove();
+    }
+    artMap.clear();
 
-    for (const sc of sculptures || []) {
-      const lat = Number(sc.lat);
-      const lng = Number(sc.lng);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (artLayer) {
+      for (const sc of sculptures || []) {
+        if (!sc?.id || sc.hidden) continue;
+        const lat = Number(sc.lat);
+        const lng = Number(sc.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
-      const isSelected = sc.id === selectedSculptureId;
-      const iconEmoji = isSelected ? '📍' : '🧊';
-      const iconSize = isSelected ? 22 : 18;
-      const emojiEntry = xeroemoji.get(iconEmoji);
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''}`;
-      el.dataset.sculptureId = sc.id;
-      el.dataset.testid = 'map3d-artwork-label';
-      el.setAttribute('aria-label', `View 3D artwork: ${sc.title || sc.id}`);
-      el.title = `View "${sc.title || '3D Artwork'}" in 3D`;
-      const iconWrap = document.createElement('span');
-      iconWrap.className = 'map3d-sculpture-icon';
-      if (emojiEntry?.svgUrl) {
-        const img = document.createElement('img');
-        img.src = emojiEntry.svgUrl;
-        img.alt = '';
-        img.width = iconSize;
-        img.height = iconSize;
-        img.style.display = 'block';
-        img.onerror = () => {
+        const isSelected = sc.id === selectedSculptureId;
+        const iconEmoji = isSelected ? '📍' : '🧊';
+        const iconSize = isSelected ? 20 : 17;
+        const emojiEntry = xeroemoji.get(iconEmoji);
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''}`;
+        el.dataset.sculptureId = sc.id;
+        el.dataset.testid = 'map3d-artwork-label';
+        el.setAttribute('aria-label', `View 3D artwork: ${sc.title || sc.id}`);
+
+        const chainLinks = getSculptureChainLinks(sc, config);
+        if (chainLinks?.txUrl) {
+          el.dataset.txUrl = chainLinks.txUrl;
+        }
+        const liveParcel = (parcelsRef.current || []).find(
+          (p) => String(p?.parcelId || '').toUpperCase() === String(sc.parcelId || '').toUpperCase()
+        );
+        const landLabel = resolveLandDisplayName(
+          {
+            customName: liveParcel?.customName || sc.parcelName || '',
+            displayName: liveParcel?.displayName || sc.landDisplayName || '',
+            firstSculptureTitle: sc.title || '',
+            placeName: sc.placeName || ''
+          },
+          { defaultName: 'Virtual Land' }
+        );
+        const assetMeta =
+          sc.modelType === 'custom-3d'
+            ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D Model`
+            : `${sc.voxelCount || sc.voxels?.length || 0} blocks`;
+        el.title = `View "${sc.title || '3D Artwork'}" in 3D (${landLabel} · ${assetMeta})`;
+
+        const iconWrap = document.createElement('span');
+        iconWrap.className = 'map3d-sculpture-icon';
+        if (emojiEntry?.svgUrl) {
+          const img = document.createElement('img');
+          img.src = emojiEntry.svgUrl;
+          img.alt = '';
+          img.width = iconSize;
+          img.height = iconSize;
+          img.style.display = 'block';
+          img.onerror = () => {
+            iconWrap.textContent = iconEmoji;
+          };
+          iconWrap.appendChild(img);
+        } else {
           iconWrap.textContent = iconEmoji;
-        };
-        iconWrap.appendChild(img);
-      } else {
-        iconWrap.textContent = iconEmoji;
-      }
-      el.appendChild(iconWrap);
-      if (sc.title) {
-        const labelSpan = document.createElement('span');
-        labelSpan.className = 'map3d-sculpture-label';
-        const rawTitle = String(sc.title).trim();
-        labelSpan.textContent = rawTitle.length > 20 ? `${rawTitle.slice(0, 19).trimEnd()}…` : rawTitle;
-        el.appendChild(labelSpan);
-      }
+        }
+        el.appendChild(iconWrap);
+        if (sc.title) {
+          const labelSpan = document.createElement('span');
+          labelSpan.className = 'map3d-sculpture-label';
+          const rawTitle = String(sc.title).trim();
+          labelSpan.textContent =
+            rawTitle.length > 20 ? `${rawTitle.slice(0, 19).trimEnd()}…` : rawTitle;
+          el.appendChild(labelSpan);
+        }
 
-      const chainLinks = getSculptureChainLinks(sc, config);
-      const liveParcel = (parcelsRef.current || []).find(
-        (p) => String(p?.parcelId || '').toUpperCase() === String(sc.parcelId || '').toUpperCase()
-      );
-      const landLabel = resolveLandDisplayName(
-        {
-          customName: liveParcel?.customName || sc.parcelName || '',
-          displayName: liveParcel?.displayName || sc.landDisplayName || '',
-          firstSculptureTitle: sc.title || '',
-          placeName: sc.placeName || ''
-        },
-        { defaultName: 'Virtual Land' }
-      );
-      const assetMeta =
-        sc.modelType === 'custom-3d'
-          ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D Model`
-          : `${sc.voxelCount || sc.voxels?.length || 0} blocks`;
-      const popupEl = document.createElement('div');
-      popupEl.style.cssText = 'font-size:12px;line-height:1.4;color:#0f172a;min-width:170px;';
-      const titleEl = document.createElement('strong');
-      titleEl.textContent = sc.title;
-      const metaEl = document.createElement('div');
-      metaEl.style.color = '#475569';
-      metaEl.textContent = `${landLabel} · ${assetMeta}`;
-      popupEl.append(titleEl, metaEl);
-      if (chainLinks.txUrl) {
-        const txLink = document.createElement('a');
-        txLink.href = chainLinks.txUrl;
-        txLink.target = '_blank';
-        txLink.rel = 'noreferrer';
-        txLink.style.cssText = 'display:inline-block;margin-top:4px;font-size:11px;color:#0284c7;';
-        txLink.textContent = 'View Tx on Explorer';
-        popupEl.append(txLink);
+        el.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          onSelectSculptureRef.current?.(sc);
+        });
+
+        el.style.display = 'none';
+        artLayer.appendChild(el);
+        artMap.set(sc.id, { el, sculpture: sc });
       }
-
-      const popup = new maplibregl.Popup({ offset: 18, closeButton: false }).setDOMContent(popupEl);
-      el.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        onSelectSculpture?.(sc);
-      });
-
-      const marker = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -32] })
-        .setLngLat([lng, lat])
-        .setPopup(popup)
-        .addTo(map);
-      markersRef.current.push(marker);
     }
 
-    if (userLocation && Number.isFinite(Number(userLocation.lat)) && Number.isFinite(Number(userLocation.lng))) {
+    if (
+      map &&
+      userLocation &&
+      Number.isFinite(Number(userLocation.lat)) &&
+      Number.isFinite(Number(userLocation.lng))
+    ) {
       const dot = document.createElement('div');
       dot.className = 'map3d-user-dot';
       dot.title = 'Your Location';
@@ -1359,11 +1519,17 @@ export default function MapView3D({
       markersRef.current.push(userMarker);
     }
 
+    drawWireframes();
+
     return () => {
       for (const mk of markersRef.current) mk.remove();
       markersRef.current = [];
+      for (const { el } of artMap.values()) {
+        el.remove();
+      }
+      artMap.clear();
     };
-  }, [sculptures, parcels, userLocation, selectedSculptureId, config, onSelectSculpture]);
+  }, [sculptures, parcels, userLocation, selectedSculptureId, config, drawWireframes]);
 
   // Render floating action & label pins strictly above wireframes (+, Title, Copy Share Link for owned; Copy Link for public)
   useEffect(() => {
@@ -2349,6 +2515,7 @@ export default function MapView3D({
         <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
         <canvas ref={wireCanvasRef} className="map3d-wireframe-canvas" aria-hidden="true" />
         <div ref={floatingPinsLayerRef} className="map3d-floating-pins-layer" />
+        <div ref={floatingArtworkLayerRef} className="map3d-floating-artwork-layer" />
 
         {/* Dynamic Live Intersection / Business / Address / Parcel Search */}
         <div ref={searchBoxRef} className="map3d-search-box map3d-ui-stop">

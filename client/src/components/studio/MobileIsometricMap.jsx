@@ -683,6 +683,7 @@ export default function MobileIsometricMap({
     let primaryInnerColor = '#ffd6ec';
 
     if (isFullExpandedRef.current) {
+      const projectedOthers = [];
       for (const other of otherEntriesRef.current || []) {
         if (!other?.volume) continue;
         const otherGeom = computePrismScreenGeometry(map, maplibregl, other.volume);
@@ -690,6 +691,11 @@ export default function MobileIsometricMap({
         const otherFrozen = Boolean(other.parcel?.frozen || other.parcel?.settings?.frozen);
         const otherOuter = otherFrozen ? '#7dd3fc' : '#ff4da6';
         const otherInner = otherFrozen ? '#e0f2fe' : '#ffd6ec';
+        projectedOthers.push({ other, otherGeom, otherOuter, otherInner });
+      }
+      // Draw farther lands first so closer boundaries stay crisp in front
+      projectedOthers.sort((a, b) => (b.otherGeom.avgDepth || 0) - (a.otherGeom.avgDepth || 0));
+      for (const { other, otherGeom, otherOuter, otherInner } of projectedOthers) {
         drawMobilePrismWireframe(ctx, otherGeom, {
           outerColor: otherOuter,
           innerColor: otherInner,
@@ -784,28 +790,19 @@ export default function MobileIsometricMap({
     });
     const placedRects = [];
 
-    // Pass 2: Draw primary land label strictly ON TOP of its wireframe
-    for (const item of pendingLabels) {
-      drawFloatingLandLabel(ctx, item.geom, {
-        ...item,
-        stageWidth: w,
-        stageHeight: h,
-        reservedRects,
-        placedRects
-      });
-    }
-
-    // Pass 3: Position clickable floating Land Label (linked strictly to top center of land boundary)
-    // and Left/Right Side Artwork Callout Labels + elbow pointers with direct sculpture links
+    // Pass 2: Position clickable floating Land Label (linked strictly to top center of land boundary)
+    // and Left/Right Side Artwork Callout Labels + elbow pointers with direct sculpture links FIRST
+    // so secondary distant land labels never block primary land or artwork labels.
     if (showcaseModeRef.current) {
       const landBtn = landLabelBtnRef.current;
       if (primaryGeom) {
         const approxW = landBtn?.offsetWidth || 168;
+        const pillH = landBtn?.offsetHeight || 28;
         const landBox = computeFloatingLandLabelBox(primaryGeom, {
           viewportWidth: w,
           liftPx: 20,
           minY: w < 520 ? 56 : 46,
-          pillHeight: 28,
+          pillHeight: pillH,
           approxWidth: approxW
         });
         if (landBox) {
@@ -826,7 +823,7 @@ export default function MobileIsometricMap({
             x: landBox.centerX - approxW / 2,
             y: landBox.y,
             w: approxW,
-            h: 30
+            h: pillH + 4
           });
         } else if (landBtn) {
           landBtn.style.display = 'none';
@@ -886,6 +883,17 @@ export default function MobileIsometricMap({
       if (!positionedIds.has(id) && btn) {
         btn.style.display = 'none';
       }
+    }
+
+    // Pass 3: Draw canvas land labels strictly ON TOP of wireframes without overlapping HUD or artwork callouts
+    for (const item of pendingLabels) {
+      drawFloatingLandLabel(ctx, item.geom, {
+        ...item,
+        stageWidth: w,
+        stageHeight: h,
+        reservedRects,
+        placedRects
+      });
     }
 
     // Pass 4: Compute directional edge-arrow labels pointing to selectable neighboring lands

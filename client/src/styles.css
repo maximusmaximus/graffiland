@@ -4004,12 +4004,12 @@ select {
   gap: 0;
   padding: 0;
   border-radius: 10px;
-  border: 1.25px solid rgba(0, 245, 212, 0.55);
-  background: rgba(7, 12, 24, 0.9);
+  border: 1.5px solid rgba(0, 245, 212, 0.78);
+  background: rgba(6, 10, 22, 0.97);
   backdrop-filter: blur(10px);
   color: #eef6ff;
   overflow: hidden;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 245, 212, 0.16);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.65), 0 0 12px rgba(0, 245, 212, 0.24);
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease, transform 140ms ease;
 }
 
@@ -7749,6 +7749,33 @@ select {
   left: 0;
   will-change: transform;
   z-index: 8;
+}
+
+/* Floating 3D Artwork Labels Strictly Above ALL Wireframe & Leader Lines */
+.map3d-floating-artwork-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.map3d-floating-artwork-layer .map3d-sculpture-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: auto;
+  will-change: transform;
+  z-index: 11;
+  background: rgba(6, 10, 22, 0.97);
+  border: 1.5px solid rgba(0, 245, 212, 0.9);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.72), 0 0 12px rgba(0, 245, 212, 0.3);
+}
+
+.map3d-floating-artwork-layer .map3d-sculpture-marker:hover {
+  border-color: #ffffff;
+  background: rgba(10, 18, 36, 0.99);
+  filter: brightness(1.08);
 }
 
 /* Desktop Mint Land Overhaul: Compact Sliders, Title Validation, Batch Mint, Minted Copy, 3-Free Limit Card */
