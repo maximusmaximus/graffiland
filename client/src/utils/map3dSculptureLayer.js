@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { extractSculptureScale, yawToRadians } from '../../../shared/sculpturePlacement.mjs';
+import {
+  extractSculptureScale,
+  parcelLocalOffsetToWorldLatLng,
+  parcelLocalYawToWorldYawRad,
+  yawToRadians
+} from '../../../shared/sculpturePlacement.mjs';
 import { buildVoxelGroup, disposeObject3D } from '../components/VoxelEngine3D.js';
 import {
   enforceCrispTexturesAndShading,
@@ -119,14 +124,24 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
     }
   }
 
+  const parcelRotationDeg = hasVol ? Number(parcelVolume.rotationDeg || 0) : 0;
+  const worldYawRad = parcelLocalYawToWorldYawRad(off.yaw || 0, parcelRotationDeg);
+  const worldPos = parcelLocalOffsetToWorldLatLng(lat, lng, anchorDx, anchorDz, parcelRotationDeg);
+
   return {
     lat,
     lng,
+    worldLat: worldPos.lat,
+    worldLng: worldPos.lng,
     altitudeMeters: Number(altitudeMeters.toFixed(4)),
     scale,
     anchorDx,
     anchorDz,
+    worldDx: worldPos.worldDx,
+    worldDz: worldPos.worldDz,
     yawRad,
+    worldYawRad,
+    parcelRotationDeg,
     centerOffset: {
       x: -center.x,
       y: -min.y,
@@ -151,7 +166,7 @@ function buildSculptureSignature(sc, parcelVolume) {
       ? `${voxels.length}:${firstV?.x ?? 0},${firstV?.y ?? 0},${firstV?.color ?? ''}:${lastV?.x ?? 0},${lastV?.y ?? 0},${lastV?.color ?? ''}`
       : '0';
   const volSig = parcelVolume
-    ? `${parcelVolume.widthMeters}:${parcelVolume.depthMeters}:${parcelVolume.heightMeters}:${parcelVolume.baseAltitudeM || 0}`
+    ? `${parcelVolume.widthMeters}:${parcelVolume.depthMeters}:${parcelVolume.heightMeters}:${parcelVolume.baseAltitudeM || 0}:${parcelVolume.rotationDeg || 0}`
     : 'none';
   return [
     sc?.id || '',
@@ -259,9 +274,32 @@ export function createSculptureThreeLayer({
     entries.delete(scId);
   }
 
-  function createSelectionRing(radiusM) {
-    const r = Math.max(0.65, radiusM);
-    const geo = new THREE.RingGeometry(r * 0.88, r * 1.05, 64);
+  function createSelectionFrame(widthM, depthM) {
+    const w = Math.max(0.6, Number(widthM) || 1);
+    const d = Math.max(0.6, Number(depthM) || 1);
+    const pad = Math.min(0.65, Math.max(0.08, Math.min(w, d) * 0.04));
+    const border = Math.min(0.75, Math.max(0.08, Math.min(w, d) * 0.045));
+    const hwIn = w / 2 + pad;
+    const hdIn = d / 2 + pad;
+    const hwOut = hwIn + border;
+    const hdOut = hdIn + border;
+
+    const shape = new THREE.Shape();
+    shape.moveTo(-hwOut, -hdOut);
+    shape.lineTo(hwOut, -hdOut);
+    shape.lineTo(hwOut, hdOut);
+    shape.lineTo(-hwOut, hdOut);
+    shape.closePath();
+
+    const hole = new THREE.Path();
+    hole.moveTo(-hwIn, -hdIn);
+    hole.lineTo(-hwIn, hdIn);
+    hole.lineTo(hwIn, hdIn);
+    hole.lineTo(hwIn, -hdIn);
+    hole.closePath();
+    shape.holes.push(hole);
+
+    const geo = new THREE.ShapeGeometry(shape);
     const mat = new THREE.MeshBasicMaterial({
       color: 0xffd166,
       transparent: true,
@@ -269,10 +307,10 @@ export function createSculptureThreeLayer({
       side: THREE.DoubleSide,
       depthWrite: false
     });
-    const ring = new THREE.Mesh(geo, mat);
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.03;
-    return ring;
+    const frame = new THREE.Mesh(geo, mat);
+    frame.rotation.x = -Math.PI / 2;
+    frame.position.y = 0.04;
+    return frame;
   }
 
   function mountModelIntoEntry(entry, object3d, bounds, sc, parcelVolume) {
@@ -296,15 +334,20 @@ export function createSculptureThreeLayer({
     );
     pivot.add(object3d);
     pivot.scale.setScalar(transform.scale);
-    if (transform.yawRad !== 0) {
-      pivot.rotation.y = transform.yawRad;
+    if (transform.worldYawRad !== 0) {
+      pivot.rotation.y = transform.worldYawRad;
     }
-    pivot.position.set(transform.anchorDx, 0, transform.anchorDz);
+    pivot.position.set(transform.worldDx, 0, transform.worldDz);
     container.add(pivot);
 
-    const ringRadius = Math.max(transform.renderedSize.x, transform.renderedSize.z) * 0.62;
-    const selectionRing = createSelectionRing(ringRadius);
-    selectionRing.position.set(transform.anchorDx, 0.04, transform.anchorDz);
+    const selectionRing = createSelectionFrame(
+      transform.renderedSize.x,
+      transform.renderedSize.z
+    );
+    selectionRing.position.set(transform.worldDx, 0.04, transform.worldDz);
+    if (transform.worldYawRad !== 0) {
+      selectionRing.rotation.z = transform.worldYawRad;
+    }
     selectionRing.visible = selectedId === entry.id;
     container.add(selectionRing);
 
@@ -426,6 +469,10 @@ export function createSculptureThreeLayer({
 
     setData(input) {
       syncData(input);
+    },
+
+    getTransform(scId) {
+      return entries.get(String(scId || ''))?.transform || null;
     },
 
     getStats() {

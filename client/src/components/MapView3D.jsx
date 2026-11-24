@@ -17,7 +17,8 @@ import {
 } from '../../../shared/landVolume.mjs';
 import {
   extractSculptureBaseDimensions,
-  extractSculptureScale
+  extractSculptureScale,
+  parcelLocalOffsetToWorldLatLng
 } from '../../../shared/sculpturePlacement.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
@@ -815,7 +816,6 @@ export default function MapView3D({
     }
 
     // PASS 2b: Floating artwork labels strictly ABOVE all wireframe & leader lines (z-index 10)
-    const metersPerDegLat = 111320;
     const artworkEntries = [];
     for (const [scId, info] of floatingArtworkMapRef.current.entries()) {
       const el = info?.el;
@@ -824,6 +824,7 @@ export default function MapView3D({
       const liveTransform = threeLayerRef.current?.getTransform?.(scId) || null;
       const scPid = String(sc.parcelId || '').toUpperCase();
       const parentVol = scPid ? parcelGeomMap.get(scPid)?.vol || null : null;
+      const parcelRotDeg = Number(parentVol?.rotationDeg || 0);
 
       let artLat;
       let artLng;
@@ -833,11 +834,23 @@ export default function MapView3D({
         Number.isFinite(Number(liveTransform.lat)) &&
         Number.isFinite(Number(liveTransform.lng))
       ) {
-        const refLat = Number(liveTransform.lat);
-        const mPerDegLng =
-          metersPerDegLat * Math.max(0.08, Math.cos((refLat * Math.PI) / 180));
-        artLat = refLat - Number(liveTransform.anchorDz || 0) / metersPerDegLat;
-        artLng = Number(liveTransform.lng) + Number(liveTransform.anchorDx || 0) / mPerDegLng;
+        if (
+          Number.isFinite(Number(liveTransform.worldLat)) &&
+          Number.isFinite(Number(liveTransform.worldLng))
+        ) {
+          artLat = Number(liveTransform.worldLat);
+          artLng = Number(liveTransform.worldLng);
+        } else {
+          const wPos = parcelLocalOffsetToWorldLatLng(
+            Number(liveTransform.lat),
+            Number(liveTransform.lng),
+            Number(liveTransform.anchorDx || 0),
+            Number(liveTransform.anchorDz || 0),
+            Number(liveTransform.parcelRotationDeg ?? parcelRotDeg)
+          );
+          artLat = wPos.lat;
+          artLng = wPos.lng;
+        }
         const renderedH = Math.max(0.2, Number(liveTransform.renderedSize?.y || 1));
         artTopAlt = Number(liveTransform.altitudeMeters || 0) + renderedH;
       } else {
@@ -847,13 +860,12 @@ export default function MapView3D({
           el.style.display = 'none';
           continue;
         }
-        const mPerDegLng =
-          metersPerDegLat * Math.max(0.08, Math.cos((rawLat * Math.PI) / 180));
         const dxM = Number(sc.anchorOffset?.dx || 0);
         const dyM = Math.max(0, Number(sc.anchorOffset?.dy || 0));
         const dzM = Number(sc.anchorOffset?.dz || 0);
-        artLat = rawLat - dzM / metersPerDegLat;
-        artLng = rawLng + dxM / mPerDegLng;
+        const wPos = parcelLocalOffsetToWorldLatLng(rawLat, rawLng, dxM, dzM, parcelRotDeg);
+        artLat = wPos.lat;
+        artLng = wPos.lng;
         const baseDims = extractSculptureBaseDimensions(sc);
         const userScale = extractSculptureScale(sc);
         const baseAlt = Number(parentVol?.baseAltitudeM || 0);

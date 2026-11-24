@@ -2,6 +2,7 @@ import { VOXEL_STEP } from '../../../shared/constants.mjs';
 import {
   extractSculptureBaseDimensions,
   extractSculptureScale,
+  parcelLocalOffsetToWorldLatLng,
   yawToRadians
 } from '../../../shared/sculpturePlacement.mjs';
 
@@ -44,13 +45,17 @@ function buildCustomModelMonolithFeatures(sc, isSelected, parcelVolume = null) {
   const dx = Number(off.dx || 0);
   const dy = Math.max(0, Number(off.dy || 0));
   const dz = Number(off.dz || 0);
-  const yawRad = -yawToRadians(off.yaw || 0) - Number(sc.customModel?.rotationY || 0);
 
   const hasVol =
     parcelVolume &&
     Number.isFinite(Number(parcelVolume.widthMeters)) &&
     Number.isFinite(Number(parcelVolume.depthMeters)) &&
     Number.isFinite(Number(parcelVolume.heightMeters));
+
+  const parcelRotDeg = hasVol ? Number(parcelVolume.rotationDeg || 0) : 0;
+  const parcelRotRad = (parcelRotDeg * Math.PI) / 180;
+  const worldAnchor = parcelLocalOffsetToWorldLatLng(lat, lng, dx, dz, parcelRotDeg);
+  const yawRad = parcelRotRad - yawToRadians(off.yaw || 0) - Number(sc.customModel?.rotationY || 0);
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
   const baseDims = extractSculptureBaseDimensions(sc);
@@ -110,10 +115,10 @@ function buildCustomModelMonolithFeatures(sc, isSelected, parcelVolume = null) {
       type: 'Polygon',
       coordinates: [
         makeRotatedRectRing({
-          centerLat: lat,
-          centerLng: lng,
-          eastM: dx,
-          northM: -dz,
+          centerLat: worldAnchor.lat,
+          centerLng: worldAnchor.lng,
+          eastM: 0,
+          northM: 0,
           halfW: t.halfW,
           halfD: t.halfD,
           yawRad
@@ -133,7 +138,10 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
   const dx = Number(off.dx || 0);
   const dy = Math.max(0, Number(off.dy || 0));
   const dz = Number(off.dz || 0);
-  const yawRad = -yawToRadians(off.yaw || 0);
+  const parcelRotDeg = Number(parcelVolume?.rotationDeg || 0);
+  const parcelRotRad = (parcelRotDeg * Math.PI) / 180;
+  const worldAnchor = parcelLocalOffsetToWorldLatLng(lat, lng, dx, dz, parcelRotDeg);
+  const yawRad = parcelRotRad - yawToRadians(off.yaw || 0);
   const userScale = extractSculptureScale(sc);
 
   const step = VOXEL_STEP || 0.05;
@@ -251,10 +259,10 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
       type: 'Polygon',
       coordinates: [
         makeRotatedRectRing({
-          centerLat: lat,
-          centerLng: lng,
-          eastM: dx,
-          northM: -dz,
+          centerLat: worldAnchor.lat,
+          centerLng: worldAnchor.lng,
+          eastM: 0,
+          northM: 0,
           halfW: pedestalHalfW,
           halfD: pedestalHalfD,
           yawRad
@@ -275,8 +283,8 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
     let runColor = yMap.get(ys[0]);
 
     const flushRun = () => {
-      const eastM = dx + (cx - centerGx) * unitMeters;
-      const northM = -dz - (cz - centerGz) * unitMeters;
+      const eastM = (cx - centerGx) * unitMeters;
+      const northM = -(cz - centerGz) * unitMeters;
       const baseM = voxelBaseElevation + (runStart / stride) * blockH;
       const topM = voxelBaseElevation + (runEnd / stride + 1) * blockH;
       features.push({
@@ -295,8 +303,8 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
           type: 'Polygon',
           coordinates: [
             makeRotatedRectRing({
-              centerLat: lat,
-              centerLng: lng,
+              centerLat: worldAnchor.lat,
+              centerLng: worldAnchor.lng,
               eastM,
               northM,
               halfW: half,

@@ -245,7 +245,7 @@ export default function SculptureViewer3D({
       const startDz = Number(lt.dz || 0);
       const startYaw = Number(lt.yaw || 0);
       const startScale = Math.max(
-        0.1,
+        0.001,
         Number(lt.scale ?? extractSculptureScale(sculptureRef.current) ?? 1)
       );
       const baseX = showLandBoundsRef.current ? Number(lt.baseX || 0) : 0;
@@ -335,8 +335,8 @@ export default function SculptureViewer3D({
         const curDist = Math.hypot(hitPoint.x - dragState.pivotX, hitPoint.z - dragState.pivotZ);
         const ratio = Math.max(0.15, curDist / dragState.startDist);
         const nextScale = Math.max(
-          0.1,
-          Math.min(capScale, Math.round(dragState.startScale * ratio * 100) / 100)
+          0.001,
+          Math.min(capScale, Math.round(dragState.startScale * ratio * 1000) / 1000)
         );
         setGizmoStatusText(`Scaling: ${nextScale.toFixed(2)}×`);
         onTransformChangeRef.current?.({ scale: nextScale });

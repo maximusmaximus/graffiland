@@ -4,9 +4,15 @@ import {
   computeItemLocalBox,
   computeMaxFeasibleScale,
   evaluateModelFitInParcel,
+  latLngToParcelLocalMeters,
+  parcelLocalMetersToWorldMeters,
+  parcelLocalOffsetToWorldLatLng,
+  parcelLocalYawToWorldYawRad,
+  resolveParcelVolumeForPlacement,
   resolveSculpturePlacement
 } from '../shared/sculpturePlacement.mjs';
 import { computeSculptureMapTransform } from '../client/src/utils/map3dSculptureLayer.js';
+import { buildSculptures3DGeoJson } from '../client/src/utils/sculpture3dGeoJson.js';
 
 function assertAllInsideAndNonOverlapping(res, vol, gap = 0.08) {
   assert.equal(res.ok, true, `Expected placement ok, got: ${JSON.stringify(res)}`);
@@ -175,5 +181,133 @@ describe('3D Artwork Transform, Scaling & Non-Intersecting Push Solver', () => {
       modelScale: cmFit.maxSafeScale
     });
     assert.equal(fixedFit.fits, true);
+  });
+
+  test('Parcel-local to world coordinate transforms are exact inverses across rotated lands (49° and 318°)', () => {
+    for (const rotDeg of [0, 49, 135, 318]) {
+      const vol = {
+        centerLat: 39.730741,
+        centerLng: -121.83832,
+        widthMeters: 28.1,
+        depthMeters: 97,
+        heightMeters: 18,
+        rotationDeg: rotDeg
+      };
+      const localSamples = [
+        [0, 0],
+        [5, -10],
+        [-7.23, 38.64],
+        [18, 8]
+      ];
+      for (const [dx, dz] of localSamples) {
+        const worldPos = parcelLocalOffsetToWorldLatLng(vol.centerLat, vol.centerLng, dx, dz, rotDeg);
+        const worldVec = parcelLocalMetersToWorldMeters(dx, dz, rotDeg);
+        assert.ok(Math.abs(worldPos.worldDx - worldVec.east) < 1e-4);
+        assert.ok(Math.abs(worldPos.worldDz - worldVec.south) < 1e-4);
+
+        const roundTrip = latLngToParcelLocalMeters(worldPos.lat, worldPos.lng, vol);
+        assert.ok(
+          Math.abs(roundTrip.baseX - dx) < 0.02,
+          `rot=${rotDeg} dx=${dx} roundTrip.baseX=${roundTrip.baseX}`
+        );
+        assert.ok(
+          Math.abs(roundTrip.baseZ - dz) < 0.02,
+          `rot=${rotDeg} dz=${dz} roundTrip.baseZ=${roundTrip.baseZ}`
+        );
+      }
+    }
+  });
+
+  test('Map 3D transform & GeoJSON footprint match Edit View orientation and scale inside rotated parcel (Veggie Row in 49° parcel)', () => {
+    const farmersMarketVol = {
+      centerLat: 39.730741,
+      centerLng: -121.83832,
+      widthMeters: 28.1,
+      depthMeters: 97,
+      heightMeters: 18,
+      rotationDeg: 49,
+      baseAltitudeM: 0
+    };
+    const farmersMarketParcel = {
+      parcelId: 'GLAND-9R1658B0',
+      volume: farmersMarketVol
+    };
+
+    // resolveParcelVolumeForPlacement works identically whether passed { parcel } or a direct parcel object
+    const resolvedWrapped = resolveParcelVolumeForPlacement({ parcel: farmersMarketParcel });
+    const resolvedDirect = resolveParcelVolumeForPlacement(farmersMarketParcel);
+    assert.equal(resolvedWrapped.widthMeters, 28.1);
+    assert.equal(resolvedWrapped.depthMeters, 97);
+    assert.equal(resolvedWrapped.rotationDeg, 49);
+    assert.deepEqual(resolvedDirect, resolvedWrapped);
+
+    const veggieRow = {
+      id: 'b92ee380-9057-44d3-aa7a-e3cfed12754b',
+      parcelId: 'GLAND-9R1658B0',
+      modelType: 'custom-3d',
+      lat: 39.730741,
+      lng: -121.83832,
+      scale: 55.201,
+      anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 0, scale: 55.201 },
+      customModel: { format: 'glb', scale: 55.201, rotationY: 0 },
+      meshStats: { bbox: { width: 0.262, height: 0.2436, depth: 1.4 } }
+    };
+    const normalizedBounds = {
+      min: { x: -0.131, y: 0, z: -0.7 },
+      max: { x: 0.131, y: 0.2436, z: 0.7 }
+    };
+
+    const t = computeSculptureMapTransform(veggieRow, farmersMarketVol, normalizedBounds);
+    assert.ok(Math.abs(t.worldYawRad - (-49 * Math.PI) / 180) < 1e-6);
+    assert.ok(Math.abs(t.renderedSize.x - 14.4627) < 0.02);
+    assert.ok(Math.abs(t.renderedSize.y - 13.447) < 0.02);
+    assert.ok(Math.abs(t.renderedSize.z - 77.2814) < 0.02);
+
+    // Every world corner of the Three.js model must project back inside the 28.1m x 97m parcel box
+    const hw = t.renderedSize.x / 2;
+    const hd = t.renderedSize.z / 2;
+    const R = (farmersMarketVol.rotationDeg * Math.PI) / 180;
+    for (const [cx, cz] of [
+      [-hw, -hd],
+      [hw, -hd],
+      [hw, hd],
+      [-hw, hd]
+    ]) {
+      const east = cx * Math.cos(t.worldYawRad) + cz * Math.sin(t.worldYawRad) + t.worldDx;
+      const south = -cx * Math.sin(t.worldYawRad) + cz * Math.cos(t.worldYawRad) + t.worldDz;
+      const localX = east * Math.cos(R) + south * Math.sin(R);
+      const localZ = -east * Math.sin(R) + south * Math.cos(R);
+      assert.ok(Math.abs(localX) <= 7.25 && Math.abs(localX) <= farmersMarketVol.widthMeters / 2);
+      assert.ok(Math.abs(localZ) <= 38.66 && Math.abs(localZ) <= farmersMarketVol.depthMeters / 2);
+    }
+
+    // Offset + yaw test: dx=5, dz=-10, yaw=90 in 49° parcel
+    const shifted = {
+      ...veggieRow,
+      anchorOffset: { dx: 5, dy: 0, dz: -10, yaw: 90, scale: 1 }
+    };
+    const tShift = computeSculptureMapTransform(shifted, farmersMarketVol, normalizedBounds);
+    assert.ok(Math.abs(tShift.worldYawRad - parcelLocalYawToWorldYawRad(90, 49)) < 1e-6);
+    assert.ok(Math.abs(tShift.worldYawRad - ((90 - 49) * Math.PI) / 180) < 1e-6);
+    const shiftBack = latLngToParcelLocalMeters(tShift.worldLat, tShift.worldLng, farmersMarketVol);
+    assert.ok(Math.abs(shiftBack.baseX - 5) < 0.02);
+    assert.ok(Math.abs(shiftBack.baseZ - -10) < 0.02);
+
+    // GeoJSON fallback footprint for Veggie Row must also sit strictly aligned inside the 49° parcel
+    const geo = buildSculptures3DGeoJson([veggieRow], '', [farmersMarketParcel]);
+    assert.equal(geo.renderedCount, 1);
+    const ring = geo.geojson.features[0]?.geometry?.coordinates?.[0] || [];
+    assert.ok(ring.length >= 4);
+    for (const [lng, lat] of ring) {
+      const local = latLngToParcelLocalMeters(lat, lng, farmersMarketVol);
+      assert.ok(
+        Math.abs(local.baseX) <= 7.35,
+        `GeoJSON corner localX=${local.baseX} expected within ±7.35m`
+      );
+      assert.ok(
+        Math.abs(local.baseZ) <= 38.75,
+        `GeoJSON corner localZ=${local.baseZ} expected within ±38.75m`
+      );
+    }
   });
 });
