@@ -1614,6 +1614,8 @@ export default function MobileIsometricMap({
       data-testid="mobile-iso-3d-map"
       data-map-mode="3d"
       data-free-nav={isFullExpanded ? 'true' : 'false'}
+      data-focused-parcel-id={primaryEntry?.parcel?.parcelId || ''}
+      data-focus-tick={String(focusParcelTick || 0)}
       data-three-3d-models={loadedThree3dCount}
     >
       {webglAvailable ? (
