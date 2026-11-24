@@ -237,7 +237,11 @@ describe('Mobile Pairing QR Parser & Signature Approval History', () => {
       PUBLIC_URL: 'https://app.example.dev',
       ALLOW_DEV_GOOGLE_AUTH: 'true',
       SESSION_SECRET: 'test-session-secret',
-      WALLET_ENCRYPTION_KEY: 'test-wallet-key'
+      WALLET_ENCRYPTION_KEY: 'test-wallet-key',
+      IPFS_KV: {
+        put: async () => {},
+        get: async () => null
+      }
     };
     const wFetch = async (route, opts = {}) => {
       const res = await worker.fetch(
@@ -308,5 +312,76 @@ describe('Mobile Pairing QR Parser & Signature Approval History', () => {
     assert.ok(repairNotif, 'Expected Re-pair needed notification when pairing expires');
     assert.ok(repairNotif.title.toLowerCase().includes('re-pair'));
     assert.equal(repairNotif.actionLabel, 'Re-pair Now');
+
+    // Verify already-queued oversized create_sculpture returns structured 409 (maxSafeScale)
+    // and succeeds with autoFitScale: true on Worker /mobile-sign
+    const ownerUser = auth.body.user;
+    const nowIso = new Date().toISOString();
+    const parcelId = 'GLAND-9R1652SD';
+    db.prepare(
+      `INSERT INTO land_parcels (parcel_id, geohash, center_lat, center_lng, first_claimant_sub, first_claimant_address, latest_claimant_address, sculpture_count, updated_at)
+       VALUES (?, '9r1652sd', 39.729815, -121.84303, ?, ?, ?, 0, ?)`
+    ).run(parcelId, ownerUser.id, ownerUser.walletAddress, ownerUser.walletAddress, nowIso);
+    db.prepare(
+      `INSERT INTO land_volumes (parcel_id, center_lat, center_lng, width_meters, depth_meters, height_meters, z_scale, rotation_deg, base_altitude_m, footprint_area_sqm, volume_cubic_m, corners_json, updated_at)
+       VALUES (?, 39.729815, -121.84303, 18.2, 19.7, 18, 1, 315, 0, 358.54, 6453.72, '[]', ?)`
+    ).run(parcelId, nowIso);
+
+    const bigObj = [
+      'v -3.39 0 -3.27',
+      'v 3.39 0 3.27',
+      'v 0 8.4 0',
+      'f 1 2 3'
+    ].join('\n');
+    const oversizedPayload = {
+      title: 'Oversized Poo Model',
+      description: 'An oversized 3D sculpture staged before preflight checks.',
+      modelFormat: 'obj',
+      modelData: bigObj,
+      modelScale: 6,
+      anchorOffset: { dx: 0, dy: 0, dz: 0, yaw: 45 }
+    };
+    const legacyReqId = 'sigreq_legacy_oversized_1';
+    db.prepare(
+      `INSERT INTO land_signature_requests (
+        id, pairing_code, owner_sub, owner_address, action, parcel_id, sculpture_id,
+        payload_json, payload_hash, canonical_message, nonce, requested_by, agent_name,
+        status, signed_by, signer_address, signature, tx_hash, result_json,
+        created_at, updated_at, expires_at
+      ) VALUES (?, ?, ?, ?, 'create_sculpture', ?, '', ?, '0xhash', 'legacy-msg', 'nonce1', 'agent', 'legacy-bot', 'pending', '', '', '', '', '{}', ?, ?, ?)`
+    ).run(
+      legacyReqId,
+      pairCode,
+      ownerUser.id,
+      ownerUser.walletAddress,
+      parcelId,
+      JSON.stringify(oversizedPayload),
+      nowIso,
+      nowIso,
+      new Date(Date.now() + 3600_000).toISOString()
+    );
+
+    const failSign = await wFetch(`/api/signatures/requests/${legacyReqId}/mobile-sign`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(failSign.status, 409, JSON.stringify(failSign.body));
+    assert.equal(failSign.body.code, 'exceeds_land_bounds');
+    assert.ok(
+      Number(failSign.body.maxSafeScale) > 1 && Number(failSign.body.maxSafeScale) < 2.2,
+      `Expected maxSafeScale ~1.9, got ${failSign.body.maxSafeScale}`
+    );
+
+    const autoFitSign = await wFetch(`/api/signatures/requests/${legacyReqId}/mobile-sign`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ autoFitScale: true })
+    });
+    assert.equal(autoFitSign.status, 200, JSON.stringify(autoFitSign.body));
+    assert.equal(autoFitSign.body.ok, true);
+    assert.equal(autoFitSign.body.autoFittedScale, failSign.body.maxSafeScale);
+    assert.equal(autoFitSign.body.result?.sculpture?.title, 'Oversized Poo Model');
+    assert.equal(autoFitSign.body.request?.status, 'executed');
   });
 });

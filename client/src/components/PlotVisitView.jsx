@@ -144,6 +144,7 @@ export default function PlotVisitView({
   // Owner pending transaction approvals & pairing health on this land
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [approvalBusyId, setApprovalBusyId] = useState('');
+  const [approvalErrors, setApprovalErrors] = useState({});
   const [expandedApprovalId, setExpandedApprovalId] = useState('');
   const [mcpRepairAlert, setMcpRepairAlert] = useState(null);
 
@@ -335,12 +336,20 @@ export default function PlotVisitView({
     return () => clearInterval(timer);
   }, [user?.id, isLandOwner, activeParcel?.parcelId, loadOwnerPendingAndPairing]);
 
-  async function handleApprovePendingTx(item) {
+  async function handleApprovePendingTx(item, options = {}) {
     if (!item?.id || !user?.id || approvalBusyId) return;
+    const autoFitScale = Boolean(options?.autoFitScale);
     setApprovalBusyId(item.id);
+    setApprovalErrors((prev) => {
+      if (!prev[item.id]) return prev;
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
     try {
       let extSig = '';
       if (
+        !autoFitScale &&
         user?.walletAddress &&
         item.ownerAddress &&
         user.walletAddress.toLowerCase() !== item.ownerAddress.toLowerCase() &&
@@ -352,23 +361,28 @@ export default function PlotVisitView({
           params: [item.canonicalMessage, item.ownerAddress]
         });
       }
-      await api.mobileSignRequest(item.id, extSig ? { signature: extSig } : {});
+      const signPayload = {
+        ...(extSig ? { signature: extSig } : {}),
+        ...(autoFitScale ? { autoFitScale: true } : {})
+      };
+      const signRes = await api.mobileSignRequest(item.id, signPayload);
       setPendingApprovals((prev) => prev.filter((r) => r.id !== item.id));
       const title =
         item.summaryTitle ||
         String(item.action || 'Land Transaction')
           .replace(/_/g, ' ')
           .replace(/^\w/, (c) => c.toUpperCase());
+      const fitSuffix = signRes?.autoFittedScale ? ` (auto-fitted to ${signRes.autoFittedScale}×)` : '';
       recordUserAction(user?.id, {
         type: 'approve_land_tx',
         icon: '✅',
-        title: `Approved "${title}"`,
+        title: `Approved "${title}"${fitSuffix}`,
         detail: landDisplayName,
         parcelId: activeParcel?.parcelId || item.parcelId || '',
-        sculptureId: item.sculptureId || '',
+        sculptureId: signRes?.result?.sculpture?.id || item.sculptureId || '',
         linkLabel: 'Land'
       });
-      const msg = `Approved & executed "${title}" on "${landDisplayName}"!`;
+      const msg = `Approved & executed "${title}"${fitSuffix} on "${landDisplayName}"!`;
       flashStatus(msg);
       notifySettingsSaved(msg);
       let nextParcel = activeParcel;
@@ -385,7 +399,18 @@ export default function PlotVisitView({
       onPlotUpdated?.({ parcel: nextParcel, sculptures: nextSculptures });
       loadOwnerPendingAndPairing();
     } catch (err) {
-      flashStatus(err?.message || 'Could not approve transaction.', true);
+      const errMsg = err?.message || 'Could not approve transaction.';
+      const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);
+      setApprovalErrors((prev) => ({
+        ...prev,
+        [item.id]: {
+          message: errMsg,
+          code: String(err?.data?.code || ''),
+          maxSafeScale: Number.isFinite(maxSafe) && maxSafe > 0 ? maxSafe : null
+        }
+      }));
+      flashStatus(errMsg, true);
+      notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 6500 });
     } finally {
       setApprovalBusyId('');
     }
@@ -394,6 +419,12 @@ export default function PlotVisitView({
   async function handleRejectPendingTx(item) {
     if (!item?.id || !user?.id || approvalBusyId) return;
     setApprovalBusyId(item.id);
+    setApprovalErrors((prev) => {
+      if (!prev[item.id]) return prev;
+      const next = { ...prev };
+      delete next[item.id];
+      return next;
+    });
     try {
       await api.rejectSignatureRequest(item.id);
       setPendingApprovals((prev) => prev.filter((r) => r.id !== item.id));
@@ -1723,6 +1754,10 @@ export default function PlotVisitView({
                             {pendingApprovals.map((item) => {
                               const busy = approvalBusyId === item.id;
                               const isExpanded = expandedApprovalId === item.id;
+                              const itemError = approvalErrors?.[item.id] || null;
+                              const canAutoFit =
+                                itemError?.code === 'exceeds_land_bounds' &&
+                                Number(itemError?.maxSafeScale) >= 0.001;
                               const title =
                                 item.summaryTitle ||
                                 String(item.action || 'Land Transaction')
@@ -1752,6 +1787,32 @@ export default function PlotVisitView({
                                     🤖 {item.agentName || 'Paired Agent'} · {String(item.action || '').replace(/_/g, ' ')}
                                   </div>
                                   <p className="plot-pending-item-desc">{desc}</p>
+                                  {itemError?.message && (
+                                    <div
+                                      className="approval-inline-error"
+                                      data-testid="plot-approval-error"
+                                      role="alert"
+                                    >
+                                      <div className="approval-inline-error-msg">
+                                        ⚠️ {itemError.message}
+                                      </div>
+                                      {canAutoFit && (
+                                        <button
+                                          type="button"
+                                          className="btn btn-xs btn-primary"
+                                          data-testid="plot-autofit-approve-btn"
+                                          disabled={Boolean(approvalBusyId)}
+                                          onClick={() =>
+                                            handleApprovePendingTx(item, { autoFitScale: true })
+                                          }
+                                        >
+                                          {busy
+                                            ? 'Fitting & Placing…'
+                                            : `📐 Auto-Fit (${itemError.maxSafeScale}×) & Approve`}
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                   {isExpanded && (
                                     <div className="mobile-approval-details mono">
                                       <div>Action: {item.action}</div>

@@ -5908,6 +5908,57 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       const repairBanner = hudView.getByTestId('mobile-repair-banner');
       assert.ok(repairBanner.textContent.includes('Re-pair Needed'));
       cleanup();
+
+      // 6) MobilePairApprovalDropdown displays inline approval error + 1-tap Auto-Fit & Approve button
+      const autoFitCalls = [];
+      const errHudView = RTL.render(
+        React.createElement(StudioHudTopBar, {
+          user: ownerUser,
+          mode: 'draw',
+          dockOpen: false,
+          location: null,
+          pairedCode: '',
+          voxels: [],
+          quickSculpt: false,
+          hasOwnedLand: true,
+          ownedLandCount: 1,
+          originStatus: { originBlocked: false, isSecure: true, isTrusted: true },
+          sceneScan: { active: false },
+          surfaceAnchor: { locked: false },
+          mcpPairingsState: { mcpActive: true, activePairing: { code: 'GLP-1111-2222-3333-4444' }, pairings: [] },
+          pendingSignatures: [
+            {
+              id: 'sigreq-oversized-1',
+              action: 'create_sculpture',
+              parcelId: 'GLAND-9R1652SD',
+              parcelName: 'ARTISTSSHITBOX',
+              summaryTitle: 'Place "Sprinkle Poo"',
+              summaryDescription: 'Add GLB 3D model on "ARTISTSSHITBOX".',
+              agentName: 'land-builder-agent',
+              ownerAddress: ownerUser.walletAddress,
+              canonicalMessage: 'sign-oversized',
+              expiresAt: new Date(Date.now() + 3600000).toISOString()
+            }
+          ],
+          pendingSigErrors: {
+            'sigreq-oversized-1': {
+              message: 'Scale 6× exceeds the 18.2×19.7×18m land bounds (max 1.927×).',
+              code: 'exceeds_land_bounds',
+              maxSafeScale: 1.927
+            }
+          },
+          onMobileSignPending: (item, opts) => autoFitCalls.push({ id: item.id, opts }),
+          signatureHistory: []
+        })
+      );
+      RTL.fireEvent.click(errHudView.getByTestId('mobile-pair-hub-btn'));
+      const inlineErr = errHudView.getByTestId('mobile-approval-error');
+      assert.ok(inlineErr.textContent.includes('1.927×'));
+      const autoFitBtn = errHudView.getByTestId('mobile-autofit-approve-btn');
+      assert.ok(autoFitBtn.textContent.includes('Auto-Fit (1.927×) & Approve'));
+      RTL.fireEvent.click(autoFitBtn);
+      assert.deepEqual(autoFitCalls, [{ id: 'sigreq-oversized-1', opts: { autoFitScale: true } }]);
+      cleanup();
     } finally {
       globalThis.fetch = origFetch;
       localStorage.removeItem('graffiland_user_history_v1:google:landholder-99');

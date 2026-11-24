@@ -75,6 +75,7 @@ export default function StudioHudTopBar({
   pendingSignatures = [],
   signatureHistory = [],
   pendingSigBusyId = '',
+  pendingSigErrors = {},
   onMobileSignPending,
   onMobileRejectPending,
   onRefreshSignatures,
@@ -350,6 +351,7 @@ export default function StudioHudTopBar({
           pendingSignatures={pendingSignatures}
           signatureHistory={signatureHistory}
           pendingSigBusyId={pendingSigBusyId}
+          pendingSigErrors={pendingSigErrors}
           onMobileSignPending={onMobileSignPending}
           onMobileRejectPending={onMobileRejectPending}
           onRefreshSignatures={onRefreshSignatures}

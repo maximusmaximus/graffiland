@@ -29,6 +29,8 @@ import {
   applySetSculptureVisibility,
   applyUpdateParcel,
   applyUpdateSculpture,
+  preflightCreateSculptureOnLand,
+  preflightUpdateSculpture,
   updateLandSettings
 } from './landMutations.mjs';
 import { updateLandVolume } from '../agentQuestService.mjs';
@@ -436,6 +438,9 @@ export async function executeValidatedSignatureRow(
   await db.run(
     `UPDATE land_signature_requests
      SET status = 'executed',
+         payload_json = ?,
+         payload_hash = ?,
+         canonical_message = ?,
          signed_by = ?,
          signer_address = ?,
          signature = ?,
@@ -444,6 +449,9 @@ export async function executeValidatedSignatureRow(
          updated_at = ?
      WHERE id = ? AND status = 'pending'`,
     [
+      reqRow.payload_json,
+      reqRow.payload_hash,
+      reqRow.canonical_message,
       signedBy,
       signerAddress,
       signature,
@@ -639,6 +647,8 @@ export async function signRequestByMobile(
     requestId,
     user,
     signature = '',
+    autoFitScale = false,
+    overrideScale = null,
     decryptEmbeddedPrivateKey,
     pinSculptureFn,
     mintSculptureFn,
@@ -662,13 +672,98 @@ export async function signRequestByMobile(
     throw new McpServiceError('Signature request has expired.', 410);
   }
 
+  let effectiveRow = row;
+  let appliedAutoFitScale = null;
   let finalSig = String(signature || '').trim();
   let signerAddress = '';
+
+  const requestedOverrideScale =
+    overrideScale !== null && overrideScale !== undefined && overrideScale !== ''
+      ? Number(overrideScale)
+      : NaN;
+  const wantsScaleAdjust =
+    (Boolean(autoFitScale) || (Number.isFinite(requestedOverrideScale) && requestedOverrideScale > 0)) &&
+    (row.action === 'create_sculpture' || row.action === 'update_sculpture');
+
+  if (wantsScaleAdjust) {
+    if (finalSig) {
+      throw new McpServiceError(
+        'Auto-fit scale modifies the request payload and requires embedded wallet signing.',
+        400
+      );
+    }
+    const parsedPayload = JSON.parse(row.payload_json || '{}');
+    let nextScale = Number.isFinite(requestedOverrideScale) && requestedOverrideScale > 0
+      ? requestedOverrideScale
+      : null;
+
+    if (nextScale === null && autoFitScale) {
+      try {
+        if (row.action === 'create_sculpture') {
+          const parcelCtx = await checkParcelOwnership(db, {
+            parcelId: row.parcel_id,
+            user
+          });
+          await preflightCreateSculptureOnLand(db, { parcelCtx, payload: parsedPayload });
+        } else if (row.action === 'update_sculpture') {
+          const perm = await checkSculptureOrLandOwnership(db, {
+            sculptureId: row.sculpture_id,
+            user,
+            allowHidden: true
+          });
+          await preflightUpdateSculpture(db, { sculptureRow: perm.row, payload: parsedPayload });
+        }
+      } catch (preflightErr) {
+        const candidateScale = Number(
+          preflightErr?.extra?.maxSafeScale ?? preflightErr?.extra?.suggestedScale ?? 0
+        );
+        if (preflightErr?.statusCode === 409 && candidateScale >= 0.001) {
+          nextScale = candidateScale;
+        } else {
+          throw preflightErr;
+        }
+      }
+    }
+
+    if (nextScale !== null && nextScale >= 0.001) {
+      const adjustedPayload = {
+        ...parsedPayload,
+        modelScale: nextScale,
+        ...(parsedPayload.scale !== undefined ? { scale: nextScale } : {}),
+        ...(parsedPayload.anchorOffset && typeof parsedPayload.anchorOffset === 'object'
+          ? {
+              anchorOffset: {
+                ...parsedPayload.anchorOffset,
+                ...(parsedPayload.anchorOffset.scale !== undefined ? { scale: nextScale } : {})
+              }
+            }
+          : {})
+      };
+      const nextPayloadHash = hashPayloadCanonical(adjustedPayload);
+      const nextCanonicalMessage = buildLandActivityMessage({
+        requestId: row.id,
+        action: row.action,
+        parcelId: row.parcel_id,
+        sculptureId: row.sculpture_id || '',
+        ownerAddress: row.owner_address,
+        payloadHash: nextPayloadHash,
+        nonce: row.nonce,
+        expiresAt: row.expires_at
+      });
+      effectiveRow = {
+        ...row,
+        payload_json: JSON.stringify(adjustedPayload),
+        payload_hash: nextPayloadHash,
+        canonical_message: nextCanonicalMessage
+      };
+      appliedAutoFitScale = nextScale;
+    }
+  }
 
   if (finalSig) {
     let recovered;
     try {
-      recovered = ethers.getAddress(ethers.verifyMessage(row.canonical_message, finalSig));
+      recovered = ethers.getAddress(ethers.verifyMessage(effectiveRow.canonical_message, finalSig));
     } catch {
       throw new McpServiceError('Invalid mobile wallet signature.', 401);
     }
@@ -683,12 +778,12 @@ export async function signRequestByMobile(
   } else {
     const pk = await decryptEmbeddedPrivateKey(user);
     const wallet = new ethers.Wallet(pk);
-    finalSig = await wallet.signMessage(row.canonical_message);
+    finalSig = await wallet.signMessage(effectiveRow.canonical_message);
     signerAddress = ethers.getAddress(wallet.address);
   }
 
-  return executeValidatedSignatureRow(db, {
-    reqRow: row,
+  const execOut = await executeValidatedSignatureRow(db, {
+    reqRow: effectiveRow,
     ownerUser: user,
     signedBy: 'mobile-wallet',
     signerAddress,
@@ -697,6 +792,9 @@ export async function signRequestByMobile(
     mintSculptureFn,
     emitMetadataUpdateFn
   });
+  return appliedAutoFitScale !== null
+    ? { ...execOut, autoFittedScale: appliedAutoFitScale }
+    : execOut;
 }
 
 export async function signRequestByAgent(

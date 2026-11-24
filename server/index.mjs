@@ -1857,6 +1857,8 @@ export function createAppServer(serverOptions = {}) {
         requestId: req.params.id,
         user: req.user,
         signature: req.body?.signature || '',
+        autoFitScale: Boolean(req.body?.autoFitScale),
+        overrideScale: req.body?.overrideScale ?? null,
         decryptEmbeddedPrivateKey: async (u) => decryptPrivateKey(u.encrypted_wallet_json),
         pinSculptureFn: makePinHook(),
         mintSculptureFn: makeMintHook(),

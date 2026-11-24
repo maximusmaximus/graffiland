@@ -87,6 +87,7 @@ export default function MobilePairApprovalDropdown({
   pendingSignatures = [],
   signatureHistory = [],
   pendingSigBusyId = '',
+  pendingSigErrors = {},
   onMobileSignPending,
   onMobileRejectPending,
   onRefreshSignatures
@@ -327,6 +328,10 @@ export default function MobilePairApprovalDropdown({
                 const busy = pendingSigBusyId === item.id;
                 const { title, desc } = fallbackSummary(item);
                 const isExpanded = expandedId === item.id;
+                const itemError = pendingSigErrors?.[item.id] || null;
+                const canAutoFit =
+                  itemError?.code === 'exceeds_land_bounds' &&
+                  Number(itemError?.maxSafeScale) >= 0.001;
                 return (
                   <div
                     key={item.id}
@@ -353,6 +358,29 @@ export default function MobilePairApprovalDropdown({
                     </div>
 
                     <p className="mobile-approval-desc">{desc}</p>
+
+                    {itemError?.message && (
+                      <div
+                        className="approval-inline-error"
+                        data-testid="mobile-approval-error"
+                        role="alert"
+                      >
+                        <div className="approval-inline-error-msg">⚠️ {itemError.message}</div>
+                        {canAutoFit && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-primary"
+                            data-testid="mobile-autofit-approve-btn"
+                            disabled={busy}
+                            onClick={() => onMobileSignPending?.(item, { autoFitScale: true })}
+                          >
+                            {busy
+                              ? 'Fitting & Placing…'
+                              : `📐 Auto-Fit (${itemError.maxSafeScale}×) & Approve`}
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {isExpanded && (
                       <div className="mobile-approval-details mono">

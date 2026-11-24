@@ -2595,6 +2595,8 @@ export default {
             requestId: reqId,
             user,
             signature: body?.signature || '',
+            autoFitScale: Boolean(body?.autoFitScale),
+            overrideScale: body?.overrideScale ?? null,
             decryptEmbeddedPrivateKey: async (u) =>
               decryptWalletPrivateKey(u.encrypted_wallet_json, cfg.walletEncryptionKey),
             pinSculptureFn: makeWorkerPinHook(),
@@ -2624,7 +2626,11 @@ export default {
           request
         );
       } catch (err) {
-        return jsonResponse({ error: err.message || 'Signature action failed' }, err?.statusCode || 400, request);
+        return jsonResponse(
+          { error: err.message || 'Signature action failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
