@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { BrowserProvider, Contract, isAddress } from 'ethers';
 import xeroemoji from 'xeroemoji';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import { HUMAN_MAX_DRAW_SPAN_METERS } from '../../../shared/constants.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import {
   buildPlacementItemFromSculpture,
@@ -295,15 +296,32 @@ export default function SculptureModal({
 
   const maxScaleForLand = useMemo(() => {
     if (!targetBaseItem) return 10;
-    return computeMaxScaleForParcel(
+    const landCap = computeMaxScaleForParcel(
       { ...targetBaseItem, yaw: Number(editOffset.yaw || 0) },
       placementVolume
     );
-  }, [editOffset.yaw, placementVolume, targetBaseItem]);
+    if (sculpture?.modelType === 'custom-3d') return landCap;
+    const yawRad = (Number(editOffset.yaw || 0) * Math.PI) / 180;
+    const cosY = Math.abs(Math.cos(yawRad));
+    const sinY = Math.abs(Math.sin(yawRad));
+    const effW = Math.max(
+      0.01,
+      Number(targetBaseItem.baseWidth || 0.05) * cosY + Number(targetBaseItem.baseDepth || 0.05) * sinY
+    );
+    const effD = Math.max(
+      0.01,
+      Number(targetBaseItem.baseWidth || 0.05) * sinY + Number(targetBaseItem.baseDepth || 0.05) * cosY
+    );
+    const humanCap = Math.min(
+      HUMAN_MAX_DRAW_SPAN_METERS / effW,
+      HUMAN_MAX_DRAW_SPAN_METERS / effD
+    );
+    return Math.max(MIN_ARTWORK_SCALE, Math.min(landCap, Math.floor(humanCap * 1000) / 1000));
+  }, [editOffset.yaw, placementVolume, sculpture?.modelType, targetBaseItem]);
 
   const maxSafeScale = useMemo(() => {
     if (!sculpture?.id || placementItems.length === 0) return maxScaleForLand;
-    return computeMaxFeasibleScale({
+    const feasible = computeMaxFeasibleScale({
       parcelVolume: placementVolume,
       targetId: sculpture.id,
       targetTransform: {
@@ -314,6 +332,7 @@ export default function SculptureModal({
       },
       items: placementItems
     });
+    return Math.min(feasible, maxScaleForLand);
   }, [editOffset, maxScaleForLand, placementItems, placementVolume, sculpture?.id]);
 
   const handleMeasuredBounds = useCallback((dims) => {

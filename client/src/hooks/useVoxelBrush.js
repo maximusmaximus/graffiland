@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
-import { AREA_HALF_SPAN_METERS, AREA_LIMIT_BLOCKS } from '../../../shared/constants.mjs';
+import {
+  AREA_HALF_SPAN_METERS,
+  AREA_LIMIT_BLOCKS,
+  HUMAN_MAX_DRAW_SPAN_FEET,
+  HUMAN_MAX_DRAW_SPAN_METERS
+} from '../../../shared/constants.mjs';
 import {
   computeAdjacentCandidateSlots,
+  computeMaxHumanDrawScale,
   findBestAdjacentVoxelSlot,
   getVoxelCellStep,
+  measureVoxelHorizontalFootprint,
   normalizeBlockScale,
   snapToVoxelLattice
 } from '../../../shared/voxelStroke.mjs';
@@ -21,8 +28,8 @@ import { ForegroundOcclusionCompositor } from '../components/ForegroundOcclusion
 export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
   { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks', quick: true },
-  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase', quick: true },
+  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
   { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear', quick: true },
   { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas', quick: true },
   { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform', quick: false },
@@ -145,7 +152,7 @@ export function useVoxelBrush({
   const [occlusionEnabled, setOcclusionEnabled] = useState(false);
   const [painting, setPainting] = useState(false);
   const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
-  const [artTransform, setArtTransform] = useState({
+  const [artTransform, setArtTransformState] = useState({
     scale: 1,
     rotYDeg: 0,
     offsetX: 0,
@@ -572,10 +579,48 @@ export function useVoxelBrush({
     [cameraRef, canvasHostRef, draftGroupRef]
   );
 
+  const setArtTransform = useCallback(
+    (updater) => {
+      const maxHumanSpan =
+        config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
+      let clampedForFootprint = false;
+      setArtTransformState((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        if (!next) return prev;
+        const list = voxelsRef.current || [];
+        if (list.length === 0) return next;
+        const reqScale = Math.max(0.25, Math.min(2, Number(next.scale ?? 1)));
+        const maxAllowedScale = computeMaxHumanDrawScale(list, {
+          step: VOXEL_STEP,
+          rotYDeg: Number(next.rotYDeg || 0),
+          pivot: transformPivotRef.current,
+          maxSpanMeters: maxHumanSpan,
+          minScale: 0.25,
+          maxScale: 2
+        });
+        if (reqScale > maxAllowedScale + 1e-4) {
+          clampedForFootprint = true;
+          return { ...next, scale: maxAllowedScale };
+        }
+        return { ...next, scale: reqScale };
+      });
+      if (clampedForFootprint) {
+        queueMicrotask(() => {
+          showTemporaryHint(
+            `Max drawing size is ${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft`
+          );
+        });
+      }
+    },
+    [config?.policy?.humanMaxDrawSpanMeters, showTemporaryHint]
+  );
+
   const applyVoxelBatch = useCallback(
     (targets) => {
       if (!Array.isArray(targets) || targets.length === 0) return;
       const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
+      const maxHumanSpan =
+        config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
       const maxVoxels = config?.policy?.maxVoxels || 4096;
 
       const uniqueAdds = [];
@@ -608,7 +653,7 @@ export function useVoxelBrush({
 
       if (hadOutOfBounds && uniqueAdds.length === 0) {
         setSensorBanner(
-          `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
+          `Drawing size limit reached (${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft max)`
         );
         return;
       }
@@ -630,9 +675,14 @@ export function useVoxelBrush({
         let maxY = -Infinity;
         let minZ = Infinity;
         let maxZ = -Infinity;
+        let outerMinX = Infinity;
+        let outerMaxX = -Infinity;
+        let outerMinZ = Infinity;
+        let outerMaxZ = -Infinity;
 
         for (let i = 0; i < prev.length; i += 1) {
           const v = prev[i];
+          const vHalf = (VOXEL_STEP * normalizeBlockScale(v.scale ?? 1)) * 0.5;
           existingIndexByKey.set(voxelKey(v.x, v.y, v.z), i);
           if (v.x < minX) minX = v.x;
           if (v.x > maxX) maxX = v.x;
@@ -640,24 +690,44 @@ export function useVoxelBrush({
           if (v.y > maxY) maxY = v.y;
           if (v.z < minZ) minZ = v.z;
           if (v.z > maxZ) maxZ = v.z;
+          if (v.x - vHalf < outerMinX) outerMinX = v.x - vHalf;
+          if (v.x + vHalf > outerMaxX) outerMaxX = v.x + vHalf;
+          if (v.z - vHalf < outerMinZ) outerMinZ = v.z - vHalf;
+          if (v.z + vHalf > outerMaxZ) outerMaxZ = v.z + vHalf;
         }
 
         let nextList = null;
         const additions = [];
         for (const cand of uniqueAdds) {
+          const candScale = normalizeBlockScale(cand.scale ?? blockSizeRef.current);
+          const candHalf = (VOXEL_STEP * candScale) * 0.5;
           if (existingIndexByKey.has(cand.key)) {
             if (!cand.replaceExisting) continue;
             const idx = existingIndexByKey.get(cand.key);
             const cur = (nextList || prev)[idx];
-            const nextScale = normalizeBlockScale(cand.scale ?? blockSizeRef.current);
             if (
               cur &&
               cur.color === colorRef.current &&
               (cur.material || 'matte') === materialRef.current &&
-              normalizeBlockScale(cur.scale ?? 1) === nextScale
+              normalizeBlockScale(cur.scale ?? 1) === candScale
             ) {
               continue;
             }
+            const repMinX = Math.min(outerMinX, cand.x - candHalf);
+            const repMaxX = Math.max(outerMaxX, cand.x + candHalf);
+            const repMinZ = Math.min(outerMinZ, cand.z - candHalf);
+            const repMaxZ = Math.max(outerMaxZ, cand.z + candHalf);
+            if (
+              repMaxX - repMinX > maxHumanSpan + 1e-4 ||
+              repMaxZ - repMinZ > maxHumanSpan + 1e-4
+            ) {
+              limitNotice = `Drawing size limit reached (${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft max)`;
+              continue;
+            }
+            outerMinX = repMinX;
+            outerMaxX = repMaxX;
+            outerMinZ = repMinZ;
+            outerMaxZ = repMaxZ;
             if (!nextList) nextList = [...prev];
             nextList[idx] = {
               x: cand.x,
@@ -665,7 +735,7 @@ export function useVoxelBrush({
               z: cand.z,
               color: colorRef.current,
               material: materialRef.current,
-              scale: nextScale
+              scale: candScale
             };
             continue;
           }
@@ -681,6 +751,19 @@ export function useVoxelBrush({
           const nMinZ = Math.min(minZ, cand.z);
           const nMaxZ = Math.max(maxZ, cand.z);
 
+          const nOuterMinX = Math.min(outerMinX, cand.x - candHalf);
+          const nOuterMaxX = Math.max(outerMaxX, cand.x + candHalf);
+          const nOuterMinZ = Math.min(outerMinZ, cand.z - candHalf);
+          const nOuterMaxZ = Math.max(outerMaxZ, cand.z + candHalf);
+
+          if (
+            nOuterMaxX - nOuterMinX > maxHumanSpan + 1e-4 ||
+            nOuterMaxZ - nOuterMinZ > maxHumanSpan + 1e-4
+          ) {
+            limitNotice = `Drawing size limit reached (${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft max)`;
+            continue;
+          }
+
           const spanX = Math.round((nMaxX - nMinX) / VOXEL_STEP) + 1;
           const spanY = Math.round((nMaxY - nMinY) / VOXEL_STEP) + 1;
           const spanZ = Math.round((nMaxZ - nMinZ) / VOXEL_STEP) + 1;
@@ -695,6 +778,10 @@ export function useVoxelBrush({
           maxY = nMaxY;
           minZ = nMinZ;
           maxZ = nMaxZ;
+          outerMinX = nOuterMinX;
+          outerMaxX = nOuterMaxX;
+          outerMinZ = nOuterMinZ;
+          outerMaxZ = nOuterMaxZ;
           existingIndexByKey.set(cand.key, prev.length + additions.length);
           additions.push({
             x: cand.x,
@@ -702,7 +789,7 @@ export function useVoxelBrush({
             z: cand.z,
             color: colorRef.current,
             material: materialRef.current,
-            scale: normalizeBlockScale(cand.scale ?? blockSizeRef.current)
+            scale: candScale
           });
         }
 
@@ -716,12 +803,17 @@ export function useVoxelBrush({
         queueMicrotask(() => {
           setSensorBanner(
             limitNotice ||
-              `Area limit reached (${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS}x${AREA_LIMIT_BLOCKS} blocks max)`
+              `Drawing size limit reached (${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft max)`
           );
         });
       }
     },
-    [config?.policy?.areaHalfSpanMeters, config?.policy?.maxVoxels, setSensorBanner]
+    [
+      config?.policy?.areaHalfSpanMeters,
+      config?.policy?.humanMaxDrawSpanMeters,
+      config?.policy?.maxVoxels,
+      setSensorBanner
+    ]
   );
 
   const eraseTargetVoxel = useCallback((target) => {
@@ -854,7 +946,7 @@ export function useVoxelBrush({
   }, []);
 
   const resetArtTransformState = useCallback(() => {
-    setArtTransform({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
+    setArtTransformState({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
     activeCanvasPointersRef.current.clear();
     transformPinchRef.current = null;
     if (draftGroupRef.current) {
@@ -928,7 +1020,17 @@ export function useVoxelBrush({
         voxelsRef.current.length > 0 &&
         hasNonIdentityTransform(tr)
       ) {
-        const s = tr.scale;
+        const maxHumanSpan =
+          config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
+        const maxAllowedScale = computeMaxHumanDrawScale(voxelsRef.current, {
+          step: VOXEL_STEP,
+          rotYDeg: tr.rotYDeg,
+          pivot,
+          maxSpanMeters: maxHumanSpan,
+          minScale: 0.25,
+          maxScale: 2
+        });
+        const s = Math.min(tr.scale, maxAllowedScale);
         const quat = new THREE.Quaternion().setFromAxisAngle(
           new THREE.Vector3(0, 1, 0),
           THREE.MathUtils.degToRad(tr.rotYDeg)
@@ -948,8 +1050,18 @@ export function useVoxelBrush({
             scale: Math.min(2, Math.max(0.25, Math.round(((v.scale ?? 1) * s) * 100) / 100))
           };
         });
+        const footprint = measureVoxelHorizontalFootprint(baked, {
+          step: VOXEL_STEP,
+          maxSpanMeters: maxHumanSpan
+        });
         resetArtTransformState();
-        setVoxels(baked);
+        if (!footprint.exceedsLimit) {
+          setVoxels(baked);
+        } else {
+          showTemporaryHint(
+            `Max drawing size is ${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft`
+          );
+        }
       } else {
         resetArtTransformState();
       }
@@ -963,7 +1075,12 @@ export function useVoxelBrush({
         showTemporaryHint('Returned to drawing mode');
       }
     },
-    [config?.policy?.areaHalfSpanMeters, resetArtTransformState, showTemporaryHint]
+    [
+      config?.policy?.areaHalfSpanMeters,
+      config?.policy?.humanMaxDrawSpanMeters,
+      resetArtTransformState,
+      showTemporaryHint
+    ]
   );
 
   const toggleTransformLock = useCallback(() => {
@@ -1158,11 +1275,16 @@ export function useVoxelBrush({
         return;
       }
       if (toolId === 'brush' || toolId === 'pencil' || toolId === 'stack' || toolId === 'erase') {
+        const prevTool = toolRef.current;
         if (modeRef.current === 'transform') {
           commitTransformAndExit('draw', toolId);
         } else {
           setMode('draw');
           setTool(toolId);
+          toolRef.current = toolId;
+        }
+        if (!silent && toolId === 'brush' && prevTool !== 'brush') {
+          onFirstBrushUseRef.current?.();
         }
       } else if (toolId === 'preview') {
         if (modeRef.current === 'transform') {
@@ -1650,7 +1772,7 @@ export function useVoxelBrush({
         Math.min(1.2, fallbackEulerRef.current.pitch - dy * 0.004)
       );
     },
-    [cameraRef, fallbackEulerRef, rawOrientationRef]
+    [cameraRef, fallbackEulerRef, rawOrientationRef, setArtTransform]
   );
 
   const handleCanvasPointerCancel = useCallback(

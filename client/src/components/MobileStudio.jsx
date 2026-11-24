@@ -786,6 +786,12 @@ export default function MobileStudio({
     prevFullscreenOverlayRef.current = hasFullscreenOverlay;
   }, [ensureArCameraLive, hasFullscreenOverlay]);
 
+  useEffect(() => {
+    if (isTransformMode) {
+      setDockOpen(false);
+    }
+  }, [isTransformMode]);
+
   const prevMappingAwayRef = useRef(isAwayFromMappingView);
   useEffect(() => {
     if (!prevMappingAwayRef.current && isAwayFromMappingView) {
@@ -1057,7 +1063,13 @@ export default function MobileStudio({
         applyVoxelAction={brush.applyVoxelAction}
         eraseTargetVoxel={brush.eraseTargetVoxel}
         rebuildDraftMesh={brush.rebuildDraftMesh}
-        onCanvasPointerDown={brush.handleCanvasPointerDown}
+        onCanvasPointerDown={(e) => {
+          if (dockOpen) {
+            setDockOpen(false);
+            return;
+          }
+          brush.handleCanvasPointerDown(e);
+        }}
         onCanvasPointerMove={brush.handleCanvasPointerMove}
         onCanvasPointerUp={brush.handleCanvasPointerUp}
         onCanvasPointerCancel={brush.handleCanvasPointerCancel}
@@ -1218,14 +1230,8 @@ export default function MobileStudio({
           <StudioDockDrawer
             dockOpen={dockOpen}
             onToggleDock={() => setDockOpen((v) => !v)}
-            mode={brush.mode}
+            onCloseDock={() => setDockOpen(false)}
             tool={brush.tool}
-            onSelectDrawTool={(nextTool) => {
-              brush.selectKeyTool(nextTool);
-              if (nextTool === 'brush') {
-                maybeShowSprayBrushGuide();
-              }
-            }}
             onOpenBrushGuide={() => setSprayBrushGuideOpen(true)}
             blockSize={brush.blockSize}
             setBlockSize={brush.setBlockSize}

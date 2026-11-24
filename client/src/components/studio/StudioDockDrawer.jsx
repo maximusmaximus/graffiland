@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   BLOCK_SIZE_PRESETS,
   STANDARD_COLOR_PRESETS,
@@ -9,18 +9,17 @@ import XeroIcon from '../XeroIcon.jsx';
 const REACH_PRESETS = [1.2, 1.8, 2.4, 3.0];
 
 /**
- * Bottom-right Brush, Pencil & Eraser Options Palette.
- * Core studio/canvas features live in the bottom-center swipe menu (ToolCarouselBar),
- * while this dedicated palette exposes quick switching between Brush (fluid spray can),
- * Pencil (single-block place/stack/replace), and Eraser, plus block size, standard colors,
- * material finish, and reach distance.
+ * Paint & Brush Kit Palette (Block Size, Preset Colors, Finish & Reach).
+ * Tool selection (Brush, Pencil, Stack, Eraser, etc.) lives exclusively in the
+ * bottom-center swipe menu (ToolCarouselBar). When open, this palette floats
+ * cleanly above the center tool button so the selected tool remains visible,
+ * and clicking/tapping anywhere off the kit minimizes it back to its icon.
  */
 export default function StudioDockDrawer({
   dockOpen,
   onToggleDock,
-  mode,
+  onCloseDock = null,
   tool,
-  onSelectDrawTool = null,
   onOpenBrushGuide = null,
   blockSize = 1,
   setBlockSize = null,
@@ -31,34 +30,85 @@ export default function StudioDockDrawer({
   reachMeters,
   setReachMeters
 }) {
+  const toggleBtnRef = useRef(null);
+  const popoverRef = useRef(null);
+
+  useEffect(() => {
+    if (!dockOpen) return undefined;
+    let dismissed = false;
+    const closeKit = () => {
+      if (dismissed) return;
+      dismissed = true;
+      if (onCloseDock) {
+        onCloseDock();
+      } else {
+        onToggleDock?.();
+      }
+    };
+    const handleOutsideInteraction = (ev) => {
+      const target = ev.target;
+      if (
+        (popoverRef.current && popoverRef.current.contains(target)) ||
+        (toggleBtnRef.current && toggleBtnRef.current.contains(target))
+      ) {
+        return;
+      }
+      closeKit();
+    };
+    const handleKeyDown = (ev) => {
+      if (ev.key === 'Escape') {
+        closeKit();
+      }
+    };
+    document.addEventListener('pointerdown', handleOutsideInteraction, true);
+    document.addEventListener('mousedown', handleOutsideInteraction, true);
+    document.addEventListener('click', handleOutsideInteraction, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsideInteraction, true);
+      document.removeEventListener('mousedown', handleOutsideInteraction, true);
+      document.removeEventListener('click', handleOutsideInteraction, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [dockOpen, onCloseDock, onToggleDock]);
+
   const activeScale = normalizeBlockScale(blockSize);
   const activeSizePreset =
     BLOCK_SIZE_PRESETS.find((p) => Math.abs(p.scale - activeScale) < 0.05) || BLOCK_SIZE_PRESETS[1];
-  const activeToolLabel =
-    tool === 'erase' ? 'Eraser' : tool === 'pencil' ? 'Pencil' : 'Brush';
   const activeToolHint =
     tool === 'erase'
-      ? 'Tap or hold on blocks to erase'
+      ? 'Eraser active below · tap or hold blocks to erase'
       : tool === 'pencil'
-      ? 'Tap blocks to replace · move phone to stack'
-      : 'Hold & sweep phone like a spray can';
+      ? 'Pencil active below · tap blocks to replace or stack'
+      : tool === 'stack'
+      ? 'Stack active below · hold to stack onto block faces'
+      : 'Brush active below · hold & sweep like a spray can';
+
+  const handleMinimize = () => {
+    if (onCloseDock) {
+      onCloseDock();
+    } else {
+      onToggleDock?.();
+    }
+  };
 
   return (
     <>
       <button
+        ref={toggleBtnRef}
         type="button"
         className={`floating-tools-toggle palette-fab-btn ${dockOpen ? 'is-open' : ''}`}
         data-testid="palette-options-toggle"
         onClick={onToggleDock}
         aria-expanded={dockOpen}
-        aria-label={dockOpen ? 'Close brush, pencil & eraser options' : 'Brush, pencil & eraser options'}
-        title={`${activeToolLabel} options · Size ${activeSizePreset.label} · Color ${color}`}
+        aria-label={dockOpen ? 'Minimize paint and brush kit' : 'Open paint and brush kit'}
+        title={`Paint & Brush Kit · Size ${activeSizePreset.label} · Color ${color}`}
       >
         {dockOpen ? (
           <XeroIcon emoji="✖️" size={18} />
         ) : (
           <>
-            <XeroIcon emoji={tool === 'erase' ? '🧽' : '🎨'} size={22} />
+            <XeroIcon emoji="🎨" size={22} />
             <span
               className="palette-fab-color-dot"
               style={{ backgroundColor: color }}
@@ -73,40 +123,20 @@ export default function StudioDockDrawer({
 
       {dockOpen && (
         <div
+          ref={popoverRef}
           className="brush-options-popover hud-interactive"
           data-testid="brush-options-popup"
           role="dialog"
-          aria-label="Brush, Pencil & Eraser Options"
+          aria-label="Paint and Brush Kit"
         >
-          <div className="brush-opt-header is-stacked">
-            <div className="brush-opt-tool-switch" role="group" aria-label="Draw mode">
-              <button
-                type="button"
-                className={`brush-opt-mode-btn ${mode === 'draw' && tool === 'brush' ? 'active' : ''}`}
-                data-testid="palette-select-brush"
-                onClick={() => onSelectDrawTool?.('brush')}
-              >
-                <XeroIcon emoji="🖌️" size={13} /> Brush
-              </button>
-              <button
-                type="button"
-                className={`brush-opt-mode-btn ${mode === 'draw' && tool === 'pencil' ? 'active' : ''}`}
-                data-testid="palette-select-pencil"
-                onClick={() => onSelectDrawTool?.('pencil')}
-              >
-                <XeroIcon emoji="✏️" size={13} /> Pencil
-              </button>
-              <button
-                type="button"
-                className={`brush-opt-mode-btn is-eraser ${mode === 'draw' && tool === 'erase' ? 'active' : ''}`}
-                data-testid="palette-select-erase"
-                onClick={() => onSelectDrawTool?.('erase')}
-              >
-                <XeroIcon emoji="🧽" size={13} /> Eraser
-              </button>
-            </div>
-            <div className="brush-opt-hint-row">
+          <div className="brush-opt-header">
+            <div className="brush-opt-title-group">
+              <span className="brush-opt-title">
+                <XeroIcon emoji="🎨" size={13} /> Paint &amp; Brush Kit
+              </span>
               <span className="brush-opt-mode-hint">{activeToolHint}</span>
+            </div>
+            <div className="brush-opt-header-actions">
               {tool === 'brush' && onOpenBrushGuide && (
                 <button
                   type="button"
@@ -119,6 +149,16 @@ export default function StudioDockDrawer({
                   ?
                 </button>
               )}
+              <button
+                type="button"
+                className="brush-opt-min-btn"
+                data-testid="palette-minimize-btn"
+                aria-label="Minimize paint and brush kit"
+                title="Minimize to icon"
+                onClick={handleMinimize}
+              >
+                <XeroIcon emoji="➖" size={11} />
+              </button>
             </div>
           </div>
 

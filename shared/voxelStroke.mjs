@@ -1,4 +1,4 @@
-import { VOXEL_STEP } from './constants.mjs';
+import { HUMAN_MAX_DRAW_SPAN_METERS, VOXEL_STEP } from './constants.mjs';
 
 export const BLOCK_SIZE_PRESETS = Object.freeze([
   { id: 's', label: 'S', scale: 0.5, hint: 'Fine · 0.5×' },
@@ -415,4 +415,148 @@ export function advanceFluidSprayPoint(
     y: py + (ry - py) * alpha,
     z: pz + (rz - pz) * alpha
   };
+}
+
+/**
+ * Measures the physical horizontal footprint (width X, depth Z, and height Y in meters)
+ * of a voxel list, including individual block extents and optional uniform transform scale/rotation.
+ */
+export function measureVoxelHorizontalFootprint(
+  voxels,
+  {
+    step = VOXEL_STEP,
+    scale = 1,
+    rotYDeg = 0,
+    pivot = null,
+    maxSpanMeters = HUMAN_MAX_DRAW_SPAN_METERS
+  } = {}
+) {
+  if (!Array.isArray(voxels) || voxels.length === 0) {
+    return {
+      minX: 0,
+      maxX: 0,
+      minY: 0,
+      maxY: 0,
+      minZ: 0,
+      maxZ: 0,
+      widthMeters: 0,
+      heightMeters: 0,
+      depthMeters: 0,
+      exceedsLimit: false
+    };
+  }
+
+  const uniformScale = Number.isFinite(Number(scale)) && Number(scale) > 0 ? Number(scale) : 1;
+  const rad = ((Number(rotYDeg) || 0) * Math.PI) / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+  const px = Number(pivot?.x || 0);
+  const py = Number(pivot?.y || 0);
+  const pz = Number(pivot?.z || 0);
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+
+  for (const v of voxels) {
+    const vx = Number(v?.x);
+    const vy = Number(v?.y);
+    const vz = Number(v?.z);
+    if (!Number.isFinite(vx) || !Number.isFinite(vy) || !Number.isFinite(vz)) continue;
+    const dx = (vx - px) * uniformScale;
+    const dy = (vy - py) * uniformScale;
+    const dz = (vz - pz) * uniformScale;
+    const rx = px + dx * cosR + dz * sinR;
+    const ry = py + dy;
+    const rz = pz - dx * sinR + dz * cosR;
+    const bakedBlockScale = normalizeBlockScale(normalizeBlockScale(v?.scale ?? 1) * uniformScale);
+    const half = (step * bakedBlockScale) * 0.5;
+    if (rx - half < minX) minX = rx - half;
+    if (rx + half > maxX) maxX = rx + half;
+    if (ry - half < minY) minY = ry - half;
+    if (ry + half > maxY) maxY = ry + half;
+    if (rz - half < minZ) minZ = rz - half;
+    if (rz + half > maxZ) maxZ = rz + half;
+  }
+
+  if (!Number.isFinite(minX)) {
+    return {
+      minX: 0,
+      maxX: 0,
+      minY: 0,
+      maxY: 0,
+      minZ: 0,
+      maxZ: 0,
+      widthMeters: 0,
+      heightMeters: 0,
+      depthMeters: 0,
+      exceedsLimit: false
+    };
+  }
+
+  const widthMeters = Math.max(0, Math.round((maxX - minX) * 10000) / 10000);
+  const heightMeters = Math.max(0, Math.round((maxY - minY) * 10000) / 10000);
+  const depthMeters = Math.max(0, Math.round((maxZ - minZ) * 10000) / 10000);
+  const limit = Number(maxSpanMeters) > 0 ? Number(maxSpanMeters) : HUMAN_MAX_DRAW_SPAN_METERS;
+
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    minZ,
+    maxZ,
+    widthMeters,
+    heightMeters,
+    depthMeters,
+    exceedsLimit: widthMeters > limit + 1e-4 || depthMeters > limit + 1e-4
+  };
+}
+
+/**
+ * Computes the maximum uniform transform scale (within [minScale, maxScale]) that keeps
+ * a human voxel sculpture strictly inside the 250ft x 250ft (76.2m x 76.2m) drawing footprint.
+ */
+export function computeMaxHumanDrawScale(
+  voxels,
+  {
+    step = VOXEL_STEP,
+    rotYDeg = 0,
+    pivot = null,
+    maxSpanMeters = HUMAN_MAX_DRAW_SPAN_METERS,
+    minScale = 0.25,
+    maxScale = 2
+  } = {}
+) {
+  if (!Array.isArray(voxels) || voxels.length === 0) return maxScale;
+  const atMax = measureVoxelHorizontalFootprint(voxels, {
+    step,
+    scale: maxScale,
+    rotYDeg,
+    pivot,
+    maxSpanMeters
+  });
+  if (!atMax.exceedsLimit) return maxScale;
+
+  let lo = minScale;
+  let hi = maxScale;
+  for (let i = 0; i < 20; i += 1) {
+    const mid = (lo + hi) * 0.5;
+    const probe = measureVoxelHorizontalFootprint(voxels, {
+      step,
+      scale: mid,
+      rotYDeg,
+      pivot,
+      maxSpanMeters
+    });
+    if (probe.exceedsLimit) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return Math.max(minScale, Math.floor(lo * 1000) / 1000);
 }

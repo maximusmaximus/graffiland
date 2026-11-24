@@ -882,6 +882,8 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     assert.equal(cfg.body.policy.maxVoxels, 4096);
     assert.equal(cfg.body.policy.areaHalfSpanMeters, 250);
     assert.deepEqual(cfg.body.policy.areaLimitBlocks, [10000, 10000, 10000]);
+    assert.equal(cfg.body.policy.humanMaxDrawSpanFeet, 250);
+    assert.equal(cfg.body.policy.humanMaxDrawSpanMeters, 76.2);
 
     const spec = await apiJson('/api/agent/spec');
     assert.equal(spec.status, 200);
@@ -934,6 +936,34 @@ describe('GRAFFILAND Full-Stack Verification', () => {
     });
     assert.equal(outOfBounds.status, 400);
     assert.match(outOfBounds.body.error, /10000x10000x10000|bounds/i);
+
+    // Human drawings exceeding 250ft x 250ft (76.2m x 76.2m) horizontal footprint must be rejected
+    const tooWideHuman = await apiJson('/api/sculptures/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile'
+      },
+      body: JSON.stringify({
+        title: 'Over 250ft Mural',
+        description: 'Testing human drawing bounds exceeding 250ft wide.',
+        termsAccepted: true,
+        location: { lat: 37.7749, lng: -122.4194, altitude: 10, accuracy: 8 },
+        pol: {
+          frameCount: 6,
+          gyroSamples: 8,
+          cameraFingerprint: 'ok',
+          skyLuminance: 0.5,
+          flowScore: 0.7
+        },
+        voxels: [
+          { x: -38.5, y: 0, z: 0, color: '#00f5d4', material: 'matte' },
+          { x: 38.5, y: 0, z: 0, color: '#ff3e7f', material: 'neon' }
+        ]
+      })
+    });
+    assert.equal(tooWideHuman.status, 400);
+    assert.match(tooWideHuman.body.error, /250ft x 250ft/i);
   });
 
   test('Agent Sculpture Code stages 3D build without auto-publishing', async () => {
