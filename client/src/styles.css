@@ -3879,7 +3879,17 @@ select {
   max-height: 520px;
 }
 
-.plot-visit-stage.is-expanded-view:not(.is-fullscreen) {
+.plot-visit-stage.is-fullscreen,
+.plot-visit-shell.is-desktop .plot-visit-stage.is-fullscreen {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  border-bottom: none;
+}
+
+.plot-visit-stage.is-expanded-view:not(.is-fullscreen),
+.plot-visit-shell.is-desktop .plot-visit-stage.is-expanded-view:not(.is-fullscreen) {
   flex: 1 1 auto;
   height: auto;
   max-height: none;
@@ -4006,6 +4016,7 @@ select {
   border: none;
   border-left: 1px solid rgba(0, 245, 212, 0.32);
   color: #00f5d4;
+  text-decoration: none;
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;

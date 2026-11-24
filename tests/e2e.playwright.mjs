@@ -1715,7 +1715,40 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
         'Iso Showcase Plaza'
       )
     );
+    // Side sculpture callout includes real direct link (<a href*="sculpture=">)
+    const artLinkHref = await guestPage
+      .locator('a[data-testid="plot-artwork-view-btn"]')
+      .first()
+      .getAttribute('href');
+    assert.ok(
+      artLinkHref && artLinkHref.includes('sculpture='),
+      `Expected side sculpture label link href to contain sculpture=, got ${artLinkHref}`
+    );
     assert.equal(await guestPage.locator('[data-testid="plot-land-management"]').count(), 0);
+
+    // Click Full View button -> unlocks free 3D/2D navigation (no isometric snapping) with explicit Fit recenter
+    await guestPage.locator('[data-testid="mobile-map-fullscreen-btn"]').click();
+    assert.equal(
+      await guestPage.locator('[data-testid="mobile-iso-3d-map"]').getAttribute('data-free-nav'),
+      'true'
+    );
+    assert.equal(
+      (await guestPage.locator('[data-testid="mobile-iso-mode-chip"]').textContent()).trim(),
+      '3D FREE'
+    );
+    // Toggle 3D -> 2D -> 3D while in Full View stays in free navigation without snapping back
+    await guestPage.locator('[data-testid="mobile-map-2d-toggle-btn"]').click();
+    await guestPage.waitForSelector('[data-testid="mobile-map-3d-toggle-btn"]', { timeout: 5000 });
+    await guestPage.waitForSelector('[data-testid="mobile-map-fit-btn"]', { timeout: 5000 });
+    await guestPage.locator('[data-testid="mobile-map-3d-toggle-btn"]').click();
+    await guestPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-free-nav="true"]', {
+      timeout: 5000
+    });
+    // Exit Full View cleanly
+    await guestPage.locator('[data-testid="mobile-map-fullscreen-btn"]').click();
+    await guestPage.waitForSelector('[data-testid="mobile-iso-3d-map"][data-free-nav="false"]', {
+      timeout: 5000
+    });
 
     // Click side artwork label -> expands Neon Obelisk details cleanly below
     await guestPage.locator('[data-testid="plot-artwork-label"]').first().click();

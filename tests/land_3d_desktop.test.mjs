@@ -697,8 +697,19 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       'sc-voxel-1'
     );
     assert.equal(out.renderedCount, 2);
-    assert.ok(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-voxel-1' && f.properties.heightMeters > 0.5));
-    assert.ok(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-glb-2' && f.properties.heightMeters > 4));
+    // True 1:1 un-autoscaled sizes: 2-block voxel (0.05m step -> 0.10m + small base pad) and 1.4m × 1.2 scale custom model (1.68m)
+    const voxelMaxH = Math.max(
+      ...out.geojson.features
+        .filter((f) => f.properties.sculptureId === 'sc-voxel-1')
+        .map((f) => Number(f.properties.heightMeters || 0))
+    );
+    assert.ok(voxelMaxH > 0.08 && voxelMaxH < 0.25, `Expected un-autoscaled voxel height ~0.12m, got ${voxelMaxH}`);
+    const glbMaxH = Math.max(
+      ...out.geojson.features
+        .filter((f) => f.properties.sculptureId === 'sc-glb-2')
+        .map((f) => Number(f.properties.heightMeters || 0))
+    );
+    assert.ok(glbMaxH > 1.5 && glbMaxH < 2.0, `Expected un-autoscaled 1.2x custom model height ~1.68m, got ${glbMaxH}`);
     assert.equal(out.geojson.features.some((f) => f.properties.sculptureId === 'sc-hidden-3'), false);
 
     const prompt = buildLandAdd3DItemAgentPrompt({
@@ -1211,8 +1222,8 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     );
   });
 
-  test('HD 3D map transform, full-resolution voxel GeoJSON, and crisp linear texture enforcement prevent pixelation for agent & human models', () => {
-    // 1) Custom 3D model (.glb) inside large land scales up to crisp visible centerpiece without exceeding inner 10%-padded volume
+  test('HD 3D map transform preserves exact 1:1 un-autoscaled object size, full-resolution voxel GeoJSON, and crisp linear texture enforcement', () => {
+    // 1) Custom 3D model (.glb) inside a large land is NEVER autoscaled — preserves exact 1:1 native size × user scale
     const glbTransform = computeSculptureMapTransform(
       {
         id: 'sc-tree',
@@ -1232,11 +1243,37 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       { min: { x: -0.5, y: 0, z: -0.5 }, max: { x: 0.5, y: 1.4, z: 0.5 } }
     );
     assert.ok(glbTransform);
-    assert.ok(glbTransform.renderedSize.y >= 15 && glbTransform.renderedSize.y <= 24.1);
-    assert.ok(glbTransform.renderedSize.x < 67.7 / 1.2);
+    assert.equal(glbTransform.scale, 1, 'Objects placed into lands must NOT be autoscaled');
+    assert.equal(glbTransform.renderedSize.x, 1);
+    assert.equal(glbTransform.renderedSize.y, 1.4);
+    assert.equal(glbTransform.renderedSize.z, 1);
     assert.equal(glbTransform.altitudeMeters, 0);
 
-    // 2) Small object-fitted parcel preserves exact 10%-padded centering on all axes
+    // 1b) Explicit user scale is respected directly without shrinking/clamping to a smaller parcel
+    const scaledTransform = computeSculptureMapTransform(
+      {
+        id: 'sc-big',
+        lat: 39.728365,
+        lng: -121.838894,
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', scale: 2.5, rotationY: 0 }
+      },
+      {
+        centerLat: 39.728305,
+        centerLng: -121.838863,
+        widthMeters: 3,
+        depthMeters: 3,
+        heightMeters: 3,
+        baseAltitudeM: 0
+      },
+      { min: { x: -1, y: 0, z: -1 }, max: { x: 1, y: 2, z: 1 } }
+    );
+    assert.ok(scaledTransform);
+    assert.equal(scaledTransform.scale, 2.5);
+    assert.equal(scaledTransform.renderedSize.x, 5);
+    assert.equal(scaledTransform.renderedSize.y, 5);
+
+    // 2) Small object-fitted parcel preserves exact 10%-padded vertical centering with scale === 1 (zero autoscaling)
     const tightTransform = computeSculptureMapTransform(
       { id: 'sc-tight', lat: 37.78, lng: -122.4 },
       {
@@ -1250,6 +1287,7 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
       { min: { x: -1, y: 0, z: -1 }, max: { x: 1, y: 2, z: 1 } }
     );
     assert.ok(tightTransform);
+    assert.equal(tightTransform.scale, 1);
     assert.equal(tightTransform.renderedSize.x, 2);
     assert.equal(tightTransform.renderedSize.y, 2);
     assert.equal(tightTransform.altitudeMeters, 0.2);

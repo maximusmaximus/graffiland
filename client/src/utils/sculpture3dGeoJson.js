@@ -1,4 +1,9 @@
 import { VOXEL_STEP } from '../../../shared/constants.mjs';
+import {
+  extractSculptureBaseDimensions,
+  extractSculptureScale,
+  yawToRadians
+} from '../../../shared/sculpturePlacement.mjs';
 
 const METERS_PER_DEG_LAT = 111320;
 const MAX_COLUMNS_PER_SCULPTURE = 4096;
@@ -34,14 +39,13 @@ function makeRotatedRectRing({ centerLat, centerLng, eastM, northM, halfW, halfD
 function buildCustomModelMonolithFeatures(sc, isSelected, parcelVolume = null) {
   const lat = Number(sc.lat);
   const lng = Number(sc.lng);
-  const scale = Math.max(0.5, Math.min(2.5, Number(sc.customModel?.scale || 1)));
+  const userScale = extractSculptureScale(sc);
   const off = sc.anchorOffset || {};
   const dx = Number(off.dx || 0);
   const dy = Math.max(0, Number(off.dy || 0));
   const dz = Number(off.dz || 0);
-  const yawRad = -Number(off.yaw || 0) - Number(sc.customModel?.rotationY || 0);
+  const yawRad = -yawToRadians(off.yaw || 0) - Number(sc.customModel?.rotationY || 0);
 
-  // Respect parcel inner 10%-padded dimensions when a parcel volume is present
   const hasVol =
     parcelVolume &&
     Number.isFinite(Number(parcelVolume.widthMeters)) &&
@@ -49,21 +53,21 @@ function buildCustomModelMonolithFeatures(sc, isSelected, parcelVolume = null) {
     Number.isFinite(Number(parcelVolume.heightMeters));
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
-  let maxHalfW = 2.2 * scale;
-  let maxHalfD = 2.2 * scale;
-  let totalH = 6.8 * scale;
+  const baseDims = extractSculptureBaseDimensions(sc);
+  // Preserve true 1:1 physical dimensions × explicit userScale (no autoscaling to land size)
+  const maxHalfW = Math.max(0.05, (baseDims.width * userScale) / 2);
+  const maxHalfD = Math.max(0.05, (baseDims.depth * userScale) / 2);
+  const totalH = Math.max(0.05, baseDims.height * userScale);
   let baseLift = baseAlt + dy;
 
-  if (hasVol) {
-    const innerW = Number(parcelVolume.widthMeters) / 1.2;
-    const innerD = Number(parcelVolume.depthMeters) / 1.2;
-    const innerH = Number(parcelVolume.heightMeters) / 1.2;
-    maxHalfW = Math.min(maxHalfW, Math.max(0.2, innerW / 2));
-    maxHalfD = Math.min(maxHalfD, Math.max(0.2, innerD / 2));
-    totalH = Math.min(totalH, Math.max(0.4, innerH));
-    if (Number(parcelVolume.heightMeters) <= totalH * 1.45) {
-      baseLift = baseAlt + Math.max(0, (Number(parcelVolume.heightMeters) - totalH) / 2);
-    }
+  if (
+    hasVol &&
+    Math.abs(userScale - 1) <= 1e-4 &&
+    dy === 0 &&
+    Number(parcelVolume.heightMeters) > totalH &&
+    Number(parcelVolume.heightMeters) <= totalH * 1.45
+  ) {
+    baseLift = baseAlt + Math.max(0, (Number(parcelVolume.heightMeters) - totalH) / 2);
   }
 
   const tiers = [
@@ -129,7 +133,8 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
   const dx = Number(off.dx || 0);
   const dy = Math.max(0, Number(off.dy || 0));
   const dz = Number(off.dz || 0);
-  const yawRad = -Number(off.yaw || 0);
+  const yawRad = -yawToRadians(off.yaw || 0);
+  const userScale = extractSculptureScale(sc);
 
   const step = VOXEL_STEP || 0.05;
   let minGx = Infinity;
@@ -167,9 +172,9 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
   const centerGx = (minGx + maxGx) / 2;
   const centerGz = (minGz + maxGz) / 2;
 
-  // Architectural display scale, strictly bounded inside the parcel's inner 10%-padded volume
+  // True 1:1 physical voxel scale × explicit userScale (never autoscale to land dimensions)
   let stride = 1;
-  let unitMeters = Math.max(0.45, Math.min(1.5, 7.2 / Math.max(spanX, spanZ, 4)));
+  const unitMeters = step * userScale;
 
   const hasVol =
     parcelVolume &&
@@ -178,19 +183,6 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
     Number.isFinite(Number(parcelVolume.heightMeters));
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
-  let innerW = Infinity;
-  let innerD = Infinity;
-  let innerH = Infinity;
-
-  if (hasVol) {
-    innerW = Number(parcelVolume.widthMeters) / 1.2;
-    innerD = Number(parcelVolume.depthMeters) / 1.2;
-    innerH = Number(parcelVolume.heightMeters) / 1.2;
-    const maxFitUnit = Math.min(innerW / spanX, innerD / spanZ, innerH / spanY);
-    if (Number.isFinite(maxFitUnit) && maxFitUnit > 0) {
-      unitMeters = Math.min(unitMeters, maxFitUnit);
-    }
-  }
 
   const groupColumns = (gridStride) => {
     const colMap = new Map();
@@ -224,26 +216,24 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
   const renderedD = spanZ * unitMeters;
   const renderedH = spanY * unitMeters;
 
-  // Vertical placement: for object-fitted parcels, center vertically inside the 10%-padded height;
-  // for large manually-claimed parcels, rest cleanly on a thin pedestal at ground level.
+  // Vertical placement: for object-fitted auto-parcels, preserve the 10% bottom padding;
+  // for manually claimed lands, rest at ground + user dy without autoscaling.
   const isObjectFittedParcel =
-    hasVol && Number(parcelVolume.heightMeters) <= renderedH * 1.45;
+    hasVol &&
+    Math.abs(userScale - 1) <= 1e-4 &&
+    dy === 0 &&
+    Number(parcelVolume.heightMeters) > renderedH &&
+    Number(parcelVolume.heightMeters) <= renderedH * 1.45;
   const pedestalH = isObjectFittedParcel
     ? Math.min(0.05, Math.max(0.02, ((Number(parcelVolume.heightMeters) - renderedH) / 2) * 0.35))
-    : Math.min(0.35, hasVol ? Number(parcelVolume.heightMeters) * 0.04 : 0.35);
+    : Math.min(0.06, Math.max(0.02, renderedH * 0.04));
   const voxelBaseElevation = isObjectFittedParcel
     ? baseAlt + Math.max(pedestalH, (Number(parcelVolume.heightMeters) - renderedH) / 2)
     : baseAlt + dy + pedestalH;
 
-  // Subtle base pad strictly within the parcel's inner 10%-padded footprint
-  const pedestalHalfW = Math.min(
-    hasVol ? Math.max(0.15, innerW / 2) : 6.2,
-    Math.max(0.25, renderedW / 2 + (isObjectFittedParcel ? 0 : 0.4))
-  );
-  const pedestalHalfD = Math.min(
-    hasVol ? Math.max(0.15, innerD / 2) : 6.2,
-    Math.max(0.25, renderedD / 2 + (isObjectFittedParcel ? 0 : 0.4))
-  );
+  // Subtle base pad proportional to the sculpture's real un-autoscaled footprint
+  const pedestalHalfW = Math.max(0.05, renderedW / 2 + (isObjectFittedParcel ? 0 : 0.05));
+  const pedestalHalfD = Math.max(0.05, renderedD / 2 + (isObjectFittedParcel ? 0 : 0.05));
 
   features.push({
     type: 'Feature',

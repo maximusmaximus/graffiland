@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
-import { copyToClipboard } from '../utils/clipboard.js';
+import { buildSculptureShareUrl, copyToClipboard } from '../utils/clipboard.js';
 import {
   buildParcelGeoSummary,
   computeIsometricCameraFit,
@@ -10,8 +10,15 @@ import {
   resolveParcelVolume
 } from '../utils/landPreviewHelpers.js';
 import { hasWebGLSupport, loadMapLibre } from '../utils/loadMapLibre.js';
-import { computePrismScreenGeometry } from '../utils/map3dProjection.js';
-import { drawFloatingLandLabel } from '../utils/map3dLabelOverlay.js';
+import {
+  computePrismScreenGeometry,
+  projectLngLatAltToScreen
+} from '../utils/map3dProjection.js';
+import {
+  computeSideArtworkCallouts,
+  drawArtworkCalloutLeader,
+  drawFloatingLandLabel
+} from '../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
 import {
@@ -21,10 +28,7 @@ import {
 import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
-import {
-  formatShortLength,
-  useMeasurementUnits
-} from '../utils/measurementUnits.js';
+import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import InfoTip from './InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -137,7 +141,15 @@ function drawPreviewPrism(
 /**
  * Fallback proportional 3D isometric SVG blueprint rendered cleanly when WebGL is unavailable.
  */
-function IsometricFallbackBlueprint({ volume, parcel, viewMode, bearingDeg }) {
+function IsometricFallbackBlueprint({
+  volume,
+  parcel,
+  displayName = '',
+  sculptures = [],
+  onSelectSculpture = null,
+  viewMode,
+  bearingDeg
+}) {
   const maxDim = Math.max(10, volume.widthMeters, volume.depthMeters, volume.heightMeters);
   const wScale = (volume.widthMeters / maxDim) * 74;
   const dScale = (volume.depthMeters / maxDim) * 74;
@@ -164,10 +176,32 @@ function IsometricFallbackBlueprint({ volume, parcel, viewMode, bearingDeg }) {
   const t1 = iso(hw, -hd, hScale);
   const t2 = iso(hw, hd, hScale);
   const t3 = iso(-hw, hd, hScale);
+  const topCenterX = (t0[0] + t1[0] + t2[0] + t3[0]) / 4;
+  const topCenterY = (t0[1] + t1[1] + t2[1] + t3[1]) / 4;
+  const labelY = Math.max(20, Math.min(t0[1], t1[1], t2[1], t3[1]) - 14);
   const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
   const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
   const fill = isFrozen ? 'rgba(125, 211, 252, 0.18)' : 'rgba(255, 31, 143, 0.16)';
   const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+
+  const fallbackCallouts = computeSideArtworkCallouts({
+    sculptures,
+    volume,
+    viewportWidth: 360,
+    viewportHeight: 220,
+    topInsetPx: 46,
+    bottomInsetPx: 38,
+    marginPx: 8,
+    labelHeight: 32,
+    gapPx: 6,
+    projectScreenPt: (_lng, _lat, _alt, _sc, idx, total) => {
+      const frac = total <= 1 ? 0 : idx / (total - 1) - 0.5;
+      return {
+        x: cx + frac * hw * 0.7,
+        y: cy - hScale * 0.45 + (idx % 2 === 0 ? -5 : 5)
+      };
+    }
+  });
 
   return (
     <div className="land-preview-fallback" data-testid="land-preview-svg-fallback">
@@ -204,18 +238,101 @@ function IsometricFallbackBlueprint({ volume, parcel, viewMode, bearingDeg }) {
         )}
         <line x1={b1[0]} y1={b1[1]} x2={b2[0]} y2={b2[1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
         <line x1={b2[0]} y1={b2[1]} x2={b3[0]} y2={b3[1]} stroke={stroke} strokeWidth="2.0" opacity="1" />
+        {/* Land tag leader line strictly to top center of land boundary */}
+        <line
+          data-testid="plot-land-leader-line"
+          data-target="top-center"
+          x1={topCenterX}
+          y1={labelY + 4}
+          x2={topCenterX}
+          y2={topCenterY}
+          stroke={stroke}
+          strokeWidth="1.3"
+        />
+        <circle cx={topCenterX} cy={topCenterY} r="2.4" fill="#ffffff" />
         <text
-          x={cx}
-          y={Math.max(22, t0[1] - 10)}
+          x={topCenterX}
+          y={labelY}
           textAnchor="middle"
           fill="#eafffc"
           fontSize="11"
           fontFamily="monospace"
           fontWeight="600"
         >
-          {`${Math.round(volume.widthMeters)}×${Math.round(volume.depthMeters)}×${Math.round(volume.heightMeters)}m · ${Math.round(bearingDeg)}°`}
+          {displayName || `${Math.round(volume.widthMeters)}×${Math.round(volume.depthMeters)}×${Math.round(volume.heightMeters)}m · ${Math.round(bearingDeg)}°`}
         </text>
+        {fallbackCallouts.map((c) => (
+          <g key={c.sculptureId} data-testid="plot-artwork-leader-line" data-sculpture-id={c.sculptureId}>
+            <polyline
+              points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+              fill="none"
+              stroke="#00f5d4"
+              strokeWidth="1.25"
+            />
+            <circle cx={c.targetX} cy={c.targetY} r="2.4" fill="#eafffc" />
+          </g>
+        ))}
       </svg>
+
+      {fallbackCallouts.length > 0 && (
+        <div
+          className="plot-iso-callout-layer"
+          data-testid="plot-iso-callout-layer"
+          onPointerDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {fallbackCallouts.map((c) => (
+            <div
+              key={c.sculptureId}
+              className={`plot-iso-artwork-callout is-${c.side}`}
+              data-callout-side={c.side}
+              style={{
+                left: c.side === 'left' ? 8 : undefined,
+                right: c.side === 'right' ? 8 : undefined,
+                top: `${Math.round((c.y / 220) * 100)}%`
+              }}
+            >
+              <button
+                type="button"
+                className="plot-iso-callout-main"
+                data-testid="preview-artwork-label"
+                data-sculpture-id={c.sculptureId}
+                data-callout-side={c.side}
+                title={`Open 3D view of "${c.title}"`}
+                onClick={() => onSelectSculpture?.(c.sculpture)}
+              >
+                <span className="plot-iso-callout-title">{c.title}</span>
+                <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
+              </button>
+              <a
+                href={c.sculptureUrl}
+                className="plot-iso-callout-open-btn"
+                data-testid="plot-artwork-view-btn"
+                data-sculpture-id={c.sculptureId}
+                aria-label={`Open 3D art link for ${c.title}`}
+                title={`Open link for "${c.title}" (${c.sculptureUrl})`}
+                onClick={(e) => {
+                  if (
+                    onSelectSculpture &&
+                    !e.metaKey &&
+                    !e.ctrlKey &&
+                    !e.shiftKey &&
+                    !e.altKey &&
+                    e.button === 0
+                  ) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectSculpture(c.sculpture);
+                  }
+                }}
+              >
+                ↗
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -300,9 +417,16 @@ export default function LandIsometricPreview({
   const [hydrationVersion, setHydrationVersion] = useState(0);
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
   const threeLayerRef = useRef(null);
+  const calloutBtnMapRef = useRef(new Map());
+  const userMovedCameraRef = useRef(false);
+  const lastCameraKeyRef = useRef('');
   const [stageSize, setStageSize] = useState({ width: 600, height: 260 });
   const [neighborArrows, setNeighborArrows] = useState([]);
   const neighborArrowsSigRef = useRef('');
+
+  useEffect(() => {
+    userMovedCameraRef.current = userMovedCamera;
+  }, [userMovedCamera]);
 
   const volume = useMemo(() => resolveParcelVolume(parcel), [parcel]);
 
@@ -509,10 +633,6 @@ export default function LandIsometricPreview({
         const isFrozenNow = isFrozenRef.current;
         const shortName = displayNameRef.current || 'Virtual Land';
         const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
-        const heightTag = formatShortLength(curVol.heightMeters, unitSystemRef.current, {
-          decimals: 0,
-          compact: true
-        });
         const outerColor = isFrozenNow ? '#7dd3fc' : '#ff1f8f';
         const innerColor = isFrozenNow ? '#e0f2fe' : '#ffd6ec';
         drawPreviewPrism(ctx, geom, {
@@ -526,7 +646,7 @@ export default function LandIsometricPreview({
           geom,
           outerColor,
           innerColor,
-          label: `${isFrozenNow ? '❄️ ' : ''}${trimmed} · ${heightTag}`,
+          label: `${isFrozenNow ? '❄️ ' : ''}${trimmed}`,
           liftPx: 22,
           minY: 48,
           isPrimary: true
@@ -561,7 +681,7 @@ export default function LandIsometricPreview({
     });
     const placedRects = [];
 
-    // Pass 2: Focused land floating label on top of its wireframe
+    // Pass 2: Focused land floating label on top of its wireframe (leader strictly to top center)
     if (primaryLabel) {
       drawFloatingLandLabel(ctx, primaryLabel.geom, {
         ...primaryLabel,
@@ -570,6 +690,46 @@ export default function LandIsometricPreview({
         reservedRects,
         placedRects
       });
+    }
+
+    // Pass 2b: Left/Right side sculpture callouts with glowing elbow leader lines & direct links
+    const previewSculptures = (hydratedPreviewSculpturesRef.current || []).filter(
+      (sc) => sc && !sc.hidden && sc.id
+    );
+    const sideCallouts = computeSideArtworkCallouts({
+      sculptures: previewSculptures,
+      volume: curVol,
+      viewportWidth: w,
+      viewportHeight: h,
+      topInsetPx: 48,
+      bottomInsetPx: 42,
+      marginPx: w < 520 ? 8 : 12,
+      labelHeight: w < 520 ? 32 : 36,
+      gapPx: 6,
+      getSculptureTransform: (id) => threeLayerRef.current?.getTransform?.(id) || null,
+      projectScreenPt: (lng, lat, alt) =>
+        projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
+    });
+    const positionedCalloutIds = new Set();
+    for (const c of sideCallouts) {
+      drawArtworkCalloutLeader(ctx, c);
+      positionedCalloutIds.add(c.sculptureId);
+      placedRects.push({ x: c.x, y: c.y, w: c.width, h: c.height || 36 });
+      const el = calloutBtnMapRef.current.get(c.sculptureId);
+      if (el) {
+        el.style.left = `${c.x}px`;
+        el.style.top = `${c.y}px`;
+        el.style.width = `${c.width}px`;
+        el.style.display = 'flex';
+        el.dataset.calloutSide = c.side;
+        el.classList.toggle('is-left', c.side === 'left');
+        el.classList.toggle('is-right', c.side === 'right');
+      }
+    }
+    for (const [id, el] of calloutBtnMapRef.current.entries()) {
+      if (!positionedCalloutIds.has(id) && el) {
+        el.style.display = 'none';
+      }
     }
 
     // Pass 3: Edge-of-label directional arrows pointing toward selectable neighboring lands
@@ -782,7 +942,10 @@ export default function LandIsometricPreview({
               id: 'preview-sculptures-three-3d',
               maplibregl: maplibreRef.current,
               resolveUrlFn: resolveApiUrl,
-              onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+              onStatsChange: (stats) => {
+                setLoadedThree3dCount(stats?.loadedCount || 0);
+                drawWireframes();
+              }
             });
             threeLayerRef.current = threeLayer;
             map.addLayer(
@@ -990,7 +1153,12 @@ export default function LandIsometricPreview({
 
   useEffect(() => {
     if (!volume) return;
+    const camKey = `${volume.parcelId}|${viewMode}|${bearingOffset}`;
     const isSameParcel = lastCenteredParcelRef.current.parcelId === volume.parcelId;
+    if (camKey === lastCameraKeyRef.current && userMovedCameraRef.current) {
+      return;
+    }
+    lastCameraKeyRef.current = camKey;
     applyCameraFit(volume, {
       mode: viewMode,
       offsetDeg: bearingOffset,
@@ -1121,6 +1289,73 @@ export default function LandIsometricPreview({
           <>
             <div ref={mapHostRef} className="land-preview-map-host" />
             <canvas ref={wireCanvasRef} className="land-preview-wire-canvas" aria-hidden="true" />
+            {hydratedPreviewSculptures.filter((sc) => sc && !sc.hidden && sc.id).length > 0 && (
+              <div
+                className="plot-iso-callout-layer"
+                data-testid="plot-iso-callout-layer"
+                onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {hydratedPreviewSculptures
+                  .filter((sc) => sc && !sc.hidden && sc.id)
+                  .map((sc) => {
+                    const sub =
+                      sc.modelType === 'custom-3d'
+                        ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
+                        : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
+                    const sculptureUrl =
+                      buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
+                    return (
+                      <div
+                        key={sc.id}
+                        ref={(el) => {
+                          if (el) calloutBtnMapRef.current.set(sc.id, el);
+                          else calloutBtnMapRef.current.delete(sc.id);
+                        }}
+                        className="plot-iso-artwork-callout"
+                        style={{ display: 'none' }}
+                      >
+                        <button
+                          type="button"
+                          className="plot-iso-callout-main"
+                          data-testid="preview-artwork-label"
+                          data-sculpture-id={sc.id}
+                          title={`Open 3D view of "${sc.title || 'Artwork'}"`}
+                          onClick={() => onSelectSculpture?.(sc)}
+                        >
+                          <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
+                          <span className="plot-iso-callout-meta mono">{sub}</span>
+                        </button>
+                        <a
+                          href={sculptureUrl}
+                          className="plot-iso-callout-open-btn"
+                          data-testid="plot-artwork-view-btn"
+                          data-sculpture-id={sc.id}
+                          aria-label={`Open 3D art link for ${sc.title || '3D Artwork'}`}
+                          title={`Open link for "${sc.title || '3D Artwork'}" (${sculptureUrl})`}
+                          onClick={(e) => {
+                            if (
+                              onSelectSculpture &&
+                              !e.metaKey &&
+                              !e.ctrlKey &&
+                              !e.shiftKey &&
+                              !e.altKey &&
+                              e.button === 0
+                            ) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onSelectSculpture(sc);
+                            }
+                          }}
+                        >
+                          ↗
+                        </a>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
             {!mapReady && (
               <div className="land-preview-loading-pill" role="status">
                 <XeroIcon emoji="🗺️" size={12} /> Loading isometric map…
@@ -1131,6 +1366,9 @@ export default function LandIsometricPreview({
           <IsometricFallbackBlueprint
             volume={volume}
             parcel={parcel}
+            displayName={displayName}
+            sculptures={hydratedPreviewSculptures.filter((sc) => sc && !sc.hidden && sc.id)}
+            onSelectSculpture={onSelectSculpture}
             viewMode={viewMode}
             bearingDeg={liveBearing}
           />
@@ -1210,36 +1448,6 @@ export default function LandIsometricPreview({
           <span className="land-preview-scale-text">{scaleBar.label}</span>
           <span className="land-preview-scale-bar" style={{ width: scaleBar.widthPx }} />
         </div>
-
-        {/* Bottom-Center: Clickable Artwork Labels that Jump Directly to the Art View */}
-        {onSelectSculpture && hydratedPreviewSculptures.filter((sc) => sc && !sc.hidden).length > 0 && (
-          <div
-            className="land-preview-artwork-dock"
-            data-testid="land-preview-artwork-dock"
-            onPointerDown={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {hydratedPreviewSculptures
-              .filter((sc) => sc && !sc.hidden)
-              .slice(0, 3)
-              .map((sc) => (
-                <button
-                  key={sc.id}
-                  type="button"
-                  className="land-preview-artwork-pill"
-                  data-testid="preview-artwork-label"
-                  data-sculpture-id={sc.id}
-                  title={`Open 3D view of "${sc.title || 'Artwork'}"`}
-                  onClick={() => onSelectSculpture(sc)}
-                >
-                  <span aria-hidden="true">{sc.modelType === 'custom-3d' ? '🧊' : '🎨'}</span>
-                  <span className="land-preview-artwork-pill-name">{sc.title || '3D Artwork'}</span>
-                  <span className="land-preview-artwork-pill-arrow" aria-hidden="true">↗</span>
-                </button>
-              ))}
-          </div>
-        )}
 
         {/* Bottom-Right: Refit Button */}
         <button

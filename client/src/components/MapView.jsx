@@ -54,12 +54,15 @@ export default function MapView({
   const initialUserLocationRef = useRef(userLocation);
   const onViewportChangeRef = useRef(onViewportChange);
   const onSelectParcelRef = useRef(onSelectParcel);
+  const isFullExpandedRef = useRef(Boolean(isFullExpanded));
+  const lastHandledFocusTickRef = useRef(focusParcelTick);
   const userAdjustedViewRef = useRef(
     Boolean(
-      initialView &&
-        Number.isFinite(Number(initialView.lat)) &&
-        Number.isFinite(Number(initialView.lng)) &&
-        Number.isFinite(Number(initialView.zoom))
+      isFullExpanded ||
+        (initialView &&
+          Number.isFinite(Number(initialView.lat)) &&
+          Number.isFinite(Number(initialView.lng)) &&
+          Number.isFinite(Number(initialView.zoom)))
     )
   );
   const suppressViewSaveRef = useRef(false);
@@ -177,7 +180,7 @@ export default function MapView({
     layerRef.current = layer;
 
     const refitAutoBounds = () => {
-      if (userAdjustedViewRef.current || !lastAutoBoundsRef.current) return;
+      if (userAdjustedViewRef.current || isFullExpandedRef.current || !lastAutoBoundsRef.current) return;
       suppressViewSaveRef.current = true;
       try {
         map.stop();
@@ -285,12 +288,18 @@ export default function MapView({
       location: hasUser ? userLocation : null
     });
     const filterSig = `${focusArea ? '1' : '0'}:${parcelList.map((p) => p.parcelId).join(',')}`;
-    if (lastFilterSignatureRef.current && lastFilterSignatureRef.current !== filterSig) {
+    if (
+      !isFullExpandedRef.current &&
+      lastFilterSignatureRef.current &&
+      lastFilterSignatureRef.current !== filterSig
+    ) {
       userAdjustedViewRef.current = false;
     }
     lastFilterSignatureRef.current = filterSig;
 
-    const isFocusedSingleLand = Boolean(compact && selectedParcelId && parcelMap.has(selectedParcelId));
+    const isFocusedSingleLand = Boolean(
+      compact && !isFullExpanded && selectedParcelId && parcelMap.has(selectedParcelId)
+    );
 
     // When focused on a specific land in compact 2D view, hide other lands' polygons/lines
     // and show clickable directional edge-arrow labels pointing to selectable neighboring lands.
@@ -440,7 +449,7 @@ export default function MapView({
     lastAutoBoundsRef.current = closestFit.boundsLatLng;
     recomputeFocusedNeighborArrows();
 
-    if (!userAdjustedViewRef.current) {
+    if (!userAdjustedViewRef.current && !isFullExpandedRef.current) {
       suppressViewSaveRef.current = true;
       try {
         map.stop();
@@ -469,6 +478,7 @@ export default function MapView({
     focusArea,
     areaRadiusMeters,
     compact,
+    isFullExpanded,
     selectedSculptureId,
     selectedParcelId,
     config,
@@ -488,7 +498,9 @@ export default function MapView({
   }, [recomputeFocusedNeighborArrows]);
 
   useEffect(() => {
-    if (!focusParcelTick || !selectedParcelId) return;
+    const tickAdvanced = focusParcelTick > lastHandledFocusTickRef.current;
+    lastHandledFocusTickRef.current = focusParcelTick;
+    if (!tickAdvanced || !selectedParcelId) return;
     const map = mapRef.current;
     if (!map) return;
     const match = parcels.find((p) => p?.parcelId === selectedParcelId);
@@ -504,11 +516,15 @@ export default function MapView({
   }, [focusParcelTick, selectedParcelId, parcels]);
 
   useEffect(() => {
+    isFullExpandedRef.current = Boolean(isFullExpanded);
+    if (isFullExpanded) {
+      userAdjustedViewRef.current = true;
+    }
     const map = mapRef.current;
     if (!map) return undefined;
     const t = setTimeout(() => {
       map.invalidateSize({ animate: false, pan: false });
-      if (!userAdjustedViewRef.current && lastAutoBoundsRef.current) {
+      if (!isFullExpanded && !userAdjustedViewRef.current && lastAutoBoundsRef.current) {
         map.fitBounds(lastAutoBoundsRef.current, {
           paddingTopLeft: [14, 42],
           paddingBottomRight: [14, 28],
@@ -533,9 +549,9 @@ export default function MapView({
       location: hasUser ? userLocation : null
     });
     if (closestFit.boundsLatLng) {
-      userAdjustedViewRef.current = false;
+      userAdjustedViewRef.current = Boolean(isFullExpandedRef.current);
       lastAutoBoundsRef.current = closestFit.boundsLatLng;
-    recomputeFocusedNeighborArrows();
+      recomputeFocusedNeighborArrows();
       suppressViewSaveRef.current = true;
       try {
         map.fitBounds(closestFit.boundsLatLng, {

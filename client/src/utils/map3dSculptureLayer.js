@@ -23,7 +23,8 @@ function readVec3(vec, fallback = { x: 0, y: 0, z: 0 }) {
 /**
  * Computes exact geographic anchor, altitude, uniform scale, and local grounding offset
  * so both voxel sculptures and custom 3D models (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`)
- * render cleanly inside their parcel's 10%-padded 3D volume across all 3D maps & previews.
+ * render at their true 1:1 physical scale (multiplied only by explicit user scale) with
+ * zero automatic upscaling or downscaling to fit a land volume.
  */
 export function computeSculptureMapTransform(sc, parcelVolume = null, modelBounds = null) {
   const hasVol = Boolean(
@@ -86,10 +87,9 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
     }
   }
 
-  const safeSizeX = Math.max(0.05, size.x);
-  const safeSizeY = Math.max(0.05, size.y);
-  const safeSizeZ = Math.max(0.05, size.z);
-  const maxObjDim = Math.max(safeSizeX, safeSizeY, safeSizeZ, 0.1);
+  const safeSizeX = Math.max(0.01, size.x);
+  const safeSizeY = Math.max(0.01, size.y);
+  const safeSizeZ = Math.max(0.01, size.z);
 
   const off = sc?.anchorOffset || {};
   const anchorDx = Number.isFinite(Number(off.dx)) ? Number(off.dx) : 0;
@@ -100,45 +100,24 @@ export function computeSculptureMapTransform(sc, parcelVolume = null, modelBound
 
   const baseAlt = hasVol ? Math.max(0, Number(parcelVolume.baseAltitudeM || 0)) : 0;
 
-  let scale = Math.max(0.05, Math.max(1, 7.2 / maxObjDim) * userScale);
+  // Never autoscale objects placed into lands: strictly preserve native 1:1 size × explicit userScale
+  const scale = Math.max(0.05, Number(userScale.toFixed(5)));
+  const renderedH = safeSizeY * scale;
   let altitudeMeters = baseAlt + anchorDy;
 
   if (hasVol) {
-    const volW = Number(parcelVolume.widthMeters);
-    const volD = Number(parcelVolume.depthMeters);
     const volH = Number(parcelVolume.heightMeters);
-    const innerW = volW / 1.2;
-    const innerD = volD / 1.2;
-    const innerH = volH / 1.2;
-
-    const innerMaxFitScale = Math.min(innerW / safeSizeX, innerD / safeSizeZ, innerH / safeSizeY);
-    const fullVolMaxFitScale = Math.min(volW / safeSizeX, volD / safeSizeZ, volH / safeSizeY);
-    const targetSpan = Math.min(Math.max(7.2, Math.min(innerW, innerD) * 0.62), 24);
-    const baselineScale =
-      Number.isFinite(innerMaxFitScale) && innerMaxFitScale > 0
-        ? Math.min(targetSpan / maxObjDim, innerMaxFitScale)
-        : targetSpan / maxObjDim;
-
-    if (Math.abs(userScale - 1) <= 1e-4) {
-      scale = baselineScale;
-    } else {
-      const scaled = baselineScale * userScale;
-      scale =
-        Number.isFinite(fullVolMaxFitScale) && fullVolMaxFitScale > 0
-          ? Math.min(scaled, fullVolMaxFitScale)
-          : scaled;
-    }
-
-    const renderedH = safeSizeY * scale;
-    const isObjectFittedParcel = Math.abs(userScale - 1) <= 1e-4 && anchorDy === 0 && volH <= renderedH * 1.45;
+    const isObjectFittedParcel =
+      Math.abs(userScale - 1) <= 1e-4 &&
+      anchorDy === 0 &&
+      volH > renderedH &&
+      volH <= renderedH * 1.45;
     if (isObjectFittedParcel) {
       altitudeMeters = baseAlt + Math.max(0, (volH - renderedH) / 2);
     } else {
-      altitudeMeters = baseAlt + Math.min(anchorDy, Math.max(0, volH - renderedH));
+      altitudeMeters = baseAlt + anchorDy;
     }
   }
-
-  scale = Math.max(0.05, Number(scale.toFixed(5)));
 
   return {
     lat,

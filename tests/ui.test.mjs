@@ -4190,4 +4190,147 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Land view shows side sculpture labels with leader lines & direct links, land tag links strictly to top center, and Full View unlocks free 3D/2D navigation', async () => {
+    const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
+    const { default: MobileIsometricMap } = await loadJsxModule(
+      'client/src/components/studio/MobileIsometricMap.jsx'
+    );
+    const { default: LandIsometricPreview } = await loadJsxModule(
+      'client/src/components/LandIsometricPreview.jsx'
+    );
+
+    const sculptures = [
+      {
+        id: 'sc-side-left',
+        title: 'Crystal Beacon',
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', scale: 1 },
+        parcelId: 'GLAND-SIDE0001',
+        lat: 39.7302,
+        lng: -121.84075
+      },
+      {
+        id: 'sc-side-right',
+        title: 'Neon Archway',
+        modelType: 'voxel',
+        voxelCount: 24,
+        parcelId: 'GLAND-SIDE0001',
+        lat: 39.73022,
+        lng: -121.8406
+      }
+    ];
+    const parcel = {
+      parcelId: 'GLAND-SIDE0001',
+      customName: 'Skyline Terrace',
+      geohash: '9r1652wm',
+      centerLat: 39.7302,
+      centerLng: -121.84067,
+      volume: {
+        parcelId: 'GLAND-SIDE0001',
+        centerLat: 39.7302,
+        centerLng: -121.84067,
+        widthMeters: 16,
+        depthMeters: 14,
+        heightMeters: 12,
+        rotationDeg: 0
+      },
+      sculptures
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ parcels: [parcel], shortLabel: 'Skyline Terrace, Chico, CA' })
+    });
+
+    try {
+      // 1) PlotVisitView: Land tag leader line strictly targets top-center of land boundary,
+      // side sculpture labels appear on left/right with leader lines & real ?sculpture=<id> links
+      const openedIds = [];
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures,
+          allParcels: [parcel],
+          onSelectSculpture: (sc) => openedIds.push(sc.id),
+          onClose: () => {}
+        })
+      );
+
+      const landLine = plotView.getByTestId('plot-land-leader-line');
+      assert.equal(landLine.getAttribute('data-target'), 'top-center');
+      assert.ok(Number(landLine.getAttribute('y2')) < 140, 'Top-center leader endpoint must sit on top face, not bottom center');
+
+      const leaderLines = plotView.getAllByTestId('plot-artwork-leader-line');
+      assert.equal(leaderLines.length, 2, 'Expected leader line for every placed sculpture');
+
+      const artLinks = plotView.getAllByTestId('plot-artwork-view-btn');
+      assert.equal(artLinks.length, 2);
+      for (const link of artLinks) {
+        assert.equal(link.tagName, 'A', 'Sculpture side callout link must be a real anchor <a> element');
+        const scId = link.getAttribute('data-sculpture-id');
+        assert.ok(
+          String(link.getAttribute('href') || '').includes(`sculpture=${scId}`),
+          `Expected anchor href to link to sculpture=${scId}`
+        );
+      }
+
+      // Clicking Full View unlocks free 3D navigation (no isometric snapping) & switches HUD chip to 3D FREE
+      assert.equal(plotView.getByTestId('mobile-iso-3d-map').getAttribute('data-free-nav'), 'false');
+      assert.equal(plotView.getByTestId('mobile-iso-mode-chip').textContent.trim(), '3D ISO');
+      RTL.fireEvent.click(plotView.getByTestId('mobile-map-fullscreen-btn'));
+      assert.equal(plotView.getByTestId('mobile-iso-3d-map').getAttribute('data-free-nav'), 'true');
+      assert.equal(plotView.getByTestId('mobile-iso-mode-chip').textContent.trim(), '3D FREE');
+      assert.ok(plotView.getByTestId('mobile-map-fit-btn'), 'Explicit Fit recenter button stays available in Full View');
+
+      // Switching 3D -> 2D while in Full View keeps explicit Fit recenter button & fullscreen active
+      RTL.fireEvent.click(plotView.getByTestId('mobile-map-2d-toggle-btn'));
+      assert.equal(plotView.queryByTestId('mobile-iso-3d-map'), null);
+      assert.ok(plotView.getByTestId('mobile-map-3d-toggle-btn'));
+      assert.ok(plotView.getByTestId('mobile-map-fit-btn'), '2D land view exposes explicit Fit recenter button');
+
+      // Switching back 2D -> 3D while in Full View stays in free-nav mode (no isometric snap)
+      RTL.fireEvent.click(plotView.getByTestId('mobile-map-3d-toggle-btn'));
+      assert.equal(plotView.getByTestId('mobile-iso-3d-map').getAttribute('data-free-nav'), 'true');
+      cleanup();
+
+      // 2) MobileIsometricMap (non-showcase MobileMapSheet land view) ALSO shows side sculpture labels with lines & links
+      const mobileIso = RTL.render(
+        React.createElement(MobileIsometricMap, {
+          parcels: [parcel],
+          sculptures,
+          selectedParcelId: parcel.parcelId,
+          onSelectSculpture: (sc) => openedIds.push(sc.id),
+          onOpenSculptureView: (sc) => openedIds.push(sc.id)
+        })
+      );
+      assert.equal(mobileIso.getByTestId('plot-land-leader-line').getAttribute('data-target'), 'top-center');
+      assert.equal(mobileIso.getAllByTestId('plot-artwork-leader-line').length, 2);
+      const sheetLinks = mobileIso.getAllByTestId('plot-artwork-view-btn');
+      assert.equal(sheetLinks.length, 2);
+      assert.equal(sheetLinks[0].tagName, 'A');
+      cleanup();
+
+      // 3) LandIsometricPreview ALSO shows side sculpture labels with lines & direct links and top-center land line
+      const preview = RTL.render(
+        React.createElement(LandIsometricPreview, {
+          parcel,
+          allParcels: [parcel],
+          onSelectSculpture: (sc) => openedIds.push(sc.id)
+        })
+      );
+      assert.equal(preview.getByTestId('plot-land-leader-line').getAttribute('data-target'), 'top-center');
+      assert.equal(preview.getAllByTestId('plot-artwork-leader-line').length, 2);
+      const prevLinks = preview.getAllByTestId('plot-artwork-view-btn');
+      assert.equal(prevLinks.length, 2);
+      assert.equal(prevLinks[0].tagName, 'A');
+      assert.ok(String(prevLinks[0].getAttribute('href') || '').includes('sculpture='));
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });
