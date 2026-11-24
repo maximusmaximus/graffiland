@@ -427,6 +427,7 @@ export function measureVoxelHorizontalFootprint(
     step = VOXEL_STEP,
     scale = 1,
     rotYDeg = 0,
+    rotZDeg = 0,
     pivot = null,
     maxSpanMeters = HUMAN_MAX_DRAW_SPAN_METERS
   } = {}
@@ -447,9 +448,12 @@ export function measureVoxelHorizontalFootprint(
   }
 
   const uniformScale = Number.isFinite(Number(scale)) && Number(scale) > 0 ? Number(scale) : 1;
-  const rad = ((Number(rotYDeg) || 0) * Math.PI) / 180;
-  const cosR = Math.cos(rad);
-  const sinR = Math.sin(rad);
+  const radY = ((Number(rotYDeg) || 0) * Math.PI) / 180;
+  const radZ = ((Number(rotZDeg) || 0) * Math.PI) / 180;
+  const cosY = Math.cos(radY);
+  const sinY = Math.sin(radY);
+  const cosZ = Math.cos(radZ);
+  const sinZ = Math.sin(radZ);
   const px = Number(pivot?.x || 0);
   const py = Number(pivot?.y || 0);
   const pz = Number(pivot?.z || 0);
@@ -469,9 +473,12 @@ export function measureVoxelHorizontalFootprint(
     const dx = (vx - px) * uniformScale;
     const dy = (vy - py) * uniformScale;
     const dz = (vz - pz) * uniformScale;
-    const rx = px + dx * cosR + dz * sinR;
-    const ry = py + dy;
-    const rz = pz - dx * sinR + dz * cosR;
+    // Euler YXZ with X=0 applies Z rotation first, then Y rotation (exact match to THREE.Euler(0, radY, radZ, 'YXZ'))
+    const x1 = dx * cosZ - dy * sinZ;
+    const y1 = dx * sinZ + dy * cosZ;
+    const rx = px + x1 * cosY + dz * sinY;
+    const ry = py + y1;
+    const rz = pz - x1 * sinY + dz * cosY;
     const bakedBlockScale = normalizeBlockScale(normalizeBlockScale(v?.scale ?? 1) * uniformScale);
     const half = (step * bakedBlockScale) * 0.5;
     if (rx - half < minX) minX = rx - half;
@@ -525,6 +532,7 @@ export function computeMaxHumanDrawScale(
   {
     step = VOXEL_STEP,
     rotYDeg = 0,
+    rotZDeg = 0,
     pivot = null,
     maxSpanMeters = HUMAN_MAX_DRAW_SPAN_METERS,
     minScale = 0.25,
@@ -536,6 +544,7 @@ export function computeMaxHumanDrawScale(
     step,
     scale: maxScale,
     rotYDeg,
+    rotZDeg,
     pivot,
     maxSpanMeters
   });
@@ -549,6 +558,7 @@ export function computeMaxHumanDrawScale(
       step,
       scale: mid,
       rotYDeg,
+      rotZDeg,
       pivot,
       maxSpanMeters
     });

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import {
   parseParcelParamFromLocation,
@@ -7,6 +7,13 @@ import {
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
 import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
+import {
+  countUnseenMapItems,
+  loadSeenLands,
+  markLandSeenInMap,
+  normalizeSeenLandKey,
+  saveSeenLands
+} from '../utils/seenLands.js';
 import {
   loadBoolPreference,
   loadLocalDraft,
@@ -131,6 +138,7 @@ export default function MobileStudio({
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
+  const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
   const hintTimerRef = useRef(null);
   const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
@@ -307,17 +315,81 @@ export default function MobileStudio({
   setArTargetedSculptureBridgeRef.current = ar.setArTargetedSculpture;
   arTargetedIdRef.current = ar.arTargetedIdRef.current;
 
+  const markSeenLand = useCallback(
+    (parcelId, artCountOverride = null) => {
+      const cleanKey = normalizeSeenLandKey(parcelId);
+      if (!cleanKey) return;
+      let resolvedCount = artCountOverride;
+      if (resolvedCount === null || resolvedCount === undefined) {
+        const nearbyCount = (ar.nearbySculptures || []).filter(
+          (sc) => normalizeSeenLandKey(sc?.parcelId || sc?.parcel_id) === cleanKey
+        ).length;
+        const mapCount = (ar.mapSculptures || []).filter(
+          (sc) => normalizeSeenLandKey(sc?.parcelId || sc?.parcel_id) === cleanKey
+        ).length;
+        resolvedCount = Math.max(nearbyCount, mapCount);
+      }
+      setSeenLandsMap((prev) => {
+        const next = markLandSeenInMap(prev, cleanKey, { artCount: resolvedCount });
+        saveSeenLands(next);
+        return next;
+      });
+    },
+    [ar.mapSculptures, ar.nearbySculptures]
+  );
+
+  useEffect(() => {
+    if (parcelVisit?.parcel?.parcelId) {
+      markSeenLand(
+        parcelVisit.parcel.parcelId,
+        Array.isArray(parcelVisit.sculptures) ? parcelVisit.sculptures.length : null
+      );
+    }
+  }, [markSeenLand, parcelVisit?.parcel?.parcelId, parcelVisit?.sculptures]);
+
+  useEffect(() => {
+    if (arViewSession?.parcel?.parcelId) {
+      markSeenLand(
+        arViewSession.parcel.parcelId,
+        Array.isArray(arViewSession.sculptures) ? arViewSession.sculptures.length : null
+      );
+    }
+  }, [arViewSession?.parcel?.parcelId, arViewSession?.sculptures, markSeenLand]);
+
+  useEffect(() => {
+    const sc = ar.mapSelectedSculpture;
+    if (!sc) return;
+    if (sc.parcelId) {
+      markSeenLand(sc.parcelId);
+    } else if (sc.id) {
+      markSeenLand(`SC:${sc.id}`, 1);
+    }
+  }, [ar.mapSelectedSculpture, markSeenLand]);
+
+  const unseenNearbyMapCount = useMemo(
+    () =>
+      countUnseenMapItems({
+        sculptures: ar.nearbySculptures,
+        parcels: ar.nearbyParcels,
+        location: pol.location,
+        radiusMeters: 300,
+        seenMap: seenLandsMap
+      }),
+    [ar.nearbyParcels, ar.nearbySculptures, pol.location, seenLandsMap]
+  );
+
   const handleInspectArLand = useCallback(
     (land) => {
       if (!land?.parcelId) {
         ar.setArSelectedLandId('');
         return;
       }
+      markSeenLand(land.parcelId, Array.isArray(land.sculptures) ? land.sculptures.length : null);
       brush.stopBrushPainting();
       setDockOpen(false);
       ar.selectArLand(land, land.sculptures || []);
     },
-    [ar, brush]
+    [ar, brush, markSeenLand]
   );
 
   const handleExitArLand = useCallback(() => {
@@ -1156,7 +1228,7 @@ export default function MobileStudio({
           onMobileRejectPending={pairing.handleMobileRejectPending}
           onRefreshSignatures={pairing.refreshPendingSignatures}
           mapOpen={ar.mapOpen}
-          nearbyCount={ar.nearbySculptures.length}
+          nearbyCount={unseenNearbyMapCount}
           onOpenAreaMap={ar.openAreaMap}
           activeQuest={activeQuest}
           selectedPlinthSlot={selectedPlinthSlot}
@@ -1168,20 +1240,45 @@ export default function MobileStudio({
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
           notifRefreshSignal={lands.ownedLandCount}
-          onNotificationAction={(item) => {
+          onNotificationAction={async (item) => {
             if (!item) return;
-            if (item.actionType === 'open_archive') {
+            if (item.actionType === 'open_mint') {
+              setInfoInitialTab('mint');
+              setInfoOpen(true);
+            } else if (item.actionType === 'open_archive') {
               setArchiveInitialId(String(item.meta?.archiveId || ''));
               setArchiveOpen(true);
+            } else if (
+              (item.actionType === 'open_sculpture' ||
+                (item.sculptureId && item.actionType !== 'open_land')) &&
+              item.sculptureId
+            ) {
+              const localMatch =
+                (ar.mapSculptures || []).find((s) => s.id === item.sculptureId) ||
+                (ar.nearbySculptures || []).find((s) => s.id === item.sculptureId);
+              if (localMatch) {
+                ar.setMapSelectedSculpture(localMatch);
+                return;
+              }
+              try {
+                const res = await api.getSculpture(item.sculptureId);
+                if (res?.sculpture) {
+                  ar.setMapSelectedSculpture(res.sculpture);
+                  return;
+                }
+              } catch {
+                // Fall back to opening the land if sculpture lookup fails
+              }
+              if (item.parcelId) {
+                ar.openAreaMap({ focusParcelId: item.parcelId });
+              }
             } else if (item.actionType === 'open_land' && item.parcelId) {
               if (lands.hasOwnedLand) {
                 lands.setLandManageParcelId(item.parcelId);
                 lands.setLandManageOpen(true);
               } else {
-                ar.openAreaMap();
+                ar.openAreaMap({ focusParcelId: item.parcelId });
               }
-            } else if (item.actionType === 'open_mint') {
-              ar.openAreaMap();
             }
           }}
         />
@@ -1635,8 +1732,13 @@ export default function MobileStudio({
           initialDimensionMode={ar.mapInitialDimensionMode}
           onSelectParcel={ar.focusMapParcel}
           onSelectSculpture={ar.setMapSelectedSculpture}
+          onMarkLandSeen={markSeenLand}
           onFindLandInAR={(land) => {
             if (!land?.parcelId) return;
+            markSeenLand(
+              land.parcelId,
+              Array.isArray(land.sculptures) ? land.sculptures.length : null
+            );
             if (pol.needsGyroTap) {
               pol.enableIosGyro();
             }
@@ -1832,6 +1934,15 @@ export default function MobileStudio({
           onOpenArchive={(archId = '') => {
             setArchiveInitialId(archId || '');
             setArchiveOpen(true);
+          }}
+          onStartMobileDraw={() => {
+            setInfoOpen(false);
+            setInfoInitialTab('guide');
+          }}
+          onOpenMobileMap={() => {
+            setInfoOpen(false);
+            setInfoInitialTab('guide');
+            ar.openAreaMap();
           }}
           onLogout={() => {
             onLogout();

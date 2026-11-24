@@ -29,10 +29,10 @@ export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
   { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks', quick: true },
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase', quick: true },
+  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale, Y/Z rotate & move', quick: true },
   { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
   { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear', quick: true },
   { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas', quick: true },
-  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale & transform', quick: false },
   { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim', quick: true },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat', quick: true },
   { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts', quick: true },
@@ -74,6 +74,7 @@ function hasNonIdentityTransform(tr) {
   return (
     Math.abs(tr.scale - 1) > 0.005 ||
     Math.abs(tr.rotYDeg) > 0.25 ||
+    Math.abs(tr.rotZDeg || 0) > 0.25 ||
     Math.abs(tr.offsetX) > 0.002 ||
     Math.abs(tr.offsetY) > 0.002 ||
     Math.abs(tr.offsetZ) > 0.002
@@ -155,6 +156,7 @@ export function useVoxelBrush({
   const [artTransform, setArtTransformState] = useState({
     scale: 1,
     rotYDeg: 0,
+    rotZDeg: 0,
     offsetX: 0,
     offsetY: 0,
     offsetZ: 0
@@ -593,6 +595,7 @@ export function useVoxelBrush({
         const maxAllowedScale = computeMaxHumanDrawScale(list, {
           step: VOXEL_STEP,
           rotYDeg: Number(next.rotYDeg || 0),
+          rotZDeg: Number(next.rotZDeg || 0),
           pivot: transformPivotRef.current,
           maxSpanMeters: maxHumanSpan,
           minScale: 0.25,
@@ -857,14 +860,15 @@ export function useVoxelBrush({
     }
 
     const s = artTransform.scale;
-    const rad = THREE.MathUtils.degToRad(artTransform.rotYDeg);
+    const radY = THREE.MathUtils.degToRad(artTransform.rotYDeg || 0);
+    const radZ = THREE.MathUtils.degToRad(artTransform.rotZDeg || 0);
     const pivotVec = new THREE.Vector3(transformPivot.x, transformPivot.y, transformPivot.z);
     const offsetVec = new THREE.Vector3(
       artTransform.offsetX,
       artTransform.offsetY,
       artTransform.offsetZ
     );
-    const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rad);
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, radY, radZ, 'YXZ'));
     const transformedPivot = pivotVec.clone().multiplyScalar(s).applyQuaternion(quat);
 
     group.scale.setScalar(s);
@@ -946,7 +950,7 @@ export function useVoxelBrush({
   }, []);
 
   const resetArtTransformState = useCallback(() => {
-    setArtTransformState({ scale: 1, rotYDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
+    setArtTransformState({ scale: 1, rotYDeg: 0, rotZDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
     activeCanvasPointersRef.current.clear();
     transformPinchRef.current = null;
     if (draftGroupRef.current) {
@@ -1006,7 +1010,7 @@ export function useVoxelBrush({
     modeRef.current = 'transform';
     showTemporaryHint(
       voxelsRef.current.length
-        ? 'Art locked — pinch/drag or use sliders to scale & transform, tap ✅ to draw'
+        ? 'Art locked — pinch to scale, 2-finger twist for Z-rotate, drag to move, or use sliders · tap ✅ to draw'
         : 'Transform locked — tap ✅ again to return to drawing mode'
     );
   }, [resetArtTransformState, showTemporaryHint, stopBrushPainting]);
@@ -1025,15 +1029,20 @@ export function useVoxelBrush({
         const maxAllowedScale = computeMaxHumanDrawScale(voxelsRef.current, {
           step: VOXEL_STEP,
           rotYDeg: tr.rotYDeg,
+          rotZDeg: tr.rotZDeg || 0,
           pivot,
           maxSpanMeters: maxHumanSpan,
           minScale: 0.25,
           maxScale: 2
         });
         const s = Math.min(tr.scale, maxAllowedScale);
-        const quat = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0),
-          THREE.MathUtils.degToRad(tr.rotYDeg)
+        const quat = new THREE.Quaternion().setFromEuler(
+          new THREE.Euler(
+            0,
+            THREE.MathUtils.degToRad(tr.rotYDeg || 0),
+            THREE.MathUtils.degToRad(tr.rotZDeg || 0),
+            'YXZ'
+          )
         );
         const safeLimit = (config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS) - VOXEL_STEP;
         const vec = new THREE.Vector3();
@@ -1734,7 +1743,7 @@ export function useVoxelBrush({
           setArtTransform((prev) => ({
             ...prev,
             scale: Math.max(0.25, Math.min(2, Number((prev.scale * scaleFactor).toFixed(3)))),
-            rotYDeg: Math.round(((prev.rotYDeg - dAngleDeg + 540) % 360) - 180)
+            rotZDeg: Math.round((((prev.rotZDeg || 0) - dAngleDeg + 540) % 360) - 180)
           }));
         } else if (pointers.size === 1) {
           const dx = e.clientX - prevPt.x;

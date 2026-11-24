@@ -603,10 +603,18 @@ select {
 }
 
 .transform-nudge-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+.transform-gesture-note {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.65);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .transform-chip-btn {
@@ -623,7 +631,7 @@ select {
 
 .transform-sliders {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
   gap: 8px;
 }
@@ -8409,6 +8417,29 @@ select {
 
 .notif-item-actions {
   margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notif-action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.notif-secondary-link {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.notif-secondary-link:hover {
+  color: #fff;
 }
 
 .notif-dismiss-btn {

@@ -4520,4 +4520,249 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Lock & Scale sits immediately after Erase and exposes Z-axis rotation slider & reset', async () => {
+    const { KEY_TOOLS } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
+    const { default: ToolCarouselBar } = await loadJsxModule(
+      'client/src/components/studio/ToolCarouselBar.jsx'
+    );
+
+    const ids = KEY_TOOLS.map((t) => t.id);
+    assert.equal(
+      ids.indexOf('transform'),
+      ids.indexOf('erase') + 1,
+      `Expected Lock & Scale (transform) immediately after erase, got order: ${ids.join(' -> ')}`
+    );
+
+    let transformState = { scale: 1, rotYDeg: 15, rotZDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 };
+    const setTransform = (updater) => {
+      transformState = typeof updater === 'function' ? updater(transformState) : updater;
+    };
+
+    const view = RTL.render(
+      React.createElement(ToolCarouselBar, {
+        quickSculpt: false,
+        activeKeyTool: 'transform',
+        toolAvailability: { transform: { usable: true, reason: '' } },
+        canTouch: true,
+        swipeDragPx: 0,
+        isDraggingKey: false,
+        painting: false,
+        mode: 'transform',
+        dockOpen: false,
+        voxelsLength: 12,
+        artTransform: transformState,
+        onSetArtTransform: setTransform,
+        onToggleTransformLock: () => {},
+        onStepKeyTool: () => {},
+        onKeyPointerDown: () => {},
+        onKeyPointerMove: () => {},
+        onKeyPointerUp: () => {},
+        onKeyPointerCancel: () => {}
+      })
+    );
+
+    const zSlider = view.getByTestId('transform-rotz-slider');
+    assert.ok(zSlider, 'Expected Z-axis rotation slider in Lock & Scale bar');
+    RTL.fireEvent.change(zSlider, { target: { value: '48' } });
+    assert.equal(transformState.rotZDeg, 48);
+
+    RTL.fireEvent.click(view.getByRole('button', { name: 'Reset' }));
+    assert.equal(transformState.rotZDeg, 0);
+    assert.equal(transformState.rotYDeg, 0);
+    assert.equal(transformState.scale, 1);
+    cleanup();
+  });
+
+  test('NotificationCenter auto-dismisses seen alerts without Mark all read, renders art links, and opens Mint Info modal', async () => {
+    const { default: NotificationCenter } = await loadJsxModule(
+      'client/src/components/NotificationCenter.jsx'
+    );
+    const { default: InfoTermsModal } = await loadJsxModule(
+      'client/src/components/InfoTermsModal.jsx'
+    );
+
+    const origFetch = globalThis.fetch;
+    const readCalls = [];
+    let markedReadOnServer = false;
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/notifications/read') && opts.method === 'POST') {
+        const body = JSON.parse(opts.body || '{}');
+        readCalls.push(body);
+        markedReadOnServer = true;
+        return { ok: true, status: 200, json: async () => ({ unreadCount: 0 }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          unreadCount: markedReadOnServer ? 0 : 1,
+          preferences: {
+            sculpture_on_land: true,
+            mint_slots_unlocked: true,
+            mint_limit_reached: true,
+            land_expiring: true,
+            land_activity: true,
+            browser_push_enabled: false
+          },
+          mintStatus: {
+            usedSlots: 1,
+            maxSlots: 3,
+            remainingSlots: 2,
+            canMintDesktop: true
+          },
+          notifications: [
+            {
+              id: 'n-art-1',
+              category: 'sculpture_on_land',
+              severity: 'info',
+              title: '🎨 New art "Solar Arch" on "Twin Palms"',
+              message: '@maya minted "Solar Arch" on "Twin Palms", a Virtual Land you contributed to.',
+              parcelId: 'GLAND-9Q8YYK9P',
+              sculptureId: 'sc-solar-1',
+              actionType: 'open_sculpture',
+              actionLabel: 'View Art',
+              meta: {
+                sculptureUrl: '?sculpture=sc-solar-1',
+                parcelUrl: '?parcel=GLAND-9Q8YYK9P'
+              },
+              read: markedReadOnServer,
+              createdAt: new Date().toISOString()
+            }
+          ]
+        })
+      };
+    };
+
+    try {
+      const actions = [];
+      const view = RTL.render(
+        React.createElement(NotificationCenter, {
+          user: { id: 'u-auto', name: 'Auto Dismiss User' },
+          variant: 'desktop',
+          onAction: (item) => actions.push(item)
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '1');
+      });
+
+      // Open inbox -> auto-marks read immediately, no manual "Mark all read" button
+      RTL.fireEvent.click(view.getByRole('button', { name: /Notifications/i }));
+      assert.equal(view.queryByRole('button', { name: /Mark all read/i }), null);
+
+      await RTL.waitFor(() => {
+        assert.ok(readCalls.some((c) => Array.isArray(c.ids) && c.ids.includes('n-art-1')));
+        assert.equal(view.queryByTestId('notif-unread-badge'), null);
+      });
+
+      // Direct artwork link + land link are present while open
+      const artLink = view.getByTestId('notif-art-link');
+      assert.equal(artLink.getAttribute('href'), '?sculpture=sc-solar-1');
+      const landLink = view.getByTestId('notif-land-link');
+      assert.equal(landLink.getAttribute('href'), '?parcel=GLAND-9Q8YYK9P');
+
+      // Closing popover dismisses the seen notifications automatically
+      RTL.fireEvent.click(view.getByRole('button', { name: /Close notifications/i }));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Notifications/i }));
+      assert.equal(view.queryByTestId('notif-art-link'), null);
+      assert.ok(view.getByText(/You’re all caught up!/i));
+
+      // Clicking Mint Land button triggers open_mint -> opens How to Mint info guide
+      RTL.fireEvent.click(view.getByTestId('notif-mint-land-btn'));
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].actionType, 'open_mint');
+      cleanup();
+
+      let startedMapMint = false;
+      const infoView = RTL.render(
+        React.createElement(InfoTermsModal, {
+          config: { policy: {} },
+          user: { id: 'u-auto', name: 'Auto Dismiss User' },
+          initialTab: 'mint',
+          onStartMapMint: () => {
+            startedMapMint = true;
+          },
+          onClose: () => {}
+        })
+      );
+      const mintGuide = infoView.getByTestId('info-mint-guide');
+      assert.ok(mintGuide.textContent.includes('Draw Art Outdoors in Mobile AR'));
+      assert.ok(mintGuide.textContent.includes('Draw a 3D Box on the Map First'));
+      assert.ok(mintGuide.textContent.includes('Unlock More Slots'));
+      RTL.fireEvent.click(infoView.getByTestId('info-mint-start-map-btn'));
+      assert.equal(startedMapMint, true);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('MobileMapSheet marks lands as seen when expanded or navigated so map counter hides them', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+
+    const seenCalls = [];
+    const sampleParcel = {
+      parcelId: 'GLAND-SEEN001',
+      customName: 'Sunset Lot',
+      centerLat: 37.7749,
+      centerLng: -122.4194,
+      stewardType: 'human',
+      stewardStatus: 'awakened',
+      hadHumanInteraction: true,
+      inactivityExpiresAt: ''
+    };
+    const sampleSculpture = {
+      id: 'sc-seen-1',
+      title: 'Glow Cube',
+      parcelId: 'GLAND-SEEN001',
+      lat: 37.7749,
+      lng: -122.4194
+    };
+
+    const view = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user: null,
+        ownedParcelIds: [],
+        config: {},
+        location: { lat: 37.7749, lng: -122.4194 },
+        areaFilterMode: 'all',
+        setAreaFilterMode: () => {},
+        mapLoading: false,
+        loadPublicMapData: () => {},
+        displayedMapSculptures: [sampleSculpture],
+        areaSculpturesSorted: [sampleSculpture],
+        mapParcels: [sampleParcel],
+        mapSelectedSculpture: null,
+        selectedParcelId: '',
+        focusParcelTick: 0,
+        onSelectParcel: () => {},
+        onSelectSculpture: () => {},
+        onMarkLandSeen: (pid, count) => seenCalls.push({ pid, count }),
+        onShowHint: () => {},
+        onClose: () => {}
+      })
+    );
+
+    const expandToggle = view.getByTestId('land-card-expand-toggle');
+    RTL.fireEvent.click(expandToggle);
+    assert.ok(
+      seenCalls.some((c) => c.pid === 'GLAND-SEEN001' && c.count === 1),
+      `Expected expanding land card to call onMarkLandSeen, got ${JSON.stringify(seenCalls)}`
+    );
+
+    const navLink = view.getByTestId('land-google-maps-link');
+    RTL.fireEvent.click(navLink);
+    assert.ok(
+      seenCalls.filter((c) => c.pid === 'GLAND-SEEN001').length >= 2,
+      'Expected clicking Navigate link to also mark land seen'
+    );
+    cleanup();
+  });
 });

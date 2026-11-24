@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { isAddress } from 'ethers';
 import {
   IN_PERSON_HUMAN_INTERACTIONS,
@@ -31,11 +31,17 @@ export default function InfoTermsModal({
   onUserUpdate,
   onOpenProfile = null,
   onOpenArchive = null,
+  onStartMapMint = null,
+  onStartMobileDraw = null,
+  onOpenMobileMap = null,
   onLogout,
   onRequestLogin,
   onClose
 }) {
   const [tab, setTab] = useState(initialTab);
+  useEffect(() => {
+    setTab(initialTab || 'guide');
+  }, [initialTab]);
   const [viewportGuide, setViewportGuide] = useState(detectInitialViewportTab);
   const [payoutInput, setPayoutInput] = useState(user?.customPayoutAddress || '');
   const [savingPayout, setSavingPayout] = useState(false);
@@ -146,6 +152,14 @@ export default function InfoTermsModal({
           </button>
           <button
             type="button"
+            className={`btn btn-sm ${tab === 'mint' ? 'btn-primary' : ''}`}
+            data-testid="info-mint-tab"
+            onClick={() => setTab('mint')}
+          >
+            <XeroIcon emoji="🏗️" size={14} /> How to Mint
+          </button>
+          <button
+            type="button"
             className={`btn btn-sm ${tab === 'terms' ? 'btn-primary' : ''}`}
             onClick={() => setTab('terms')}
           >
@@ -159,6 +173,103 @@ export default function InfoTermsModal({
             <XeroIcon emoji="⚙️" size={14} /> Account &amp; Settings
           </button>
         </div>
+
+        {tab === 'mint' && (
+          <div
+            style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}
+            data-testid="info-mint-guide"
+          >
+            <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+              Pick the easiest way for where you are right now — all human mints are{' '}
+              <strong>gas-free</strong>:
+            </div>
+
+            <div
+              className="card info-simple-card"
+              style={{ borderColor: 'rgba(0, 245, 212, 0.38)' }}
+            >
+              <div className="info-simple-title">
+                <XeroIcon emoji="📱" size={16} />
+                <strong>1. Draw Art Outdoors in Mobile AR (Fastest · Permanent)</strong>
+              </div>
+              <p>
+                Open GRAFFILAND on your phone outside, tap a real surface, draw your 3D art, and
+                tap <strong>Publish</strong>. Your art and Virtual Land mint together on the spot —{' '}
+                <strong>permanent ownership, no expiry timer, and no starter slot limit</strong>.
+              </p>
+              {typeof onStartMobileDraw === 'function' && (
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    data-testid="info-mint-start-mobile-draw-btn"
+                    onClick={() => onStartMobileDraw()}
+                  >
+                    <XeroIcon emoji="🖌️" size={13} /> Start Drawing in AR
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="card info-simple-card"
+              style={{ borderColor: 'rgba(255, 209, 102, 0.34)' }}
+            >
+              <div className="info-simple-title">
+                <XeroIcon emoji="🗺️" size={16} />
+                <strong>2. Draw a 3D Box on the Map First (Desktop · 3 Free Starter Slots)</strong>
+              </div>
+              <p>
+                Use <strong>Draw Land</strong> on the Desktop 3D Map to outline and mint a plot
+                first. It starts with a{' '}
+                <strong>{STEWARD_DEFAULTS.inactivityArchiveDays}-day timer</strong> — visit it in
+                person on Mobile AR and add art before time runs out to make it permanently yours
+                (the timer disappears forever).
+              </p>
+              {(typeof onStartMapMint === 'function' || typeof onOpenMobileMap === 'function') && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {typeof onStartMapMint === 'function' && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      data-testid="info-mint-start-map-btn"
+                      onClick={() => onStartMapMint()}
+                    >
+                      <XeroIcon emoji="🏗️" size={13} /> Draw &amp; Mint 3D Land
+                    </button>
+                  )}
+                  {typeof onOpenMobileMap === 'function' && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      data-testid="info-mint-open-map-btn"
+                      onClick={() => onOpenMobileMap()}
+                    >
+                      <XeroIcon emoji="🗺️" size={13} /> Open Nearest Lands Map
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="card info-simple-card">
+              <div className="info-simple-title">
+                <XeroIcon emoji="✨" size={16} />
+                <strong>3. Unlock More Slots Anytime</strong>
+              </div>
+              <p>
+                Used all 3 free starter map slots? Visit one of your empty plots in person on
+                Mobile AR and publish art on it to free up a slot — or walk to any dormant AI
+                agent plot and add {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks to awaken it and
+                earn contributor royalties.
+              </p>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
+                Note: Map plots that expire with zero in-person human interaction are archived and
+                their starter slot does not reopen.
+              </div>
+            </div>
+          </div>
+        )}
 
         {tab === 'guide' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
@@ -271,9 +382,10 @@ export default function InfoTermsModal({
                     <strong>Tap Surface &amp; Paint 3D Voxels</strong>
                     <InfoTip title="Mobile Tool Carousel">
                       Tap any floor, wall, or table to anchor your grid, then swipe the bottom Key
-                      Button: <strong>Brush → Stack → Erase → Lock &amp; Scale → Preview → Agent
-                      Code → Publish</strong>. Supports 4x precision (<code>0.05m</code> grid),
-                      matte/neon/glass finishes, up to 4,096 blocks, and auto-saved cloud drafts.
+                      Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger Z-rotate
+                      &amp; sliders) → Stack → Preview → Agent Code → Publish</strong>. Supports 4x
+                      precision (<code>0.05m</code> grid), matte/neon/glass finishes, up to 4,096
+                      blocks, and auto-saved cloud drafts.
                     </InfoTip>
                   </div>
                   <p>

@@ -42,6 +42,7 @@ export default function MobileMapSheet({
   onSelectParcel,
   onSelectSculpture,
   onFindLandInAR = null,
+  onMarkLandSeen = null,
   onOpenProfile = null,
   onManageLand = null,
   onRenameLand = null,
@@ -125,16 +126,27 @@ export default function MobileMapSheet({
     [displayedLands, selectedParcelId]
   );
 
+  function markLandSeenById(parcelId) {
+    if (!parcelId || typeof onMarkLandSeen !== 'function') return;
+    const match = displayedLands.find((l) => l.parcelId === parcelId);
+    onMarkLandSeen(parcelId, Array.isArray(match?.sculptures) ? match.sculptures.length : null);
+  }
+
   function toggleCardExpanded(parcelId) {
     if (!parcelId) return;
-    setExpandedLandIds((prev) => ({
-      ...prev,
-      [parcelId]: !prev[parcelId]
-    }));
+    setExpandedLandIds((prev) => {
+      const opening = !prev[parcelId];
+      if (opening) markLandSeenById(parcelId);
+      return {
+        ...prev,
+        [parcelId]: opening
+      };
+    });
   }
 
   function handleClickLandRank(parcelId) {
     if (!parcelId) return;
+    markLandSeenById(parcelId);
     onSelectParcel?.(parcelId);
     setLocalFocusTick((t) => t + 1);
     setExpandedLandIds((prev) => ({ ...prev, [parcelId]: true }));
@@ -151,6 +163,7 @@ export default function MobileMapSheet({
   function handleSelectParcelOnMap(parcel) {
     const pid = parcel?.parcelId || '';
     if (!pid) return;
+    markLandSeenById(pid);
     onSelectParcel?.(pid);
     setExpandedLandIds((prev) => ({ ...prev, [pid]: true }));
     setCollapsedLandIds((prev) => ({ ...prev, [pid]: false }));
@@ -161,11 +174,13 @@ export default function MobileMapSheet({
   }
 
   function handleFocusLandOnMap(parcelId) {
+    markLandSeenById(parcelId);
     onSelectParcel?.(parcelId);
     setLocalFocusTick((t) => t + 1);
   }
 
   function handleOpenLandIn3D(parcelId) {
+    markLandSeenById(parcelId);
     onSelectParcel?.(parcelId);
     setMapDimensionMode('3d');
     setLocalFocusTick((t) => t + 1);
@@ -367,7 +382,10 @@ export default function MobileMapSheet({
                 type="button"
                 className="btn btn-xs btn-primary"
                 data-testid="mobile-map-dock-find-ar-btn"
-                onClick={() => onFindLandInAR(focusedLand)}
+                onClick={() => {
+                  markLandSeenById(focusedLand.parcelId);
+                  onFindLandInAR(focusedLand);
+                }}
                 aria-label={`Find ${focusedLand.displayName} in AR camera`}
               >
                 <XeroIcon emoji="👁️" size={12} /> Find in AR
@@ -379,6 +397,7 @@ export default function MobileMapSheet({
                 href={focusedLand.googleMapsUrl}
                 target="_blank"
                 rel="noreferrer"
+                onClick={() => markLandSeenById(focusedLand.parcelId)}
                 aria-label={`Navigate to ${focusedLand.displayName}`}
               >
                 <XeroIcon emoji="🧭" size={12} /> Navigate
@@ -728,7 +747,10 @@ export default function MobileMapSheet({
                             type="button"
                             className="btn btn-xs btn-primary"
                             data-testid="land-card-find-ar-btn"
-                            onClick={() => onFindLandInAR(land)}
+                            onClick={() => {
+                              markLandSeenById(land.parcelId);
+                              onFindLandInAR(land);
+                            }}
                             aria-label={`Guide camera to ${land.displayName} in AR`}
                           >
                             <XeroIcon emoji="👁️" size={12} /> Find in AR
@@ -741,6 +763,7 @@ export default function MobileMapSheet({
                             target="_blank"
                             rel="noreferrer"
                             data-testid="land-google-maps-link"
+                            onClick={() => markLandSeenById(land.parcelId)}
                             aria-label={`Navigate to ${land.displayName}`}
                           >
                             <XeroIcon emoji="🧭" size={12} /> Navigate
@@ -803,12 +826,16 @@ export default function MobileMapSheet({
                                   key={sc.id}
                                   className="mobile-land-sculpture-item"
                                   data-testid="land-sculpture-item"
-                                  onClick={() => onSelectSculpture?.(sc)}
+                                  onClick={() => {
+                                    markLandSeenById(land.parcelId);
+                                    onSelectSculpture?.(sc);
+                                  }}
                                   role="button"
                                   tabIndex={0}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
                                       e.preventDefault();
+                                      markLandSeenById(land.parcelId);
                                       onSelectSculpture?.(sc);
                                     }
                                   }}
@@ -915,6 +942,7 @@ export default function MobileMapSheet({
                                       className="btn btn-primary btn-xs"
                                       onClick={(e) => {
                                         e.stopPropagation();
+                                        markLandSeenById(land.parcelId);
                                         onSelectSculpture?.(sc);
                                       }}
                                     >

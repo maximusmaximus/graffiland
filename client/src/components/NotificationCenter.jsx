@@ -6,8 +6,8 @@ const CATEGORY_META = [
   {
     key: 'sculpture_on_land',
     icon: '🎨',
-    label: 'Sculptures on your lands',
-    hint: 'When anyone builds or publishes a sculpture on your Virtual Land.'
+    label: 'New art on your lands & contributions',
+    hint: 'Direct links whenever new art is minted on a land you own or contributed to.'
   },
   {
     key: 'mint_slots_unlocked',
@@ -87,7 +87,20 @@ export default function NotificationCenter({
 
   const containerRef = useRef(null);
   const seenIdsRef = useRef(new Set());
+  const viewedWhileOpenIdsRef = useRef(new Set());
+  const openRef = useRef(false);
   const initializedRef = useRef(false);
+
+  const closePopover = useCallback(() => {
+    openRef.current = false;
+    setOpen(false);
+    if (viewedWhileOpenIdsRef.current.size > 0) {
+      const dismissedIds = new Set(viewedWhileOpenIdsRef.current);
+      viewedWhileOpenIdsRef.current.clear();
+      setNotifications((prev) => prev.filter((n) => !dismissedIds.has(n.id)));
+      setUnreadCount(0);
+    }
+  }, []);
 
   const fireBrowserNotification = useCallback((title, body, tag = '') => {
     try {
@@ -116,8 +129,16 @@ export default function NotificationCenter({
         const res = await api.getNotifications(40);
         const list = Array.isArray(res?.notifications) ? res.notifications : [];
         const prefs = res?.preferences ? { ...DEFAULT_PREFS, ...res.preferences } : DEFAULT_PREFS;
-        setNotifications(list);
-        setUnreadCount(Number(res?.unreadCount || 0));
+        // Seen/read notifications are automatically dismissed and stay hidden; keep items seen
+        // during the current open session visible until the user closes or acts on them.
+        const visibleList = list.filter(
+          (n) => !n.read || (openRef.current && viewedWhileOpenIdsRef.current.has(n.id))
+        );
+        const unseenCount = visibleList.filter(
+          (n) => !n.read && !viewedWhileOpenIdsRef.current.has(n.id)
+        ).length;
+        setNotifications(visibleList);
+        setUnreadCount(openRef.current ? 0 : unseenCount);
         setPreferences(prefs);
         if (res?.mintStatus) setMintStatus(res.mintStatus);
 
@@ -143,6 +164,8 @@ export default function NotificationCenter({
   const userId = user?.id || '';
   useEffect(() => {
     seenIdsRef.current = new Set();
+    viewedWhileOpenIdsRef.current = new Set();
+    openRef.current = false;
     initializedRef.current = false;
     if (!userId) {
       setOpen(false);
@@ -164,15 +187,29 @@ export default function NotificationCenter({
     }
   }, [user, refreshSignal, loadNotifications]);
 
+  // Automatically mark displayed notifications as seen/read the moment the user views the inbox
+  useEffect(() => {
+    if (!open || activeTab !== 'inbox' || !user) return;
+    const newlyViewedIds = notifications
+      .filter((n) => !viewedWhileOpenIdsRef.current.has(n.id))
+      .map((n) => n.id);
+    if (newlyViewedIds.length === 0) return;
+    for (const id of newlyViewedIds) {
+      viewedWhileOpenIdsRef.current.add(id);
+    }
+    setUnreadCount(0);
+    api.markNotificationsRead({ ids: newlyViewedIds }).catch(() => {});
+  }, [open, activeTab, notifications, user]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onDocDown = (e) => {
       if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setOpen(false);
+        closePopover();
       }
     };
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') closePopover();
     };
     document.addEventListener('pointerdown', onDocDown);
     document.addEventListener('keydown', onKeyDown);
@@ -180,41 +217,31 @@ export default function NotificationCenter({
       document.removeEventListener('pointerdown', onDocDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [open, closePopover]);
 
   if (!user) return null;
 
   const handleToggleOpen = () => {
-    const next = !open;
-    setOpen(next);
-    if (next) {
-      setBrowserPerm(getBrowserNotificationPermission());
-      loadNotifications({ silent: true });
-      if (onOpenSettingsExternal) onOpenSettingsExternal();
+    if (open) {
+      closePopover();
+      return;
     }
+    openRef.current = true;
+    setOpen(true);
+    setBrowserPerm(getBrowserNotificationPermission());
+    loadNotifications({ silent: true });
+    if (onOpenSettingsExternal) onOpenSettingsExternal();
   };
 
-  const handleMarkAllRead = async () => {
-    try {
-      await api.markNotificationsRead({ markAll: true });
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true, readAt: n.readAt || new Date().toISOString() })));
-      setUnreadCount(0);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleNotificationAction = async (item) => {
-    if (!item.read) {
+  const handleNotificationAction = async (item, overrideAction = null) => {
+    const effective = overrideAction ? { ...item, ...overrideAction } : item;
+    if (item?.id) {
+      viewedWhileOpenIdsRef.current.add(item.id);
       api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === item.id ? { ...n, read: true, readAt: new Date().toISOString() } : n))
-      );
-      setUnreadCount((c) => Math.max(0, c - 1));
     }
     if (onAction) {
-      setOpen(false);
-      onAction(item);
+      closePopover();
+      onAction(effective);
     }
   };
 
@@ -355,7 +382,7 @@ export default function NotificationCenter({
                 type="button"
                 className="notif-close-btn"
                 aria-label="Close notifications"
-                onClick={() => setOpen(false)}
+                onClick={closePopover}
               >
                 ✕
               </button>
@@ -376,7 +403,8 @@ export default function NotificationCenter({
                       slots open
                     </strong>
                     <span>
-                      Draw and mint a new 3D Virtual Land anytime — or sculpt IRL on mobile!
+                      Tap Mint Land to see the simple ways to mint (Mobile AR instant permanent land
+                      or Desktop 3D plot).
                     </span>
                   </>
                 ) : (
@@ -385,8 +413,7 @@ export default function NotificationCenter({
                       ⏳ {mintStatus.usedSlots}/{mintStatus.maxSlots} starter Desktop lands full
                     </strong>
                     <span>
-                      Build a sculpture on one of your unbuilt lands to unlock another Desktop slot,
-                      or sculpt in person with Mobile AR now.
+                      Tap Mint Land to see how to mint right now in Mobile AR or unlock more slots.
                     </span>
                   </>
                 )}
@@ -395,17 +422,18 @@ export default function NotificationCenter({
                 <button
                   type="button"
                   className="btn-xs notif-mint-banner-btn"
+                  data-testid="notif-mint-land-btn"
                   onClick={() => {
-                    setOpen(false);
+                    closePopover();
                     onAction({
-                      actionType: mintStatus.canMintDesktop ? 'open_mint' : 'open_pair_mobile',
+                      actionType: 'open_mint',
                       category: mintStatus.canMintDesktop
                         ? 'mint_slots_unlocked'
                         : 'mint_limit_reached'
                     });
                   }}
                 >
-                  {mintStatus.canMintDesktop ? '🏗️ Mint Land' : '📱 Pair Mobile'}
+                  🏗️ Mint Land
                 </button>
               )}
             </div>
@@ -417,7 +445,9 @@ export default function NotificationCenter({
                 <span className="notif-toolbar-meta">
                   {loading
                     ? 'Refreshing...'
-                    : `${notifications.length} alert${notifications.length === 1 ? '' : 's'}`}
+                    : notifications.length > 0
+                    ? `${notifications.length} alert${notifications.length === 1 ? '' : 's'} · auto-dismisses once seen`
+                    : 'No unread alerts'}
                 </span>
                 <div className="notif-toolbar-btns">
                   {!preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
@@ -429,15 +459,6 @@ export default function NotificationCenter({
                       🔔 Enable Browser Alerts
                     </button>
                   )}
-                  {unreadCount > 0 && (
-                    <button
-                      type="button"
-                      className="notif-link-btn"
-                      onClick={handleMarkAllRead}
-                    >
-                      Mark all read
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -446,57 +467,99 @@ export default function NotificationCenter({
                   <div className="notif-empty-icon">✨</div>
                   <strong>You’re all caught up!</strong>
                   <p>
-                    You’ll see alerts here when someone builds a sculpture on your land, when a
-                    sale happens, or whenever you unlock new minting capacity.
+                    You’ll see alerts with direct links here whenever new art is minted on a land
+                    you own or contributed to, or when mint slots change.
                   </p>
                 </div>
               ) : (
                 <div className="notif-list">
-                  {notifications.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`notif-item severity-${item.severity || 'info'} ${
-                        item.read ? 'is-read' : 'is-unread'
-                      }`}
-                      onClick={() => handleNotificationAction(item)}
-                    >
-                      <div className="notif-item-icon" aria-hidden="true">
-                        {iconForCategory(item.category)}
-                      </div>
-                      <div className="notif-item-content">
-                        <div className="notif-item-top">
-                          <strong className="notif-item-title">{item.title}</strong>
-                          <span className="notif-item-time">
-                            {formatRelativeTime(item.createdAt)}
-                          </span>
-                        </div>
-                        <p className="notif-item-msg">{item.message}</p>
-                        {item.actionLabel && (
-                          <div className="notif-item-actions">
-                            <button
-                              type="button"
-                              className="btn-xs notif-action-btn"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleNotificationAction(item);
-                              }}
-                            >
-                              {item.actionLabel} →
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="notif-dismiss-btn"
-                        aria-label="Dismiss notification"
-                        title="Dismiss"
-                        onClick={(e) => handleDelete(e, item.id)}
+                  {notifications.map((item) => {
+                    const artHref =
+                      item.meta?.sculptureUrl ||
+                      (item.sculptureId ? `?sculpture=${encodeURIComponent(item.sculptureId)}` : '');
+                    const parcelHref =
+                      item.meta?.parcelUrl ||
+                      (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
+                    const isArtLink = Boolean(artHref) && (item.actionType === 'open_sculpture' || Boolean(item.sculptureId));
+                    return (
+                      <div
+                        key={item.id}
+                        className={`notif-item severity-${item.severity || 'info'} ${
+                          item.read ? 'is-read' : 'is-unread'
+                        }`}
+                        onClick={() => handleNotificationAction(item)}
                       >
-                        ×
-                      </button>
-                    </div>
-                  ))}
+                        <div className="notif-item-icon" aria-hidden="true">
+                          {iconForCategory(item.category)}
+                        </div>
+                        <div className="notif-item-content">
+                          <div className="notif-item-top">
+                            <strong className="notif-item-title">{item.title}</strong>
+                            <span className="notif-item-time">
+                              {formatRelativeTime(item.createdAt)}
+                            </span>
+                          </div>
+                          <p className="notif-item-msg">{item.message}</p>
+                          {(item.actionLabel || isArtLink) && (
+                            <div className="notif-item-actions">
+                              {isArtLink ? (
+                                <a
+                                  href={artHref}
+                                  className="btn-xs notif-action-btn notif-action-link"
+                                  data-testid="notif-art-link"
+                                  onClick={(e) => {
+                                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      handleNotificationAction(item, { actionType: 'open_sculpture' });
+                                    }
+                                  }}
+                                >
+                                  {item.actionLabel || 'View Art'} →
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn-xs notif-action-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleNotificationAction(item);
+                                  }}
+                                >
+                                  {item.actionLabel} →
+                                </button>
+                              )}
+                              {isArtLink && parcelHref && (
+                                <a
+                                  href={parcelHref}
+                                  className="notif-secondary-link"
+                                  data-testid="notif-land-link"
+                                  onClick={(e) => {
+                                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      handleNotificationAction(item, { actionType: 'open_land' });
+                                    }
+                                  }}
+                                >
+                                  Open Land
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="notif-dismiss-btn"
+                          aria-label="Dismiss notification"
+                          title="Dismiss"
+                          onClick={(e) => handleDelete(e, item.id)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

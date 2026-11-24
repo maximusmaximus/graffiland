@@ -631,14 +631,111 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     }).then((r) => r.json());
     assert.equal(afterPubNotifs.mintStatus.canMintDesktop, true);
     assert.equal(afterPubNotifs.mintStatus.remainingSlots, 1);
-    assert.ok(
-      afterPubNotifs.notifications.some((n) => n.category === 'sculpture_on_land'),
-      'Expected sculpture_on_land notification for land owner'
+    const ownerArtNotif = afterPubNotifs.notifications.find(
+      (n) => n.category === 'sculpture_on_land' && n.sculptureId === pubBody.sculpture.id
+    );
+    assert.ok(ownerArtNotif, 'Expected sculpture_on_land notification for land owner');
+    assert.equal(ownerArtNotif.actionType, 'open_sculpture');
+    assert.equal(
+      ownerArtNotif.meta?.sculptureUrl,
+      `?sculpture=${encodeURIComponent(pubBody.sculpture.id)}`
     );
     assert.ok(
       afterPubNotifs.notifications.some((n) => n.category === 'mint_slots_unlocked'),
       'Expected mint_slots_unlocked notification when unbuilt land gets first sculpture'
     );
+
+    // A third artist mints new art on the same land -> BOTH owner AND prior contributor (otherToken)
+    // receive sculpture_on_land notifications with direct links to the newly minted art!
+    const thirdLogin = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: {
+          email: 'third-contributor-alert@graffiland.test',
+          name: 'Third Artist'
+        }
+      })
+    }).then((r) => r.json());
+    const thirdToken = thirdLogin.token;
+
+    const nowPub2 = Date.now() + 5000;
+    const pub2Res = await fetch(`${baseUrl}/api/sculptures/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${thirdToken}`,
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'
+      },
+      body: JSON.stringify({
+        title: 'Contributor Alert Beacon',
+        description: 'Second sculpture minted on the same land to notify owner and prior contributors.',
+        termsAccepted: true,
+        voxels: [
+          { x: 0.4, y: 0, z: 0.4, color: '#ff006e', material: 'neon' },
+          { x: 0.4, y: 0.2, z: 0.4, color: '#00f5d4', material: 'neon' },
+          { x: 0.4, y: 0.4, z: 0.4, color: '#ffd166', material: 'neon' }
+        ],
+        location: { lat: 37.7749, lng: -122.4194, altitude: 10, accuracy: 5, heading: 90 },
+        proofOfLocation: {
+          gpsSamples: [
+            { lat: 37.7749, lng: -122.4194, t: nowPub2 - 4000 },
+            { lat: 37.774905, lng: -122.419395, t: nowPub2 - 1000 }
+          ],
+          gyroSamples: 20,
+          cameraFrames: 10,
+          opticalFlowCorrelation: 0.9,
+          horizonLuminance: 145,
+          ambientPalette: ['#ff006e', '#00f5d4'],
+          visualDHash: 'f1e2d3c4b5a69788',
+          cameraFacingMode: 'environment',
+          cameraResolution: '1920x1080',
+          sculptDurationMs: 12000,
+          sceneCoveragePct: 100
+        },
+        deviceProfile: { isMobile: true, screenWidth: 390, screenHeight: 844, hasCamera: true }
+      })
+    });
+    const pub2Body = await pub2Res.json();
+    assert.equal(pub2Res.status, 201, JSON.stringify(pub2Body));
+
+    const [ownerNotifs2, contribNotifs2, actorNotifs2] = await Promise.all([
+      fetch(`${baseUrl}/api/notifications`, {
+        headers: { Authorization: `Bearer ${humanToken}` }
+      }).then((r) => r.json()),
+      fetch(`${baseUrl}/api/notifications`, {
+        headers: { Authorization: `Bearer ${otherHumanToken}` }
+      }).then((r) => r.json()),
+      fetch(`${baseUrl}/api/notifications`, {
+        headers: { Authorization: `Bearer ${thirdToken}` }
+      }).then((r) => r.json())
+    ]);
+
+    const ownerSecondArt = ownerNotifs2.notifications.find(
+      (n) => n.category === 'sculpture_on_land' && n.sculptureId === pub2Body.sculpture.id
+    );
+    const contribSecondArt = contribNotifs2.notifications.find(
+      (n) => n.category === 'sculpture_on_land' && n.sculptureId === pub2Body.sculpture.id
+    );
+    const actorSelfArt = actorNotifs2.notifications.find(
+      (n) => n.category === 'sculpture_on_land' && n.sculptureId === pub2Body.sculpture.id
+    );
+
+    assert.ok(ownerSecondArt, 'Expected land owner to be notified of new art');
+    assert.equal(ownerSecondArt.actionType, 'open_sculpture');
+    assert.equal(
+      ownerSecondArt.meta?.sculptureUrl,
+      `?sculpture=${encodeURIComponent(pub2Body.sculpture.id)}`
+    );
+    assert.ok(contribSecondArt, 'Expected prior land contributor to be notified of new art');
+    assert.equal(contribSecondArt.actionType, 'open_sculpture');
+    assert.equal(contribSecondArt.meta?.recipientRole, 'contributor');
+    assert.equal(
+      contribSecondArt.meta?.sculptureUrl,
+      `?sculpture=${encodeURIComponent(pub2Body.sculpture.id)}`
+    );
+    assert.equal(actorSelfArt, undefined, 'Artist who just minted should not get a self-alert');
   });
 
   test('Location search supports coords, GLAND parcel IDs, and query validation', async () => {
