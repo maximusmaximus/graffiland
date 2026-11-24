@@ -23,6 +23,51 @@ import XeroIcon from '../XeroIcon.jsx';
  * While active, non-essential drawing HUD buttons are temporarily hidden so the user can
  * inspect and interact with the land effortlessly.
  */
+/**
+ * Resolves the single canonical chat target for a Virtual Land so all visitors and
+ * artworks on that land share one chat room (preferring an initialized board, else
+ * the earliest sculpture on the land, else the parcel itself for an empty land).
+ */
+export function resolveLandChatTarget(land, displayName = '') {
+  if (!land) return null;
+  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const label =
+    displayName ||
+    resolveLandDisplayName({
+      customName: String(land.customName || '').trim(),
+      displayName: land.displayName || '',
+      firstSculptureTitle: sculptures[0]?.title || ''
+    });
+
+  if (sculptures.length > 0) {
+    const initialized = sculptures.find((s) => s?.chatSummary?.initialized);
+    const chosen = initialized || sculptures[0];
+    return {
+      ...chosen,
+      parcelId: chosen.parcelId || land.parcelId,
+      parcelName: chosen.parcelName || land.customName || label
+    };
+  }
+
+  if (!land.parcelId) return null;
+  const lat = land.centerLat ?? land.volume?.centerLat ?? null;
+  const lng = land.centerLng ?? land.volume?.centerLng ?? null;
+  return {
+    id: land.parcelId,
+    parcelId: land.parcelId,
+    parcelName: label,
+    customName: land.customName || '',
+    title: label,
+    lat: Number.isFinite(Number(lat)) ? Number(lat) : null,
+    lng: Number.isFinite(Number(lng)) ? Number(lng) : null,
+    creatorSub: land.ownerSub || land.stewardSub || '',
+    creatorUsername: land.stewardUsername || '',
+    creatorName: land.stewardName || '',
+    creatorAvatar: land.stewardAvatar || '',
+    isParcelChat: true
+  };
+}
+
 export default function ARLandInspectorPanel({
   land,
   nearbyLands = [],
@@ -34,6 +79,7 @@ export default function ARLandInspectorPanel({
   onRenameLand = null,
   onOpenProfile = null,
   onInspectSculpture = null,
+  onOpenLandChat = null,
   onOpenSculptureChat = null,
   onShowHint = null,
   onClose
@@ -80,6 +126,23 @@ export default function ARLandInspectorPanel({
   const stewardHandle = land.stewardUsername || land.ownerSub || '';
 
   const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const canonicalChatTarget = resolveLandChatTarget(land, displayName);
+  const canOpenLandChat = Boolean(
+    canonicalChatTarget &&
+      (typeof onOpenLandChat === 'function' || typeof onOpenSculptureChat === 'function')
+  );
+  const landChatMessageCount = sculptures.reduce(
+    (maxCnt, sc) => Math.max(maxCnt, Number(sc?.chatSummary?.messageCount || 0)),
+    Number(land?.chatMessageCount || 0)
+  );
+  const handleOpenLandChat = () => {
+    if (!canonicalChatTarget) return;
+    if (typeof onOpenLandChat === 'function') {
+      onOpenLandChat(land, canonicalChatTarget);
+    } else if (typeof onOpenSculptureChat === 'function') {
+      onOpenSculptureChat(canonicalChatTarget, land.distanceMeters ?? 0);
+    }
+  };
   const currentIdx = nearbyLands.findIndex((item) => item?.parcelId === land.parcelId);
   const hasMultipleNearby = nearbyLands.length > 1 && currentIdx >= 0 && typeof onSelectNearbyLand === 'function';
 
@@ -410,6 +473,19 @@ export default function ARLandInspectorPanel({
             {checkInBusy ? 'Verifying…' : checkedInDone ? 'Visited In Person' : 'Check In IRL'}
           </button>
         )}
+        {canOpenLandChat && (
+          <button
+            type="button"
+            className="btn btn-xs"
+            data-testid="ar-land-chat-btn"
+            aria-label={`Open chat for ${displayName}`}
+            title={`Open encrypted in-person chat for ${displayName}`}
+            onClick={handleOpenLandChat}
+          >
+            <XeroIcon emoji="💬" size={13} /> Land Chat
+            {landChatMessageCount > 0 ? ` (${landChatMessageCount})` : ''}
+          </button>
+        )}
         {onOpen3DMap && (
           <button
             type="button"
@@ -501,16 +577,6 @@ export default function ARLandInspectorPanel({
                   </div>
                 </div>
                 <div className="ar-land-sc-actions">
-                  {onOpenSculptureChat && (
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      aria-label={`Chat on ${sc.title}`}
-                      onClick={() => onOpenSculptureChat(sc, land.distanceMeters ?? 0)}
-                    >
-                      <XeroIcon emoji="💬" size={12} />
-                    </button>
-                  )}
                   {onInspectSculpture && (
                     <button
                       type="button"

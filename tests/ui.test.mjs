@@ -4765,4 +4765,124 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     );
     cleanup();
   });
+
+  test('ARLandInspectorPanel renders strictly ONE land chat button ABOVE the sculpture section and zero chat icons per artwork', async () => {
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+    const { default: SculptureChatDrawer } = await loadJsxModule(
+      'client/src/components/SculptureChatDrawer.jsx'
+    );
+
+    const multiArtLand = {
+      parcelId: 'GLAND-ONECHAT1',
+      customName: 'Farmers Market',
+      centerLat: 39.728,
+      centerLng: -121.838,
+      isInside: true,
+      isOwned: true,
+      distanceMeters: 4,
+      sculptures: [
+        {
+          id: 'sc-art-1',
+          title: 'Veggie Row',
+          parcelId: 'GLAND-ONECHAT1',
+          lat: 39.728,
+          lng: -121.838,
+          chatSummary: { initialized: false, messageCount: 3 }
+        },
+        {
+          id: 'sc-art-2',
+          title: 'Pumpkin Arch',
+          parcelId: 'GLAND-ONECHAT1',
+          lat: 39.72801,
+          lng: -121.83801,
+          chatSummary: { initialized: true, messageCount: 3 }
+        },
+        {
+          id: 'sc-art-3',
+          title: 'Carrot Tower',
+          parcelId: 'GLAND-ONECHAT1',
+          lat: 39.72802,
+          lng: -121.83802,
+          chatSummary: { initialized: false, messageCount: 3 }
+        }
+      ]
+    };
+
+    const openedChats = [];
+    const view = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: multiArtLand,
+        onDrawHere: () => {},
+        onInspectSculpture: () => {},
+        onOpenLandChat: (land, target) => openedChats.push({ parcelId: land.parcelId, targetId: target.id }),
+        onClose: () => {}
+      })
+    );
+
+    // Strictly ONE chat icon/button on the entire land panel
+    const chatButtons = view.getAllByTestId('ar-land-chat-btn');
+    assert.equal(chatButtons.length, 1, 'Expected strictly one Land Chat button per land');
+    assert.ok(chatButtons[0].textContent.includes('Land Chat (3)'));
+
+    // Zero chat buttons inside the sculptures section (none per artwork!)
+    const sculpturesSection = view.getByTestId('ar-land-sculptures-list');
+    assert.equal(
+      sculpturesSection.querySelectorAll('button[aria-label*="Chat"], button[aria-label*="chat"]').length,
+      0,
+      'Sculpture rows must NOT have individual per-artwork chat icons'
+    );
+    const chatEmojiImgsInSculptures = Array.from(sculpturesSection.querySelectorAll('img')).filter((img) =>
+      String(img.getAttribute('src') || '').includes('1f4ac')
+    );
+    assert.equal(
+      chatEmojiImgsInSculptures.length,
+      0,
+      'No 💬 chat icon should appear inside the sculptures list'
+    );
+
+    // The single Land Chat button must sit ABOVE the sculpture section in DOM order
+    const relPos = chatButtons[0].compareDocumentPosition(sculpturesSection);
+    assert.ok(
+      Boolean(relPos & globalThis.window.Node.DOCUMENT_POSITION_FOLLOWING),
+      'Land Chat button must appear above the sculptures section'
+    );
+
+    // Clicking Land Chat targets the canonical initialized sculpture on the land
+    RTL.fireEvent.click(chatButtons[0]);
+    assert.deepEqual(openedChats, [{ parcelId: 'GLAND-ONECHAT1', targetId: 'sc-art-2' }]);
+    cleanup();
+
+    // Empty land (0 sculptures) still renders one Land Chat button targeting the parcel itself
+    const emptyOpened = [];
+    const emptyView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: { ...multiArtLand, parcelId: 'GLAND-EMPTYCHAT', sculptures: [] },
+        onOpenLandChat: (land, target) => emptyOpened.push({ parcelId: land.parcelId, targetId: target.id }),
+        onClose: () => {}
+      })
+    );
+    RTL.fireEvent.click(emptyView.getByTestId('ar-land-chat-btn'));
+    assert.deepEqual(emptyOpened, [{ parcelId: 'GLAND-EMPTYCHAT', targetId: 'GLAND-EMPTYCHAT' }]);
+    cleanup();
+
+    // SculptureChatDrawer titles the board by the Land name ("Farmers Market") as a Land Chat
+    const drawerView = RTL.render(
+      React.createElement(SculptureChatDrawer, {
+        sculpture: {
+          id: 'sc-art-2',
+          title: 'Pumpkin Arch',
+          parcelId: 'GLAND-ONECHAT1',
+          parcelName: 'Farmers Market'
+        },
+        user: null,
+        onRequestLogin: () => {},
+        onClose: () => {}
+      })
+    );
+    assert.equal(drawerView.container.querySelector('.chat-board-title')?.textContent, 'Farmers Market');
+    assert.ok(drawerView.container.textContent.includes('Land Chat'));
+    cleanup();
+  });
 });

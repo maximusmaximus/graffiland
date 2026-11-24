@@ -6,7 +6,8 @@ import {
   verifyCameraSightProof
 } from './chatPolicy.mjs';
 import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
-import { getPinnedBatchMeta, isUserLandHolder } from './pinService.mjs';
+import { normalizeParcelId } from './mcp/helpers.mjs';
+import { formatPinBatchMeta, getPinnedBatchMeta, isUserLandHolder } from './pinService.mjs';
 
 function sanitizePublicEcJwk(raw) {
   const jwk = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -143,21 +144,108 @@ function formatMessageRow(row) {
   };
 }
 
+/**
+ * Enforces one shared encrypted chat room per Virtual Land (`parcel_id`).
+ * Resolves any sculpture ID (or parcel ID for an empty land) to the single canonical
+ * board belonging to that parcel so every visitor and artwork on the land shares one chat.
+ */
+async function resolveLandChatContext(db, requestedId) {
+  const cleanId = String(requestedId || '').trim();
+  if (!cleanId) {
+    throw new ChatHttpError(404, 'Land or sculpture not found');
+  }
+
+  let target = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [cleanId]);
+
+  if (!target && /^GLAND-/i.test(cleanId)) {
+    const cleanParcel = normalizeParcelId(cleanId);
+    target = await db
+      .get(
+        'SELECT * FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
+        [cleanParcel]
+      )
+      .catch(() => null);
+
+    if (!target) {
+      const [vol, lp, st, pc] = await Promise.all([
+        db.get('SELECT * FROM land_volumes WHERE parcel_id = ?', [cleanParcel]).catch(() => null),
+        db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [cleanParcel]).catch(() => null),
+        db
+          .get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [cleanParcel])
+          .catch(() => null),
+        db
+          .get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [cleanParcel])
+          .catch(() => null)
+      ]);
+      if (vol || lp || st || pc) {
+        target = {
+          id: cleanParcel,
+          parcel_id: cleanParcel,
+          geohash: vol?.geohash || lp?.geohash || cleanParcel.replace(/^GLAND-/i, '').toLowerCase(),
+          lat: Number(vol?.center_lat ?? lp?.center_lat ?? 0),
+          lng: Number(vol?.center_lng ?? lp?.center_lng ?? 0),
+          creator_sub: st?.steward_sub || pc?.owner_sub || lp?.first_claimant_sub || '',
+          title: pc?.custom_name || cleanParcel,
+          isParcelOnly: true
+        };
+      }
+    }
+  }
+
+  if (!target) {
+    throw new ChatHttpError(404, 'Sculpture not found');
+  }
+
+  const parcelId = String(target.parcel_id || '').trim();
+  const board = parcelId
+    ? await db
+        .get(
+          `SELECT b.*
+           FROM sculpture_chat_boards b
+           LEFT JOIN sculptures s ON s.id = b.sculpture_id
+           WHERE b.sculpture_id = ?
+              OR b.sculpture_id = ?
+              OR (s.parcel_id = ? AND s.hidden = 0)
+           ORDER BY
+             CASE
+               WHEN b.sculpture_id = ? THEN 0
+               WHEN b.sculpture_id = ? THEN 1
+               ELSE 2
+             END,
+             b.created_at ASC
+           LIMIT 1`,
+          [target.id, parcelId, parcelId, target.id, parcelId]
+        )
+        .catch(() => null)
+    : await db
+        .get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [target.id])
+        .catch(() => null);
+
+  return {
+    target,
+    parcelId,
+    board: board || null,
+    boardId: board ? board.sculpture_id : target.id
+  };
+}
+
 export async function initChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
-  const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [sculptureId]);
-  if (!sculpture) throw new ChatHttpError(404, 'Sculpture not found');
+  const { target: sculpture, board: existing, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
 
   if (!looksMobileRequest(body?.deviceProfile, userAgent)) {
     throw new ChatHttpError(403, 'Initializing an AR chat board requires a mobile device.');
   }
 
-  const existing = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (existing) {
-    return { initialized: true, board: sanitizeBoardRow(existing) };
+    return { initialized: true, boardId: existing.sculpture_id, board: sanitizeBoardRow(existing) };
   }
 
-  // Only the sculpture creator can initialize right after minting, OR an in-person camera viewer for legacy sculptures
-  if (sculpture.creator_sub !== user.id) {
+  // Only the sculpture/land creator can initialize right after minting, OR an in-person camera viewer
+  const landHolder = await isUserLandHolder(db, { sculpture, user });
+  if (sculpture.creator_sub !== user.id && !landHolder) {
     verifyCameraSightProof({
       sightProof: body?.sightProof,
       deviceProfile: body?.deviceProfile,
@@ -187,10 +275,10 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
       sculpture_id, creator_sub, key_epoch, room_key_commit, clue_prompt, clue_wrapped_json,
       auto_grant_pol, created_at, updated_at
     ) VALUES (?, ?, 1, ?, ?, ?, 1, ?, ?)`,
-    [sculptureId, user.id, roomKeyCommit.toLowerCase(), cluePrompt, clueWrappedJson, now, now]
+    [boardId, user.id, roomKeyCommit.toLowerCase(), cluePrompt, clueWrappedJson, now, now]
   );
 
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
+  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [boardId]);
 
   // If this request created Epoch 1 cleanly, register founder's self-grant row
   if (board && board.creator_sub === user.id) {
@@ -204,7 +292,7 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'granted', ?, ?, ?, ?, ?, ?, ?)`,
       [
         crypto.randomUUID(),
-        sculptureId,
+        boardId,
         Number(board.key_epoch),
         user.id,
         user.name,
@@ -225,14 +313,15 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
     );
   }
 
-  return { initialized: true, board: sanitizeBoardRow(board) };
+  return { initialized: true, boardId, board: sanitizeBoardRow(board) };
 }
 
 export async function updateBoardClue(db, { sculptureId, user, body, userAgent = '' }) {
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
-  if (!board) throw new ChatHttpError(404, 'Sculpture chat board not initialized');
-  if (board.creator_sub !== user.id) {
-    throw new ChatHttpError(403, 'Only the sculpture creator can configure the on-site clue.');
+  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
+  if (!board) throw new ChatHttpError(404, 'Land chat board not initialized');
+  const landHolder = await isUserLandHolder(db, { sculpture, user });
+  if (board.creator_sub !== user.id && !landHolder) {
+    throw new ChatHttpError(403, 'Only the land holder or chat creator can configure the on-site clue.');
   }
   if (!looksMobileRequest(body?.deviceProfile, userAgent)) {
     throw new ChatHttpError(403, 'Clue configuration requires mobile studio access.');
@@ -242,15 +331,15 @@ export async function updateBoardClue(db, { sculptureId, user, body, userAgent =
   const now = new Date().toISOString();
   await db.run(
     'UPDATE sculpture_chat_boards SET clue_prompt = ?, clue_wrapped_json = ?, updated_at = ? WHERE sculpture_id = ?',
-    [cluePrompt, clueWrappedJson, now, sculptureId]
+    [cluePrompt, clueWrappedJson, now, boardId]
   );
 
-  const updated = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
-  return { board: sanitizeBoardRow(updated) };
+  const updated = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [boardId]);
+  return { boardId, board: sanitizeBoardRow(updated) };
 }
 
 export async function enterChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
-  const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [sculptureId]);
+  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
@@ -269,13 +358,17 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
 
   const [isLandHolder, pinMetaResult] = await Promise.all([
     isUserLandHolder(db, { sculpture, user }),
-    getPinnedBatchMeta(db, { sculptureId: sculpture.id })
+    sculpture.isParcelOnly
+      ? Promise.resolve({ meta: formatPinBatchMeta(null, sculpture.parcel_id) })
+      : getPinnedBatchMeta(db, { sculptureId: sculpture.id }).catch(() => ({
+          meta: formatPinBatchMeta(null, sculpture.parcel_id)
+        }))
   ]);
 
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (!board) {
     return {
       initialized: false,
+      boardId,
       isLandHolder,
       pinMeta: pinMetaResult.meta,
       sight,
@@ -292,7 +385,7 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     myGrantRow = await db.get(
       `SELECT * FROM sculpture_chat_grants
        WHERE sculpture_id = ? AND key_epoch = ? AND requester_pub_fp = ?`,
-      [sculptureId, Number(board.key_epoch), pubFp]
+      [boardId, Number(board.key_epoch), pubFp]
     );
   }
   if (!myGrantRow) {
@@ -300,7 +393,7 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
       `SELECT * FROM sculpture_chat_grants
        WHERE sculpture_id = ? AND key_epoch = ? AND requester_sub = ?
        ORDER BY CASE WHEN status = 'granted' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1`,
-      [sculptureId, Number(board.key_epoch), user.id]
+      [boardId, Number(board.key_epoch), user.id]
     );
   }
 
@@ -309,7 +402,7 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     const countRow = await db.get(
       `SELECT COUNT(*) AS c FROM sculpture_chat_grants
        WHERE sculpture_id = ? AND key_epoch = ? AND status = 'pending'`,
-      [sculptureId, Number(board.key_epoch)]
+      [boardId, Number(board.key_epoch)]
     );
     pendingRequestsCount = Number(countRow?.c || 0);
   }
@@ -318,11 +411,12 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     `SELECT * FROM sculpture_chat_messages
      WHERE sculpture_id = ? AND key_epoch = ?
      ORDER BY created_at ASC LIMIT 200`,
-    [sculptureId, Number(board.key_epoch)]
+    [boardId, Number(board.key_epoch)]
   );
 
   return {
     initialized: true,
+    boardId,
     isLandHolder,
     pinMeta: pinMetaResult.meta,
     sight,
@@ -334,7 +428,7 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
 }
 
 export async function requestChatGrant(db, { sculptureId, user, body, userAgent = '' }) {
-  const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [sculptureId]);
+  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
@@ -351,8 +445,7 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
     }).catch(() => {});
   }
 
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
-  if (!board) throw new ChatHttpError(404, 'Sculpture chat board is not initialized yet.');
+  if (!board) throw new ChatHttpError(404, 'Land chat board is not initialized yet.');
 
   const ecdhPubJwk = sanitizePublicEcJwk(body?.requesterEcdhPubJwk);
   const signPubJwk = sanitizePublicEcJwk(body?.requesterSignPubJwk);
@@ -362,12 +455,12 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
   const existing = await db.get(
     `SELECT * FROM sculpture_chat_grants
      WHERE sculpture_id = ? AND key_epoch = ? AND requester_pub_fp = ?`,
-    [sculptureId, keyEpoch, pubFp]
+    [boardId, keyEpoch, pubFp]
   );
 
   const now = new Date().toISOString();
   if (existing && existing.status === 'granted') {
-    return { grant: formatGrantRow(existing), sight };
+    return { boardId, grant: formatGrantRow(existing), sight };
   }
 
   if (existing) {
@@ -378,7 +471,7 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
       [JSON.stringify(sight.proofSummary), sight.sightScore, sight.distanceMeters, now, existing.id]
     );
     const updated = await db.get('SELECT * FROM sculpture_chat_grants WHERE id = ?', [existing.id]);
-    return { grant: formatGrantRow(updated), sight };
+    return { boardId, grant: formatGrantRow(updated), sight };
   }
 
   const id = crypto.randomUUID();
@@ -392,7 +485,7 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', '', '', '', '', ?, ?)`,
     [
       id,
-      sculptureId,
+      boardId,
       keyEpoch,
       user.id,
       user.name,
@@ -408,7 +501,7 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
   );
 
   const created = await db.get('SELECT * FROM sculpture_chat_grants WHERE id = ?', [id]);
-  return { grant: formatGrantRow(created), sight };
+  return { boardId, grant: formatGrantRow(created), sight };
 }
 
 /**
@@ -418,7 +511,7 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
  * to an admitted member/peer grantor.
  */
 export async function claimClueUnlockedGrant(db, { sculptureId, user, body, userAgent = '' }) {
-  const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [sculptureId]);
+  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
@@ -435,7 +528,6 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
     }).catch(() => {});
   }
 
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
   if (!board) throw new ChatHttpError(404, 'Chat board not initialized');
 
   const proofToken = String(body?.roomProofToken || '').trim();
@@ -459,7 +551,7 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
   const existing = await db.get(
     `SELECT * FROM sculpture_chat_grants
      WHERE sculpture_id = ? AND key_epoch = ? AND requester_pub_fp = ?`,
-    [sculptureId, keyEpoch, pubFp]
+    [boardId, keyEpoch, pubFp]
   );
 
   if (existing) {
@@ -483,7 +575,7 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
       ]
     );
     const updated = await db.get('SELECT * FROM sculpture_chat_grants WHERE id = ?', [existing.id]);
-    return { grant: formatGrantRow(updated) };
+    return { boardId, grant: formatGrantRow(updated) };
   }
 
   const id = crypto.randomUUID();
@@ -497,7 +589,7 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'granted', ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      sculptureId,
+      boardId,
       keyEpoch,
       user.id,
       user.name,
@@ -518,11 +610,16 @@ export async function claimClueUnlockedGrant(db, { sculptureId, user, body, user
   );
 
   const created = await db.get('SELECT * FROM sculpture_chat_grants WHERE id = ?', [id]);
-  return { grant: formatGrantRow(created) };
+  return { boardId, grant: formatGrantRow(created) };
 }
 
 export async function listPendingGrantsForGrantor(db, { user, sculptureId = null }) {
-  const rows = sculptureId
+  let canonicalBoardId = null;
+  if (sculptureId) {
+    const ctx = await resolveLandChatContext(db, sculptureId).catch(() => null);
+    canonicalBoardId = ctx?.boardId || sculptureId;
+  }
+  const rows = canonicalBoardId
     ? await db.all(
         `SELECT g.* FROM sculpture_chat_grants g
          WHERE g.sculpture_id = ? AND g.status = 'pending'
@@ -534,7 +631,7 @@ export async function listPendingGrantsForGrantor(db, { user, sculptureId = null
                AND m.status = 'granted'
            )
          ORDER BY g.updated_at DESC LIMIT 30`,
-        [sculptureId, user.id]
+        [canonicalBoardId, user.id]
       )
     : await db.all(
         `SELECT g.* FROM sculpture_chat_grants g
@@ -554,15 +651,15 @@ export async function listPendingGrantsForGrantor(db, { user, sculptureId = null
 }
 
 export async function submitPeerGrant(db, { sculptureId, user, body }) {
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
-  if (!board) throw new ChatHttpError(404, 'Sculpture chat board not found.');
+  const { board, boardId } = await resolveLandChatContext(db, sculptureId);
+  if (!board) throw new ChatHttpError(404, 'Land chat board not found.');
 
   const keyEpoch = Number(board.key_epoch);
   const callerMember = await db.get(
     `SELECT * FROM sculpture_chat_grants
      WHERE sculpture_id = ? AND key_epoch = ? AND requester_sub = ? AND status = 'granted'
      LIMIT 1`,
-    [sculptureId, keyEpoch, user.id]
+    [boardId, keyEpoch, user.id]
   );
   if (!callerMember) {
     throw new ChatHttpError(403, 'Only admitted keyholders can wrap the room key for new viewers.');
@@ -572,7 +669,7 @@ export async function submitPeerGrant(db, { sculptureId, user, body }) {
   const target = await db.get(
     `SELECT * FROM sculpture_chat_grants
      WHERE id = ? AND sculpture_id = ? AND key_epoch = ?`,
-    [targetGrantId, sculptureId, keyEpoch]
+    [targetGrantId, boardId, keyEpoch]
   );
   if (!target) throw new ChatHttpError(404, 'Target key request not found.');
 
@@ -600,7 +697,7 @@ export async function submitPeerGrant(db, { sculptureId, user, body }) {
   );
 
   const updated = await db.get('SELECT * FROM sculpture_chat_grants WHERE id = ?', [targetGrantId]);
-  return { grant: formatGrantRow(updated) };
+  return { boardId, grant: formatGrantRow(updated) };
 }
 
 export async function postEncryptedChatMessage(db, { sculptureId, user, body, userAgent = '' }) {
@@ -617,7 +714,7 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     );
   }
 
-  const sculpture = await db.get('SELECT * FROM sculptures WHERE id = ? AND hidden = 0', [sculptureId]);
+  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
   verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
@@ -625,15 +722,14 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     sculpture
   });
 
-  const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [sculptureId]);
-  if (!board) throw new ChatHttpError(404, 'Sculpture chat board is not initialized.');
+  if (!board) throw new ChatHttpError(404, 'Land chat board is not initialized.');
 
   const keyEpoch = Number(board.key_epoch);
   const member = await db.get(
     `SELECT * FROM sculpture_chat_grants
      WHERE sculpture_id = ? AND key_epoch = ? AND requester_sub = ? AND status = 'granted'
      LIMIT 1`,
-    [sculptureId, keyEpoch, user.id]
+    [boardId, keyEpoch, user.id]
   );
   if (!member) {
     throw new ChatHttpError(403, 'Unlock the encrypted room key before posting.');
@@ -661,7 +757,7 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     throw new ChatHttpError(400, 'aadJson must be valid JSON.');
   }
   if (
-    parsedAad?.sculptureId !== sculptureId ||
+    parsedAad?.sculptureId !== boardId ||
     Number(parsedAad?.keyEpoch) !== keyEpoch ||
     parsedAad?.senderSub !== user.id ||
     parsedAad?.senderPubFp !== senderPubFp
@@ -677,7 +773,7 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      sculptureId,
+      boardId,
       keyEpoch,
       user.id,
       senderPubFp,
@@ -699,5 +795,5 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
       awakenDormant: true
     }).catch(() => {});
   }
-  return { message: formatMessageRow(saved) };
+  return { boardId, message: formatMessageRow(saved) };
 }

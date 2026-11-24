@@ -1429,8 +1429,12 @@ export default function MobileStudio({
             onInspectSculpture={(sc) => {
               ar.setMapSelectedSculpture(sc);
             }}
-            onOpenSculptureChat={(sc, distM) => {
-              chat.openCameraSelectedChat(sc, distM, chat.arPinPreview);
+            onOpenLandChat={(targetLand, canonicalTarget) => {
+              chat.openCameraSelectedChat(
+                canonicalTarget,
+                targetLand?.distanceMeters ?? 0,
+                chat.arPinPreview
+              );
             }}
             onShowHint={showTemporaryHint}
             onClose={handleExitArLand}
