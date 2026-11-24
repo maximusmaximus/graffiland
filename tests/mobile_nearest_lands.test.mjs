@@ -412,7 +412,7 @@ describe('Mobile Nearest Lands Map Helpers', () => {
     assert.equal(landBox.centerX, 400);
     assert.ok(landBox.y + landBox.height <= 140, 'Floating land label stays strictly above wireframe');
     assert.equal(landBox.toX, 400);
-    assert.equal(landBox.toY, 265, 'Thin center arrow points directly to land base center');
+    assert.equal(landBox.toY, 160, 'Land tag leader line connects strictly to top center of land boundary');
 
     const sculptures = [
       { id: 'sc-1', title: 'Alpha Tree', modelType: 'custom-3d', customModel: { format: 'glb' }, lat: 39.738, lng: -121.849 },
@@ -429,9 +429,10 @@ describe('Mobile Nearest Lands Map Helpers', () => {
       'sc-5': { x: 475, y: 198 }
     };
 
+    const seenAltById = {};
     const callouts = computeSideArtworkCallouts({
       sculptures,
-      volume: { centerLat: 39.7382, centerLng: -121.8485, heightMeters: 12 },
+      volume: { centerLat: 39.7382, centerLng: -121.8485, heightMeters: 40 },
       viewportWidth: 800,
       viewportHeight: 420,
       selectedSculptureId: 'sc-4',
@@ -440,10 +441,25 @@ describe('Mobile Nearest Lands Map Helpers', () => {
       marginPx: 14,
       labelHeight: 40,
       gapPx: 8,
-      projectScreenPt: (_lng, _lat, _alt, sc) => mockPts[sc.id]
+      getSculptureTransform: (id) =>
+        id === 'sc-1'
+          ? { lat: 39.738, lng: -121.849, altitudeMeters: 0, anchorDx: 0, anchorDz: 0, renderedSize: { x: 1, y: 2, z: 1 } }
+          : null,
+      projectScreenPt: (_lng, _lat, alt, sc) => {
+        seenAltById[sc.id] = alt;
+        return mockPts[sc.id];
+      }
     });
 
     assert.equal(callouts.length, 5);
+    assert.equal(seenAltById['sc-1'], 1, 'Pointer targets true un-autoscaled 3D sculpture midpoint (2m / 2 = 1m)');
+    assert.ok(seenAltById['sc-2'] < 2, 'Fallback pointer uses real un-autoscaled height instead of autoscaled parcel height');
+    for (const c of callouts) {
+      assert.ok(
+        c.sculptureUrl && c.sculptureUrl.includes(`sculpture=${c.sculptureId}`),
+        `Expected side sculpture callout to include direct link for ${c.sculptureId}, got ${c.sculptureUrl}`
+      );
+    }
     const leftSide = callouts.filter((c) => c.side === 'left').sort((a, b) => a.y - b.y);
     const rightSide = callouts.filter((c) => c.side === 'right').sort((a, b) => a.y - b.y);
     assert.ok(leftSide.length >= 2 && rightSide.length >= 2, 'Balanced left/right side split');

@@ -85,22 +85,17 @@ function normalizeLoadedObject(
     center.set(0, 0.5, 0);
   }
 
-  const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-  // Fit overly tiny or huge external 3D assets cleanly into ~1.4m showcase scale before custom scale
-  let autoFit = 1;
-  if (maxDim > 3.2 || maxDim < 0.28) {
-    autoFit = 1.4 / maxDim;
-  }
+  // Preserve native 1:1 dimensions of placed 3D assets (never autoscale to fit land or showcase size)
   const baseSize = {
-    width: Math.max(0.05, Math.round(size.x * autoFit * 10000) / 10000),
-    height: Math.max(0.05, Math.round(size.y * autoFit * 10000) / 10000),
-    depth: Math.max(0.05, Math.round(size.z * autoFit * 10000) / 10000)
+    width: Math.max(0.01, Math.round(size.x * 10000) / 10000),
+    height: Math.max(0.01, Math.round(size.y * 10000) / 10000),
+    depth: Math.max(0.01, Math.round(size.z * 10000) / 10000)
   };
   const userScale =
     applyCustomScale && Number.isFinite(Number(customModel?.scale)) && Number(customModel.scale) > 0
       ? Number(customModel.scale)
       : 1;
-  const finalScale = autoFit * userScale;
+  const finalScale = userScale;
 
   root.scale.multiplyScalar(finalScale);
   const minY = Number.isFinite(initialBox.min.y) ? initialBox.min.y : 0;

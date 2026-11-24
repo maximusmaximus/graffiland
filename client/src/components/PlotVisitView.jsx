@@ -20,6 +20,7 @@ import {
   formatShortDate,
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
+import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
@@ -68,10 +69,28 @@ export default function PlotVisitView({
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
+  const map2dParcelLayerRef = useRef(null);
+  const map2dUserMovedRef = useRef(false);
+  const map2dInitialFittedRef = useRef(false);
+  const sharedViewportRef = useRef(null);
 
   // Automatically enter Isometric 3D mode whenever a user visits a plot link
   const [mapDimensionMode, setMapDimensionMode] = useState('3d'); // '3d' | '2d'
   const [isMapFull, setIsMapFull] = useState(false);
+  const isMapFullRef = useRef(false);
+  const [map2dOverlay, setMap2dOverlay] = useState({
+    width: 0,
+    height: 0,
+    landTag: null,
+    callouts: []
+  });
+
+  useEffect(() => {
+    isMapFullRef.current = isMapFull;
+    if (isMapFull) {
+      map2dUserMovedRef.current = true;
+    }
+  }, [isMapFull]);
 
   // Interactive selection & expandable details panel below the isometric viewport
   const [selectedTarget, setSelectedTarget] = useState('land'); // 'land' | 'artwork'
@@ -319,15 +338,132 @@ export default function PlotVisitView({
     [onSelectSculpture, selectedSculptureId, selectedTarget]
   );
 
-  // Optional 2D Leaflet fallback when user explicitly toggles 3D -> 2D
+  const activeParcelRef = useRef(activeParcel);
+  const visibleSculpturesRef = useRef(visibleSculptures);
+  const selectedSculptureIdRef = useRef(selectedSculptureId);
+  const landDisplayNameRef = useRef(landDisplayName);
+
+  useEffect(() => {
+    activeParcelRef.current = activeParcel;
+    visibleSculpturesRef.current = visibleSculptures;
+    selectedSculptureIdRef.current = selectedSculptureId;
+    landDisplayNameRef.current = landDisplayName;
+  }, [activeParcel, landDisplayName, selectedSculptureId, visibleSculptures]);
+
+  const recompute2dOverlay = useCallback(() => {
+    const map = mapRef.current;
+    const host = mapHostRef.current;
+    const curParcel = activeParcelRef.current;
+    if (!map || !host || !curParcel) return;
+
+    const w = host.clientWidth || 0;
+    const h = host.clientHeight || 0;
+    if (w <= 0 || h <= 0) return;
+
+    const corners = Array.isArray(curParcel?.volume?.corners) ? curParcel.volume.corners : [];
+    let pts = [];
+    if (corners.length >= 4) {
+      pts = corners.slice(0, 4).map(([lng, lat]) => {
+        const pt = map.latLngToContainerPoint([Number(lat), Number(lng)]);
+        return { x: pt.x, y: pt.y };
+      });
+    } else if (curParcel?.bounds?.sw && curParcel?.bounds?.ne) {
+      const [sLat, wLng] = curParcel.bounds.sw;
+      const [nLat, eLng] = curParcel.bounds.ne;
+      pts = [
+        [nLat, wLng],
+        [nLat, eLng],
+        [sLat, eLng],
+        [sLat, wLng]
+      ].map(([lat, lng]) => {
+        const pt = map.latLngToContainerPoint([Number(lat), Number(lng)]);
+        return { x: pt.x, y: pt.y };
+      });
+    }
+
+    let landTag = null;
+    if (pts.length >= 4) {
+      const topCenterX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+      const topCenterY = Math.min(...pts.map((p) => p.y));
+      const pillHeight = 28;
+      const labelY = Math.max(w < 520 ? 52 : 44, topCenterY - pillHeight - 18);
+      const clampedX = Math.max(76, Math.min(w - 76, topCenterX));
+      if (topCenterX >= -80 && topCenterX <= w + 80 && topCenterY >= -60 && topCenterY <= h + 80) {
+        landTag = {
+          centerX: Math.round(clampedX),
+          y: Math.round(labelY),
+          fromX: Math.round(clampedX),
+          fromY: Math.round(labelY + pillHeight),
+          toX: Math.round(topCenterX),
+          toY: Math.round(topCenterY)
+        };
+      }
+    }
+
+    const callouts = computeSideArtworkCallouts({
+      sculptures: visibleSculpturesRef.current || [],
+      volume: curParcel?.volume || null,
+      viewportWidth: w,
+      viewportHeight: h,
+      selectedSculptureId: selectedSculptureIdRef.current || '',
+      topInsetPx: w < 520 ? 74 : 64,
+      bottomInsetPx: 42,
+      marginPx: w < 520 ? 8 : 14,
+      labelHeight: w < 520 ? 34 : 40,
+      gapPx: 8,
+      projectScreenPt: (lng, lat) => {
+        const pt = map.latLngToContainerPoint([Number(lat), Number(lng)]);
+        return { x: pt.x, y: pt.y };
+      }
+    });
+
+    setMap2dOverlay({ width: w, height: h, landTag, callouts });
+  }, []);
+
+  const handleRecenter2D = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !hasCenter) return;
+    const parcelLayer = map2dParcelLayerRef.current;
+    if (parcelLayer && typeof parcelLayer.getBounds === 'function') {
+      map.fitBounds(parcelLayer.getBounds(), { padding: [44, 44], maxZoom: 21, animate: true });
+    } else {
+      map.setView([centerLat, centerLng], 19, { animate: true });
+    }
+    map2dUserMovedRef.current = Boolean(isMapFullRef.current);
+  }, [centerLat, centerLng, hasCenter]);
+
+  // Reset initial 2D fit flag when navigating to a different parcel
+  useEffect(() => {
+    map2dInitialFittedRef.current = false;
+    map2dUserMovedRef.current = Boolean(isMapFullRef.current);
+  }, [activeParcel?.parcelId]);
+
+  // Optional 2D Leaflet view when user explicitly toggles 3D -> 2D
   useEffect(() => {
     if (mapDimensionMode !== '2d' || !mapHostRef.current || !hasCenter || mapRef.current) {
       return undefined;
     }
 
+    const saved = isMapFullRef.current ? sharedViewportRef.current : null;
+    const hasSaved = Boolean(
+      saved &&
+        Number.isFinite(Number(saved.lat)) &&
+        Number.isFinite(Number(saved.lng)) &&
+        Number.isFinite(Number(saved.zoom))
+    );
+    const startCenter = hasSaved ? [Number(saved.lat), Number(saved.lng)] : [centerLat, centerLng];
+    const startZoom = hasSaved ? Math.max(3, Math.min(21.5, Number(saved.zoom))) : 19;
+    if (hasSaved || isMapFullRef.current) {
+      map2dUserMovedRef.current = true;
+      map2dInitialFittedRef.current = true;
+    } else {
+      map2dUserMovedRef.current = false;
+      map2dInitialFittedRef.current = false;
+    }
+
     const map = L.map(mapHostRef.current, {
-      center: [centerLat, centerLng],
-      zoom: 19,
+      center: startCenter,
+      zoom: startZoom,
       maxZoom: 21.5,
       zoomControl: false,
       attributionControl: true
@@ -339,6 +475,28 @@ export default function PlotVisitView({
       maxZoom: 21.5
     }).addTo(map);
 
+    const markMoved = () => {
+      map2dUserMovedRef.current = true;
+    };
+    const syncViewAndOverlay = () => {
+      const c = map.getCenter();
+      if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
+        sharedViewportRef.current = {
+          ...(sharedViewportRef.current || {}),
+          lat: Number(c.lat.toFixed(6)),
+          lng: Number(c.lng.toFixed(6)),
+          zoom: Number(map.getZoom().toFixed(2))
+        };
+      }
+      recompute2dOverlay();
+    };
+
+    map.on('dragstart', markMoved);
+    map.on('zoomstart', markMoved);
+    map.on('move', recompute2dOverlay);
+    map.on('zoom', recompute2dOverlay);
+    map.on('moveend', syncViewAndOverlay);
+
     const layer = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerRef.current = layer;
@@ -347,27 +505,40 @@ export default function PlotVisitView({
     if (typeof ResizeObserver === 'function' && mapHostRef.current) {
       observer = new ResizeObserver(() => {
         map.invalidateSize({ animate: false, pan: false });
+        recompute2dOverlay();
       });
       observer.observe(mapHostRef.current);
     }
 
-    const t = setTimeout(() => map.invalidateSize(), 100);
+    const t = setTimeout(() => {
+      map.invalidateSize({ animate: false, pan: false });
+      recompute2dOverlay();
+    }, 100);
     return () => {
       clearTimeout(t);
       observer?.disconnect();
+      map.off('dragstart', markMoved);
+      map.off('zoomstart', markMoved);
+      map.off('move', recompute2dOverlay);
+      map.off('zoom', recompute2dOverlay);
+      map.off('moveend', syncViewAndOverlay);
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      map2dParcelLayerRef.current = null;
     };
-  }, [hasCenter, centerLat, centerLng, mapDimensionMode]);
+  }, [hasCenter, centerLat, centerLng, mapDimensionMode, recompute2dOverlay]);
 
   useEffect(() => {
     if (mapDimensionMode !== '2d') return undefined;
     const map = mapRef.current;
     if (!map) return undefined;
-    const t = setTimeout(() => map.invalidateSize({ animate: false, pan: false }), 80);
+    const t = setTimeout(() => {
+      map.invalidateSize({ animate: false, pan: false });
+      recompute2dOverlay();
+    }, 80);
     return () => clearTimeout(t);
-  }, [isMapFull, mapDimensionMode]);
+  }, [isMapFull, mapDimensionMode, recompute2dOverlay]);
 
   useEffect(() => {
     if (mapDimensionMode !== '2d') return;
@@ -376,7 +547,37 @@ export default function PlotVisitView({
     if (!map || !layer || !hasCenter) return;
 
     layer.clearLayers();
-    map.invalidateSize();
+    map.invalidateSize({ animate: false, pan: false });
+
+    // In Full View, render neighboring lands too so users can navigate freely across lands
+    if (isMapFull) {
+      for (const other of stageParcels) {
+        if (!other?.parcelId || other.parcelId === activeParcel?.parcelId) continue;
+        const otherFrozen = Boolean(other.frozen || other.settings?.frozen);
+        const otherColor = otherFrozen ? '#7dd3fc' : '#ff4da6';
+        const otherCorners = Array.isArray(other?.volume?.corners) ? other.volume.corners : [];
+        let otherLayer = null;
+        if (otherCorners.length >= 4) {
+          otherLayer = L.polygon(
+            otherCorners.slice(0, 4).map(([lng, lat]) => [Number(lat), Number(lng)]),
+            { color: otherColor, weight: 2, fillColor: otherColor, fillOpacity: 0.16 }
+          );
+        } else if (other?.bounds?.sw && other?.bounds?.ne) {
+          otherLayer = L.rectangle([other.bounds.sw, other.bounds.ne], {
+            color: otherColor,
+            weight: 2,
+            fillColor: otherColor,
+            fillOpacity: 0.16
+          });
+        }
+        if (otherLayer) {
+          otherLayer
+            .bindTooltip(resolveLandDisplayName(other, { defaultName: 'Virtual Land' }))
+            .on('click', () => handleSelectNeighborOnMap(other))
+            .addTo(layer);
+        }
+      }
+    }
 
     const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
     const corners = Array.isArray(activeParcel?.volume?.corners) ? activeParcel.volume.corners : [];
@@ -402,6 +603,7 @@ export default function PlotVisitView({
         .on('click', () => handleSelectLandTarget())
         .addTo(layer);
     }
+    map2dParcelLayerRef.current = parcelLayer;
 
     L.circleMarker([centerLat, centerLng], {
       radius: 6,
@@ -446,13 +648,19 @@ export default function PlotVisitView({
         .addTo(layer);
     }
 
-    if (parcelLayer && typeof parcelLayer.getBounds === 'function') {
-      map.fitBounds(parcelLayer.getBounds(), { padding: [44, 44], maxZoom: 21 });
-    } else {
-      map.setView([centerLat, centerLng], 19);
+    // Fit bounds ONLY once on initial compact 2D entry — NEVER snap back in Full View or after user panned/zoomed!
+    if (!isMapFullRef.current && !map2dUserMovedRef.current && !map2dInitialFittedRef.current) {
+      map2dInitialFittedRef.current = true;
+      if (parcelLayer && typeof parcelLayer.getBounds === 'function') {
+        map.fitBounds(parcelLayer.getBounds(), { padding: [44, 44], maxZoom: 21, animate: false });
+      } else {
+        map.setView([centerLat, centerLng], 19, { animate: false });
+      }
     }
+    recompute2dOverlay();
   }, [
     activeParcel,
+    stageParcels,
     visibleSculptures,
     selectedSculptureId,
     userLocation,
@@ -460,10 +668,13 @@ export default function PlotVisitView({
     centerLat,
     centerLng,
     isFrozen,
+    isMapFull,
     landDisplayName,
     mapDimensionMode,
     handleSelectLandTarget,
-    handleSelectArtworkTarget
+    handleSelectArtworkTarget,
+    handleSelectNeighborOnMap,
+    recompute2dOverlay
   ]);
 
   async function handleCopyShareLink() {
@@ -772,6 +983,10 @@ export default function PlotVisitView({
                 isFullExpanded={isMapFull}
                 showcaseMode
                 landSelected={selectedTarget === 'land'}
+                initialView={isMapFull ? sharedViewportRef.current : null}
+                onViewportChange={(vp) => {
+                  sharedViewportRef.current = vp;
+                }}
                 onToggle2D={() => setMapDimensionMode('2d')}
                 onToggleFullMap={() => setIsMapFull((v) => !v)}
                 onSelectLand={handleSelectLandTarget}
@@ -782,6 +997,145 @@ export default function PlotVisitView({
             ) : (
               <>
                 <div ref={mapHostRef} className="mobile-parcel-map-canvas" />
+                {map2dOverlay.width > 0 && map2dOverlay.height > 0 && (
+                  <svg
+                    className="mobile-iso-wire-canvas"
+                    viewBox={`0 0 ${map2dOverlay.width} ${map2dOverlay.height}`}
+                    width="100%"
+                    height="100%"
+                    aria-hidden="true"
+                  >
+                    {map2dOverlay.landTag && (
+                      <g>
+                        <line
+                          data-testid="plot-land-leader-line"
+                          data-target="top-center"
+                          x1={map2dOverlay.landTag.fromX}
+                          y1={map2dOverlay.landTag.fromY}
+                          x2={map2dOverlay.landTag.toX}
+                          y2={map2dOverlay.landTag.toY}
+                          stroke={isFrozen ? '#7dd3fc' : '#ff1f8f'}
+                          strokeWidth="1.5"
+                        />
+                        <circle
+                          cx={map2dOverlay.landTag.toX}
+                          cy={map2dOverlay.landTag.toY}
+                          r="2.8"
+                          fill="#ffffff"
+                        />
+                      </g>
+                    )}
+                    {map2dOverlay.callouts.map((c) => (
+                      <g
+                        key={c.sculptureId}
+                        data-testid="plot-artwork-leader-line"
+                        data-sculpture-id={c.sculptureId}
+                      >
+                        <polyline
+                          points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+                          fill="none"
+                          stroke="rgba(4, 10, 20, 0.78)"
+                          strokeWidth={c.isSelected ? '3.4' : '2.6'}
+                          strokeLinejoin="round"
+                          strokeLinecap="round"
+                        />
+                        <polyline
+                          points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+                          fill="none"
+                          stroke={c.isSelected ? '#ffd166' : '#00f5d4'}
+                          strokeWidth={c.isSelected ? '1.8' : '1.25'}
+                          strokeLinejoin="round"
+                          strokeLinecap="round"
+                        />
+                        <circle
+                          cx={c.targetX}
+                          cy={c.targetY}
+                          r={c.isSelected ? '3.2' : '2.4'}
+                          fill={c.isSelected ? '#ffd166' : '#eafffc'}
+                        />
+                      </g>
+                    ))}
+                  </svg>
+                )}
+                <div
+                  className="plot-iso-callout-layer"
+                  data-testid="plot-iso-callout-layer"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {map2dOverlay.landTag && (
+                    <button
+                      type="button"
+                      className={`plot-iso-land-label-btn ${
+                        selectedTarget === 'land' ? 'is-selected' : ''
+                      }`}
+                      data-testid="plot-land-label"
+                      style={{
+                        left: `${map2dOverlay.landTag.centerX}px`,
+                        top: `${map2dOverlay.landTag.y}px`,
+                        transform: 'translateX(-50%)'
+                      }}
+                      onClick={handleSelectLandTarget}
+                      title={`Inspect ${landDisplayName}`}
+                    >
+                      <span className="plot-iso-land-dot" aria-hidden="true" />
+                      <span>{landDisplayName}</span>
+                    </button>
+                  )}
+                  {map2dOverlay.callouts.map((c) => (
+                    <div
+                      key={c.sculptureId}
+                      className={`plot-iso-artwork-callout is-${c.side} ${
+                        c.isSelected ? 'is-selected' : ''
+                      }`}
+                      data-callout-side={c.side}
+                      style={{
+                        left: `${c.x}px`,
+                        top: `${c.y}px`,
+                        width: `${c.width}px`
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="plot-iso-callout-main"
+                        data-testid="plot-artwork-label"
+                        data-sculpture-id={c.sculptureId}
+                        data-callout-side={c.side}
+                        onClick={() => handleSelectArtworkTarget(c.sculpture)}
+                        title={`Inspect "${c.title}"`}
+                      >
+                        <span className="plot-iso-callout-title">{c.title}</span>
+                        <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
+                      </button>
+                      <a
+                        href={c.sculptureUrl}
+                        className="plot-iso-callout-open-btn"
+                        data-testid="plot-artwork-view-btn"
+                        data-sculpture-id={c.sculptureId}
+                        aria-label={`Open 3D art link for ${c.title}`}
+                        title={`Open link for "${c.title}" (${c.sculptureUrl})`}
+                        onClick={(e) => {
+                          const openHandler = onSelectSculpture || handleSelectArtworkTarget;
+                          if (
+                            openHandler &&
+                            !e.metaKey &&
+                            !e.ctrlKey &&
+                            !e.shiftKey &&
+                            !e.altKey &&
+                            e.button === 0
+                          ) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openHandler(c.sculpture);
+                          }
+                        }}
+                      >
+                        ↗
+                      </a>
+                    </div>
+                  ))}
+                </div>
                 <div
                   className="map-compact-fab-row"
                   onPointerDown={(e) => e.stopPropagation()}
@@ -792,11 +1146,21 @@ export default function PlotVisitView({
                     type="button"
                     className="btn map-recenter-fab map-mode-toggle-fab"
                     data-testid="mobile-map-3d-toggle-btn"
-                    aria-label="Switch to 3D isometric map"
-                    title="View this land in 3D isometric mode"
+                    aria-label="Switch to 3D map"
+                    title="View this land in 3D mode"
                     onClick={() => setMapDimensionMode('3d')}
                   >
                     <XeroIcon emoji="🧊" size={13} /> 3D
+                  </button>
+                  <button
+                    type="button"
+                    className="btn map-recenter-fab"
+                    data-testid="mobile-map-fit-btn"
+                    aria-label="Recenter 2D map on land"
+                    title="Recenter map on this land"
+                    onClick={handleRecenter2D}
+                  >
+                    <XeroIcon emoji="🎯" size={13} /> Fit
                   </button>
                   <button
                     type="button"

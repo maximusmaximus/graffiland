@@ -64,6 +64,7 @@ export default function MobileMapSheet({
   const [renamedNames, setRenamedNames] = useState({});
   const cardRefs = useRef(new Map());
   const mapCanvasRef = useRef(null);
+  const sharedFullViewportRef = useRef(null);
 
   const fallbackParcelCoords = useMemo(() => {
     for (const p of mapParcels || []) {
@@ -313,10 +314,15 @@ export default function MobileMapSheet({
             selectedSculptureId={mapSelectedSculpture?.id || ''}
             focusParcelTick={focusParcelTick + localFocusTick}
             isFullExpanded={isFullMap}
+            initialView={isFullMap ? sharedFullViewportRef.current : null}
+            onViewportChange={(vp) => {
+              sharedFullViewportRef.current = vp;
+            }}
             onToggle2D={() => setMapDimensionMode('2d')}
             onToggleFullMap={toggleFullMap}
             onSelectParcel={handleSelectParcelOnMap}
             onSelectSculpture={onSelectSculpture}
+            onOpenSculptureView={onSelectSculpture}
           />
         ) : (
           <MapView
@@ -328,6 +334,13 @@ export default function MobileMapSheet({
             selectedSculptureId={mapSelectedSculpture?.id || ''}
             selectedParcelId={selectedParcelId}
             focusParcelTick={focusParcelTick + localFocusTick}
+            initialView={isFullMap ? sharedFullViewportRef.current : null}
+            onViewportChange={(vp) => {
+              sharedFullViewportRef.current = {
+                ...(sharedFullViewportRef.current || {}),
+                ...vp
+              };
+            }}
             config={config}
             compact
             isFullExpanded={isFullMap}

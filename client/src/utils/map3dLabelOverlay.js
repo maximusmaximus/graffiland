@@ -1,10 +1,15 @@
+import {
+  extractSculptureBaseDimensions,
+  extractSculptureScale
+} from '../../../shared/sculpturePlacement.mjs';
 import { placeFloatingLabelRect } from './canvasLabelLayout.js';
+import { buildSculptureShareUrl } from './clipboard.js';
 
 /**
  * Shared 2D canvas overlay helper for 3D map wireframes.
  * Always called in Pass 2 (after all prism wireframes and gizmos are drawn)
  * so floating labels sit strictly on top of wireframes with a thin arrow
- * connecting from the exact center of the land prism.
+ * connecting cleanly to the exact top center of the land boundary.
  */
 
 export function getPrismLabelAnchor(geom) {
@@ -174,12 +179,12 @@ export function drawFloatingLandLabel(
 
   const pillCenterX = bx + boxW / 2;
 
-  // Leader arrow from bottom of floating pill down to the exact land center
+  // Leader arrow from bottom of floating pill strictly to the top center of the land boundary
   drawFloatingCenterArrow(ctx, {
     fromX: pillCenterX,
     fromY: by + boxH,
-    toX: anchor.baseCenter.x,
-    toY: anchor.baseCenter.y,
+    toX: anchor.roofCenter.x,
+    toY: anchor.roofCenter.y,
     color: outerColor,
     dotColor: innerColor
   });
@@ -230,15 +235,16 @@ export function computeFloatingLandLabelBox(
     height: pillHeight,
     fromX: centerX,
     fromY: y + pillHeight,
-    toX: anchor.baseCenter.x,
-    toY: anchor.baseCenter.y,
+    toX: anchor.roofCenter.x,
+    toY: anchor.roofCenter.y,
     anchor
   };
 }
 
 /**
  * Computes balanced, non-overlapping Left & Right side callout label positions
- * with sleek elbow pointer coordinates aimed directly at each 3D artwork on a plot.
+ * with sleek elbow pointer coordinates aimed directly at each 3D artwork on a plot,
+ * along with each sculpture's direct shareable link URL.
  */
 export function computeSideArtworkCallouts({
   sculptures = [],
@@ -246,6 +252,7 @@ export function computeSideArtworkCallouts({
   viewportWidth = 400,
   viewportHeight = 300,
   projectScreenPt = null,
+  getSculptureTransform = null,
   selectedSculptureId = '',
   topInsetPx = 62,
   bottomInsetPx = 46,
@@ -263,7 +270,7 @@ export function computeSideArtworkCallouts({
   const elbowStub = isNarrow ? 10 : 18;
 
   const baseAlt = Number(volume?.baseAltitudeM || 0);
-  const volH = Number(volume?.heightMeters || 18);
+  const volH = Number(volume?.heightMeters || 0);
   const volLat = Number(volume?.centerLat);
   const volLng = Number(volume?.centerLng);
   const metersPerDegLat = 111320;
@@ -271,17 +278,40 @@ export function computeSideArtworkCallouts({
     metersPerDegLat * Math.max(0.08, Math.cos(((Number.isFinite(volLat) ? volLat : 0) * Math.PI) / 180));
 
   const projected = visible.map((sc, idx) => {
-    const rawLat = Number(sc.lat);
-    const rawLng = Number(sc.lng);
-    const dxM = Number(sc.anchorOffset?.dx || 0);
-    const dyM = Math.max(0, Number(sc.anchorOffset?.dy || 0));
-    const dzM = Number(sc.anchorOffset?.dz || 0);
-    const lat = (Number.isFinite(rawLat) ? rawLat : volLat) - dzM / metersPerDegLat;
-    const lng = (Number.isFinite(rawLng) ? rawLng : volLng) + dxM / metersPerDegLng;
+    const liveTransform =
+      typeof getSculptureTransform === 'function' ? getSculptureTransform(sc.id) : null;
 
-    // Aim pointer squarely at the middle of the rendered 3D sculpture inside the parcel
-    const approxMidH = Math.min(volH * 0.55, Math.max(1.2, Math.min(volH / 1.2, 22) * 0.35));
-    const targetAlt = baseAlt + dyM + approxMidH;
+    let lat;
+    let lng;
+    let targetAlt;
+    if (liveTransform && Number.isFinite(Number(liveTransform.lat)) && Number.isFinite(Number(liveTransform.lng))) {
+      const dxM = Number(liveTransform.anchorDx || 0);
+      const dzM = Number(liveTransform.anchorDz || 0);
+      lat = Number(liveTransform.lat) - dzM / metersPerDegLat;
+      lng = Number(liveTransform.lng) + dxM / metersPerDegLng;
+      const renderedH = Math.max(0.1, Number(liveTransform.renderedSize?.y || 1));
+      targetAlt = Number(liveTransform.altitudeMeters || 0) + renderedH * 0.5;
+    } else {
+      const rawLat = Number(sc.lat);
+      const rawLng = Number(sc.lng);
+      const dxM = Number(sc.anchorOffset?.dx || 0);
+      const dyM = Math.max(0, Number(sc.anchorOffset?.dy || 0));
+      const dzM = Number(sc.anchorOffset?.dz || 0);
+      lat = (Number.isFinite(rawLat) ? rawLat : volLat) - dzM / metersPerDegLat;
+      lng = (Number.isFinite(rawLng) ? rawLng : volLng) + dxM / metersPerDegLng;
+
+      // Aim pointer squarely at the true un-autoscaled vertical center of the 3D sculpture
+      const userScale = extractSculptureScale(sc);
+      const baseDims = extractSculptureBaseDimensions(sc);
+      const renderedH = Math.max(0.1, baseDims.height * userScale);
+      const isObjectFitted =
+        volH > renderedH &&
+        volH <= renderedH * 1.45 &&
+        Math.abs(userScale - 1) <= 1e-4 &&
+        dyM === 0;
+      const baseLift = isObjectFitted ? baseAlt + (volH - renderedH) / 2 : baseAlt + dyM;
+      targetAlt = baseLift + renderedH * 0.5;
+    }
 
     let pt = null;
     if (typeof projectScreenPt === 'function' && Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -298,12 +328,15 @@ export function computeSideArtworkCallouts({
       sc.modelType === 'custom-3d'
         ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
         : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
+    const sculptureUrl =
+      buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
 
     return {
       sculpture: sc,
       sculptureId: String(sc.id),
       title: String(sc.title || '3D Artwork'),
       subtitle,
+      sculptureUrl,
       targetX,
       targetY,
       isSelected: Boolean(selectedSculptureId && String(selectedSculptureId) === String(sc.id))

@@ -269,6 +269,20 @@ describe('All 5 Custom 3D Formats (.glb, .gltf, .obj, .stl, .ply) & Gateway Mode
       plyPointsNodes >= 1,
       'Expected vertex-only PLY point cloud to render as visible THREE.Points with PointsMaterial'
     );
+
+    // 6) Large (>3.2m) and tiny (<0.28m) external 3D models are NEVER autoscaled to 1.4m
+    const tallObjBytes = new TextEncoder().encode(
+      ['o TallMonument', 'v 0 0 0', 'v 4 0 0', 'v 2 6.5 1', 'f 1 2 3'].join('\n')
+    );
+    const tallParsed = await parseCustomModelBytes(tallObjBytes, 'obj', { format: 'obj', scale: 1 });
+    assert.ok(Math.abs(tallParsed.baseSize.height - 6.5) < 0.01, `Expected native 6.5m height without autoscale, got ${tallParsed.baseSize.height}`);
+    assert.ok(Math.abs(tallParsed.baseSize.width - 4.0) < 0.01, `Expected native 4.0m width without autoscale, got ${tallParsed.baseSize.width}`);
+
+    const tinyObjBytes = new TextEncoder().encode(
+      ['o TinyFigurine', 'v 0 0 0', 'v 0.15 0 0', 'v 0.08 0.18 0.1', 'f 1 2 3'].join('\n')
+    );
+    const tinyParsed = await parseCustomModelBytes(tinyObjBytes, 'obj', { format: 'obj', scale: 1 });
+    assert.ok(Math.abs(tinyParsed.baseSize.height - 0.18) < 0.01, `Expected native 0.18m height without autoscale, got ${tinyParsed.baseSize.height}`);
   });
 
   test('fetchModelBytesFromGateways skips failing/HTML gateways and returns verified real GLB bytes', async () => {

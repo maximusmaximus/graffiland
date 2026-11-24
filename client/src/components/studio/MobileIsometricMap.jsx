@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { api, resolveApiUrl } from '../../utils/api.js';
+import { buildSculptureShareUrl } from '../../utils/clipboard.js';
 import {
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
@@ -213,27 +214,31 @@ function MobileIsoSvgFallback({
       )}`
     : '3D Isometric Land View';
 
-  const fallbackCallouts = showcaseMode
-    ? computeSideArtworkCallouts({
-        sculptures,
-        volume: vol,
-        viewportWidth: 360,
-        viewportHeight: 220,
-        selectedSculptureId,
-        topInsetPx: 54,
-        bottomInsetPx: 38,
-        marginPx: 8,
-        labelHeight: 32,
-        gapPx: 6,
-        projectScreenPt: (_lng, _lat, _alt, _sc, idx, total) => {
-          const frac = total <= 1 ? 0 : idx / (total - 1) - 0.5;
-          return {
-            x: cx + frac * objHw * 0.9,
-            y: cy - hScale * 0.45 + (idx % 2 === 0 ? -6 : 6)
-          };
-        }
-      })
-    : [];
+  const topCenterX = (t[0][0] + t[1][0] + t[2][0] + t[3][0]) / 4;
+  const topCenterY = (t[0][1] + t[1][1] + t[2][1] + t[3][1]) / 4;
+
+  const fallbackCallouts =
+    showcaseMode || sculptures.length > 0
+      ? computeSideArtworkCallouts({
+          sculptures,
+          volume: vol,
+          viewportWidth: 360,
+          viewportHeight: 220,
+          selectedSculptureId,
+          topInsetPx: 54,
+          bottomInsetPx: 38,
+          marginPx: 8,
+          labelHeight: 32,
+          gapPx: 6,
+          projectScreenPt: (_lng, _lat, _alt, _sc, idx, total) => {
+            const frac = total <= 1 ? 0 : idx / (total - 1) - 0.5;
+            return {
+              x: cx + frac * objHw * 0.9,
+              y: cy - hScale * 0.45 + (idx % 2 === 0 ? -6 : 6)
+            };
+          }
+        })
+      : [];
 
   return (
     <div className="mobile-iso-fallback" data-testid="mobile-iso-svg-fallback">
@@ -298,49 +303,64 @@ function MobileIsoSvgFallback({
         {showcaseMode ? (
           <>
             <line
-              x1={cx}
+              data-testid="plot-land-leader-line"
+              data-target="top-center"
+              x1={topCenterX}
               y1={40}
-              x2={cx}
-              y2={cy}
+              x2={topCenterX}
+              y2={topCenterY}
               stroke={landSelected ? '#ffd166' : stroke}
               strokeWidth="1.4"
             />
-            <circle cx={cx} cy={cy} r="2.6" fill="#ffffff" />
-            {fallbackCallouts.map((c) => (
-              <g key={c.sculptureId}>
-                <polyline
-                  points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
-                  fill="none"
-                  stroke={c.isSelected ? '#ffd166' : '#00f5d4'}
-                  strokeWidth={c.isSelected ? '1.8' : '1.25'}
-                />
-                <circle
-                  cx={c.targetX}
-                  cy={c.targetY}
-                  r={c.isSelected ? '3.4' : '2.4'}
-                  fill={c.isSelected ? '#ffd166' : '#eafffc'}
-                />
-              </g>
-            ))}
+            <circle cx={topCenterX} cy={topCenterY} r="2.6" fill="#ffffff" />
           </>
         ) : (
-          <text
-            x={cx}
-            y={Math.max(24, t[0][1] - 10)}
-            textAnchor="middle"
-            fill="#eafffc"
-            fontSize="11"
-            fontFamily="monospace"
-            fontWeight="700"
-          >
-            {`${label} · ${Math.round(bearingDeg)}°`}
-          </text>
+          <>
+            <line
+              data-testid="plot-land-leader-line"
+              data-target="top-center"
+              x1={topCenterX}
+              y1={Math.max(28, t[0][1] - 6)}
+              x2={topCenterX}
+              y2={topCenterY}
+              stroke={stroke}
+              strokeWidth="1.25"
+            />
+            <circle cx={topCenterX} cy={topCenterY} r="2.2" fill="#ffffff" />
+            <text
+              x={topCenterX}
+              y={Math.max(22, t[0][1] - 10)}
+              textAnchor="middle"
+              fill="#eafffc"
+              fontSize="11"
+              fontFamily="monospace"
+              fontWeight="700"
+            >
+              {`${label} · ${Math.round(bearingDeg)}°`}
+            </text>
+          </>
         )}
+        {fallbackCallouts.map((c) => (
+          <g key={c.sculptureId} data-testid="plot-artwork-leader-line" data-sculpture-id={c.sculptureId}>
+            <polyline
+              points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+              fill="none"
+              stroke={c.isSelected ? '#ffd166' : '#00f5d4'}
+              strokeWidth={c.isSelected ? '1.8' : '1.25'}
+            />
+            <circle
+              cx={c.targetX}
+              cy={c.targetY}
+              r={c.isSelected ? '3.4' : '2.4'}
+              fill={c.isSelected ? '#ffd166' : '#eafffc'}
+            />
+          </g>
+        ))}
       </svg>
 
-      {showcaseMode && (
+      {(showcaseMode || fallbackCallouts.length > 0) && (
         <div className="plot-iso-callout-layer" data-testid="plot-iso-callout-layer">
-          {primaryEntry && (
+          {showcaseMode && primaryEntry && (
             <button
               type="button"
               className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
@@ -379,22 +399,31 @@ function MobileIsoSvgFallback({
                 <span className="plot-iso-callout-title">{c.title}</span>
                 <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
               </button>
-              {onOpenSculptureView && (
-                <button
-                  type="button"
-                  className="plot-iso-callout-open-btn"
-                  data-testid="plot-artwork-view-btn"
-                  data-sculpture-id={c.sculptureId}
-                  aria-label={`Open 3D art view for ${c.title}`}
-                  title={`Go to 3D view of "${c.title}"`}
-                  onClick={(e) => {
+              <a
+                href={c.sculptureUrl}
+                className="plot-iso-callout-open-btn"
+                data-testid="plot-artwork-view-btn"
+                data-sculpture-id={c.sculptureId}
+                aria-label={`Open 3D art link for ${c.title}`}
+                title={`Open link for "${c.title}" (${c.sculptureUrl})`}
+                onClick={(e) => {
+                  const openHandler = onOpenSculptureView || onSelectSculpture;
+                  if (
+                    openHandler &&
+                    !e.metaKey &&
+                    !e.ctrlKey &&
+                    !e.shiftKey &&
+                    !e.altKey &&
+                    e.button === 0
+                  ) {
+                    e.preventDefault();
                     e.stopPropagation();
-                    onOpenSculptureView(c.sculpture);
-                  }}
-                >
-                  ↗
-                </button>
-              )}
+                    openHandler(c.sculpture);
+                  }
+                }}
+              >
+                ↗
+              </a>
             </div>
           ))}
         </div>
@@ -413,6 +442,8 @@ export default function MobileIsometricMap({
   isFullExpanded = false,
   showcaseMode = false,
   landSelected = false,
+  initialView = null,
+  onViewportChange = null,
   onToggle2D,
   onToggleFullMap = null,
   onSelectParcel = null,
@@ -427,8 +458,30 @@ export default function MobileIsometricMap({
   const maplibreRef = useRef(null);
   const styleReadyRef = useRef(false);
   const fallbackAppliedRef = useRef(false);
-  const userMovedRef = useRef(false);
+  const isFullExpandedRef = useRef(Boolean(isFullExpanded));
+  const initialViewRef = useRef(initialView);
+  const onViewportChangeRef = useRef(onViewportChange);
+  const lastHandledFocusTickRef = useRef(focusParcelTick);
+  const lastFittedParcelIdRef = useRef('');
+  const userMovedRef = useRef(
+    Boolean(
+      isFullExpanded &&
+        initialView &&
+        Number.isFinite(Number(initialView.lat)) &&
+        Number.isFinite(Number(initialView.lng))
+    )
+  );
   const suppressMoveFlagRef = useRef(false);
+
+  useEffect(() => {
+    isFullExpandedRef.current = Boolean(isFullExpanded);
+  }, [isFullExpanded]);
+  useEffect(() => {
+    initialViewRef.current = initialView;
+  }, [initialView]);
+  useEffect(() => {
+    onViewportChangeRef.current = onViewportChange;
+  }, [onViewportChange]);
 
   const [webglAvailable, setWebglAvailable] = useState(() => hasWebGLSupport());
   const [mapReady, setMapReady] = useState(false);
@@ -622,11 +675,40 @@ export default function MobileIsometricMap({
 
     const primary = primaryEntryRef.current;
 
-    // Pass 1: Draw ONLY the focused land wireframe (never draw neighboring lands' wireframe lines)
+    // Pass 1: In compact land focus, draw ONLY the focused land wireframe;
+    // in Full View free-navigation mode, draw neighboring lands too so users can explore freely.
     const pendingLabels = [];
     let primaryGeom = null;
     let primaryOuterColor = '#ff1f8f';
     let primaryInnerColor = '#ffd6ec';
+
+    if (isFullExpandedRef.current) {
+      for (const other of otherEntriesRef.current || []) {
+        if (!other?.volume) continue;
+        const otherGeom = computePrismScreenGeometry(map, maplibregl, other.volume);
+        if (!otherGeom) continue;
+        const otherFrozen = Boolean(other.parcel?.frozen || other.parcel?.settings?.frozen);
+        const otherOuter = otherFrozen ? '#7dd3fc' : '#ff4da6';
+        const otherInner = otherFrozen ? '#e0f2fe' : '#ffd6ec';
+        drawMobilePrismWireframe(ctx, otherGeom, {
+          outerColor: otherOuter,
+          innerColor: otherInner,
+          lineWidth: 1.5,
+          glowBlur: 8,
+          dashed: false,
+          showGroundHalo: false
+        });
+        pendingLabels.push({
+          geom: otherGeom,
+          outerColor: otherOuter,
+          innerColor: otherInner,
+          label: formatSimpleLandLabel(other.parcel, null),
+          liftPx: 16,
+          minY: 52,
+          isPrimary: false
+        });
+      }
+    }
 
     if (primary?.volume) {
       const geom = computePrismScreenGeometry(map, maplibregl, primary.volume);
@@ -635,13 +717,6 @@ export default function MobileIsometricMap({
         const simpleLabel = formatSimpleLandLabel(
           primary.parcel,
           showcaseModeRef.current ? null : primary.rankIndex
-        );
-        const dims = formatDimensionTriple(
-          primary.volume.widthMeters,
-          primary.volume.depthMeters,
-          primary.volume.heightMeters,
-          unitSystemRef.current,
-          { compact: true }
         );
         const outerColor = isFrozen
           ? '#7dd3fc'
@@ -672,7 +747,7 @@ export default function MobileIsometricMap({
             geom,
             outerColor,
             innerColor,
-            label: `${simpleLabel} · ${dims}`,
+            label: simpleLabel,
             liftPx: 20,
             minY: 52,
             isPrimary: true
@@ -720,7 +795,8 @@ export default function MobileIsometricMap({
       });
     }
 
-    // Pass 3 (Showcase Mode): Position clickable floating Land Label & Left/Right Side Artwork Labels + elbow pointers
+    // Pass 3: Position clickable floating Land Label (linked strictly to top center of land boundary)
+    // and Left/Right Side Artwork Callout Labels + elbow pointers with direct sculpture links
     if (showcaseModeRef.current) {
       const landBtn = landLabelBtnRef.current;
       if (primaryGeom) {
@@ -758,49 +834,57 @@ export default function MobileIsometricMap({
       } else if (landBtn) {
         landBtn.style.display = 'none';
       }
+    }
 
-      const activeVol = primaryEntryRef.current?.volume || null;
-      const callouts = computeSideArtworkCallouts({
-        sculptures: hydratedSculpturesRef.current || [],
-        volume: activeVol,
-        viewportWidth: w,
-        viewportHeight: h,
-        selectedSculptureId: selectedSculptureIdRef.current || '',
-        topInsetPx: w < 520 ? 76 : 66,
-        bottomInsetPx: 46,
-        marginPx: w < 520 ? 8 : 14,
-        labelHeight: w < 520 ? 34 : 40,
-        gapPx: 8,
-        projectScreenPt: (lng, lat, alt) =>
-          projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
+    const activeVol = primaryEntryRef.current?.volume || null;
+    const focusedPid = primaryEntryRef.current?.parcel?.parcelId || '';
+    const focusedCalloutSculptures = focusedPid
+      ? (hydratedSculpturesRef.current || []).filter(
+          (sc) => sc && !sc.hidden && sc.id && (!sc.parcelId || sc.parcelId === focusedPid)
+        )
+      : (hydratedSculpturesRef.current || []).filter((sc) => sc && !sc.hidden && sc.id);
+
+    const callouts = computeSideArtworkCallouts({
+      sculptures: focusedCalloutSculptures,
+      volume: activeVol,
+      viewportWidth: w,
+      viewportHeight: h,
+      selectedSculptureId: selectedSculptureIdRef.current || '',
+      topInsetPx: w < 520 ? (showcaseModeRef.current ? 76 : 56) : 66,
+      bottomInsetPx: 46,
+      marginPx: w < 520 ? 8 : 14,
+      labelHeight: w < 520 ? 34 : 40,
+      gapPx: 8,
+      getSculptureTransform: (id) => threeLayerRef.current?.getTransform?.(id) || null,
+      projectScreenPt: (lng, lat, alt) =>
+        projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
+    });
+    latestCalloutsRef.current = callouts;
+
+    const positionedIds = new Set();
+    for (const c of callouts) {
+      drawArtworkCalloutLeader(ctx, c);
+      positionedIds.add(c.sculptureId);
+      placedRects.push({
+        x: c.x,
+        y: c.y,
+        w: c.width,
+        h: c.height || (w < 520 ? 36 : 42)
       });
-      latestCalloutsRef.current = callouts;
-
-      const positionedIds = new Set();
-      for (const c of callouts) {
-        drawArtworkCalloutLeader(ctx, c);
-        positionedIds.add(c.sculptureId);
-        placedRects.push({
-          x: c.x,
-          y: c.y,
-          w: c.width,
-          h: c.height || (w < 520 ? 36 : 42)
-        });
-        const btn = calloutBtnMapRef.current.get(c.sculptureId);
-        if (btn) {
-          btn.style.left = `${c.x}px`;
-          btn.style.top = `${c.y}px`;
-          btn.style.width = `${c.width}px`;
-          btn.style.display = 'flex';
-          btn.dataset.calloutSide = c.side;
-          btn.classList.toggle('is-left', c.side === 'left');
-          btn.classList.toggle('is-right', c.side === 'right');
-        }
+      const btn = calloutBtnMapRef.current.get(c.sculptureId);
+      if (btn) {
+        btn.style.left = `${c.x}px`;
+        btn.style.top = `${c.y}px`;
+        btn.style.width = `${c.width}px`;
+        btn.style.display = 'flex';
+        btn.dataset.calloutSide = c.side;
+        btn.classList.toggle('is-left', c.side === 'left');
+        btn.classList.toggle('is-right', c.side === 'right');
       }
-      for (const [id, btn] of calloutBtnMapRef.current.entries()) {
-        if (!positionedIds.has(id) && btn) {
-          btn.style.display = 'none';
-        }
+    }
+    for (const [id, btn] of calloutBtnMapRef.current.entries()) {
+      if (!positionedIds.has(id) && btn) {
+        btn.style.display = 'none';
       }
     }
 
@@ -842,23 +926,30 @@ export default function MobileIsometricMap({
     if (!map || !styleReadyRef.current) return;
 
     const primary = primaryEntryRef.current;
-    // When focused on a land, NEVER render extrusion prisms or lines for other lands
-    const focusedEntries = primary ? [primary] : [];
+    // In compact focused mode, render ONLY the primary land prism;
+    // in Full View free-navigation mode, render all nearby lands so users can explore freely.
+    const focusedEntries = isFullExpandedRef.current
+      ? entriesRef.current || (primary ? [primary] : [])
+      : primary
+        ? [primary]
+        : [];
+    const primaryPid = primary?.parcel?.parcelId || '';
     const landFeatures = focusedEntries
       .map((entry) =>
         parcelVolumeToFeature(entry.parcel, entry.volume, {
-          isSelected: true
+          isSelected: Boolean(primaryPid && entry.parcel?.parcelId === primaryPid)
         })
       )
       .filter(Boolean);
 
     const parcelsWithVolumes = focusedEntries.map((e) => ({ ...e.parcel, volume: e.volume }));
-    const focusedPid = primary?.parcel?.parcelId || '';
-    const focusedSculptures = focusedPid
-      ? (hydratedSculpturesRef.current || []).filter(
-          (s) => !s?.parcelId || s.parcelId === focusedPid
-        )
-      : hydratedSculpturesRef.current || [];
+    const focusedSculptures = isFullExpandedRef.current
+      ? hydratedSculpturesRef.current || []
+      : primaryPid
+        ? (hydratedSculpturesRef.current || []).filter(
+            (s) => !s?.parcelId || s.parcelId === primaryPid
+          )
+        : hydratedSculpturesRef.current || [];
     const sc3d = buildSculptures3DGeoJson(
       focusedSculptures,
       selectedSculptureIdRef.current || '',
@@ -1026,7 +1117,10 @@ export default function MobileIsometricMap({
               id: 'mobile-iso-sculptures-three-3d',
               maplibregl: maplibreRef.current,
               resolveUrlFn: resolveApiUrl,
-              onStatsChange: (stats) => setLoadedThree3dCount(stats?.loadedCount || 0)
+              onStatsChange: (stats) => {
+                setLoadedThree3dCount(stats?.loadedCount || 0);
+                drawWireframes();
+              }
             });
             threeLayerRef.current = threeLayer;
             map.addLayer(
@@ -1102,29 +1196,56 @@ export default function MobileIsometricMap({
         const initLoc = userLocationRef.current;
         const vw = rootRef.current?.clientWidth || 360;
         const vh = rootRef.current?.clientHeight || 220;
-        const initFit = initVol
-          ? computeIsometricCameraFit(initVol, {
-              viewportWidth: vw,
-              viewportHeight: vh,
-              viewMode: 'isometric',
-              bearingOffsetDeg: bearingOffsetRef.current
-            })
-          : null;
+        const savedView = isFullExpandedRef.current ? initialViewRef.current : null;
+        const hasSavedView = Boolean(
+          savedView &&
+            Number.isFinite(Number(savedView.lat)) &&
+            Number.isFinite(Number(savedView.lng)) &&
+            Number.isFinite(Number(savedView.zoom))
+        );
+        const initFit =
+          !hasSavedView && initVol
+            ? computeIsometricCameraFit(initVol, {
+                viewportWidth: vw,
+                viewportHeight: vh,
+                viewMode: 'isometric',
+                bearingOffsetDeg: bearingOffsetRef.current
+              })
+            : null;
 
         const fallbackCenter =
           initLoc && Number.isFinite(Number(initLoc.lat)) && Number.isFinite(Number(initLoc.lng))
             ? [Number(initLoc.lng), Number(initLoc.lat)]
             : [-122.4194, 37.7749];
 
+        const startCenter = hasSavedView
+          ? [Number(savedView.lng), Number(savedView.lat)]
+          : initFit?.center || fallbackCenter;
+        const startZoom = hasSavedView ? Number(savedView.zoom) : initFit?.zoom ?? 16.5;
+        const startPitch = hasSavedView
+          ? Number.isFinite(Number(savedView.pitch))
+            ? Number(savedView.pitch)
+            : 48
+          : initFit?.pitch ?? 55;
+        const startBearing = hasSavedView
+          ? Number.isFinite(Number(savedView.bearing))
+            ? Number(savedView.bearing)
+            : 0
+          : initFit?.bearing ?? -45;
+
+        if (hasSavedView || isFullExpandedRef.current) {
+          userMovedRef.current = true;
+        }
+
         let map;
         try {
           map = new maplibregl.Map({
             container: mapHostRef.current,
             style: OPENFREEMAP_LIBERTY_STYLE,
-            center: initFit?.center || fallbackCenter,
-            zoom: initFit?.zoom ?? 16.5,
-            pitch: initFit?.pitch ?? 55,
-            bearing: initFit?.bearing ?? -45,
+            center: startCenter,
+            zoom: startZoom,
+            pitch: startPitch,
+            bearing: startBearing,
             minZoom: 3,
             maxZoom: 22.5,
             maxPitch: 72,
@@ -1141,10 +1262,8 @@ export default function MobileIsometricMap({
         }
 
         mapRef.current = map;
-        if (initFit) {
-          setLiveBearing(initFit.bearing);
-          setLiveZoom(initFit.zoom);
-        }
+        setLiveBearing(Number(startBearing.toFixed(1)));
+        setLiveZoom(Number(startZoom.toFixed(2)));
 
         map.on('style.load', () => {
           ensureLayers(map);
@@ -1154,7 +1273,7 @@ export default function MobileIsometricMap({
         map.on('load', () => {
           ensureLayers(map);
           setMapReady(true);
-          if (!userMovedRef.current && primaryEntryRef.current) {
+          if (!userMovedRef.current && !isFullExpandedRef.current && primaryEntryRef.current) {
             fitCameraToTarget({ targetEntry: primaryEntryRef.current, animate: false });
           }
         });
@@ -1178,8 +1297,21 @@ export default function MobileIsometricMap({
         });
 
         map.on('moveend', () => {
-          setLiveBearing(Number(map.getBearing().toFixed(1)));
-          setLiveZoom(Number(map.getZoom().toFixed(2)));
+          const c = map.getCenter();
+          const b = Number(map.getBearing().toFixed(1));
+          const z = Number(map.getZoom().toFixed(2));
+          const p = Number(map.getPitch().toFixed(1));
+          setLiveBearing(b);
+          setLiveZoom(z);
+          if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
+            onViewportChangeRef.current?.({
+              lat: Number(c.lat.toFixed(6)),
+              lng: Number(c.lng.toFixed(6)),
+              zoom: z,
+              pitch: p,
+              bearing: b
+            });
+          }
           drawWireframes();
         });
 
@@ -1260,17 +1392,31 @@ export default function MobileIsometricMap({
     };
   }, [drawWireframes, fitCameraToTarget, syncMapSources, webglAvailable]);
 
-  // Keep GeoJSON sources & showcase callouts synced when parcels, sculptures, hydration, or selection change
+  // Keep GeoJSON sources & showcase callouts synced when parcels, sculptures, hydration, full-view, or selection change
   useEffect(() => {
     syncMapSources();
-  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, userLocation, unitSystem, syncMapSources]);
+  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, isFullExpanded, userLocation, unitSystem, syncMapSources]);
 
-  // Smoothly re-frame whenever user picks a land or taps Focus Map / 3D on a land card
+  // Smoothly re-frame ONLY on initial mount or explicit land-focus action — NEVER auto-snap while in Full View
   useEffect(() => {
     if (!primaryEntry?.volume) return;
-    if (focusParcelTick > 0 || !userMovedRef.current) {
+    const tickAdvanced = focusParcelTick > lastHandledFocusTickRef.current;
+    lastHandledFocusTickRef.current = focusParcelTick;
+    const parcelId = primaryEntry.parcel?.parcelId || '';
+    const parcelChanged = Boolean(parcelId && parcelId !== lastFittedParcelIdRef.current);
+
+    if (isFullExpandedRef.current) {
+      if (tickAdvanced) {
+        lastFittedParcelIdRef.current = parcelId;
+        fitCameraToTarget({ targetEntry: primaryEntry, animate: true });
+      }
+      return;
+    }
+
+    if (tickAdvanced || !lastFittedParcelIdRef.current || (parcelChanged && !userMovedRef.current)) {
       userMovedRef.current = false;
-      fitCameraToTarget({ targetEntry: primaryEntry, animate: focusParcelTick > 0 });
+      lastFittedParcelIdRef.current = parcelId;
+      fitCameraToTarget({ targetEntry: primaryEntry, animate: tickAdvanced || parcelChanged });
     }
   }, [focusParcelTick, primaryEntry, fitCameraToTarget]);
 
@@ -1287,7 +1433,7 @@ export default function MobileIsometricMap({
       if (!map) return;
       map.resize();
       drawWireframes();
-      if (!userMovedRef.current && primaryEntryRef.current) {
+      if (!userMovedRef.current && !isFullExpandedRef.current && primaryEntryRef.current) {
         fitCameraToTarget({ targetEntry: primaryEntryRef.current, animate: false });
       }
     });
@@ -1325,13 +1471,16 @@ export default function MobileIsometricMap({
     }
   }, [webglAvailable, mapReady, primaryEntry, otherEntries, stageDims.width, stageDims.height, liveBearing, showcaseMode, unitSystem]);
 
-  // Extra resize pulse when isFullExpanded toggles on mobile
+  // Entering Full View unlocks free 3D/2D camera navigation (no isometric snapping!)
   useEffect(() => {
+    if (isFullExpanded) {
+      userMovedRef.current = true;
+    }
     const t = setTimeout(() => {
       if (mapRef.current) {
         mapRef.current.resize();
         drawWireframes();
-        if (!userMovedRef.current && primaryEntryRef.current) {
+        if (!isFullExpanded && !userMovedRef.current && primaryEntryRef.current) {
           fitCameraToTarget({ targetEntry: primaryEntryRef.current, animate: true });
         }
       }
@@ -1342,12 +1491,26 @@ export default function MobileIsometricMap({
   function handleOrbit90() {
     const nextOffset = (bearingOffset + 90) % 360;
     setBearingOffset(nextOffset);
+    if (isFullExpandedRef.current) {
+      const map = mapRef.current;
+      if (map) {
+        map.easeTo({
+          bearing: map.getBearing() + 90,
+          duration: 360,
+          essential: true
+        });
+      } else {
+        setLiveBearing((b) => (b + 90) % 360);
+      }
+      return;
+    }
     userMovedRef.current = false;
     fitCameraToTarget({ targetEntry: primaryEntry, offsetDeg: nextOffset, animate: true });
   }
 
   function handleFitLand() {
-    userMovedRef.current = false;
+    // Explicit user recenter: fit the land cleanly, keeping free-navigation unlocked in Full View
+    userMovedRef.current = Boolean(isFullExpandedRef.current);
     fitCameraToTarget({ targetEntry: primaryEntry, animate: true });
   }
 
@@ -1389,25 +1552,18 @@ export default function MobileIsometricMap({
     return sculptures.filter((s) => s?.parcelId === primaryEntry.parcel.parcelId).length;
   }, [primaryEntry?.parcel?.parcelId, sculptures]);
 
-  const visibleShowcaseSculptures = useMemo(
-    () => (hydratedSculptures || []).filter((s) => s && !s.hidden && s.id),
-    [hydratedSculptures]
-  );
+  const visibleShowcaseSculptures = useMemo(() => {
+    const focusedPid = primaryEntry?.parcel?.parcelId || '';
+    return (hydratedSculptures || []).filter(
+      (s) => s && !s.hidden && s.id && (!focusedPid || !s.parcelId || s.parcelId === focusedPid)
+    );
+  }, [hydratedSculptures, primaryEntry?.parcel?.parcelId]);
 
   const primaryLandLabel = primaryEntry
     ? showcaseMode
       ? resolveLandDisplayName(primaryEntry.parcel, { defaultName: 'Virtual Land' })
       : formatSimpleLandLabel(primaryEntry.parcel)
     : 'Virtual Land';
-  const primaryLandDims = primaryEntry?.volume
-    ? formatDimensionTriple(
-        primaryEntry.volume.widthMeters,
-        primaryEntry.volume.depthMeters,
-        primaryEntry.volume.heightMeters,
-        unitSystem,
-        { compact: true }
-      )
-    : '';
 
   return (
     <div
@@ -1417,6 +1573,7 @@ export default function MobileIsometricMap({
       }`}
       data-testid="mobile-iso-3d-map"
       data-map-mode="3d"
+      data-free-nav={isFullExpanded ? 'true' : 'false'}
       data-three-3d-models={loadedThree3dCount}
     >
       {webglAvailable ? (
@@ -1427,7 +1584,7 @@ export default function MobileIsometricMap({
             className="mobile-iso-wire-canvas"
             aria-hidden="true"
           />
-          {showcaseMode && (
+          {(showcaseMode || visibleShowcaseSculptures.length > 0) && (
             <div
               className="plot-iso-callout-layer"
               data-testid="plot-iso-callout-layer"
@@ -1435,7 +1592,7 @@ export default function MobileIsometricMap({
               onTouchStart={stopMapGestureLeak}
               onMouseDown={stopMapGestureLeak}
             >
-              {primaryEntry && (
+              {showcaseMode && primaryEntry && (
                 <button
                   ref={landLabelBtnRef}
                   type="button"
@@ -1447,9 +1604,6 @@ export default function MobileIsometricMap({
                 >
                   <span className="plot-iso-land-dot" aria-hidden="true" />
                   <span>{primaryLandLabel}</span>
-                  {primaryLandDims && (
-                    <span className="plot-iso-land-dims mono">{primaryLandDims}</span>
-                  )}
                 </button>
               )}
               {visibleShowcaseSculptures.map((sc) => {
@@ -1458,6 +1612,8 @@ export default function MobileIsometricMap({
                   sc.modelType === 'custom-3d'
                     ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
                     : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
+                const sculptureUrl =
+                  buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
                 return (
                   <div
                     key={sc.id}
@@ -1483,22 +1639,31 @@ export default function MobileIsometricMap({
                       <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
                       <span className="plot-iso-callout-meta mono">{sub}</span>
                     </button>
-                    {onOpenSculptureView && (
-                      <button
-                        type="button"
-                        className="plot-iso-callout-open-btn"
-                        data-testid="plot-artwork-view-btn"
-                        data-sculpture-id={sc.id}
-                        aria-label={`Open 3D art view for ${sc.title || '3D Artwork'}`}
-                        title={`Go to 3D view of "${sc.title || '3D Artwork'}"`}
-                        onClick={(e) => {
+                    <a
+                      href={sculptureUrl}
+                      className="plot-iso-callout-open-btn"
+                      data-testid="plot-artwork-view-btn"
+                      data-sculpture-id={sc.id}
+                      aria-label={`Open 3D art link for ${sc.title || '3D Artwork'}`}
+                      title={`Open link for "${sc.title || '3D Artwork'}" (${sculptureUrl})`}
+                      onClick={(e) => {
+                        const openHandler = onOpenSculptureView || onSelectSculpture;
+                        if (
+                          openHandler &&
+                          !e.metaKey &&
+                          !e.ctrlKey &&
+                          !e.shiftKey &&
+                          !e.altKey &&
+                          e.button === 0
+                        ) {
+                          e.preventDefault();
                           e.stopPropagation();
-                          onOpenSculptureView(sc);
-                        }}
-                      >
-                        ↗
-                      </button>
-                    )}
+                          openHandler(sc);
+                        }
+                      }}
+                    >
+                      ↗
+                    </a>
                   </div>
                 );
               })}
@@ -1547,7 +1712,7 @@ export default function MobileIsometricMap({
           type="button"
           className="btn map-recenter-fab"
           data-testid="mobile-map-orbit-btn"
-          aria-label="Rotate isometric view 90 degrees"
+          aria-label="Rotate 3D view 90 degrees"
           title="Rotate 3D view 90°"
           onClick={handleOrbit90}
         >
@@ -1558,8 +1723,8 @@ export default function MobileIsometricMap({
             type="button"
             className="btn map-recenter-fab"
             data-testid="mobile-map-fit-btn"
-            aria-label="Fit land in 3D isometric view"
-            title="Re-center and fit 3D land"
+            aria-label="Recenter and fit land in 3D view"
+            title="Recenter and fit 3D land"
             onClick={handleFitLand}
           >
             <XeroIcon emoji="🎯" size={13} /> Fit
@@ -1591,9 +1756,11 @@ export default function MobileIsometricMap({
         )}
       </div>
 
-      {/* Bottom-Left Compact 3D Isometric HUD (Compass + Metric Scale Bar) */}
+      {/* Bottom-Left Compact 3D HUD (Mode + Compass + Metric Scale Bar) */}
       <div className="mobile-iso-hud-bottom" aria-hidden="true">
-        <span className="mobile-iso-hud-chip is-accent">3D ISO</span>
+        <span className="mobile-iso-hud-chip is-accent" data-testid="mobile-iso-mode-chip">
+          {isFullExpanded ? '3D FREE' : '3D ISO'}
+        </span>
         <span className="mobile-iso-hud-chip mono" data-testid="mobile-iso-compass-chip">
           <XeroIcon emoji="🧭" size={12} />
           <span>
@@ -1608,40 +1775,6 @@ export default function MobileIsometricMap({
           <span>{scaleBar.label}</span>
         </span>
       </div>
-
-      {/* Clickable Artwork Labels in Non-Showcase 3D Map Mode -> Jump Straight to Art View */}
-      {!showcaseMode && onSelectSculpture && (() => {
-        const focusedPid = primaryEntry?.parcel?.parcelId || '';
-        const focusedArts = visibleShowcaseSculptures
-          .filter((sc) => !focusedPid || !sc.parcelId || sc.parcelId === focusedPid)
-          .slice(0, 3);
-        if (focusedArts.length === 0) return null;
-        return (
-          <div
-            className="mobile-iso-artwork-dock"
-            data-testid="mobile-iso-artwork-dock"
-            onPointerDown={stopMapGestureLeak}
-            onTouchStart={stopMapGestureLeak}
-            onMouseDown={stopMapGestureLeak}
-          >
-            {focusedArts.map((sc) => (
-              <button
-                key={sc.id}
-                type="button"
-                className="land-preview-artwork-pill"
-                data-testid="map-artwork-label"
-                data-sculpture-id={sc.id}
-                title={`View "${sc.title || 'Artwork'}" in 3D`}
-                onClick={() => onSelectSculpture(sc)}
-              >
-                <span aria-hidden="true">{sc.modelType === 'custom-3d' ? '🧊' : '🎨'}</span>
-                <span className="land-preview-artwork-pill-name">{sc.title || '3D Artwork'}</span>
-                <span className="land-preview-artwork-pill-arrow" aria-hidden="true">↗</span>
-              </button>
-            ))}
-          </div>
-        );
-      })()}
 
       {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
       <NeighborEdgeArrowsOverlay

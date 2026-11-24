@@ -165,12 +165,11 @@ function inspectGltfJsonStats(parsed) {
     const rawW = Math.max(0.01, maxX - minX);
     const rawH = Math.max(0.01, maxY - minY);
     const rawD = Math.max(0.01, maxZ - minZ);
-    const maxDim = Math.max(rawW, rawH, rawD, 0.001);
-    const autoFit = maxDim > 3.2 || maxDim < 0.28 ? 1.4 / maxDim : 1;
+    // Preserve native 1:1 model dimensions without autoscaling objects placed into lands
     bbox = {
-      width: Math.round(Math.max(0.05, rawW * autoFit) * 10000) / 10000,
-      height: Math.round(Math.max(0.05, rawH * autoFit) * 10000) / 10000,
-      depth: Math.round(Math.max(0.05, rawD * autoFit) * 10000) / 10000
+      width: Math.round(Math.max(0.01, rawW) * 10000) / 10000,
+      height: Math.round(Math.max(0.01, rawH) * 10000) / 10000,
+      depth: Math.round(Math.max(0.01, rawD) * 10000) / 10000
     };
   }
 
