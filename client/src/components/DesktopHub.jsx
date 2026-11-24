@@ -23,6 +23,11 @@ import {
   formatRadiusLabel,
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
+import {
+  groupNearestLandsWithSculptures,
+  isLandOwnedByUser,
+  resolveLandCoords
+} from '../utils/landMapHelpers.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
@@ -125,6 +130,10 @@ export default function DesktopHub({
   const [areaFilter, setAreaFilter] = useState(() =>
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
+  const [nearbyCategory, setNearbyCategory] = useState(() =>
+    initialSession.nearbyCategory === 'land' ? 'land' : 'sculptures'
+  ); // 'sculptures' | 'land'
+  const [selectedLandParcelId, setSelectedLandParcelId] = useState('');
   const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'quests' | 'market' | 'leaders'
   const [drawMode, setDrawMode] = useState(false);
   const [viewMode, setViewMode] = useState('isometric'); // 'isometric' | '3d' | '2d'
@@ -211,13 +220,14 @@ export default function DesktopHub({
   useEffect(() => {
     saveDesktopSession({
       areaFilter,
+      nearbyCategory,
       mapViewport,
       introRoleTab,
       lastSculptureId: lastSculpture?.id || '',
       lastSculptureSnapshot: summarizeSculptureSnapshot(lastSculpture),
       activeView
     });
-  }, [areaFilter, mapViewport, introRoleTab, lastSculpture, activeView]);
+  }, [areaFilter, nearbyCategory, mapViewport, introRoleTab, lastSculpture, activeView]);
 
   const refreshData = useCallback(async () => {
     try {
@@ -451,6 +461,19 @@ export default function DesktopHub({
     return sculpturesSorted;
   }, [areaFilter, userLocation, nearbyMatches, sculpturesSorted]);
 
+  const groupedLands = useMemo(
+    () =>
+      groupNearestLandsWithSculptures({
+        parcels,
+        sculptures,
+        location: userLocation,
+        filterMode: areaFilter === 'all' ? 'all' : 'nearby',
+        radiusMeters: NEARBY_RADIUS_METERS,
+        unitSystem
+      }),
+    [parcels, sculptures, userLocation, areaFilter, unitSystem]
+  );
+
   const creatorLeaderboard = useMemo(() => {
     const byCreator = new Map();
     for (const sc of sculptures || []) {
@@ -543,6 +566,49 @@ export default function DesktopHub({
     } else {
       setDrawMode(false);
     }
+  }
+
+  function selectNearbyCategory(nextCategory) {
+    setNearbyCategory(nextCategory === 'land' ? 'land' : 'sculptures');
+    setSidebarTab('list');
+    setDrawMode(false);
+  }
+
+  function focusLandOnMap(land) {
+    if (!land?.parcelId) return;
+    setSelectedLandParcelId(land.parcelId);
+    const coords = resolveLandCoords(land);
+    if (coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
+      setMapFocusTarget({ lat: coords.lat, lng: coords.lng, zoom: 17.8, ts: Date.now() });
+      setMapViewport((prev) => ({ ...(prev || {}), lat: coords.lat, lng: coords.lng, zoom: 17.8 }));
+    }
+  }
+
+  function openLandShowcase(land) {
+    if (!land?.parcelId) return;
+    focusLandOnMap(land);
+    setPairOpen(false);
+    setInfoOpen(false);
+    setSelected(null);
+    setVisitedParcel({
+      loading: false,
+      parcel: land,
+      sculptures: Array.isArray(land.sculptures) ? land.sculptures : [],
+      error: ''
+    });
+    api
+      .getLandDetail(land.parcelId)
+      .then((res) => {
+        if (res?.parcel) {
+          setVisitedParcel({
+            loading: false,
+            parcel: res.parcel,
+            sculptures: res.sculptures || [],
+            error: ''
+          });
+        }
+      })
+      .catch(() => {});
   }
 
   async function handleNotificationAction(item) {
@@ -1261,8 +1327,15 @@ export default function DesktopHub({
               viewMode={viewMode}
               autoSwitchedHint={autoSwitchedHint}
               userLocation={userLocation}
-              focusArea={areaFilter === 'nearby' && Boolean(userLocation) && nearbyMatches.length > 0}
+              focusArea={
+                areaFilter === 'nearby' &&
+                Boolean(userLocation) &&
+                (nearbyCategory === 'land'
+                  ? groupedLands.nearbyLands.length > 0
+                  : nearbyMatches.length > 0)
+              }
               selectedSculptureId={selected?.id || lastSculpture?.id || ''}
+              selectedParcelId={selectedLandParcelId}
               initialView={mapViewport}
               focusTarget={mapFocusTarget}
               onViewportChange={handleViewportChange}
@@ -1287,16 +1360,55 @@ export default function DesktopHub({
             />
           </div>
 
-          <aside className="card desktop-nearby-panel" aria-label="Sculptures around you">
+          <aside
+            className="card desktop-nearby-panel"
+            aria-label={nearbyCategory === 'land' ? 'Land around you' : 'Sculptures around you'}
+            data-nearby-category={nearbyCategory}
+          >
             <div className="desktop-nearby-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
-                <XeroIcon emoji="📍" size={17} />
-                <span>Sculptures Around You</span>
+              <div className="desktop-nearby-header-left">
+                <XeroIcon emoji="📍" size={16} />
+                <div
+                  className="desktop-nearby-category-tabs"
+                  role="tablist"
+                  aria-label="Browse Sculptures or Land around you"
+                  data-testid="desktop-nearby-category-tabs"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={nearbyCategory === 'sculptures'}
+                    className={`desktop-nearby-category-tab ${
+                      nearbyCategory === 'sculptures' ? 'is-active' : ''
+                    }`}
+                    data-testid="desktop-nearby-tab-sculptures"
+                    onClick={() => selectNearbyCategory('sculptures')}
+                  >
+                    <span>Sculptures</span>
+                    <span className="desktop-nearby-tab-count">{displayedSculptures.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={nearbyCategory === 'land'}
+                    className={`desktop-nearby-category-tab ${
+                      nearbyCategory === 'land' ? 'is-active' : ''
+                    }`}
+                    data-testid="desktop-nearby-tab-land"
+                    onClick={() => selectNearbyCategory('land')}
+                  >
+                    <span>Land</span>
+                    <span className="desktop-nearby-tab-count">
+                      {groupedLands.displayedLands.length}
+                    </span>
+                  </button>
+                </div>
+                <span className="desktop-nearby-header-suffix">Around You</span>
               </div>
               <button
                 type="button"
                 className="btn"
-                style={{ padding: '5px 9px', fontSize: 11 }}
+                style={{ padding: '5px 9px', fontSize: 11, flexShrink: 0 }}
                 onClick={refreshData}
                 title="Refresh sculptures & parcels"
               >
@@ -1363,7 +1475,14 @@ export default function DesktopHub({
                   style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
                   onClick={() => setAreaFilter('nearby')}
                 >
-                  Near Me {userLocation ? `(${nearbyMatches.length})` : ''}
+                  Near Me{' '}
+                  {userLocation
+                    ? `(${
+                        sidebarTab === 'list' && nearbyCategory === 'land'
+                          ? groupedLands.nearbyLands.length
+                          : nearbyMatches.length
+                      })`
+                    : ''}
                 </button>
                 <button
                   type="button"
@@ -1371,18 +1490,38 @@ export default function DesktopHub({
                   style={{ padding: '5px 10px', fontSize: 12, flex: 1 }}
                   onClick={() => setAreaFilter('all')}
                 >
-                  Global ({sculptures.length})
+                  Global (
+                  {sidebarTab === 'list' && nearbyCategory === 'land'
+                    ? groupedLands.allLands.length
+                    : sculptures.length}
+                  )
                 </button>
               </div>
             )}
 
-            {sidebarTab === 'list' && areaFilter === 'nearby' && userLocation && nearbyMatches.length === 0 && sculptures.length > 0 && (
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                No sculptures within {nearbyRadiusLabel} yet — showing all {sculptures.length} global sculptures sorted closest first.
-              </div>
-            )}
+            {sidebarTab === 'list' &&
+              nearbyCategory === 'sculptures' &&
+              areaFilter === 'nearby' &&
+              userLocation &&
+              nearbyMatches.length === 0 &&
+              sculptures.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  No sculptures within {nearbyRadiusLabel} yet — showing all {sculptures.length} global sculptures sorted closest first.
+                </div>
+              )}
 
-            {sidebarTab === 'list' && lastSculpture && (
+            {sidebarTab === 'list' &&
+              nearbyCategory === 'land' &&
+              areaFilter === 'nearby' &&
+              userLocation &&
+              groupedLands.autoFallbackToAll &&
+              groupedLands.allLands.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  No lands within {nearbyRadiusLabel} yet — showing all {groupedLands.allLands.length} global lands sorted closest first.
+                </div>
+              )}
+
+            {sidebarTab === 'list' && nearbyCategory === 'sculptures' && lastSculpture && (
               <button
                 type="button"
                 className="desktop-nearby-item is-last-viewed"
@@ -1748,8 +1887,148 @@ export default function DesktopHub({
                   </div>
                 ))}
               </div>
+            ) : nearbyCategory === 'land' ? (
+              <div
+                className="desktop-nearby-list"
+                data-testid="desktop-nearby-lands-list"
+                aria-label="Lands around you"
+              >
+                {groupedLands.displayedLands.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
+                    No virtual lands claimed yet. Click Mint Land above to draw a 3D parcel on the map!
+                  </div>
+                ) : (
+                  groupedLands.displayedLands.map((land) => {
+                    const isSelectedLand =
+                      Boolean(selectedLandParcelId) && selectedLandParcelId === land.parcelId;
+                    const isOwned = isLandOwnedByUser(land, { user, ownedParcelIds });
+                    const exp = land.expiration;
+                    const expBadgeClass =
+                      exp.state === 'expired' || exp.state === 'expiring-soon'
+                        ? 'badge danger'
+                        : exp.state === 'expiring' || exp.state === 'dormant'
+                        ? 'badge gold'
+                        : 'badge teal';
+                    const liveTitle = getLiveLandName(land, land.displayName || 'Virtual Land');
+
+                    return (
+                      <div
+                        key={land.parcelId}
+                        role="button"
+                        tabIndex={0}
+                        className={`desktop-nearby-item desktop-land-item ${
+                          isSelectedLand ? 'is-selected' : ''
+                        } ${isOwned ? 'is-owned' : ''}`}
+                        data-testid="desktop-land-item"
+                        data-parcel-id={land.parcelId}
+                        data-selected={isSelectedLand ? 'true' : 'false'}
+                        data-owned={isOwned ? 'true' : 'false'}
+                        onClick={() => focusLandOnMap(land)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            focusLandOnMap(land);
+                          }
+                        }}
+                      >
+                        <div className="desktop-land-item-top">
+                          <div className="desktop-land-item-title-wrap">
+                            <strong className="desktop-land-item-title">{liveTitle}</strong>
+                            {isOwned && (
+                              <span className="badge gold" style={{ fontSize: 9.5 }}>
+                                Owned
+                              </span>
+                            )}
+                          </div>
+                          {land.distanceLabel && (
+                            <span className="badge teal" style={{ fontSize: 10, flexShrink: 0 }}>
+                              {land.distanceLabel} away
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="desktop-land-item-meta">
+                          <span className="badge" style={{ fontSize: 10 }}>
+                            <XeroIcon emoji="🎨" size={10} /> {land.sculptures.length}{' '}
+                            {land.sculptures.length === 1 ? 'sculpture' : 'sculptures'}
+                          </span>
+                          {land.compactDimensionsLabel && (
+                            <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                              {land.compactDimensionsLabel}
+                            </span>
+                          )}
+                          {exp.state !== 'permanent' && (
+                            <span
+                              className={expBadgeClass}
+                              style={{ fontSize: 9.5 }}
+                              title={exp.detailText}
+                            >
+                              <XeroIcon emoji={exp.state === 'expired' ? '⏱️' : '⏳'} size={10} />{' '}
+                              {exp.badgeText}
+                            </span>
+                          )}
+                          {land.isFrozen && (
+                            <span className="badge" style={{ fontSize: 9.5 }}>
+                              ❄️ Frozen
+                            </span>
+                          )}
+                        </div>
+
+                        {land.description && (
+                          <div className="desktop-land-item-desc">{land.description}</div>
+                        )}
+
+                        <div className="desktop-land-item-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ padding: '3px 9px', fontSize: 10.5 }}
+                            data-testid="desktop-land-inspect-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openLandShowcase(land);
+                            }}
+                          >
+                            <XeroIcon emoji="🧊" size={11} /> Inspect Land
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            style={{ padding: '3px 8px', fontSize: 10.5 }}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              await handleCopyParcelShareLink(land);
+                              setCopiedId(land.parcelId);
+                              setTimeout(() => setCopiedId(''), 1800);
+                            }}
+                            title={`Copy share link for ${liveTitle}`}
+                          >
+                            {copiedId === land.parcelId ? 'Copied!' : 'Share'}
+                          </button>
+                          {isOwned && (
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ padding: '3px 8px', fontSize: 10.5 }}
+                              data-testid="desktop-land-manage-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLandManageParcelId(land.parcelId);
+                                setLandManageOpen(true);
+                              }}
+                              title={`Manage ${liveTitle}`}
+                            >
+                              <XeroIcon emoji="⚙️" size={11} /> Manage
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             ) : (
-              <div className="desktop-nearby-list">
+              <div className="desktop-nearby-list" data-testid="desktop-nearby-sculptures-list">
               {displayedSculptures.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
                   No published sculptures on the map yet. Pair or open GRAFFILAND on your mobile phone to create the first piece nearby!

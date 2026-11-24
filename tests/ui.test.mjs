@@ -5406,4 +5406,165 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-focused-parcel-id'), 'GLAND-FARM01');
     cleanup();
   });
+
+  test('DesktopHub renders Sculptures and Land tabs in the Around You panel so desktop users can switch between sculptures and lands', async () => {
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+
+    const origFetch = globalThis.fetch;
+    localStorage.removeItem('graffiland_desktop_session_v1');
+
+    const mockSculptures = [
+      {
+        id: 'sc-desk-1',
+        title: 'Neon Archway',
+        description: 'Glowing archway sculpture',
+        parcelId: 'GLAND-DESK01',
+        parcelName: 'Civic Plaza',
+        lat: 37.7793,
+        lng: -122.4193,
+        voxelCount: 64,
+        polScore: 95
+      },
+      {
+        id: 'sc-desk-2',
+        title: 'Sky Totem',
+        description: 'Tall voxel tower',
+        parcelId: 'GLAND-DESK02',
+        parcelName: 'Sunset Strip',
+        lat: 37.781,
+        lng: -122.416,
+        voxelCount: 112,
+        polScore: 98
+      }
+    ];
+    const mockParcels = [
+      {
+        parcelId: 'GLAND-DESK01',
+        customName: 'Civic Plaza',
+        description: 'Downtown civic art square',
+        centerLat: 37.7793,
+        centerLng: -122.4193,
+        ownerSub: 'google:desk-owner',
+        stewardStatus: 'awakened',
+        sculptureCount: 1,
+        volume: {
+          centerLat: 37.7793,
+          centerLng: -122.4193,
+          widthMeters: 20,
+          depthMeters: 25,
+          heightMeters: 18,
+          footprintAreaSqM: 500
+        }
+      },
+      {
+        parcelId: 'GLAND-DESK02',
+        customName: 'Sunset Strip',
+        description: 'Community mural lot',
+        centerLat: 37.781,
+        centerLng: -122.416,
+        ownerSub: 'google:someone-else',
+        stewardStatus: 'dormant',
+        leaseExpiresAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+        sculptureCount: 1,
+        volume: {
+          centerLat: 37.781,
+          centerLng: -122.416,
+          widthMeters: 30,
+          depthMeters: 40,
+          heightMeters: 24,
+          footprintAreaSqM: 1200
+        }
+      }
+    ];
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/sculptures')) {
+        return { ok: true, json: async () => ({ sculptures: mockSculptures }) };
+      }
+      if (u.includes('/api/parcels')) {
+        return { ok: true, json: async () => ({ parcels: mockParcels }) };
+      }
+      if (u.includes('/api/quests/nearby')) {
+        return { ok: true, json: async () => ({ quests: [] }) };
+      }
+      if (u.includes('/api/marketplace/listings')) {
+        return { ok: true, json: async () => ({ listings: [] }) };
+      }
+      if (u.includes('/api/agents/leaderboard')) {
+        return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      }
+      if (u.includes('/api/lands/mine')) {
+        return { ok: true, json: async () => ({ parcelCount: 1, parcels: [mockParcels[0]] }) };
+      }
+      if (u.includes('/api/lands/GLAND-DESK02')) {
+        return {
+          ok: true,
+          json: async () => ({ parcel: mockParcels[1], sculptures: [mockSculptures[1]] })
+        };
+      }
+      if (u.includes('/api/mcp/pairings')) {
+        return { ok: true, json: async () => ({ mcpActive: false, activePairing: null, pairings: [] }) };
+      }
+      if (u.includes('/api/notifications')) {
+        return { ok: true, json: async () => ({ notifications: [], unreadCount: 0, preferences: {} }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: { id: 'google:desk-owner', username: 'desk_creator' },
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+
+      // 1) Header renders Sculptures and Land tabs; defaults to Sculptures around you
+      const sculpturesTab = view.getByTestId('desktop-nearby-tab-sculptures');
+      const landTab = view.getByTestId('desktop-nearby-tab-land');
+      assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
+      assert.equal(landTab.getAttribute('aria-selected'), 'false');
+
+      await RTL.waitFor(() => {
+        const list = view.getByTestId('desktop-nearby-sculptures-list');
+        assert.ok(list.textContent.includes('Neon Archway'));
+        assert.ok(list.textContent.includes('Sky Totem'));
+      });
+
+      // 2) Clicking the Land tab switches to Lands around you with counts, Owned badge & land details
+      RTL.fireEvent.click(landTab);
+      assert.equal(landTab.getAttribute('aria-selected'), 'true');
+      assert.equal(sculpturesTab.getAttribute('aria-selected'), 'false');
+
+      const landsList = view.getByTestId('desktop-nearby-lands-list');
+      assert.ok(landsList.textContent.includes('Civic Plaza'));
+      assert.ok(landsList.textContent.includes('Sunset Strip'));
+      assert.ok(landsList.textContent.includes('Owned'));
+
+      // 3) Clicking a Land item highlights it and updates MapView3D selected parcel
+      const landCards = view.getAllByTestId('desktop-land-item');
+      assert.equal(landCards.length, 2);
+      RTL.fireEvent.click(landCards[1]);
+      assert.equal(landCards[1].getAttribute('data-selected'), 'true');
+      assert.equal(landCards[0].getAttribute('data-selected'), 'false');
+      assert.equal(
+        view.container.querySelector('.map3d-stage')?.getAttribute('data-selected-parcel-id'),
+        'GLAND-DESK02'
+      );
+
+      // 4) Switching to Quests then clicking the Sculptures header tab returns cleanly to Sculptures list
+      RTL.fireEvent.click(view.getByRole('button', { name: /Quests \(0\)/i }));
+      assert.equal(view.queryByTestId('desktop-nearby-lands-list'), null);
+      RTL.fireEvent.click(sculpturesTab);
+      assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
+      assert.ok(view.getByTestId('desktop-nearby-sculptures-list').textContent.includes('Neon Archway'));
+    } finally {
+      globalThis.fetch = origFetch;
+      localStorage.removeItem('graffiland_desktop_session_v1');
+      cleanup();
+    }
+  });
 });

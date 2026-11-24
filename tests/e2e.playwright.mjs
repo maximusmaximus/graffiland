@@ -413,6 +413,15 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Dismiss intro banner/i }).click();
     assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
 
+    // Switch Around You header tabs: Sculptures <-> Land, select a land, and verify sidebar tabs
+    await page.getByTestId('desktop-nearby-tab-land').click();
+    await page.waitForSelector('[data-testid="desktop-nearby-lands-list"]');
+    const firstLandCard = page.getByTestId('desktop-land-item').first();
+    await firstLandCard.click();
+    assert.equal(await firstLandCard.getAttribute('data-selected'), 'true');
+    await page.getByTestId('desktop-nearby-tab-sculptures').click();
+    await page.waitForSelector('[data-testid="desktop-nearby-sculptures-list"]');
+
     // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
     await page.getByRole('button', { name: /Quests/i }).click();
     await page.waitForSelector('[aria-label="Agent Land Quests"]');
