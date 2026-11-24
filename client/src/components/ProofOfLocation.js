@@ -1,3 +1,156 @@
+const POPCOUNT_4BIT = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
+
+/**
+ * Computes exact bit-level Hamming distance (0..64) between two 64-bit hex perceptual dHashes.
+ */
+export function computeHexHammingDistance(hexA, hexB) {
+  const a = String(hexA || '').trim().toLowerCase();
+  const b = String(hexB || '').trim().toLowerCase();
+  if (!a || !b || a.length !== b.length || !/^[0-9a-f]+$/.test(a) || !/^[0-9a-f]+$/.test(b)) {
+    return null;
+  }
+  let bits = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const xor = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    bits += POPCOUNT_4BIT[xor & 0xf];
+  }
+  return bits;
+}
+
+function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function shortestAngleDeltaDeg(a, b) {
+  const numA = toFiniteNumber(a);
+  const numB = toFiniteNumber(b);
+  if (numA === null || numB === null) return null;
+  let d = numA - numB;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
+}
+
+/**
+ * Evaluates whether the mobile device moved substantially since `checkpoint` was captured
+ * (physical GPS translation, large heading/pitch rotation, or major visual scene change).
+ */
+export function evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs = Date.now() } = {}) {
+  if (!checkpoint || !current) {
+    return {
+      movedSubstantially: false,
+      reason: '',
+      summary: '',
+      distanceMeters: null,
+      yawDeltaDeg: null,
+      pitchDeltaDeg: null,
+      visualHammingBits: null,
+      awayMs: 0
+    };
+  }
+
+  const awayMs = Math.max(0, (toFiniteNumber(nowMs) ?? Date.now()) - (toFiniteNumber(checkpoint.capturedAt) ?? Date.now()));
+
+  let distanceMeters = null;
+  const lat1 = toFiniteNumber(checkpoint.lat);
+  const lng1 = toFiniteNumber(checkpoint.lng);
+  const lat2 = toFiniteNumber(current.lat);
+  const lng2 = toFiniteNumber(current.lng);
+  if (lat1 !== null && lng1 !== null && lat2 !== null && lng2 !== null) {
+    const cosLat = Math.max(0.08, Math.cos((((lat1 + lat2) / 2) * Math.PI) / 180));
+    distanceMeters = Math.round(
+      Math.hypot((lat2 - lat1) * 111320, (lng2 - lng1) * 111320 * cosLat) * 10
+    ) / 10;
+  }
+
+  const rawYawDelta = shortestAngleDeltaDeg(current.yawDeg, checkpoint.yawDeg);
+  const yawDeltaDeg = rawYawDelta === null ? null : Math.round(Math.abs(rawYawDelta) * 10) / 10;
+  const curPitch = toFiniteNumber(current.pitchDeg);
+  const prevPitch = toFiniteNumber(checkpoint.pitchDeg);
+  const pitchDeltaDeg =
+    curPitch !== null && prevPitch !== null
+      ? Math.round(Math.abs(curPitch - prevPitch) * 10) / 10
+      : null;
+  const visualHammingBits = computeHexHammingDistance(checkpoint.visualDHash, current.visualDHash);
+
+  const accA = toFiniteNumber(checkpoint.accuracy) ?? 8;
+  const accB = toFiniteNumber(current.accuracy) ?? 8;
+  const gpsThresholdM = Math.max(6, Math.min(18, Math.max(accA, accB) * 0.85));
+
+  if (distanceMeters !== null && distanceMeters >= gpsThresholdM) {
+    return {
+      movedSubstantially: true,
+      reason: 'gps_moved',
+      summary: `Device moved ~${Math.round(distanceMeters)}m — restart mapping for accurate placement.`,
+      distanceMeters,
+      yawDeltaDeg,
+      pitchDeltaDeg,
+      visualHammingBits,
+      awayMs
+    };
+  }
+
+  if (
+    (yawDeltaDeg !== null && yawDeltaDeg >= 55) ||
+    (pitchDeltaDeg !== null && pitchDeltaDeg >= 35)
+  ) {
+    return {
+      movedSubstantially: true,
+      reason: 'orientation_changed',
+      summary: 'Device orientation shifted substantially — restart mapping for this view.',
+      distanceMeters,
+      yawDeltaDeg,
+      pitchDeltaDeg,
+      visualHammingBits,
+      awayMs
+    };
+  }
+
+  if (visualHammingBits !== null && visualHammingBits >= 22) {
+    return {
+      movedSubstantially: true,
+      reason: 'scene_changed',
+      summary: 'Camera view changed substantially — restart mapping for the new space.',
+      distanceMeters,
+      yawDeltaDeg,
+      pitchDeltaDeg,
+      visualHammingBits,
+      awayMs
+    };
+  }
+
+  if (
+    awayMs >= 45000 &&
+    ((distanceMeters !== null && distanceMeters >= 4) ||
+      (yawDeltaDeg !== null && yawDeltaDeg >= 35) ||
+      (visualHammingBits !== null && visualHammingBits >= 16))
+  ) {
+    return {
+      movedSubstantially: true,
+      reason: 'away_stale',
+      summary: 'Device shifted while away — restart mapping to re-lock this space.',
+      distanceMeters,
+      yawDeltaDeg,
+      pitchDeltaDeg,
+      visualHammingBits,
+      awayMs
+    };
+  }
+
+  return {
+    movedSubstantially: false,
+    reason: '',
+    summary: '',
+    distanceMeters,
+    yawDeltaDeg,
+    pitchDeltaDeg,
+    visualHammingBits,
+    awayMs
+  };
+}
+
 export class ProofOfLocationTracker {
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -33,6 +186,88 @@ export class ProofOfLocationTracker {
     this.latestPose = null;
     this.sceneContrast = 0;
     this.latestGray = null;
+  }
+
+  /**
+   * Resets spatial scene mapping coverage, fine unmapped grid, heading anchor, and optical-flow
+   * buffers cleanly so a fresh scan can run from the device's current position and facing angle.
+   */
+  resetSceneScan({ preserveGps = true } = {}) {
+    if (!preserveGps) {
+      this.gpsSamples = [];
+    }
+    this.cameraFrames = 0;
+    this.prevFrame = null;
+    this.prevGyro = null;
+    this.flowMatches = 0;
+    this.flowTotal = 0;
+    this.visualDHash = '';
+    this.startedAt = Date.now();
+    this.scanSectors = new Array(this.scanCols * this.scanRows).fill(false);
+    this.fineMapped = new Uint8Array(this.fineCols * this.fineRows);
+    this.anchorYawDeg = null;
+    this.latestPose = null;
+    this.sceneContrast = 0;
+    this.latestGray = null;
+    return this.getSceneCoverage();
+  }
+
+  /**
+   * Captures a lightweight checkpoint of device location, orientation, and scene visual hash
+   * right when the user leaves mapping mode.
+   */
+  captureScanCheckpoint(location = null) {
+    const latestGps = this.gpsSamples.length
+      ? this.gpsSamples[this.gpsSamples.length - 1]
+      : null;
+    const cov = this.getSceneCoverage();
+    const gyroAlpha = toFiniteNumber(this.latestGyro?.alpha);
+    const gyroBeta = toFiniteNumber(this.latestGyro?.beta);
+    const poseYaw = toFiniteNumber(this.latestPose?.yawDeg);
+    const posePitch = toFiniteNumber(this.latestPose?.pitchDeg);
+    const hasGyro = gyroAlpha !== null;
+    return {
+      lat: toFiniteNumber(location?.lat) ?? toFiniteNumber(latestGps?.lat),
+      lng: toFiniteNumber(location?.lng) ?? toFiniteNumber(latestGps?.lng),
+      accuracy: toFiniteNumber(location?.accuracy) ?? toFiniteNumber(latestGps?.accuracy),
+      yawSource: hasGyro ? 'gyro' : 'pose',
+      yawDeg: hasGyro ? gyroAlpha : poseYaw,
+      pitchDeg: hasGyro && gyroBeta !== null ? gyroBeta - 90 : posePitch,
+      visualDHash: this.visualDHash || '',
+      horizonLuminance: this.horizonLuminance,
+      scannedCount: cov.scannedCount,
+      optimal: cov.optimal,
+      capturedAt: Date.now()
+    };
+  }
+
+  evaluateMovementSince(
+    checkpoint,
+    { location = null, yawDeg = null, pitchDeg = null, visualDHash = null, nowMs = Date.now() } = {}
+  ) {
+    const latestGps = this.gpsSamples.length
+      ? this.gpsSamples[this.gpsSamples.length - 1]
+      : null;
+    const gyroAlpha = toFiniteNumber(this.latestGyro?.alpha);
+    const gyroBeta = toFiniteNumber(this.latestGyro?.beta);
+    const poseYaw = toFiniteNumber(this.latestPose?.yawDeg);
+    const posePitch = toFiniteNumber(this.latestPose?.pitchDeg);
+    const explicitYaw = toFiniteNumber(yawDeg);
+    const explicitPitch = toFiniteNumber(pitchDeg);
+    const preferGyro = checkpoint?.yawSource === 'gyro' && gyroAlpha !== null;
+    const current = {
+      lat: toFiniteNumber(location?.lat) ?? toFiniteNumber(latestGps?.lat),
+      lng: toFiniteNumber(location?.lng) ?? toFiniteNumber(latestGps?.lng),
+      accuracy: toFiniteNumber(location?.accuracy) ?? toFiniteNumber(latestGps?.accuracy),
+      yawDeg: explicitYaw ?? (preferGyro ? gyroAlpha : poseYaw ?? gyroAlpha),
+      pitchDeg:
+        explicitPitch ??
+        (preferGyro && gyroBeta !== null
+          ? gyroBeta - 90
+          : posePitch ?? (gyroBeta !== null ? gyroBeta - 90 : null)),
+      visualDHash: visualDHash !== null ? visualDHash : this.visualDHash || ''
+    };
+    return evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs });
   }
 
   _markFinePatch(relYawDeg, pitchDeg) {

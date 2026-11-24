@@ -404,7 +404,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       viewportSrc,
-      /\{!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && \(/
+      /\{!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && \(/
     );
     assert.match(
       viewportSrc,
@@ -419,7 +419,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly;/);
     assert.match(
       viewportSrc,
-      /if \(!arViewOnly && !isTransform && !isSceneLocked && now - lastScanPosePush > 110\)/
+      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*!isMappingPaused &&\s*!isSceneLocked &&\s*now - lastScanPosePush > 110\s*\)/
     );
     assert.match(
       viewportSrc,
@@ -458,7 +458,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.ok(wideCrop.sy > 300, 'Portrait frame must be centered vertically');
 
-    // 3) MobileStudio pauses background camera sampling in Lock & Scale and when 100% locked, and hides SceneCoverageWidget in Lock & Scale
+    // 3) MobileStudio pauses background camera sampling in Lock & Scale / overlays / restart prompt, and hides SceneCoverageWidget in Lock & Scale
     const studioSrc = fs.readFileSync(
       path.resolve(process.cwd(), 'client/src/components/MobileStudio.jsx'),
       'utf8'
@@ -466,17 +466,22 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(studioSrc, /const isTransformMode = brush\.mode === 'transform';/);
     assert.match(
       studioSrc,
-      /mappingPausedRef\.current = Boolean\(\s*isArViewOnly \|\| isTransformMode \|\| pol\.sceneScan\.optimal \|\| parcelVisit \|\| ar\.mapOpen\s*\);/
+      /const isAwayFromMappingView = Boolean\(\s*hasFullscreenOverlay \|\| isArViewOnly \|\| isTransformMode\s*\);/
+    );
+    assert.match(
+      studioSrc,
+      /mappingPausedRef\.current = Boolean\(\s*isAwayFromMappingView \|\| pol\.mappingRestartPrompt\s*\);/
     );
     assert.match(studioSrc, /\{!isArViewOnly && !isTransformMode && \(\s*<SceneCoverageWidget/);
     assert.match(studioSrc, /occlusionEnabled=\{brush\.occlusionEnabled\}/);
 
-    // 4) useProofOfLocation stops sampling camera frames once 100% locked
+    // 4) useProofOfLocation stops sampling camera frames once 100% locked (except single post-return verification frame)
     const polSrc = fs.readFileSync(
       path.resolve(process.cwd(), 'client/src/hooks/useProofOfLocation.js'),
       'utf8'
     );
-    assert.match(polSrc, /if \(polRef\.current\.getSceneCoverage\(\)\.optimal\) return;/);
+    assert.match(polSrc, /const isAlreadyOptimal = polRef\.current\.getSceneCoverage\(\)\.optimal;/);
+    assert.match(polSrc, /if \(isAlreadyOptimal && !checkPendingReturn\) return;/);
 
     // 5) useVoxelBrush defaults foreground occlusion OFF (opt-in) so camera background stays flicker-free
     const brushSrc = fs.readFileSync(

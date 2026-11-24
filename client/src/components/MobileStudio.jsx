@@ -296,9 +296,6 @@ export default function MobileStudio({
   );
   isInteractingWithLandRef.current = isInteractingWithLand;
   isArViewOnlyRef.current = isArViewOnly;
-  mappingPausedRef.current = Boolean(
-    isArViewOnly || isTransformMode || pol.sceneScan.optimal || parcelVisit || ar.mapOpen
-  );
 
   const arExitLabel =
     arViewSession?.source === 'plot'
@@ -728,7 +725,10 @@ export default function MobileStudio({
 
   const {
     refreshCamera: refreshArCamera,
-    ensureCameraLive: ensureArCameraLive
+    ensureCameraLive: ensureArCameraLive,
+    notifyMappingViewLeft,
+    notifyMappingViewReturned,
+    restartSceneMapping
   } = pol;
 
   const handlePairingConnectionChange = useCallback(
@@ -771,6 +771,13 @@ export default function MobileStudio({
       archiveOpen ||
       loginOpen
   );
+  const isAwayFromMappingView = Boolean(
+    hasFullscreenOverlay || isArViewOnly || isTransformMode
+  );
+  mappingPausedRef.current = Boolean(
+    isAwayFromMappingView || pol.mappingRestartPrompt
+  );
+
   const prevFullscreenOverlayRef = useRef(hasFullscreenOverlay);
   useEffect(() => {
     if (prevFullscreenOverlayRef.current && !hasFullscreenOverlay) {
@@ -778,6 +785,35 @@ export default function MobileStudio({
     }
     prevFullscreenOverlayRef.current = hasFullscreenOverlay;
   }, [ensureArCameraLive, hasFullscreenOverlay]);
+
+  const prevMappingAwayRef = useRef(isAwayFromMappingView);
+  useEffect(() => {
+    if (!prevMappingAwayRef.current && isAwayFromMappingView) {
+      notifyMappingViewLeft();
+    } else if (prevMappingAwayRef.current && !isAwayFromMappingView) {
+      notifyMappingViewReturned();
+    }
+    prevMappingAwayRef.current = isAwayFromMappingView;
+  }, [isAwayFromMappingView, notifyMappingViewLeft, notifyMappingViewReturned]);
+
+  const prevRestartPromptRef = useRef(pol.mappingRestartPrompt);
+  useEffect(() => {
+    if (!prevRestartPromptRef.current && pol.mappingRestartPrompt) {
+      showTemporaryHint(
+        pol.mappingRestartPrompt.summary ||
+          'Device moved substantially — tap 🔄 to restart mapping.'
+      );
+    }
+    prevRestartPromptRef.current = pol.mappingRestartPrompt;
+  }, [pol.mappingRestartPrompt, showTemporaryHint]);
+
+  const handleRestartSceneMapping = useCallback(
+    async (reason = 'manual') => {
+      await restartSceneMapping({ reason, refreshCameraFeed: true });
+      showTemporaryHint('Mapping restarted — sweep your phone slowly around the space.');
+    },
+    [restartSceneMapping, showTemporaryHint]
+  );
 
   const handlePublishSubmit = async (e) => {
     e.preventDefault();
@@ -1004,6 +1040,8 @@ export default function MobileStudio({
         lastScanUiRef={pol.lastScanUiRef}
         lastUnmappedMaskRef={pol.lastUnmappedMaskRef}
         mappingCompletedNoticeShownRef={pol.mappingCompletedNoticeShownRef}
+        mappingPausedRef={mappingPausedRef}
+        mappingRestartRequired={Boolean(pol.mappingRestartPrompt)}
         setSceneScan={pol.setSceneScan}
         setUnmappedGrid={pol.setUnmappedGrid}
         setOrbStatus={pol.setOrbStatus}
@@ -1167,6 +1205,8 @@ export default function MobileStudio({
             onToggleCollapse={() => pol.setScanBoxCollapsed((v) => !v)}
             dockOpen={dockOpen}
             mode={brush.mode}
+            mappingRestartPrompt={pol.mappingRestartPrompt}
+            onRestartMapping={handleRestartSceneMapping}
             onRefreshOrbRescan={async () => {
               await ensureArCameraLive({ reason: 'orb_rescan' });
               return ar.handleRefreshOrbRescan();

@@ -112,11 +112,17 @@ export function useProofOfLocation({
     reprojErrPx: null,
     engine: 'Gyro+ORB'
   });
+  const [mappingRestartPrompt, setMappingRestartPrompt] = useState(null);
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
 
   const lastUnmappedMaskRef = useRef('');
   const mappingCompletedNoticeShownRef = useRef(false);
+  const mappingRestartPromptRef = useRef(null);
+  const leaveCheckpointRef = useRef(null);
+  const pendingReturnCheckRef = useRef(false);
+  const notifyMappingViewLeftRef = useRef(null);
+  const notifyMappingViewReturnedRef = useRef(null);
   const lastScanUiRef = useRef({
     coveragePct: -1,
     scannedCount: -1,
@@ -125,6 +131,10 @@ export function useProofOfLocation({
     cursorY: -1,
     hint: ''
   });
+
+  useEffect(() => {
+    mappingRestartPromptRef.current = mappingRestartPrompt;
+  }, [mappingRestartPrompt]);
 
   useEffect(() => {
     cameraReadyRef.current = cameraReady;
@@ -708,15 +718,50 @@ export function useProofOfLocation({
     refreshCamera({ reason: 'initial', force: true });
 
     const samplerId = setInterval(() => {
-      if (mappingPausedBridgeRef.current?.current) return;
-      if (polRef.current.getSceneCoverage().optimal) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const checkPendingReturn = pendingReturnCheckRef.current && Boolean(leaveCheckpointRef.current);
+      if (mappingPausedBridgeRef.current?.current && !checkPendingReturn) return;
+      if (mappingRestartPromptRef.current) return;
+      const isAlreadyOptimal = polRef.current.getSceneCoverage().optimal;
+      if (isAlreadyOptimal && !checkPendingReturn) return;
       if (
         videoRef.current &&
         videoRef.current.readyState >= 2 &&
-        videoRef.current.videoWidth > 0
+        videoRef.current.videoWidth > 0 &&
+        !videoRef.current.paused
       ) {
         const snap = polRef.current.sampleCameraFrame(videoRef.current);
         if (snap) {
+          if (checkPendingReturn) {
+            const checkpoint = leaveCheckpointRef.current;
+            const hasUsableVisual = Boolean(
+              polRef.current.sceneContrast >= 0.8 &&
+                snap.visualDHash &&
+                !/^0+$/.test(snap.visualDHash)
+            );
+            const waitedMs = checkpoint?.returnedAt ? Date.now() - checkpoint.returnedAt : 0;
+            if (!hasUsableVisual && waitedMs < 1600) {
+              return;
+            }
+            pendingReturnCheckRef.current = false;
+            leaveCheckpointRef.current = null;
+            const moveCheck = polRef.current.evaluateMovementSince(checkpoint, {
+              location: locationRef.current,
+              visualDHash: hasUsableVisual ? snap.visualDHash : ''
+            });
+            if (moveCheck.movedSubstantially) {
+              mappingRestartPromptRef.current = moveCheck;
+              setMappingRestartPrompt(moveCheck);
+              setScanBoxCollapsed(false);
+              lastUnmappedMaskRef.current = '0'.repeat(48);
+              setUnmappedGrid(Array(48).fill(false));
+              return;
+            }
+            if (isAlreadyOptimal) {
+              return;
+            }
+          }
+
           setPolStats({
             frames: snap.cameraFrames,
             gyro: snap.gyroSamples,
@@ -726,6 +771,13 @@ export function useProofOfLocation({
           if (cov.optimal) {
             lastUnmappedMaskRef.current = '0'.repeat(48);
             setUnmappedGrid(Array(48).fill(false));
+          } else {
+            const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+            const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
+            if (lastUnmappedMaskRef.current !== vpKey) {
+              lastUnmappedMaskRef.current = vpKey;
+              setUnmappedGrid(vpGrid);
+            }
           }
           lastScanUiRef.current = {
             coveragePct: cov.coveragePct,
@@ -749,6 +801,7 @@ export function useProofOfLocation({
       if (typeof document === 'undefined') return;
       if (document.visibilityState === 'hidden') {
         wasHiddenRef.current = true;
+        notifyMappingViewLeftRef.current?.();
         return;
       }
       if (document.visibilityState === 'visible') {
@@ -760,6 +813,7 @@ export function useProofOfLocation({
         } else {
           ensureCameraLiveRef.current?.({ reason: 'visibility_check' });
         }
+        notifyMappingViewReturnedRef.current?.();
       }
     };
 
@@ -771,6 +825,7 @@ export function useProofOfLocation({
       } else {
         ensureCameraLiveRef.current?.({ reason: 'pageshow_check' });
       }
+      notifyMappingViewReturnedRef.current?.();
     };
 
     const onFocus = () => {
@@ -1039,8 +1094,152 @@ export function useProofOfLocation({
 
   const resetOrbKeyframes = useCallback(() => {
     orbKeyframesRef.current.clear();
-    setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0 }));
+    setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0, relocalizedInliers: 0 }));
   }, []);
+
+  const invalidateScanPreviewCaches = useCallback(() => {
+    lastUnmappedMaskRef.current = '';
+    lastScanUiRef.current = {
+      coveragePct: -1,
+      scannedCount: -1,
+      optimal: false,
+      cursorX: -1,
+      cursorY: -1,
+      hint: ''
+    };
+  }, []);
+
+  const notifyMappingViewLeft = useCallback(() => {
+    if (mappingRestartPromptRef.current) return;
+    if (!leaveCheckpointRef.current) {
+      leaveCheckpointRef.current = polRef.current.captureScanCheckpoint(locationRef.current);
+    }
+    pendingReturnCheckRef.current = false;
+  }, []);
+
+  const notifyMappingViewReturned = useCallback(() => {
+    invalidateScanPreviewCaches();
+
+    if (mappingRestartPromptRef.current) {
+      lastUnmappedMaskRef.current = '0'.repeat(48);
+      setUnmappedGrid(Array(48).fill(false));
+      setScanBoxCollapsed(false);
+      ensureCameraLiveRef.current?.({
+        reason: 'mapping_return_pending_restart',
+        allowRestart: true
+      });
+      return;
+    }
+
+    const checkpoint = leaveCheckpointRef.current;
+    if (!checkpoint || (checkpoint.scannedCount <= 0 && !checkpoint.optimal)) {
+      leaveCheckpointRef.current = null;
+      pendingReturnCheckRef.current = false;
+      const cov = polRef.current.getSceneCoverage();
+      setSceneScan(cov);
+      if (cov.optimal) {
+        lastUnmappedMaskRef.current = '0'.repeat(48);
+        setUnmappedGrid(Array(48).fill(false));
+      } else {
+        const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+        lastUnmappedMaskRef.current = vpGrid.map((b) => (b ? '1' : '0')).join('');
+        setUnmappedGrid(vpGrid);
+      }
+      ensureCameraLiveRef.current?.({ reason: 'mapping_return', allowRestart: true });
+      return;
+    }
+
+    // Immediate GPS + orientation substantial-movement check (visual dHash checked on first fresh frame)
+    const immediateCheck = polRef.current.evaluateMovementSince(checkpoint, {
+      location: locationRef.current,
+      visualDHash: ''
+    });
+    if (immediateCheck.movedSubstantially) {
+      leaveCheckpointRef.current = null;
+      pendingReturnCheckRef.current = false;
+      mappingRestartPromptRef.current = immediateCheck;
+      setMappingRestartPrompt(immediateCheck);
+      setScanBoxCollapsed(false);
+      lastUnmappedMaskRef.current = '0'.repeat(48);
+      setUnmappedGrid(Array(48).fill(false));
+      ensureCameraLiveRef.current?.({ reason: 'mapping_return_moved', allowRestart: true });
+      return;
+    }
+
+    // Defer final visual-scene check until a fresh post-return camera frame arrives
+    leaveCheckpointRef.current = { ...checkpoint, returnedAt: Date.now() };
+    pendingReturnCheckRef.current = true;
+    const cov = polRef.current.getSceneCoverage();
+    setSceneScan(cov);
+    if (!cov.optimal) {
+      const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+      lastUnmappedMaskRef.current = vpGrid.map((b) => (b ? '1' : '0')).join('');
+      setUnmappedGrid(vpGrid);
+    }
+    ensureCameraLiveRef.current?.({ reason: 'mapping_return', allowRestart: true });
+  }, [invalidateScanPreviewCaches]);
+
+  notifyMappingViewLeftRef.current = notifyMappingViewLeft;
+  notifyMappingViewReturnedRef.current = notifyMappingViewReturned;
+
+  const restartSceneMapping = useCallback(
+    async ({ reason = 'manual', refreshCameraFeed = true } = {}) => {
+      leaveCheckpointRef.current = null;
+      pendingReturnCheckRef.current = false;
+      mappingRestartPromptRef.current = null;
+      setMappingRestartPrompt(null);
+      mappingCompletedNoticeShownRef.current = false;
+      invalidateScanPreviewCaches();
+
+      const freshCov = polRef.current.resetSceneScan({ preserveGps: true });
+      resetOrbKeyframes();
+      setSceneScan(freshCov);
+      setUnmappedGrid(Array(48).fill(false));
+      setPolStats((prev) => ({ frames: 0, gyro: prev.gyro, flow: 0 }));
+      setScanBoxCollapsed(false);
+
+      if (rawOrientationRef.current) {
+        yawOffsetRef.current = rawOrientationRef.current.alpha;
+      }
+
+      if (refreshCameraFeed) {
+        const videoEl = videoRef.current;
+        const videoLive = Boolean(
+          videoEl &&
+            videoEl.readyState >= 2 &&
+            videoEl.videoWidth > 0 &&
+            !videoEl.paused
+        );
+        if (!videoLive) {
+          await refreshCameraRef.current?.({
+            reason: `mapping_restart_${reason}`,
+            force: true
+          });
+        } else {
+          ensureCameraLiveRef.current?.({
+            reason: `mapping_restart_${reason}`,
+            allowRestart: true
+          });
+          const snap = polRef.current.sampleCameraFrame(videoEl);
+          if (snap) {
+            const cov = polRef.current.getSceneCoverage();
+            setPolStats({
+              frames: snap.cameraFrames,
+              gyro: snap.gyroSamples,
+              flow: Math.round(snap.opticalFlowCorrelation * 100)
+            });
+            setSceneScan(cov);
+            const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
+            lastUnmappedMaskRef.current = vpGrid.map((b) => (b ? '1' : '0')).join('');
+            setUnmappedGrid(vpGrid);
+          }
+        }
+      }
+
+      return freshCov;
+    },
+    [invalidateScanPreviewCaches, resetOrbKeyframes]
+  );
 
   return {
     videoRef,
@@ -1079,6 +1278,11 @@ export function useProofOfLocation({
     lastUnmappedMaskRef,
     mappingCompletedNoticeShownRef,
     lastScanUiRef,
+    mappingRestartPrompt,
+    setMappingRestartPrompt,
+    notifyMappingViewLeft,
+    notifyMappingViewReturned,
+    restartSceneMapping,
     orbStatus,
     setOrbStatus,
     resetOrbKeyframes,
