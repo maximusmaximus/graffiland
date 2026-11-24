@@ -142,7 +142,7 @@ export function useVoxelBrush({
     Array.isArray(initialDraft.voxels) ? initialDraft.voxels : []
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [occlusionEnabled, setOcclusionEnabled] = useState(true);
+  const [occlusionEnabled, setOcclusionEnabled] = useState(false);
   const [painting, setPainting] = useState(false);
   const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
   const [artTransform, setArtTransform] = useState({
@@ -900,6 +900,12 @@ export function useVoxelBrush({
   const enterTransformMode = useCallback(() => {
     stopBrushPainting();
     setPaletteOpen(false);
+    occlusionRef.current?.reset?.();
+    if (originStatusRef.current?.originBlocked) {
+      const clearStatus = { originBlocked: false, originVisible: true, reason: '' };
+      originStatusRef.current = clearStatus;
+      setOriginStatus(clearStatus);
+    }
     const pivot = computeVoxelCentroid(voxelsRef.current);
     setTransformPivot(pivot);
     transformPivotRef.current = pivot;
@@ -1004,6 +1010,9 @@ export function useVoxelBrush({
   }, [ensureToolUsable, showTemporaryHint]);
 
   const assertOriginUnblockedForPaint = useCallback(() => {
+    if (!occlusionEnabledRef.current) {
+      return true;
+    }
     const cam = cameraRef.current;
     if (cam && occlusionRef.current) {
       const anchor = surfaceAnchorRef.current;
@@ -1236,6 +1245,13 @@ export function useVoxelBrush({
     } else if (curTool === 'occlusion') {
       setOcclusionEnabled((prev) => {
         const next = !prev;
+        occlusionEnabledRef.current = next;
+        if (!next) {
+          occlusionRef.current?.reset?.();
+          const clearStatus = { originBlocked: false, originVisible: true, reason: '' };
+          originStatusRef.current = clearStatus;
+          setOriginStatus(clearStatus);
+        }
         showTemporaryHint(next ? 'Foreground Occlusion ON' : 'Foreground Occlusion OFF');
         return next;
       });

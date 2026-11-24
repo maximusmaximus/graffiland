@@ -395,19 +395,99 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.equal(exited, 1);
     hudView.unmount();
 
-    // 2) Verify ARViewportCanvas source & JSX strictly gate mapping-grayscale-grid, occlusion, and mapping loops on !isArViewOnly
+    // 2) Verify ARViewportCanvas source & JSX strictly gate mapping-grayscale-grid, occlusion, transform fade, and mapping loops
     const fs = await import('node:fs');
     const path = await import('node:path');
     const viewportSrc = fs.readFileSync(
       path.resolve(process.cwd(), 'client/src/components/studio/ARViewportCanvas.jsx'),
       'utf8'
     );
-    assert.match(viewportSrc, /\{!isArViewOnly && cameraReady && !sceneScanOptimal && \(/);
-    assert.match(viewportSrc, /\{!isArViewOnly && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/);
+    assert.match(
+      viewportSrc,
+      /\{!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && \(/
+    );
+    assert.match(
+      viewportSrc,
+      /\{!isArViewOnly && isTransformMode && \(\s*<div[\s\S]*?className="transform-camera-fade"/
+    );
+    assert.match(
+      viewportSrc,
+      /\{!isArViewOnly && !isTransformMode && occlusionEnabled && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/
+    );
     assert.match(viewportSrc, /grid\.visible = !arViewOnly;/);
     assert.match(viewportSrc, /shadowCatcher\.visible = !arViewOnly;/);
     assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly;/);
-    assert.match(viewportSrc, /if \(!arViewOnly && now - lastScanPosePush > 110\)/);
-    assert.match(viewportSrc, /if \(!arViewOnly && now - lastOcclusionPush > 110/);
+    assert.match(
+      viewportSrc,
+      /if \(!arViewOnly && !isTransform && !isSceneLocked && now - lastScanPosePush > 110\)/
+    );
+    assert.match(
+      viewportSrc,
+      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*occlusionEnabledRef\.current &&\s*now - lastOcclusionPush > 110/
+    );
+    assert.match(
+      viewportSrc,
+      /const shouldRefreshEnv =\s*!arViewOnly &&\s*!isTransform &&\s*!paintingRef\.current &&\s*\(!isSceneLocked \|\| !hasCapturedEnvRef\.current\);/
+    );
+  });
+
+  test('Lock & Scale stops mapping with light fade; 100% locked clears background flicker and cover-crops occlusion', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { computeVideoCoverCrop } = await import(
+      '../client/src/components/ForegroundOcclusion.js'
+    );
+
+    // 1) Landscape camera (1920x1080) inside portrait phone viewport (390x844) crops left/right instead of squishing
+    const portraitCrop = computeVideoCoverCrop(1920, 1080, 390, 844);
+    assert.equal(portraitCrop.sy, 0);
+    assert.equal(portraitCrop.sh, 1080);
+    assert.ok(
+      Math.abs(portraitCrop.sw / portraitCrop.sh - 390 / 844) < 0.001,
+      'Cover crop aspect ratio must match portrait viewport'
+    );
+    assert.ok(portraitCrop.sx > 600 && portraitCrop.sx < 800, 'Landscape frame must be centered horizontally');
+
+    // 2) Portrait camera (720x1280) inside wide viewport (1280x720) crops top/bottom
+    const wideCrop = computeVideoCoverCrop(720, 1280, 1280, 720);
+    assert.equal(wideCrop.sx, 0);
+    assert.equal(wideCrop.sw, 720);
+    assert.ok(
+      Math.abs(wideCrop.sw / wideCrop.sh - 1280 / 720) < 0.001,
+      'Cover crop aspect ratio must match wide viewport'
+    );
+    assert.ok(wideCrop.sy > 300, 'Portrait frame must be centered vertically');
+
+    // 3) MobileStudio pauses background camera sampling in Lock & Scale and when 100% locked, and hides SceneCoverageWidget in Lock & Scale
+    const studioSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'client/src/components/MobileStudio.jsx'),
+      'utf8'
+    );
+    assert.match(studioSrc, /const isTransformMode = brush\.mode === 'transform';/);
+    assert.match(
+      studioSrc,
+      /mappingPausedRef\.current = Boolean\(\s*isArViewOnly \|\| isTransformMode \|\| pol\.sceneScan\.optimal \|\| parcelVisit \|\| ar\.mapOpen\s*\);/
+    );
+    assert.match(studioSrc, /\{!isArViewOnly && !isTransformMode && \(\s*<SceneCoverageWidget/);
+    assert.match(studioSrc, /occlusionEnabled=\{brush\.occlusionEnabled\}/);
+
+    // 4) useProofOfLocation stops sampling camera frames once 100% locked
+    const polSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'client/src/hooks/useProofOfLocation.js'),
+      'utf8'
+    );
+    assert.match(polSrc, /if \(polRef\.current\.getSceneCoverage\(\)\.optimal\) return;/);
+
+    // 5) useVoxelBrush defaults foreground occlusion OFF (opt-in) so camera background stays flicker-free
+    const brushSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'client/src/hooks/useVoxelBrush.js'),
+      'utf8'
+    );
+    assert.match(brushSrc, /const \[occlusionEnabled, setOcclusionEnabled\] = useState\(false\);/);
+    assert.match(brushSrc, /if \(!occlusionEnabledRef\.current\) \{\s*return true;\s*\}/);
+
+    // 6) CSS defines uniform light-fade overlay for Lock & Scale at z-index 2 (between video z=1 and WebGL z=3)
+    const cssSrc = fs.readFileSync(path.resolve(process.cwd(), 'client/src/styles.css'), 'utf8');
+    assert.match(cssSrc, /\.transform-camera-fade\s*\{[\s\S]*?z-index:\s*2;[\s\S]*?pointer-events:\s*none;/);
   });
 });

@@ -1,4 +1,23 @@
 /**
+ * Computes source crop rectangle matching CSS `object-fit: cover` so occlusion
+ * sampling and compositing align pixel-for-pixel with `<video class="camera-feed">`.
+ */
+export function computeVideoCoverCrop(videoW, videoH, targetW, targetH) {
+  const vw = Math.max(1, Number(videoW) || 1);
+  const vh = Math.max(1, Number(videoH) || 1);
+  const tw = Math.max(1, Number(targetW) || 1);
+  const th = Math.max(1, Number(targetH) || 1);
+  const videoAspect = vw / vh;
+  const targetAspect = tw / th;
+  if (videoAspect > targetAspect) {
+    const sw = vh * targetAspect;
+    return { sx: (vw - sw) * 0.5, sy: 0, sw, sh: vh };
+  }
+  const sh = vw / targetAspect;
+  return { sx: 0, sy: (vh - sh) * 0.5, sw: vw, sh };
+}
+
+/**
  * Gyro-Compensated Foreground Occlusion & Origin Visibility Detector
  * Detects hands, people, or closer objects crossing/holding in front of the
  * sculpture or its origin, composites them crisply over the AR WebGL layer so
@@ -146,6 +165,20 @@ export class ForegroundOcclusionCompositor {
     const outCtx = outputCanvas.getContext('2d');
     if (!outCtx) return this.lastOriginStatus;
 
+    if (!enabled) {
+      outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+      this.persistedMask.fill(0);
+      this.lensCovered = false;
+      this.lastOriginStatus = {
+        originBlocked: false,
+        originVisible: true,
+        blockedRatio: 0,
+        cursorBlockedRatio: 0,
+        reason: ''
+      };
+      return this.lastOriginStatus;
+    }
+
     if (!videoEl || videoEl.readyState < 2 || !videoEl.videoWidth || !videoEl.videoHeight) {
       outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       return this.evaluateOriginVisibility(originScreen);
@@ -153,8 +186,24 @@ export class ForegroundOcclusionCompositor {
 
     const { width: w, height: h } = this;
     const len = w * h;
+    const coverCrop = computeVideoCoverCrop(
+      videoEl.videoWidth,
+      videoEl.videoHeight,
+      outputCanvas.width,
+      outputCanvas.height
+    );
     try {
-      this.sampleCtx.drawImage(videoEl, 0, 0, w, h);
+      this.sampleCtx.drawImage(
+        videoEl,
+        coverCrop.sx,
+        coverCrop.sy,
+        coverCrop.sw,
+        coverCrop.sh,
+        0,
+        0,
+        w,
+        h
+      );
     } catch {
       outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       return this.evaluateOriginVisibility(originScreen);
@@ -271,14 +320,14 @@ export class ForegroundOcclusionCompositor {
     outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
 
     const coverage = activeCount / len;
-    if (enabled && !fastPan && coverage >= 0.012 && coverage <= 0.92) {
+    if (enabled && !fastPan && coverage >= 0.024 && coverage <= 0.88) {
       const maskData = this.maskImgData.data;
       for (let i = 0; i < len; i++) {
         const p = i * 4;
         maskData[p] = 255;
         maskData[p + 1] = 255;
         maskData[p + 2] = 255;
-        maskData[p + 3] = this.persistedMask[i] >= 0.5 ? 250 : 0;
+        maskData[p + 3] = this.persistedMask[i] >= 0.5 ? 245 : 0;
       }
       this.maskCtx.putImageData(this.maskImgData, 0, 0);
 
@@ -287,7 +336,17 @@ export class ForegroundOcclusionCompositor {
       outCtx.imageSmoothingEnabled = true;
       outCtx.drawImage(this.maskCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
       outCtx.globalCompositeOperation = 'source-in';
-      outCtx.drawImage(videoEl, 0, 0, outputCanvas.width, outputCanvas.height);
+      outCtx.drawImage(
+        videoEl,
+        coverCrop.sx,
+        coverCrop.sy,
+        coverCrop.sw,
+        coverCrop.sh,
+        0,
+        0,
+        outputCanvas.width,
+        outputCanvas.height
+      );
       outCtx.restore();
     }
 

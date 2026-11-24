@@ -709,6 +709,7 @@ export function useProofOfLocation({
 
     const samplerId = setInterval(() => {
       if (mappingPausedBridgeRef.current?.current) return;
+      if (polRef.current.getSceneCoverage().optimal) return;
       if (
         videoRef.current &&
         videoRef.current.readyState >= 2 &&
@@ -722,6 +723,10 @@ export function useProofOfLocation({
             flow: Math.round(snap.opticalFlowCorrelation * 100)
           });
           const cov = polRef.current.getSceneCoverage();
+          if (cov.optimal) {
+            lastUnmappedMaskRef.current = '0'.repeat(48);
+            setUnmappedGrid(Array(48).fill(false));
+          }
           lastScanUiRef.current = {
             coveragePct: cov.coveragePct,
             scannedCount: cov.scannedCount,
