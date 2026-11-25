@@ -15,6 +15,7 @@ try {
   // SPA fallback 404.html for GitHub Pages
   fs.copyFileSync(path.join(tempDir, 'index.html'), path.join(tempDir, '404.html'));
   fs.writeFileSync(path.join(tempDir, '.nojekyll'), '');
+  fs.writeFileSync(path.join(tempDir, 'CNAME'), 'spray.land\n');
 
   const run = (cmd) => execSync(cmd, { cwd: tempDir, stdio: 'inherit' });
   run('git init');

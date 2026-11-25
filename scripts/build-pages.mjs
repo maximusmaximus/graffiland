@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const basePath = process.env.VITE_BASE_PATH || '/graffiland/';
+const basePath = process.env.VITE_BASE_PATH || '/';
 const apiBase =
   process.env.VITE_API_BASE || 'https://graffiland-api.maxinfeld-artshow.workers.dev';
 

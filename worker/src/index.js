@@ -197,8 +197,14 @@ const NFT_ABI = [
   'event SculptureMinted(uint256 indexed tokenId, address indexed recipient, bytes32 indexed landParcelId, bytes32 proofOfLocationHash, string tokenURI, int32 latE6, int32 lngE6)'
 ];
 
+const PRODUCTION_WEB_ORIGINS = [
+  'https://maximusmaximus.github.io',
+  'https://spray.land',
+  'https://www.spray.land'
+];
+
 function resolveTrustedWebAuthnOrigins(request, cfg) {
-  const trusted = new Set();
+  const trusted = new Set(PRODUCTION_WEB_ORIGINS);
   let publicHost = 'localhost';
   try {
     const pu = new URL(String(cfg?.publicUrl || ''));
@@ -307,7 +313,7 @@ function getRuntimeConfig(env) {
     googleClientId: env.GOOGLE_CLIENT_ID || '',
     // Opt-in only: a missing var must never enable passwordless dev logins.
     allowDevGoogleAuth: env.ALLOW_DEV_GOOGLE_AUTH === 'true',
-    publicUrl: env.PUBLIC_URL || 'https://maximusmaximus.github.io/graffiland',
+    publicUrl: env.PUBLIC_URL || 'https://spray.land',
     ipfsGateway: env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs',
     sessionSecret: env.SESSION_SECRET || 'graffiland-worker-dev-session-secret',
     walletEncryptionKey: env.WALLET_ENCRYPTION_KEY || 'graffiland-worker-dev-wallet-key',

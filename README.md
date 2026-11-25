@@ -2,7 +2,8 @@
 
 > Turn the physical world into a shared 3D voxel canvas. Wave your phone like a spatial spray-can over a live camera feed, verify you're really standing there using **Camera + GPS Proof of Location**, claim a **Virtual Land** parcel, and mint gas-sponsored 3D NFTs to **IPFS** and **Robinhood Chain** with a **5% resale royalty**.
 
-- **Live App (GitHub Pages)**: https://maximusmaximus.github.io/graffiland/
+- **Live App**: https://spray.land
+- **Previous GitHub Pages URL** (redirects after custom domain is active): https://maximusmaximus.github.io/graffiland/
 - **Live Edge API & WebSocket Hub (Cloudflare Workers)**: https://graffiland-api.maxinfeld-artshow.workers.dev
 
 ---

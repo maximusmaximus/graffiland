@@ -27,7 +27,7 @@ jobs:
       - run: npm ci
       - run: npm run build
         env:
-          VITE_BASE_PATH: /graffiland/
+          VITE_BASE_PATH: /
           VITE_API_BASE: ${{ vars.VITE_API_BASE || 'https://graffiland-api.maxinfeld-artshow.workers.dev' }}
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID || '' }}
       - uses: actions/upload-pages-artifact@v3

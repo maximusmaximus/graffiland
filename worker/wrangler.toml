@@ -4,7 +4,7 @@ compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-PUBLIC_URL = "https://maximusmaximus.github.io/graffiland"
+PUBLIC_URL = "https://spray.land"
 ALLOW_DEV_GOOGLE_AUTH = "false"
 ROBINHOOD_NETWORK = "testnet"
 ROBINHOOD_RESALE_FEE_BPS = "500"
