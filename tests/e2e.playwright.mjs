@@ -296,19 +296,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForTimeout(800);
     assert.equal(await page.locator(welcomeSelector).count(), 0);
 
-    // Reopen via Intro button and test "Connect AI Agent" CTA
+    // Reopen via Intro button and test "Connect AI" CTA
     await page.getByRole('button', { name: /^Intro$/i }).click();
     await page.waitForSelector(welcomeSelector);
-    await page.getByRole('button', { name: /Connect AI Agent/i }).click();
+    await page.getByRole('button', { name: /Connect AI/i }).click();
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
     await page.waitForSelector('text=Wallet / MCP Auth');
     const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
     assert.ok(selectedTabText.includes('AI Agents'));
 
-    // Reopen via Intro button and test "Full Guide" CTA opening viewport-tabbed Info modal above MapLibre
+    // Reopen via Intro button and test "Tech & Guide" CTA opening viewport-tabbed Info modal above MapLibre
     await page.getByRole('button', { name: /^Intro$/i }).click();
     await page.waitForSelector(welcomeSelector);
-    await page.getByRole('button', { name: /Full Guide/i }).click();
+    await page.getByRole('button', { name: /Tech & Guide/i }).click();
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
     await page.waitForSelector('[data-testid="info-guide-desktop"]');
     await page.getByRole('tab', { name: /Mobile AR Studio/i }).click();
@@ -341,9 +341,14 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.desktop-nav');
 
-    // Dismiss initial first-time visitor overlay via primary CTA
+    // Dismiss initial first-time visitor overlay via magenta Quick Start CTA (verify MINT FREE LAND banner)
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
-    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    const freeLandText = await page.getByTestId('welcome-free-land-banner').textContent();
+    assert.ok(freeLandText.includes('MINT FREE LAND by making art!'));
+    const quickStartBtn = page.getByTestId('welcome-quick-start-btn');
+    assert.ok((await quickStartBtn.textContent()).includes('Quick Start'));
+    assert.ok((await quickStartBtn.getAttribute('class')).includes('btn-magenta'));
+    await quickStartBtn.click();
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
       state: 'detached'
     });
@@ -351,7 +356,25 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const bodyText = await page.textContent('body');
     assert.ok(bodyText.includes('Desktop Map Explorer'));
     assert.ok(bodyText.includes('A real-world 3D art map where humans draw land'));
-    assert.ok(bodyText.includes('E2E Lighthouse Cube'));
+    // Desktop defaults to Land folder tab (larger, emoji icons, no "Around You")
+    assert.equal(await page.getByTestId('desktop-nearby-tab-land').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.getByTestId('desktop-nearby-tab-sculptures').getAttribute('aria-selected'), 'false');
+    const headerText = await page.locator('.desktop-nearby-header').textContent();
+    assert.equal(headerText.includes('Around You'), false);
+    const folderTabMetrics = await page.evaluate(() => {
+      const landBtn = globalThis.document.querySelector('[data-testid="desktop-nearby-tab-land"]');
+      const rect = landBtn?.getBoundingClientRect();
+      const cs = landBtn ? globalThis.getComputedStyle(landBtn) : null;
+      return {
+        height: rect?.height || 0,
+        topRadius: parseFloat(cs?.borderTopLeftRadius || '0'),
+        bottomRadius: parseFloat(cs?.borderBottomLeftRadius || '0'),
+        hasIcon: Boolean(landBtn?.querySelector('.xero-icon'))
+      };
+    });
+    assert.ok(folderTabMetrics.height >= 40, `Expected larger folder tab height >= 40px, got ${folderTabMetrics.height}`);
+    assert.ok(folderTabMetrics.topRadius >= 10 && folderTabMetrics.bottomRadius === 0, `Expected folder tab corners, got ${JSON.stringify(folderTabMetrics)}`);
+    assert.equal(folderTabMetrics.hasIcon, true);
 
     // Exercise Desktop Intro Banner tabs (Humans <-> Collectors <-> AI Agents), clickable "i" tooltip & Prompt Preview
     await page.getByRole('button', { name: /Copy Property-Agent Prompt/i }).waitFor();
@@ -413,14 +436,35 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Dismiss intro banner/i }).click();
     assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
 
-    // Switch Around You header tabs: Sculptures <-> Land, select a land, and verify sidebar tabs
-    await page.getByTestId('desktop-nearby-tab-land').click();
+    // Exercise Land <-> Sculptures folder tabs: Land is default, selecting a sculpture zooms map into its land and stays there after closing
     await page.waitForSelector('[data-testid="desktop-nearby-lands-list"]');
     const firstLandCard = page.getByTestId('desktop-land-item').first();
     await firstLandCard.click();
     assert.equal(await firstLandCard.getAttribute('data-selected'), 'true');
     await page.getByTestId('desktop-nearby-tab-sculptures').click();
     await page.waitForSelector('[data-testid="desktop-nearby-sculptures-list"]');
+    const lighthouseBtn = page
+      .locator('[data-testid="desktop-nearby-sculptures-list"] button')
+      .filter({ hasText: 'E2E Lighthouse Cube' })
+      .first();
+    await lighthouseBtn.click();
+    await page.waitForSelector('[aria-label="Close sculpture details"]');
+    await page.waitForTimeout(700);
+    await page.getByRole('button', { name: /Close sculpture details/i }).click();
+    await page.waitForSelector('[aria-label="Close sculpture details"]', { state: 'detached' });
+    const postCloseMap = await page.evaluate(() => {
+      const stage = globalThis.document.querySelector('.map3d-stage');
+      return {
+        selectedParcelId: stage?.getAttribute('data-selected-parcel-id') || '',
+        focusParcelId: stage?.getAttribute('data-focus-parcel-id') || '',
+        focusZoom: Number(stage?.getAttribute('data-focus-zoom') || 0),
+        liveZoom: Number(stage?.getAttribute('data-map-zoom') || 0)
+      };
+    });
+    assert.ok(postCloseMap.selectedParcelId.startsWith('GLAND-'), `Expected selected land parcel after closing sculpture, got ${JSON.stringify(postCloseMap)}`);
+    assert.equal(postCloseMap.focusParcelId, postCloseMap.selectedParcelId);
+    assert.ok(postCloseMap.focusZoom >= 17.5, `Expected zoomed focus >= 17.5, got ${JSON.stringify(postCloseMap)}`);
+    assert.ok(postCloseMap.liveZoom >= 17.0, `Expected live map zoomed into land >= 17.0 after closing sculpture, got ${JSON.stringify(postCloseMap)}`);
 
     // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
     await page.getByRole('button', { name: /Quests/i }).click();
@@ -521,7 +565,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     await page2.goto(baseUrl, { waitUntil: 'networkidle' });
     await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
-    await page2.getByRole('button', { name: /Skip to AR Camera/i }).click();
+    await page2.getByRole('button', { name: /Skip to Camera/i }).click();
     await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
       state: 'detached'
     });
@@ -627,7 +671,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     }, { timeout: 15000 });
     assert.deepEqual(mapConsoleErrors, []);
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
-    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    await page.getByRole('button', { name: /Quick Start/i }).click();
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
       state: 'detached'
     });
@@ -968,7 +1012,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="welcome-step-2"]');
     await page.getByRole('button', { name: /Next Step \(3\/3\)/i }).click();
     await page.waitForSelector('[data-testid="welcome-step-3"]');
-    await page.getByRole('button', { name: /Explore the Map/i }).click();
+    await page.getByRole('button', { name: /Quick Start/i }).click();
     await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
       state: 'detached'
     });

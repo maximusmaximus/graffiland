@@ -108,6 +108,16 @@ function formatDistanceLabel(meters, unitSystem = 'metric') {
   return `${formatDistance(meters, unitSystem, { compact: true })} away`;
 }
 
+function computeLandFocusZoom(land) {
+  const w = Number(land?.volume?.widthMeters ?? land?.widthMeters ?? 0);
+  const d = Number(land?.volume?.depthMeters ?? land?.depthMeters ?? 0);
+  const maxSpan = Math.max(w, d);
+  if (maxSpan >= 90) return 17.2;
+  if (maxSpan >= 55) return 17.8;
+  if (maxSpan >= 30) return 18.2;
+  return 18.5;
+}
+
 export default function DesktopHub({
   config,
   user,
@@ -132,8 +142,10 @@ export default function DesktopHub({
     initialSession.areaFilter === 'all' ? 'all' : 'nearby'
   );
   const [nearbyCategory, setNearbyCategory] = useState(() =>
-    initialSession.nearbyCategory === 'land' ? 'land' : 'sculptures'
-  ); // 'sculptures' | 'land'
+    initialSession.nearbyDefaultVersion >= 2 && initialSession.nearbyCategory === 'sculptures'
+      ? 'sculptures'
+      : 'land'
+  ); // 'land' | 'sculptures'
   const [selectedLandParcelId, setSelectedLandParcelId] = useState('');
   const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'quests' | 'market' | 'leaders'
   const [drawMode, setDrawMode] = useState(false);
@@ -232,6 +244,7 @@ export default function DesktopHub({
     saveDesktopSession({
       areaFilter,
       nearbyCategory,
+      nearbyDefaultVersion: 2,
       mapViewport,
       introRoleTab,
       lastSculptureId: lastSculpture?.id || '',
@@ -369,8 +382,32 @@ export default function DesktopHub({
         .getSculpture(deepId)
         .then((res) => {
           if (res?.sculpture) {
-            setSelected(res.sculpture);
-            setLastSculpture(res.sculpture);
+            const sc = res.sculpture;
+            setSelected(sc);
+            setLastSculpture(sc);
+            if (sc.parcelId) {
+              setSelectedLandParcelId(sc.parcelId);
+            }
+            const b = sc.parcelBounds;
+            const cLat =
+              b && Number.isFinite(Number(b.minLat)) && Number.isFinite(Number(b.maxLat))
+                ? (Number(b.minLat) + Number(b.maxLat)) / 2
+                : Number(sc.lat);
+            const cLng =
+              b && Number.isFinite(Number(b.minLng)) && Number.isFinite(Number(b.maxLng))
+                ? (Number(b.minLng) + Number(b.maxLng)) / 2
+                : Number(sc.lng);
+            if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+              setMapFocusTarget({
+                lat: cLat,
+                lng: cLng,
+                zoom: 18.2,
+                parcelId: sc.parcelId || '',
+                instant: true,
+                ts: Date.now()
+              });
+              setMapViewport((prev) => ({ ...(prev || {}), lat: cLat, lng: cLng, zoom: 18.2 }));
+            }
           }
         })
         .catch(() => {});
@@ -560,10 +597,75 @@ export default function DesktopHub({
     setMapViewport(vp);
   }, []);
 
+  function focusLandForSculpture(sc) {
+    if (!sc) return;
+    const targetPid = String(sc.parcelId || '').toUpperCase();
+    const matchedParcel = targetPid
+      ? (groupedLands.allLands || []).find(
+          (l) => String(l.parcelId || '').toUpperCase() === targetPid
+        ) ||
+        (parcels || []).find((p) => String(p.parcelId || '').toUpperCase() === targetPid) ||
+        (myLands?.parcels || []).find(
+          (p) => String(p.parcelId || '').toUpperCase() === targetPid
+        ) ||
+        null
+      : null;
+
+    const resolvedParcelId = matchedParcel?.parcelId || sc.parcelId || '';
+    if (resolvedParcelId) {
+      setSelectedLandParcelId(resolvedParcelId);
+    }
+
+    const parcelCoords = matchedParcel ? resolveLandCoords(matchedParcel) : null;
+    let focusLat = parcelCoords?.lat;
+    let focusLng = parcelCoords?.lng;
+
+    if (!Number.isFinite(focusLat) || !Number.isFinite(focusLng)) {
+      const b = sc.parcelBounds;
+      if (
+        b &&
+        Number.isFinite(Number(b.minLat)) &&
+        Number.isFinite(Number(b.maxLat)) &&
+        Number.isFinite(Number(b.minLng)) &&
+        Number.isFinite(Number(b.maxLng))
+      ) {
+        focusLat = (Number(b.minLat) + Number(b.maxLat)) / 2;
+        focusLng = (Number(b.minLng) + Number(b.maxLng)) / 2;
+      }
+    }
+    if (!Number.isFinite(focusLat) || !Number.isFinite(focusLng)) {
+      const sLat = Number(sc.lat);
+      const sLng = Number(sc.lng);
+      if (Number.isFinite(sLat) && Number.isFinite(sLng)) {
+        focusLat = sLat;
+        focusLng = sLng;
+      }
+    }
+
+    if (Number.isFinite(focusLat) && Number.isFinite(focusLng)) {
+      const zoom = computeLandFocusZoom(matchedParcel);
+      setMapFocusTarget({
+        lat: focusLat,
+        lng: focusLng,
+        zoom,
+        parcelId: resolvedParcelId,
+        instant: true,
+        ts: Date.now()
+      });
+      setMapViewport((prev) => ({
+        ...(prev || {}),
+        lat: focusLat,
+        lng: focusLng,
+        zoom
+      }));
+    }
+  }
+
   function openSculpture(sc) {
     if (!sc) return;
     setPairOpen(false);
     setInfoOpen(false);
+    focusLandForSculpture(sc);
     setSelected(sc);
     setLastSculpture(sc);
     const landName = getLiveLandName(sc);
@@ -663,8 +765,15 @@ export default function DesktopHub({
     setSelectedLandParcelId(land.parcelId);
     const coords = resolveLandCoords(land);
     if (coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
-      setMapFocusTarget({ lat: coords.lat, lng: coords.lng, zoom: 17.8, ts: Date.now() });
-      setMapViewport((prev) => ({ ...(prev || {}), lat: coords.lat, lng: coords.lng, zoom: 17.8 }));
+      const zoom = computeLandFocusZoom(land);
+      setMapFocusTarget({
+        lat: coords.lat,
+        lng: coords.lng,
+        zoom,
+        parcelId: land.parcelId,
+        ts: Date.now()
+      });
+      setMapViewport((prev) => ({ ...(prev || {}), lat: coords.lat, lng: coords.lng, zoom }));
     }
     const title = getLiveLandName(land, land.displayName || 'Virtual Land');
     recordLastViewedItem(user?.id, {
@@ -1552,57 +1661,55 @@ export default function DesktopHub({
 
           <aside
             className="card desktop-nearby-panel"
-            aria-label={nearbyCategory === 'land' ? 'Land around you' : 'Sculptures around you'}
+            aria-label={nearbyCategory === 'land' ? 'Land' : 'Sculptures'}
             data-nearby-category={nearbyCategory}
           >
             <div className="desktop-nearby-header">
-              <div className="desktop-nearby-header-left">
-                <XeroIcon emoji="📍" size={16} />
-                <div
-                  className="desktop-nearby-category-tabs"
-                  role="tablist"
-                  aria-label="Browse Sculptures or Land around you"
-                  data-testid="desktop-nearby-category-tabs"
+              <div
+                className="desktop-nearby-category-tabs"
+                role="tablist"
+                aria-label="Browse Land or Sculptures"
+                data-testid="desktop-nearby-category-tabs"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={nearbyCategory === 'land'}
+                  className={`desktop-nearby-category-tab ${
+                    nearbyCategory === 'land' ? 'is-active' : ''
+                  }`}
+                  data-testid="desktop-nearby-tab-land"
+                  onClick={() => selectNearbyCategory('land')}
                 >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={nearbyCategory === 'sculptures'}
-                    className={`desktop-nearby-category-tab ${
-                      nearbyCategory === 'sculptures' ? 'is-active' : ''
-                    }`}
-                    data-testid="desktop-nearby-tab-sculptures"
-                    onClick={() => selectNearbyCategory('sculptures')}
-                  >
-                    <span>Sculptures</span>
-                    <span className="desktop-nearby-tab-count">{displayedSculptures.length}</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={nearbyCategory === 'land'}
-                    className={`desktop-nearby-category-tab ${
-                      nearbyCategory === 'land' ? 'is-active' : ''
-                    }`}
-                    data-testid="desktop-nearby-tab-land"
-                    onClick={() => selectNearbyCategory('land')}
-                  >
-                    <span>Land</span>
-                    <span className="desktop-nearby-tab-count">
-                      {groupedLands.displayedLands.length}
-                    </span>
-                  </button>
-                </div>
-                <span className="desktop-nearby-header-suffix">Around You</span>
+                  <XeroIcon emoji="🗺️" size={19} />
+                  <span>Land</span>
+                  <span className="desktop-nearby-tab-count">
+                    {groupedLands.displayedLands.length}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={nearbyCategory === 'sculptures'}
+                  className={`desktop-nearby-category-tab ${
+                    nearbyCategory === 'sculptures' ? 'is-active' : ''
+                  }`}
+                  data-testid="desktop-nearby-tab-sculptures"
+                  onClick={() => selectNearbyCategory('sculptures')}
+                >
+                  <XeroIcon emoji="🗿" size={19} />
+                  <span>Sculptures</span>
+                  <span className="desktop-nearby-tab-count">{displayedSculptures.length}</span>
+                </button>
               </div>
               <button
                 type="button"
-                className="btn"
-                style={{ padding: '5px 9px', fontSize: 11, flexShrink: 0 }}
+                className="btn desktop-nearby-refresh-btn"
                 onClick={refreshData}
-                title="Refresh sculptures & parcels"
+                title="Refresh land & sculptures"
+                aria-label="Refresh land and sculptures"
               >
-                <XeroIcon emoji="🔄" size={12} />
+                <XeroIcon emoji="🔄" size={13} />
               </button>
             </div>
 
@@ -2061,7 +2168,7 @@ export default function DesktopHub({
               <div
                 className="desktop-nearby-list"
                 data-testid="desktop-nearby-lands-list"
-                aria-label="Lands around you"
+                aria-label="Lands"
               >
                 {groupedLands.displayedLands.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>

@@ -473,8 +473,10 @@ export default function MapView3D({
   const [searchResults, setSearchResults] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIdx, setActiveSearchIdx] = useState(-1);
+  const [liveCamera, setLiveCamera] = useState({ lat: null, lng: null, zoom: null });
   const searchSeqRef = useRef(0);
   const skipNextAutoSearchRef = useRef(false);
+  const pendingFocusTargetRef = useRef(null);
 
   // Latest props kept in refs for synchronous MapLibre event handlers & 60fps Canvas2D rendering
   const sculpturesRef = useRef(sculptures);
@@ -583,21 +585,35 @@ export default function MapView3D({
     onCopyParcelShareLinkRef.current = onCopyParcelShareLink;
   }, [onCopyParcelShareLink]);
   useEffect(() => {
-    const map = mapRef.current;
     if (
-      !map ||
       !focusTarget ||
       !Number.isFinite(Number(focusTarget.lat)) ||
       !Number.isFinite(Number(focusTarget.lng))
     ) {
       return;
     }
+    const targetLat = Number(focusTarget.lat);
+    const targetLng = Number(focusTarget.lng);
+    const targetZoom = Number(focusTarget.zoom || 17.8);
+    const map = mapRef.current;
     userAdjustedRef.current = true;
-    map.flyTo({
-      center: [Number(focusTarget.lng), Number(focusTarget.lat)],
-      zoom: Number(focusTarget.zoom || 17.6),
-      duration: 650
-    });
+    if (!map) {
+      pendingFocusTargetRef.current = { lat: targetLat, lng: targetLng, zoom: targetZoom };
+      return;
+    }
+    pendingFocusTargetRef.current = null;
+    if (focusTarget.instant) {
+      map.jumpTo({
+        center: [targetLng, targetLat],
+        zoom: targetZoom
+      });
+    } else {
+      map.flyTo({
+        center: [targetLng, targetLat],
+        zoom: targetZoom,
+        duration: 550
+      });
+    }
   }, [focusTarget]);
   useEffect(() => {
     onViewportChangeRef.current = onViewportChange;
@@ -1287,13 +1303,24 @@ export default function MapView3D({
 
     mapRef.current = map;
 
+    if (pendingFocusTargetRef.current) {
+      const pending = pendingFocusTargetRef.current;
+      pendingFocusTargetRef.current = null;
+      userAdjustedRef.current = true;
+      map.jumpTo({ center: [pending.lng, pending.lat], zoom: pending.zoom });
+    }
+
     const onStyleLoad = () => {
       ensureCustomLayers(map);
       const c = map.getCenter();
+      const z = Number(map.getZoom().toFixed(2));
+      const lat = Number(c.lat.toFixed(6));
+      const lng = Number(c.lng.toFixed(6));
+      setLiveCamera({ lat, lng, zoom: z });
       onViewportChangeRef.current?.({
-        lat: Number(c.lat.toFixed(6)),
-        lng: Number(c.lng.toFixed(6)),
-        zoom: Number(map.getZoom().toFixed(2)),
+        lat,
+        lng,
+        zoom: z,
         bearing: normalizeRotationDeg(map.getBearing())
       });
     };
@@ -1324,10 +1351,14 @@ export default function MapView3D({
     const onMoveEnd = () => {
       syncCameraUi();
       const c = map.getCenter();
+      const z = Number(map.getZoom().toFixed(2));
+      const lat = Number(c.lat.toFixed(6));
+      const lng = Number(c.lng.toFixed(6));
+      setLiveCamera({ lat, lng, zoom: z });
       onViewportChangeRef.current?.({
-        lat: Number(c.lat.toFixed(6)),
-        lng: Number(c.lng.toFixed(6)),
-        zoom: Number(map.getZoom().toFixed(2)),
+        lat,
+        lng,
+        zoom: z,
         bearing: normalizeRotationDeg(map.getBearing())
       });
     };
@@ -2677,6 +2708,16 @@ export default function MapView3D({
       data-three-3d-models={loadedThree3dCount}
       data-selected-draft-id={selectedDraftId || ''}
       data-selected-parcel-id={selectedParcelId || ''}
+      data-focus-parcel-id={focusTarget?.parcelId || ''}
+      data-focus-lat={Number.isFinite(Number(focusTarget?.lat)) ? String(focusTarget.lat) : ''}
+      data-focus-lng={Number.isFinite(Number(focusTarget?.lng)) ? String(focusTarget.lng) : ''}
+      data-focus-zoom={Number.isFinite(Number(focusTarget?.zoom)) ? String(focusTarget.zoom) : ''}
+      data-map-zoom={liveCamera.zoom !== null ? String(liveCamera.zoom) : ''}
+      data-map-center={
+        liveCamera.lat !== null && liveCamera.lng !== null
+          ? `${liveCamera.lat},${liveCamera.lng}`
+          : ''
+      }
       data-hovered-draft-id={hoveredDraftId || ''}
       data-active-handle={activeHandle || ''}
       style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', flex: 1, minHeight: 0 }}
