@@ -24,6 +24,8 @@ import {
   computeProximitySharpness,
   DEFAULT_ATMOSPHERIC_HAZE_HEX
 } from '../../utils/arLandGuidance.js';
+import { estimateCameraVerticalFovDeg } from '../../utils/arSensorFusion.js';
+import { startWebXrArSession } from '../../utils/webxrArSession.js';
 import XeroIcon from '../XeroIcon.jsx';
 
 /**
@@ -62,6 +64,11 @@ function ARViewportCanvasInner({
   occlusionEnabledRef,
   rawOrientationRef,
   yawOffsetRef,
+  draftYawOffsetRef = null,
+  orientationFusionRef = null,
+  positionFilterRef = null,
+  webxrControllerRef = null,
+  onWebxrStateChange = null,
   fallbackEulerRef,
   wsRef,
   locationRef,
@@ -367,9 +374,27 @@ function ARViewportCanvasInner({
       rebuildDraftMesh(voxelsRef.current);
     }
 
+    const syncLiveLensFov = () => {
+      if (!host) return;
+      const vid = videoRef?.current;
+      const track = vid?.srcObject?.getVideoTracks?.()?.[0] || null;
+      const nextFov = estimateCameraVerticalFovDeg({
+        videoTrack: track,
+        videoWidth: vid?.videoWidth || 0,
+        videoHeight: vid?.videoHeight || 0,
+        viewportWidth: host.clientWidth,
+        viewportHeight: host.clientHeight
+      });
+      if (Math.abs(camera.fov - nextFov) >= 0.4) {
+        camera.fov = nextFov;
+        camera.updateProjectionMatrix();
+      }
+    };
+
     const handleResize = () => {
       if (!host) return;
       camera.aspect = Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight);
+      syncLiveLensFov();
       camera.updateProjectionMatrix();
       renderer.setSize(host.clientWidth, host.clientHeight);
       if (occlusionCanvasRef.current) {
@@ -396,10 +421,14 @@ function ARViewportCanvasInner({
     let lastOrbExtractPush = 0;
     let lastGuidancePush = 0;
     let lastGuidanceKey = '';
+    let lastFovCheck = 0;
     let lastPixelRatio = renderer.getPixelRatio();
     let lastCanvasFilter = '';
     let orbExtractBusy = false;
+    let activeXrSession = null;
     const maxAnisotropy = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 8);
+    const fusedQuat = new THREE.Quaternion();
+    const baseCameraPos = { x: 0, y: 0.4, z: 2.2 };
     const scanFwdVec = new THREE.Vector3();
     const sprayFwdVec = new THREE.Vector3();
     const sprayUpVec = new THREE.Vector3();
@@ -410,8 +439,7 @@ function ARViewportCanvasInner({
     const targetRay = new THREE.Raycaster();
     const centerNdc = new THREE.Vector2(0, 0);
 
-    const animate = () => {
-      rafId = requestAnimationFrame(animate);
+    const renderFrame = (xrFrame = null) => {
       const now = performance.now();
       const dtMs = Math.max(4, Math.min(80, now - lastFrameAt));
       lastFrameAt = now;
@@ -419,13 +447,28 @@ function ARViewportCanvasInner({
       // Pause heavy GPU rendering & video-to-texture uploads while fullscreen map/modals cover AR view
       // so mobile browsers have full GPU headroom for MapLibre 3D maps & Three.js sculpture layers.
       if (
-        renderPausedRef.current ||
-        (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+        !activeXrSession &&
+        (renderPausedRef.current ||
+          (typeof document !== 'undefined' && document.visibilityState === 'hidden'))
       ) {
         return;
       }
 
-      if (rawOrientationRef.current) {
+      if (!activeXrSession && now - lastFovCheck > 1800) {
+        lastFovCheck = now;
+        syncLiveLensFov();
+      }
+
+      if (activeXrSession && xrFrame) {
+        const xrWorldPose = activeXrSession.processFrame(xrFrame, baseCameraPos);
+        if (xrWorldPose) {
+          camera.position.copy(xrWorldPose.position);
+          camera.quaternion.copy(xrWorldPose.quaternion);
+        }
+      } else if (orientationFusionRef?.current?.initialized) {
+        orientationFusionRef.current.getCameraQuaternion(fusedQuat);
+        camera.quaternion.slerp(fusedQuat, 0.52);
+      } else if (rawOrientationRef.current) {
         const { alpha, beta, gamma } = rawOrientationRef.current;
         const screenAngle = window.screen?.orientation?.angle || 0;
         const q = deviceOrientationToQuaternion(
@@ -443,6 +486,23 @@ function ARViewportCanvasInner({
           'YXZ'
         );
         camera.quaternion.setFromEuler(euler);
+      }
+
+      // Apply local Recenter offset ONLY to draftGroup (never rotating GPS lands off True North!)
+      if (modeRef.current !== 'transform' && draftYawOffsetRef) {
+        draftGroup.rotation.y = draftYawOffsetRef.current || 0;
+      }
+
+      // Smooth 60Hz Kalman + IMU dead-reckoning glide for nearby lands & sculptures between 1Hz GPS ticks
+      if (!activeXrSession && positionFilterRef?.current?.initialized && locationRef.current) {
+        const subDelta = positionFilterRef.current.getLiveSubmeterDeltaMeters(locationRef.current);
+        nearbyGroup.position.set(
+          camera.position.x - subDelta.east,
+          0,
+          camera.position.z + subDelta.north
+        );
+      } else if (!activeXrSession) {
+        nearbyGroup.position.set(camera.position.x, 0, camera.position.z);
       }
 
       const interactingLand = Boolean(isInteractingWithLandRef?.current);
@@ -1110,9 +1170,78 @@ function ARViewportCanvasInner({
       renderer.render(scene, camera);
     };
 
+    const animate = () => {
+      rafId = requestAnimationFrame(animate);
+      renderFrame(null);
+    };
+
+    const startStandardLoop = () => {
+      if (!rafId && !activeXrSession) {
+        rafId = requestAnimationFrame(animate);
+      }
+    };
+
+    if (webxrControllerRef) {
+      webxrControllerRef.current = {
+        start: async () => {
+          if (activeXrSession) return true;
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+          const seedHeading = orientationFusionRef?.current?.initialized
+            ? orientationFusionRef.current.getTrueHeadingDeg()
+            : 0;
+          const overlayRoot =
+            typeof document !== 'undefined' ? document.querySelector('.mobile-fullscreen') : null;
+          try {
+            const sessionCtrl = await startWebXrArSession({
+              renderer,
+              overlayRoot,
+              seedTrueHeadingDeg: seedHeading,
+              onEnd: () => {
+                activeXrSession = null;
+                renderer.setAnimationLoop(null);
+                camera.position.set(baseCameraPos.x, baseCameraPos.y, baseCameraPos.z);
+                nearbyGroup.position.set(baseCameraPos.x, 0, baseCameraPos.z);
+                onWebxrStateChange?.(false);
+                startStandardLoop();
+              }
+            });
+            activeXrSession = sessionCtrl;
+            onWebxrStateChange?.(true);
+            renderer.setAnimationLoop((_t, xrFrame) => {
+              renderFrame(xrFrame);
+            });
+            return true;
+          } catch (err) {
+            activeXrSession = null;
+            renderer.setAnimationLoop(null);
+            onWebxrStateChange?.(false);
+            startStandardLoop();
+            throw err;
+          }
+        },
+        stop: async () => {
+          if (!activeXrSession) return;
+          const cur = activeXrSession;
+          activeXrSession = null;
+          renderer.setAnimationLoop(null);
+          await cur.stop();
+        }
+      };
+    }
+
     animate();
 
     return () => {
+      if (webxrControllerRef) {
+        webxrControllerRef.current = null;
+      }
+      if (activeXrSession) {
+        const cur = activeXrSession;
+        activeXrSession = null;
+        renderer.setAnimationLoop(null);
+        cur.stop().catch(() => {});
+      }
       originBeaconMatRef.current = null;
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
@@ -1161,6 +1290,7 @@ function ARViewportCanvasInner({
     draftMatCacheRef,
     draftMeshMapRef,
     draftUnitGeoRef,
+    draftYawOffsetRef,
     envUpdaterRef,
     eraseTargetVoxel,
     fadeOtherItemsRef,
@@ -1184,12 +1314,15 @@ function ARViewportCanvasInner({
     occlusionCanvasRef,
     occlusionEnabledRef,
     occlusionRef,
+    onWebxrStateChange,
     orbKeyframesRef,
     orbTrackerRef,
+    orientationFusionRef,
     originBeaconMatRef,
     originStatusRef,
     paintingRef,
     polRef,
+    positionFilterRef,
     rawOrientationRef,
     rebuildDraftMesh,
     rendererRef,
@@ -1207,6 +1340,7 @@ function ARViewportCanvasInner({
     transformBoxRef,
     videoRef,
     voxelsRef,
+    webxrControllerRef,
     wsRef,
     yawOffsetRef
   ]);

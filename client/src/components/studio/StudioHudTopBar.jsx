@@ -6,6 +6,7 @@ import {
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
 import NotificationCenter from '../NotificationCenter.jsx';
+import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobilePairApprovalDropdown from './MobilePairApprovalDropdown.jsx';
@@ -91,6 +92,10 @@ export default function StudioHudTopBar({
   nearbyOtherItemsCount = 0,
   fadeOtherItems = false,
   onToggleFadeOtherItems = null,
+  sensorStatus = null,
+  webxrSupported = false,
+  webxrActive = false,
+  onToggleWebxr = null,
   onInspectArLand = null,
   onExitArLand = null,
   arExitLabel = 'Back to Draw',
@@ -369,7 +374,91 @@ export default function StudioHudTopBar({
       )}
 
       {/* Unified Non-Overlapping Vertical HUD Status & Alert Stack */}
-      <div className={`mobile-hud-stack ${dockOpen ? 'has-pol' : ''}`}>
+      <div
+        className={`mobile-hud-stack ${dockOpen ? 'has-pol' : ''} ${
+          isInteractingWithLand ? 'is-land-inspect' : ''
+        }`}
+      >
+        {sensorStatus &&
+          (isInteractingWithLand ||
+            mode === 'preview' ||
+            sensorStatus.needsCompassCalibration ||
+            webxrActive) && (
+            <div className="ar-sensor-hud-row hud-interactive">
+              <div
+                className={`ar-sensor-status-pill ${
+                  webxrActive
+                    ? 'is-xr'
+                    : sensorStatus.needsCompassCalibration
+                    ? 'is-warn'
+                    : sensorStatus.trueNorthLocked
+                    ? 'is-locked'
+                    : ''
+                }`}
+                data-testid="ar-sensor-status-pill"
+                data-sensor-source={sensorStatus.source || 'none'}
+                data-true-north={sensorStatus.trueNorthLocked ? 'true' : 'false'}
+              >
+                <XeroIcon
+                  emoji={
+                    webxrActive
+                      ? '✨'
+                      : sensorStatus.needsCompassCalibration
+                      ? '⚠️'
+                      : '🧭'
+                  }
+                  size={12}
+                />
+                <span>
+                  {webxrActive
+                    ? '6-DoF ARCore Lock'
+                    : sensorStatus.needsCompassCalibration
+                    ? sensorStatus.magneticInterference
+                      ? 'Magnetic interference · Wave phone in figure-8'
+                      : 'Calibrate compass (wave figure-8)'
+                    : sensorStatus.trueNorthLocked
+                    ? `True North${
+                        sensorStatus.headingAccuracyDeg != null
+                          ? ` ±${sensorStatus.headingAccuracyDeg}°`
+                          : ''
+                      }${
+                        sensorStatus.gpsAccuracyM != null
+                          ? ` · GPS ±${sensorStatus.gpsAccuracyM}m`
+                          : ''
+                      }`
+                    : `Compass Waiting${
+                        sensorStatus.gpsAccuracyM != null
+                          ? ` · GPS ±${sensorStatus.gpsAccuracyM}m`
+                          : ''
+                      }`}
+                </span>
+                <InfoTip title="Multi-Sensor AR Alignment">
+                  Fuses True-North compass, gyroscope, gravity horizon, geomagnetic declination (
+                  {sensorStatus.declinationDeg >= 0 ? '+' : ''}
+                  {sensorStatus.declinationDeg ?? 0}°), Kalman GPS + step motion, and visual ORB
+                  landmarks so lands stay locked in real-world position and direction.
+                  {sensorStatus.needsCompassCalibration
+                    ? ' Move your phone smoothly in a figure-8 away from steel or cars to recalibrate.'
+                    : ''}
+                </InfoTip>
+              </div>
+
+              {webxrSupported && typeof onToggleWebxr === 'function' && (isInteractingWithLand || mode === 'preview') && (
+                <button
+                  type="button"
+                  className={`ar-webxr-pill ${webxrActive ? 'is-active' : ''}`}
+                  data-testid="ar-webxr-toggle-btn"
+                  aria-pressed={webxrActive}
+                  onClick={onToggleWebxr}
+                  title="Toggle ARCore 6-DoF WebXR tracking for centimeter walking stability"
+                >
+                  <XeroIcon emoji="📐" size={12} />
+                  <span>{webxrActive ? 'Exit 6-DoF' : '6-DoF AR'}</span>
+                </button>
+              )}
+            </div>
+          )}
+
         {!isInteractingWithLand &&
           nearbyCameraLand &&
           (mode === 'draw' || mode === 'preview') &&
@@ -691,9 +780,10 @@ export default function StudioHudTopBar({
       {needsGyroTap && (
         <button
           className="btn btn-primary"
+          data-testid="enable-gyro-compass-btn"
           style={{
             position: 'absolute',
-            top: '50%',
+            top: isInteractingWithLand ? '36%' : '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
             zIndex: 40

@@ -154,6 +154,7 @@ export default function MobileStudio({
   const fadeOtherItemsRef = useRef(false);
   fadeOtherItemsRef.current = fadeOtherItems;
   const atmosphericTintRef = useRef(0x9dbcd8);
+  const webxrControllerRef = useRef(null);
 
   const maybeShowSprayBrushGuide = useCallback(() => {
     if (sprayBrushGuideSeenRef.current) return false;
@@ -313,7 +314,8 @@ export default function MobileStudio({
     isArViewOnly: Boolean(arViewSession || brush.mode === 'preview'),
     editingSculptureId: editingSculptureIdState,
     fadeOtherItems,
-    atmosphericTintRef
+    atmosphericTintRef,
+    orientationFusionRef: pol.orientationFusionRef
   });
 
   const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
@@ -775,6 +777,25 @@ export default function MobileStudio({
     });
   }, [showTemporaryHint]);
 
+  const handleToggleWebxr = useCallback(async () => {
+    const ctrl = webxrControllerRef.current;
+    if (!ctrl) {
+      showTemporaryHint('6-DoF WebXR is not available on this device.');
+      return;
+    }
+    try {
+      if (pol.webxrActiveRef?.current) {
+        await ctrl.stop();
+        showTemporaryHint('Switched back to True-North multi-sensor AR.');
+      } else {
+        await ctrl.start();
+        showTemporaryHint('✨ 6-DoF ARCore WebXR tracking active!');
+      }
+    } catch (err) {
+      showTemporaryHint(err?.message || 'Could not start 6-DoF WebXR session on this browser.');
+    }
+  }, [pol.webxrActiveRef, showTemporaryHint]);
+
   const handleRenameLandSynced = useCallback(
     async (land, nextCustomName) => {
       const res = await api.updateLandParcel(land.parcelId, {
@@ -1045,11 +1066,29 @@ export default function MobileStudio({
       const polSnap = pol.polRef.current.getSnapshot();
       const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
       const tr = brush.artTransformRef.current;
+      // Preserve creator's True-North world orientation + forward placement offset so
+      // visitors see published art in the exact real-world direction & spot it was painted.
+      const draftYawRad = Number(pol.draftYawOffsetRef?.current || 0);
+      const localTransformYawRad = THREE.MathUtils.degToRad(Number(tr.rotYDeg || 0));
+      const trueHeadingDeg = pol.orientationFusionRef?.current?.initialized
+        ? pol.orientationFusionRef.current.getTrueHeadingDeg()
+        : null;
+      const forwardReachM =
+        trueHeadingDeg !== null && brush.surfaceAnchorRef?.current?.depthM
+          ? Math.min(3.5, Math.max(0.5, Number(brush.surfaceAnchorRef.current.depthM)))
+          : trueHeadingDeg !== null
+          ? Math.min(3.0, Math.max(0.5, Number(brush.reachRef?.current || 1.8)))
+          : 0;
+      const headingRad = trueHeadingDeg !== null ? THREE.MathUtils.degToRad(trueHeadingDeg) : 0;
       const anchorOffset = {
-        dx: Number(tr.offsetX || 0),
+        dx: Number(((Number(tr.offsetX || 0)) + Math.sin(headingRad) * forwardReachM).toFixed(3)),
         dy: Number(tr.offsetY || 0),
-        dz: Number(tr.offsetZ || 0),
-        yaw: THREE.MathUtils.degToRad(Number(tr.rotYDeg || 0))
+        dz: Number(((Number(tr.offsetZ || 0)) - Math.cos(headingRad) * forwardReachM).toFixed(3)),
+        yaw: Number((draftYawRad + localTransformYawRad).toFixed(4))
+      };
+      const enrichedPolSnap = {
+        ...polSnap,
+        sensorFusion: pol.sensorStatus || null
       };
       const res = await api.publishSculpture({
         title,
@@ -1062,7 +1101,7 @@ export default function MobileStudio({
         plinthSlotId: selectedPlinthSlot?.id || '',
         draftId: drafts.activeDraftId || undefined,
         location: refinedAnchor,
-        proofOfLocation: polSnap,
+        proofOfLocation: enrichedPolSnap,
         deviceProfile: {
           isMobile: true,
           screenWidth: window.innerWidth,
@@ -1234,6 +1273,11 @@ export default function MobileStudio({
         occlusionEnabledRef={brush.occlusionEnabledRef}
         rawOrientationRef={pol.rawOrientationRef}
         yawOffsetRef={pol.yawOffsetRef}
+        draftYawOffsetRef={pol.draftYawOffsetRef}
+        orientationFusionRef={pol.orientationFusionRef}
+        positionFilterRef={pol.positionFilterRef}
+        webxrControllerRef={webxrControllerRef}
+        onWebxrStateChange={pol.setWebxrState}
         fallbackEulerRef={pol.fallbackEulerRef}
         wsRef={pairing.wsRef}
         locationRef={pol.locationRef}
@@ -1389,6 +1433,10 @@ export default function MobileStudio({
           nearbyOtherItemsCount={ar.visibleOtherItemsCount}
           fadeOtherItems={fadeOtherItems}
           onToggleFadeOtherItems={handleToggleFadeOtherItems}
+          sensorStatus={pol.sensorStatus}
+          webxrSupported={pol.webxrSupported}
+          webxrActive={pol.webxrActive}
+          onToggleWebxr={handleToggleWebxr}
           onInspectArLand={handleInspectArLand}
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
@@ -1687,6 +1735,12 @@ export default function MobileStudio({
               );
             }}
             onShowHint={showTemporaryHint}
+            sensorStatus={pol.sensorStatus}
+            onAdjustCompassNudge={pol.adjustCompassNudge}
+            onResetCompassNudge={pol.resetCompassNudge}
+            webxrSupported={pol.webxrSupported}
+            webxrActive={pol.webxrActive}
+            onToggleWebxr={handleToggleWebxr}
             onClose={handleExitArLand}
           />
         )}

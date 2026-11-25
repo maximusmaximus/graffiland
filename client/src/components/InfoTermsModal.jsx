@@ -408,11 +408,14 @@ export default function InfoTermsModal({
                   <div className="info-simple-title">
                     <XeroIcon emoji="📡" size={16} />
                     <strong>Quick Start, Camera &amp; Scene Scan</strong>
-                    <InfoTip title="Hybrid WebXR, ORB & Passkeys">
-                      Allow Camera, GPS, and Gyroscope, then sweep your phone around to clear
-                      grayscale scan cells and prove you are standing at that real spot. Binary ORB
-                      landmarks anchor art without uploading raw photos; landholders can add
-                      hardware ES256 Passkeys for locked notes.
+                    <InfoTip title="Hybrid WebXR, Multi-Sensor Fusion, ORB & Passkeys">
+                      Allow Camera, GPS, Compass, and Motion sensors. SPRAY.LAND fuses True-North
+                      compass (with WMM geomagnetic declination), 60Hz gyroscope &amp; gravity
+                      horizon stabilization, Kalman GPS + walking step motion, off-thread ORB
+                      visual landmarks, and optional 6-DoF WebXR ARCore tracking so lands and art
+                      stay locked in their true real-world position and direction. Use the compass
+                      Align nudge in any land inspector near steel structures or wave your phone in
+                      a figure-8 if magnetic interference appears.
                     </InfoTip>
                   </div>
                   <p>

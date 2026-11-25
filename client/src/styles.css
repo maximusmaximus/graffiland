@@ -158,6 +158,15 @@ select {
   top: calc(max(12px, env(safe-area-inset-top)) + 88px);
 }
 
+.mobile-hud-stack.is-land-inspect {
+  top: calc(max(12px, env(safe-area-inset-top)) + 122px);
+  align-items: center;
+}
+
+.mobile-hud-stack.is-land-inspect .ar-sensor-hud-row {
+  justify-content: center;
+}
+
 .mobile-hud-banner {
   position: relative;
   width: 100%;
@@ -7657,6 +7666,116 @@ select {
   border-color: rgba(0, 229, 255, 0.78);
   color: #c7fbff;
   box-shadow: 0 4px 16px rgba(0, 229, 255, 0.24);
+}
+
+.ar-sensor-hud-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+}
+
+.ar-sensor-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(7, 14, 26, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  color: #dbeafe;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.36);
+}
+
+.ar-sensor-status-pill.is-locked {
+  border-color: rgba(0, 229, 255, 0.6);
+  color: #d6fbff;
+}
+
+.ar-sensor-status-pill.is-xr {
+  background: rgba(0, 229, 255, 0.18);
+  border-color: rgba(0, 229, 255, 0.88);
+  color: #ffffff;
+}
+
+.ar-sensor-status-pill.is-warn {
+  background: rgba(56, 36, 8, 0.9);
+  border-color: rgba(255, 209, 102, 0.82);
+  color: #ffefc2;
+}
+
+.ar-webxr-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(7, 14, 26, 0.88);
+  border: 1px solid rgba(255, 45, 149, 0.65);
+  color: #ffe3f2;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.ar-webxr-pill.is-active {
+  background: rgba(255, 45, 149, 0.25);
+  border-color: rgba(255, 45, 149, 0.95);
+  color: #ffffff;
+}
+
+.ar-compass-nudge-bar {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: rgba(8, 14, 26, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ar-compass-nudge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.ar-compass-nudge-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+  color: #e2f1ff;
+}
+
+.ar-compass-nudge-readout {
+  font-size: 11px;
+  color: #00e5ff;
+}
+
+.ar-compass-nudge-btns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ar-compass-nudge-btns .btn {
+  flex: 1 1 auto;
+  min-width: 40px;
+  justify-content: center;
+  padding: 4px 6px;
+  font-size: 11px;
 }
 
 .ar-land-inspector {
