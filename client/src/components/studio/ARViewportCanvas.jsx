@@ -16,10 +16,13 @@ import {
   VOXEL_STEP
 } from '../VoxelEngine3D.js';
 import { updateThreeWireframeDepthFade } from '../../utils/prismDepthFade.js';
+import { filterStrokeAgainstPlacedItems } from '../../utils/arItemCollision.js';
 import {
   applyProximitySharpnessToObject3D,
+  blendHexWithAtmosphericHaze,
   computeArLandCameraGuidance,
-  computeProximitySharpness
+  computeProximitySharpness,
+  DEFAULT_ATMOSPHERIC_HAZE_HEX
 } from '../../utils/arLandGuidance.js';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -95,6 +98,10 @@ function ARViewportCanvasInner({
   onVideoMounted = null,
   onCameraRefreshNeeded = null,
   onArLandGuidance = null,
+  fadeOtherItemsRef = null,
+  atmosphericTintRef = null,
+  getActivePlacedItemColliders = null,
+  notifyBlockedByPlacedItem = null,
   computeTargetVoxel,
   applyVoxelBatch,
   applyVoxelAction,
@@ -173,7 +180,7 @@ function ARViewportCanvasInner({
       68,
       Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight),
       0.05,
-      260
+      320
     );
     camera.position.set(0, 0.4, 2.2);
 
@@ -296,6 +303,9 @@ function ARViewportCanvasInner({
 
     const draftGroup = new THREE.Group();
     const nearbyGroup = new THREE.Group();
+    // Anchor nearbyGroup horizontally on the camera's physical GPS origin so all <300 ft
+    // lands & sculptures appear at exact 1:1 world-meter perspective in all directions (N/S/E/W).
+    nearbyGroup.position.set(camera.position.x, 0, camera.position.z);
     scene.add(draftGroup);
     scene.add(nearbyGroup);
 
@@ -482,7 +492,19 @@ function ARViewportCanvasInner({
           }
         }
 
-        if (target && target.action === 'replace') {
+        if (target && target.action === 'blocked') {
+          ghost.position.set(target.x, target.y, target.z);
+          ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
+          ghost.material.color.set(0xff2d55);
+          spraySmoothPos = null;
+          lastPaintPosRef.current = null;
+          if (paintingRef.current) {
+            notifyBlockedByPlacedItem?.({
+              reason: target.blockedReason || 'overlap',
+              title: target.blockedByTitle || 'existing art'
+            });
+          }
+        } else if (target && target.action === 'replace') {
           const pulse = 1.07 + 0.04 * Math.sin(now * 0.012);
           const repScale = Math.max(
             curBlockScale,
@@ -570,15 +592,28 @@ function ARViewportCanvasInner({
               now - lastStackAtRef.current < 145;
 
             if (!selfStackBlocked) {
+              const placedColliders = getActivePlacedItemColliders ? getActivePlacedItemColliders() : [];
               if (!prev) {
                 const startStep = buildConnectedVoxelPath(null, strokeTarget, {
                   step: VOXEL_STEP,
                   blockScale: curBlockScale
                 });
-                if (startStep.path.length > 0) {
-                  lastPaintPosRef.current = startStep.lastPoint;
+                const filtered = filterStrokeAgainstPlacedItems({
+                  prevPoint: null,
+                  pathPoints: startStep.path,
+                  voxelStep: VOXEL_STEP,
+                  rayOrigin: camera.position,
+                  colliders: placedColliders
+                });
+                if (filtered.allowed.length > 0) {
+                  lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
                   lastStackAtRef.current = now;
-                  applyVoxelBatch(startStep.path);
+                  applyVoxelBatch(filtered.allowed);
+                }
+                if (filtered.blocked) {
+                  lastPaintPosRef.current = null;
+                  spraySmoothPos = null;
+                  notifyBlockedByPlacedItem?.(filtered.blockedBy);
                 }
               } else {
                 const stroke = buildConnectedVoxelPath(prev, strokeTarget, {
@@ -586,10 +621,22 @@ function ARViewportCanvasInner({
                   blockScale: curBlockScale,
                   maxSteps: 96
                 });
-                if (stroke.path.length > 0) {
-                  lastPaintPosRef.current = stroke.lastPoint;
+                const filtered = filterStrokeAgainstPlacedItems({
+                  prevPoint: prev,
+                  pathPoints: stroke.path,
+                  voxelStep: VOXEL_STEP,
+                  rayOrigin: camera.position,
+                  colliders: placedColliders
+                });
+                if (filtered.allowed.length > 0) {
+                  lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
                   lastStackAtRef.current = now;
-                  applyVoxelBatch(stroke.path);
+                  applyVoxelBatch(filtered.allowed);
+                }
+                if (filtered.blocked) {
+                  lastPaintPosRef.current = null;
+                  spraySmoothPos = null;
+                  notifyBlockedByPlacedItem?.(filtered.blockedBy);
                 }
               }
             }
@@ -782,6 +829,9 @@ function ARViewportCanvasInner({
           scene.environment = envData.envTexture;
           hemiLight.color.setHex(envData.skyColor);
           hemiLight.groundColor.setHex(envData.groundColor);
+          if (atmosphericTintRef && Number.isFinite(envData.skyColor)) {
+            atmosphericTintRef.current = envData.skyColor;
+          }
         }
       }
 
@@ -837,6 +887,10 @@ function ARViewportCanvasInner({
         nearbyGroupRef.current?.children.length
       ) {
         const activeId = arTargetedIdRef.current;
+        const activeFadeMul = modeRef.current === 'draw' && Boolean(fadeOtherItemsRef?.current) ? 0.22 : 1;
+        const hazeTintHex = Number.isFinite(Number(atmosphericTintRef?.current))
+          ? Number(atmosphericTintRef.current)
+          : DEFAULT_ATMOSPHERIC_HAZE_HEX;
         nearbyGroupRef.current.updateMatrixWorld();
         for (const sub of nearbyGroupRef.current.children) {
           const ud = sub.userData;
@@ -845,7 +899,7 @@ function ARViewportCanvasInner({
             if (isSelLand) {
               selectedLandObj = sub;
             }
-            const landSharp = computeProximitySharpness(ud.distanceMeters ?? 0);
+            const landSharp = computeProximitySharpness(ud.distanceMeters ?? 0, { hazeTintHex });
             const pPulse = 0.5 + 0.5 * Math.sin(now * (isSelLand ? 0.0075 : 0.0045));
             const pulseScale =
               (isSelLand
@@ -853,6 +907,22 @@ function ARViewportCanvasInner({
                 : ud.insideParcel
                 ? 0.72 + pPulse * 0.24
                 : 0.5 + pPulse * 0.2) * landSharp.prismOpacityScale;
+            if (ud.baseHex !== undefined && ud._lastHazeHex !== hazeTintHex) {
+              ud._lastHazeHex = hazeTintHex;
+              const atmoHex = blendHexWithAtmosphericHaze(
+                ud.baseHex,
+                landSharp.atmosphericHaze * 0.72,
+                hazeTintHex
+              );
+              if (ud.wireMat?.uniforms?.uColor?.value?.setHex) {
+                ud.wireMat.uniforms.uColor.value.setHex(atmoHex);
+              } else if (ud.wireMat?.color?.setHex) {
+                ud.wireMat.color.setHex(atmoHex);
+              }
+              if (ud.wallMat?.color?.setHex) {
+                ud.wallMat.color.setHex(atmoHex);
+              }
+            }
             if (ud.wireMat?.uniforms?.uOpacityScale) {
               ud.wireMat.uniforms.uOpacityScale.value = pulseScale;
             } else if (ud.wireMat) {
@@ -873,28 +943,40 @@ function ARViewportCanvasInner({
             continue;
           }
           if (ud?.sculptureId && Number.isFinite(ud.distanceMeters)) {
-            const scSharp = computeProximitySharpness(ud.distanceMeters);
-            if (Math.abs(scSharp.sharpness - (ud._lastSharpness ?? -1)) >= 0.03) {
+            const scSharp = computeProximitySharpness(ud.distanceMeters, { hazeTintHex });
+            if (
+              Math.abs(scSharp.sharpness - (ud._lastSharpness ?? -1)) >= 0.02 ||
+              Math.abs(activeFadeMul - (ud._lastFadeMul ?? -1)) >= 0.02 ||
+              ud._lastHazeHex !== hazeTintHex
+            ) {
               ud._lastSharpness = scSharp.sharpness;
-              applyProximitySharpnessToObject3D(sub, scSharp, maxAnisotropy);
+              ud._lastFadeMul = activeFadeMul;
+              ud._lastHazeHex = hazeTintHex;
+              applyProximitySharpnessToObject3D(sub, scSharp, maxAnisotropy, {
+                fadeMultiplier: activeFadeMul,
+                hazeTintHex
+              });
             }
-          }
-          if (!ud?.baseRingMat) continue;
-          const isTargeted = activeId && ud.sculptureId === activeId;
-          const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
-          ud.baseRingMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
-          ud.baseRingMat.opacity = isTargeted
-            ? 0.72 + pulse * 0.25
-            : modeRef.current === 'draw'
-            ? 0.28 + pulse * 0.18
-            : 0.46 + pulse * 0.3;
-          if (ud.baseHaloMat) {
-            ud.baseHaloMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
-            ud.baseHaloMat.opacity = isTargeted ? 0.22 + pulse * 0.14 : 0.1 + pulse * 0.1;
-          }
-          if (ud.baseGlowRing) {
-            const s = isTargeted ? 1.08 + pulse * 0.07 : 1 + pulse * 0.03;
-            ud.baseGlowRing.scale.set(s, s, 1);
+            if (!ud?.baseRingMat) continue;
+            const isTargeted = activeId && ud.sculptureId === activeId;
+            const pulse = 0.5 + 0.5 * Math.sin(now * (isTargeted ? 0.008 : 0.0045));
+            const baseAtten = scSharp.prismOpacityScale * activeFadeMul;
+            ud.baseRingMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
+            ud.baseRingMat.opacity =
+              (isTargeted
+                ? 0.72 + pulse * 0.25
+                : modeRef.current === 'draw'
+                ? 0.28 + pulse * 0.18
+                : 0.46 + pulse * 0.3) * baseAtten;
+            if (ud.baseHaloMat) {
+              ud.baseHaloMat.color.setHex(isTargeted ? 0xffd166 : 0x00f5d4);
+              ud.baseHaloMat.opacity =
+                (isTargeted ? 0.22 + pulse * 0.14 : 0.1 + pulse * 0.1) * baseAtten;
+            }
+            if (ud.baseGlowRing) {
+              const s = isTargeted ? 1.08 + pulse * 0.07 : 1 + pulse * 0.03;
+              ud.baseGlowRing.scale.set(s, s, 1);
+            }
           }
         }
       }
@@ -1068,6 +1150,7 @@ function ARViewportCanvasInner({
     applyVoxelBatch,
     arSelectedLandIdRef,
     arTargetedIdRef,
+    atmosphericTintRef,
     blockSizeRef,
     cameraRef,
     canvasHostRef,
@@ -1080,7 +1163,9 @@ function ARViewportCanvasInner({
     draftUnitGeoRef,
     envUpdaterRef,
     eraseTargetVoxel,
+    fadeOtherItemsRef,
     fallbackEulerRef,
+    getActivePlacedItemColliders,
     ghostMeshRef,
     gridHelperRef,
     hemiLightRef,
@@ -1095,6 +1180,7 @@ function ARViewportCanvasInner({
     mappingPausedRef,
     modeRef,
     nearbyGroupRef,
+    notifyBlockedByPlacedItem,
     occlusionCanvasRef,
     occlusionEnabledRef,
     occlusionRef,

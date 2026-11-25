@@ -1,7 +1,30 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
+import {
+  AR_MAX_VISIBLE_DISTANCE_FEET,
+  AR_MAX_VISIBLE_DISTANCE_METERS
+} from '../../../shared/constants.mjs';
 import { ensureLandVolumeFitsSculptures } from '../../../shared/landVolume.mjs';
 import { groupNearestLandsWithSculptures, isLandOwnedByUser } from './landMapHelpers.js';
 import { resolveParcelVolume } from './landPreviewHelpers.js';
+
+export { AR_MAX_VISIBLE_DISTANCE_FEET, AR_MAX_VISIBLE_DISTANCE_METERS };
+
+/**
+ * Returns true strictly when a target distance in meters is less than the AR camera
+ * visibility cutoff (default: strictly < 300 feet / 91.44 meters).
+ * @param {number | null | undefined} distanceMeters
+ * @param {number} [maxDistanceMeters]
+ * @returns {boolean}
+ */
+export function isWithinArCameraVisibilityRange(
+  distanceMeters,
+  maxDistanceMeters = AR_MAX_VISIBLE_DISTANCE_METERS
+) {
+  const d = Number(distanceMeters);
+  const limit = Number(maxDistanceMeters);
+  if (!Number.isFinite(d) || !Number.isFinite(limit) || limit <= 0) return false;
+  return d >= 0 && d < limit;
+}
 
 const METERS_PER_DEG_LAT = 111320;
 
@@ -115,7 +138,7 @@ export function findNearbyCameraLands({
   location = null,
   user = null,
   ownedParcelIds = [],
-  maxDistanceMeters = 120,
+  maxDistanceMeters = AR_MAX_VISIBLE_DISTANCE_METERS,
   nearThresholdMeters = 45,
   nowMs = Date.now()
 } = {}) {
@@ -154,7 +177,8 @@ export function findNearbyCameraLands({
 
     const edgeDistanceMeters = computeParcelEdgeDistanceMeters(uLat, uLng, volume);
     const centerDistanceMeters = haversineMeters(uLat, uLng, volume.centerLat, volume.centerLng);
-    if (edgeDistanceMeters > maxDistanceMeters && centerDistanceMeters > maxDistanceMeters) {
+    const minDistanceMeters = Math.min(edgeDistanceMeters, centerDistanceMeters);
+    if (!isWithinArCameraVisibilityRange(minDistanceMeters, maxDistanceMeters)) {
       continue;
     }
 
@@ -166,8 +190,9 @@ export function findNearbyCameraLands({
       ...land,
       volume,
       edgeDistanceMeters: Math.round(edgeDistanceMeters),
+      edgeDistanceMetersExact: Number(edgeDistanceMeters.toFixed(2)),
       centerDistanceMeters: Math.round(centerDistanceMeters),
-      distanceMeters: Math.round(edgeDistanceMeters === 0 ? 0 : Math.min(edgeDistanceMeters, centerDistanceMeters)),
+      distanceMeters: Math.round(edgeDistanceMeters === 0 ? 0 : minDistanceMeters),
       isInside,
       isNear,
       isOwned
@@ -208,8 +233,8 @@ export function computeArLandPrismLocalGeometry({
   location,
   volume,
   baseY = -1.15,
-  maxClampDistM = 55,
-  maxVisualHeightM = 28,
+  maxClampDistM = Number.POSITIVE_INFINITY,
+  maxVisualHeightM = 250,
   enclosingLocalBox = null,
   paddingFraction = 0.1
 }) {
@@ -230,7 +255,8 @@ export function computeArLandPrismLocalGeometry({
 
   const centerOff = projectLngLatToLocalMeters(uLat, uLng, volume.centerLat, volume.centerLng);
   const centerDist = Math.hypot(centerOff.east, centerOff.north);
-  const clampRatio = centerDist > maxClampDistM ? maxClampDistM / centerDist : 1;
+  const hasFiniteClamp = Number.isFinite(maxClampDistM) && maxClampDistM > 0;
+  const clampRatio = hasFiniteClamp && centerDist > maxClampDistM ? maxClampDistM / centerDist : 1;
 
   let bottomCorners = volume.corners.slice(0, 4).map(([cLng, cLat]) => {
     const off = projectLngLatToLocalMeters(uLat, uLng, cLat, cLng);

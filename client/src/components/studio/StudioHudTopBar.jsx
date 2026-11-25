@@ -88,6 +88,9 @@ export default function StudioHudTopBar({
   isInteractingWithLand = false,
   nearbyCameraLand = null,
   nearbyCameraLandCount = 0,
+  nearbyOtherItemsCount = 0,
+  fadeOtherItems = false,
+  onToggleFadeOtherItems = null,
   onInspectArLand = null,
   onExitArLand = null,
   arExitLabel = 'Back to Draw',
@@ -399,6 +402,27 @@ export default function StudioHudTopBar({
               <span className="ar-nearby-land-pill-cta">
                 {nearbyCameraLandCount > 1 ? `+${nearbyCameraLandCount - 1} · ` : ''}
                 Details ▸
+              </span>
+            </button>
+          )}
+
+        {!isInteractingWithLand &&
+          mode === 'draw' &&
+          nearbyOtherItemsCount > 0 &&
+          typeof onToggleFadeOtherItems === 'function' && (
+            <button
+              type="button"
+              className={`ar-fade-items-pill hud-interactive ${fadeOtherItems ? 'is-faded' : ''}`}
+              data-testid="ar-fade-other-items-btn"
+              aria-pressed={fadeOtherItems}
+              onClick={onToggleFadeOtherItems}
+              title="Fade other placed art on this land while drawing (collision protection stays active)"
+            >
+              <XeroIcon emoji={fadeOtherItems ? '👻' : '👁️'} size={13} />
+              <span>
+                {fadeOtherItems
+                  ? `Other Art Faded (${nearbyOtherItemsCount}) · Show`
+                  : `Fade Other Art (${nearbyOtherItemsCount})`}
               </span>
             </button>
           )}

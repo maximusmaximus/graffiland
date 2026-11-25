@@ -140,6 +140,8 @@ export default function MobileStudio({
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
+  const [editingSculptureIdState, setEditingSculptureIdState] = useState('');
+  const [fadeOtherItems, setFadeOtherItems] = useState(false);
   const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
   const [openPairHubSignal, setOpenPairHubSignal] = useState(null);
   const hintTimerRef = useRef(null);
@@ -148,6 +150,10 @@ export default function MobileStudio({
   arViewSessionRef.current = arViewSession;
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
+  const editingSculptureIdRef = useRef('');
+  const fadeOtherItemsRef = useRef(false);
+  fadeOtherItemsRef.current = fadeOtherItems;
+  const atmosphericTintRef = useRef(0x9dbcd8);
 
   const maybeShowSprayBrushGuide = useCallback(() => {
     if (sprayBrushGuideSeenRef.current) return false;
@@ -273,7 +279,8 @@ export default function MobileStudio({
     openPairModalRef: openPairCaller,
     openAgentHandoffRef: openAgentCaller,
     openPublishSheetRef: openPublishCaller,
-    onFirstBrushUse: maybeShowSprayBrushGuide
+    onFirstBrushUse: maybeShowSprayBrushGuide,
+    editingSculptureIdRef
   });
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
@@ -297,7 +304,10 @@ export default function MobileStudio({
     stopBrushPainting: brush.stopBrushPainting,
     showTemporaryHint,
     focusedLandId: focusedArLandId,
-    isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
+    isArViewOnly: Boolean(arViewSession || brush.mode === 'preview'),
+    editingSculptureId: editingSculptureIdState,
+    fadeOtherItems,
+    atmosphericTintRef
   });
 
   const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
@@ -726,6 +736,25 @@ export default function MobileStudio({
     const ids = (lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean);
     setOwnedParcelIdsState(ids);
   }, [lands.myLands]);
+
+  useEffect(() => {
+    const editId = lands.editingSculpture?.id || '';
+    editingSculptureIdRef.current = editId;
+    setEditingSculptureIdState(editId);
+  }, [lands.editingSculpture?.id]);
+
+  const handleToggleFadeOtherItems = useCallback(() => {
+    setFadeOtherItems((prev) => {
+      const next = !prev;
+      fadeOtherItemsRef.current = next;
+      showTemporaryHint(
+        next
+          ? 'Other art faded — solid collision protection stays active so you never draw through it.'
+          : 'Other land art restored to full visibility.'
+      );
+      return next;
+    });
+  }, [showTemporaryHint]);
 
   const handleRenameLandSynced = useCallback(
     async (land, nextCustomName) => {
@@ -1224,6 +1253,10 @@ export default function MobileStudio({
         onVideoMounted={pol.reattachVideoStream}
         onCameraRefreshNeeded={pol.refreshCamera}
         onArLandGuidance={ar.setArLandGuidance}
+        fadeOtherItemsRef={fadeOtherItemsRef}
+        atmosphericTintRef={atmosphericTintRef}
+        getActivePlacedItemColliders={brush.getActivePlacedItemColliders}
+        notifyBlockedByPlacedItem={brush.notifyBlockedByPlacedItem}
         computeTargetVoxel={brush.computeTargetVoxel}
         applyVoxelBatch={brush.applyVoxelBatch}
         applyVoxelAction={brush.applyVoxelAction}
@@ -1334,6 +1367,9 @@ export default function MobileStudio({
           isInteractingWithLand={isInteractingWithLand}
           nearbyCameraLand={ar.primaryCameraLand}
           nearbyCameraLandCount={ar.immediateCameraLands.length}
+          nearbyOtherItemsCount={ar.visibleOtherItemsCount}
+          fadeOtherItems={fadeOtherItems}
+          onToggleFadeOtherItems={handleToggleFadeOtherItems}
           onInspectArLand={handleInspectArLand}
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
@@ -1530,6 +1566,9 @@ export default function MobileStudio({
             setMaterial={brush.setMaterial}
             reachMeters={brush.reachMeters}
             setReachMeters={brush.setReachMeters}
+            nearbyOtherItemsCount={ar.visibleOtherItemsCount}
+            fadeOtherItems={fadeOtherItems}
+            onToggleFadeOtherItems={handleToggleFadeOtherItems}
           />
         )}
 

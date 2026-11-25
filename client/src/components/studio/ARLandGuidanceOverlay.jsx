@@ -1,4 +1,5 @@
 import React from 'react';
+import { AR_MAX_VISIBLE_DISTANCE_FEET } from '../../../../shared/constants.mjs';
 import { formatDistanceMeters, resolveLandCoords } from '../../utils/landMapHelpers.js';
 import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 
@@ -46,7 +47,35 @@ export default function ARLandGuidanceOverlay({
   hasBottomInspector = true
 }) {
   const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
-  if (!land || !guidance) return null;
+  if (!land) return null;
+
+  if (land.outOfArRange) {
+    const outName = land.displayName || 'Virtual Land';
+    const outDist = Number.isFinite(Number(land.edgeDistanceMeters ?? land.distanceMeters))
+      ? formatDistanceMeters(land.edgeDistanceMeters ?? land.distanceMeters, unitSystem)
+      : land.distanceLabel || '';
+    return (
+      <div
+        className={`ar-guidance-stage ${hasBottomInspector ? 'has-inspector' : ''}`}
+        data-testid="ar-land-out-of-range-overlay"
+        data-out-of-range="true"
+        aria-live="polite"
+      >
+        <div className="ar-in-view-pill is-tier-distant" data-testid="ar-land-out-of-range-badge">
+          <div className="ar-in-view-head">
+            <span className="ar-in-view-dot" aria-hidden="true" />
+            <span className="ar-in-view-title">{outName}</span>
+            {outDist && <span className="ar-in-view-dist mono">{outDist}</span>}
+          </div>
+          <div className="ar-sharpness-label mono" style={{ marginTop: 4 }}>
+            Walk within {AR_MAX_VISIBLE_DISTANCE_FEET} ft to view in AR camera
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!guidance) return null;
 
   const displayName = guidance.displayName || land.displayName || 'Nearby Land';
   const distText = land.isInside

@@ -1,4 +1,11 @@
 import * as THREE from 'three';
+import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../shared/constants.mjs';
+
+export const DEFAULT_ATMOSPHERIC_HAZE_HEX = 0x9dbcd8;
+
+const _tmpBaseColor = new THREE.Color();
+const _tmpHazeColor = new THREE.Color();
+const _tmpHsl = { h: 0, s: 0, l: 0 };
 
 const TEXTURE_SLOTS = [
   'map',
@@ -25,36 +32,42 @@ function toVec3(pt) {
 }
 
 /**
- * Computes progressive distance-based clarity & sharpness parameters for an AR land
- * and its artworks. Far lands render as clean atmospheric previews and progressively
- * sharpen in geometry detail, texture anisotropy, PBR contrast, shadows, and resolution
- * as the user walks closer.
+ * Computes progressive distance-based clarity, atmospheric perspective, and sharpness
+ * parameters for an AR land and its artworks across the 0 .. 300 ft (91.44 m) camera horizon.
+ * Far lands & sculptures recede naturally with aerial haze tinting, subtle desaturation,
+ * softened contrast, and gentle horizon attenuation, then snap progressively sharper,
+ * richer, and higher contrast as the user approaches.
  *
  * @param {number | null | undefined} distanceMeters
  * @param {{
  *   nearFullSharpMeters?: number,
  *   farSoftMeters?: number,
+ *   maxVisibleMeters?: number,
  *   lodUpgradeMeters?: number,
- *   shadowCutoffMeters?: number
+ *   shadowCutoffMeters?: number,
+ *   hazeTintHex?: number
  * }} [options]
  */
 export function computeProximitySharpness(distanceMeters, options = {}) {
   const {
     nearFullSharpMeters = 5,
-    farSoftMeters = 60,
+    farSoftMeters = AR_MAX_VISIBLE_DISTANCE_METERS,
+    maxVisibleMeters = AR_MAX_VISIBLE_DISTANCE_METERS,
     lodUpgradeMeters = 26,
-    shadowCutoffMeters = 20
+    shadowCutoffMeters = 20,
+    hazeTintHex = DEFAULT_ATMOSPHERIC_HAZE_HEX
   } = options;
 
   const rawDist = Number(distanceMeters);
   const dist = Number.isFinite(rawDist) ? Math.max(0, rawDist) : 12;
+  const inVisibleRange = dist < maxVisibleMeters;
 
   const span = Math.max(1, farSoftMeters - nearFullSharpMeters);
   const normDist = clamp((dist - nearFullSharpMeters) / span, 0, 1);
 
-  // Smooth ease-out sharpening curve: 1.0 when <= 5m, dropping smoothly to 0.22 at >= 60m
+  // Smooth ease-out sharpening curve: 1.0 when <= 5m, dropping smoothly to 0.18 at 300 ft (91.44m)
   const eased = 1 - Math.pow(normDist, 0.78);
-  const sharpness = Number(clamp(0.22 + eased * 0.78, 0.22, 1).toFixed(3));
+  const sharpness = Number(clamp(0.18 + eased * 0.82, 0.18, 1).toFixed(3));
   const sharpnessPct = Math.round(sharpness * 100);
 
   let tier = 'distant';
@@ -72,13 +85,37 @@ export function computeProximitySharpness(distanceMeters, options = {}) {
 
   // Gentle atmospheric softness only past 8m; strictly 0px crisp within 8m
   const blurNorm = clamp((dist - 8) / Math.max(1, farSoftMeters - 8), 0, 1);
-  const canvasBlurPx = Number((blurNorm * 1.35).toFixed(2));
+  const canvasBlurPx = Number((blurNorm * 1.65).toFixed(2));
 
-  // Normalize sharpness onto 0..1 relative to [0.22..1.0] for continuous visual controls
-  const s01 = clamp((sharpness - 0.22) / 0.78, 0, 1);
+  // Normalize sharpness onto 0..1 relative to [0.18..1.0] for continuous visual controls
+  const s01 = clamp((sharpness - 0.18) / 0.82, 0, 1);
+
+  // Physical Beer-Lambert exponential aerial perspective scattering curve (0 when <= 5m -> 0.72 near 300 ft)
+  const expScale = 1 - Math.exp(-2.35);
+  const scatterNorm = normDist <= 0 ? 0 : (1 - Math.exp(-2.35 * normDist)) / expScale;
+  const atmosphericHaze = Number(clamp(scatterNorm * 0.72, 0, 0.72).toFixed(3));
+  const saturationScale = Number(clamp(1 - atmosphericHaze * 0.72, 0.35, 1).toFixed(3));
+  const emissiveScale = Number(clamp(1 - atmosphericHaze * 0.68, 0.32, 1).toFixed(3));
+
+  // Smooth fade over the final ~20m approaching the 300 ft cutoff so objects dissolve into haze instead of popping
+  const horizonStart = Math.max(nearFullSharpMeters + 10, maxVisibleMeters - 20);
+  const horizonNorm = clamp(
+    (dist - horizonStart) / Math.max(1, maxVisibleMeters - horizonStart),
+    0,
+    1
+  );
+  const horizonFade = !inVisibleRange ? 0 : 1 - horizonNorm * horizonNorm * 0.68;
+
+  const sculptureOpacity = !inVisibleRange
+    ? 0
+    : Number(clamp((0.36 + s01 * 0.64) * horizonFade, 0.12, 1).toFixed(3));
+  const prismOpacityScale = !inVisibleRange
+    ? 0
+    : Number(clamp((0.32 + s01 * 0.68) * horizonFade, 0.1, 1).toFixed(3));
 
   return {
     distanceMeters: Math.round(dist * 10) / 10,
+    inVisibleRange,
     sharpness,
     sharpnessPct,
     tier,
@@ -86,13 +123,42 @@ export function computeProximitySharpness(distanceMeters, options = {}) {
     simplifyVoxelLod: dist > lodUpgradeMeters,
     anisotropyRatio: Number(s01.toFixed(3)),
     enableShadows: dist <= shadowCutoffMeters,
-    sculptureOpacity: Number((0.68 + s01 * 0.32).toFixed(3)),
-    roughnessSoftening: Number(((1 - s01) * 0.22).toFixed(3)),
-    envMapBoost: Number((0.55 + s01 * 0.63).toFixed(3)),
-    prismOpacityScale: Number((0.58 + s01 * 0.42).toFixed(3)),
+    atmosphericHaze,
+    saturationScale,
+    emissiveScale,
+    hazeTintHex,
+    sculptureOpacity,
+    roughnessSoftening: Number(((1 - s01) * 0.34).toFixed(3)),
+    envMapBoost: Number((0.46 + s01 * 0.72).toFixed(3)),
+    prismOpacityScale,
     canvasBlurPx,
     pixelRatioScale: Number((0.78 + s01 * 0.22).toFixed(3))
   };
+}
+
+/**
+ * Blends a hex color gently toward atmospheric haze tint with slight aerial desaturation.
+ * At hazeAmount === 0, returns baseHex unchanged.
+ * @param {number} baseHex
+ * @param {number} hazeAmount
+ * @param {number} [hazeTintHex]
+ * @returns {number}
+ */
+export function blendHexWithAtmosphericHaze(
+  baseHex,
+  hazeAmount = 0,
+  hazeTintHex = DEFAULT_ATMOSPHERIC_HAZE_HEX
+) {
+  const haze = clamp(Number(hazeAmount) || 0, 0, 0.85);
+  if (haze <= 0.001) return baseHex;
+  _tmpBaseColor.setHex(baseHex);
+  _tmpBaseColor.getHSL(_tmpHsl);
+  _tmpBaseColor.setHSL(_tmpHsl.h, _tmpHsl.s * (1 - haze * 0.55), _tmpHsl.l);
+  _tmpHazeColor.setHex(
+    Number.isFinite(Number(hazeTintHex)) ? Number(hazeTintHex) : DEFAULT_ATMOSPHERIC_HAZE_HEX
+  );
+  _tmpBaseColor.lerp(_tmpHazeColor, haze);
+  return _tmpBaseColor.getHex();
 }
 
 /**
@@ -284,16 +350,36 @@ export function computeArLandCameraGuidance({
 }
 
 /**
- * Losslessly applies a proximity sharpness profile to a Three.js sculpture object tree:
- * ramps texture anisotropy, restores full PBR roughness/env reflections, activates crisp
- * shadows when close, and softly clears atmospheric distance translucency as user approaches.
+ * Losslessly applies atmospheric perspective & proximity sharpness (plus optional draw-mode
+ * ghost fade multiplier) to a Three.js sculpture object tree:
+ * - Blends distant colors smoothly toward ambient sky haze with subtle aerial desaturation
+ * - Softens distant roughness, reflections, emissive glow, and opacity toward the 300 ft horizon
+ * - Ramps texture anisotropy, restores exact original crisp color/PBR sharpness, and activates
+ *   shadows as the user walks closer
+ * - Preserves full mesh geometry & visibility so 3D collision remains active even when faded out.
  */
 export function applyProximitySharpnessToObject3D(
   rootObj,
   sharpnessProfile,
-  maxAnisotropy = 8
+  maxAnisotropy = 8,
+  options = {}
 ) {
   if (!rootObj || !sharpnessProfile || typeof rootObj.traverse !== 'function') return;
+
+  const fadeMultiplier = clamp(
+    Number.isFinite(Number(options?.fadeMultiplier)) ? Number(options.fadeMultiplier) : 1,
+    0.08,
+    1
+  );
+  const hazeTintHex = Number.isFinite(Number(options?.hazeTintHex))
+    ? Number(options.hazeTintHex)
+    : Number.isFinite(Number(sharpnessProfile.hazeTintHex))
+    ? Number(sharpnessProfile.hazeTintHex)
+    : DEFAULT_ATMOSPHERIC_HAZE_HEX;
+  const haze = clamp(Number(sharpnessProfile.atmosphericHaze ?? 0), 0, 0.85);
+  const satScale = clamp(Number(sharpnessProfile.saturationScale ?? 1), 0.3, 1);
+  const emissiveScale = clamp(Number(sharpnessProfile.emissiveScale ?? 1), 0.2, 1);
+  _tmpHazeColor.setHex(hazeTintHex);
 
   const targetAnisotropy = Math.max(
     1,
@@ -309,13 +395,14 @@ export function applyProximitySharpnessToObject3D(
     const materials = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
     const hasShadowMat = materials.some((m) => m?.isShadowMaterial);
     if (hasShadowMat) {
-      obj.receiveShadow = Boolean(sharpnessProfile.enableShadows);
+      obj.receiveShadow = Boolean(sharpnessProfile.enableShadows) && fadeMultiplier > 0.5;
       return;
     }
 
     if (obj.isMesh) {
-      obj.castShadow = Boolean(sharpnessProfile.enableShadows);
-      obj.receiveShadow = Boolean(sharpnessProfile.enableShadows);
+      const shadowsOn = Boolean(sharpnessProfile.enableShadows) && fadeMultiplier > 0.5;
+      obj.castShadow = shadowsOn;
+      obj.receiveShadow = shadowsOn;
     }
 
     for (const mat of materials) {
@@ -325,20 +412,57 @@ export function applyProximitySharpnessToObject3D(
         mat.userData.__arBase = {
           opacity: Number.isFinite(mat.opacity) ? mat.opacity : 1,
           transparent: Boolean(mat.transparent),
+          depthWrite: mat.depthWrite !== undefined ? Boolean(mat.depthWrite) : true,
           roughness: Number.isFinite(mat.roughness) ? mat.roughness : null,
-          envMapIntensity: Number.isFinite(mat.envMapIntensity) ? mat.envMapIntensity : 1
+          envMapIntensity: Number.isFinite(mat.envMapIntensity) ? mat.envMapIntensity : 1,
+          color: mat.color && typeof mat.color.clone === 'function' ? mat.color.clone() : null,
+          emissive:
+            mat.emissive && typeof mat.emissive.clone === 'function' ? mat.emissive.clone() : null,
+          emissiveIntensity: Number.isFinite(mat.emissiveIntensity) ? mat.emissiveIntensity : null
         };
       }
       const base = mat.userData.__arBase;
 
-      const nextOpacity = Number((base.opacity * sharpnessProfile.sculptureOpacity).toFixed(3));
+      const nextOpacity = Number(
+        clamp(base.opacity * sharpnessProfile.sculptureOpacity * fadeMultiplier, 0, 1).toFixed(3)
+      );
       const nextTransparent = base.transparent || nextOpacity < 0.995;
-      if (mat.transparent !== nextTransparent) {
+      const nextDepthWrite = fadeMultiplier < 0.95 ? false : base.depthWrite;
+      if (mat.transparent !== nextTransparent || mat.depthWrite !== nextDepthWrite) {
         mat.transparent = nextTransparent;
+        mat.depthWrite = nextDepthWrite;
         mat.needsUpdate = true;
       }
       if (Number.isFinite(mat.opacity)) {
         mat.opacity = nextOpacity;
+      }
+
+      if (base.color && mat.color && typeof mat.color.copy === 'function') {
+        if (haze <= 0.001 && satScale >= 0.999) {
+          mat.color.copy(base.color);
+        } else {
+          _tmpBaseColor.copy(base.color);
+          _tmpBaseColor.getHSL(_tmpHsl);
+          _tmpBaseColor.setHSL(_tmpHsl.h, _tmpHsl.s * satScale, _tmpHsl.l);
+          _tmpBaseColor.lerp(_tmpHazeColor, haze);
+          mat.color.copy(_tmpBaseColor);
+        }
+      }
+
+      if (base.emissive && mat.emissive && typeof mat.emissive.copy === 'function') {
+        if (haze <= 0.001) {
+          mat.emissive.copy(base.emissive);
+        } else {
+          _tmpBaseColor.copy(base.emissive);
+          _tmpBaseColor.lerp(_tmpHazeColor, haze * 0.45);
+          mat.emissive.copy(_tmpBaseColor);
+        }
+      }
+
+      if (base.emissiveIntensity !== null && Number.isFinite(mat.emissiveIntensity)) {
+        mat.emissiveIntensity = Number(
+          (base.emissiveIntensity * emissiveScale * (fadeMultiplier < 0.95 ? 0.55 : 1)).toFixed(3)
+        );
       }
 
       if (base.roughness !== null && Number.isFinite(mat.roughness)) {
