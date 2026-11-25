@@ -167,12 +167,15 @@ function drawGlowingPrism(
   });
 
   if (showGizmo) {
-    // 1) Side Segment Move/Scale Bars along the middle of all 4 bottom & top edges
+    const isHeightGroupActive =
+      activeHandle === 'height' || String(activeHandle || '').startsWith('top-bar-');
+
+    // 1) Bottom Side Segment Bars (stretch footprint in/out) & Top Rim Bars (pull up/down for height)
     for (let i = 0; i < 4; i++) {
       const next = (i + 1) % 4;
-      const isEdgeActive = activeHandle === `edge-${i}`;
-      const barColor = isEdgeActive ? '#ffd166' : '#00f5d4';
-      const drawEdgeBar = (pA, pB, thick) => {
+      const isBottomEdgeActive = activeHandle === `edge-${i}`;
+      const isTopBarActive = isHeightGroupActive;
+      const drawEdgeBar = (pA, pB, thick, barColor, glowActive) => {
         const s1 = lerpPt(pA, pB, 0.3);
         const s2 = lerpPt(pA, pB, 0.7);
         ctx.save();
@@ -186,7 +189,7 @@ function drawGlowingPrism(
 
         ctx.strokeStyle = barColor;
         ctx.shadowColor = barColor;
-        ctx.shadowBlur = isEdgeActive ? 16 : 9;
+        ctx.shadowBlur = glowActive ? 16 : 9;
         ctx.lineWidth = thick;
         ctx.beginPath();
         ctx.moveTo(s1.x, s1.y);
@@ -202,8 +205,20 @@ function drawGlowingPrism(
         ctx.stroke();
         ctx.restore();
       };
-      drawEdgeBar(bottom[i], bottom[next], isEdgeActive ? 6.5 : 5);
-      drawEdgeBar(top[i], top[next], isEdgeActive ? 5.5 : 3.8);
+      drawEdgeBar(
+        bottom[i],
+        bottom[next],
+        isBottomEdgeActive ? 6.5 : 5,
+        isBottomEdgeActive ? '#ffd166' : '#00f5d4',
+        isBottomEdgeActive
+      );
+      drawEdgeBar(
+        top[i],
+        top[next],
+        isTopBarActive ? 6 : 4.2,
+        isTopBarActive ? '#ffd166' : '#38f8dc',
+        isTopBarActive
+      );
     }
 
     // 2) Vertical Rotation Bars (hold & move any vertical corner bar to rotate the box)
@@ -273,7 +288,7 @@ function drawGlowingPrism(
 
     // 4) Pronounced Center Z-Axis Up/Down Elevator Handle (vertical stem + glowing ↕ orb)
     if (topCenter?.visible) {
-      const isHActive = activeHandle === 'height';
+      const isHActive = isHeightGroupActive;
       const baseCenter = {
         x: (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4,
         y: (bottom[0].y + bottom[1].y + bottom[2].y + bottom[3].y) / 4
@@ -717,6 +732,8 @@ export default function MapView3D({
       if (isSelected || (!activeGizmoCoords && isHovered)) {
         const edge0Mid = lerpPt(geom.bottom[0], geom.bottom[1], 0.5);
         const edge1Mid = lerpPt(geom.bottom[1], geom.bottom[2], 0.5);
+        const topBar0Mid = lerpPt(geom.top[0], geom.top[1], 0.5);
+        const topBar1Mid = lerpPt(geom.top[1], geom.top[2], 0.5);
         const vbar0Mid = lerpPt(geom.bottom[0], geom.top[0], 0.5);
         const vbar1Mid = lerpPt(geom.bottom[1], geom.top[1], 0.5);
         const baseCenter = {
@@ -729,6 +746,8 @@ export default function MapView3D({
           corner1: [Math.round(geom.bottom[1].x), Math.round(geom.bottom[1].y)],
           edge0: [Math.round(edge0Mid.x), Math.round(edge0Mid.y)],
           edge1: [Math.round(edge1Mid.x), Math.round(edge1Mid.y)],
+          topBar0: [Math.round(topBar0Mid.x), Math.round(topBar0Mid.y)],
+          topBar1: [Math.round(topBar1Mid.x), Math.round(topBar1Mid.y)],
           vbar0: [Math.round(vbar0Mid.x), Math.round(vbar0Mid.y)],
           vbar1: [Math.round(vbar1Mid.x), Math.round(vbar1Mid.y)],
           topCenter: [Math.round(geom.topCenter.x), Math.round(geom.topCenter.y)],
@@ -1912,6 +1931,26 @@ export default function MapView3D({
         }
       }
 
+      // 2b) Top Rim Bars -> pull up / down to raise or lower the cube's height (in 3D/Isometric views)
+      for (let i = 0; i < 4; i++) {
+        const next = (i + 1) % 4;
+        const topMid = lerpPt(geom.top[i], geom.top[next], 0.5);
+        const botMid = lerpPt(geom.bottom[i], geom.bottom[next], 0.5);
+        const topBottomSep = Math.hypot(topMid.x - botMid.x, topMid.y - botMid.y);
+        if (topBottomSep < 6) continue;
+        const segTop = distPointToSegment(px, py, geom.top[i], geom.top[next]);
+        if (segTop.dist <= 11 && segTop.t >= 0.14 && segTop.t <= 0.86) {
+          return {
+            type: 'height',
+            index: i,
+            draft: d,
+            handleKey: `top-bar-${i}`,
+            cursor: 'ns-resize',
+            hint: `Pull top bar up / down to raise or lower height (${Math.round(d.heightMeters)}m)`
+          };
+        }
+      }
+
       // 3) Vertical Corner Bars -> hold & move to rotate the box
       for (let i = 0; i < 4; i++) {
         const seg = distPointToSegment(px, py, geom.bottom[i], geom.top[i]);
@@ -1927,22 +1966,18 @@ export default function MapView3D({
         }
       }
 
-      // 4) Side Segment Bars (bottom & top edges) -> move single segment
+      // 4) Bottom Side Segment Bars -> stretch single footprint edge in/out
       for (let i = 0; i < 4; i++) {
         const next = (i + 1) % 4;
         const segBot = distPointToSegment(px, py, geom.bottom[i], geom.bottom[next]);
-        const segTop = distPointToSegment(px, py, geom.top[i], geom.top[next]);
-        if (
-          (segBot.dist <= 10 && segBot.t >= 0.14 && segBot.t <= 0.86) ||
-          (segTop.dist <= 9 && segTop.t >= 0.16 && segTop.t <= 0.84)
-        ) {
+        if (segBot.dist <= 10 && segBot.t >= 0.14 && segBot.t <= 0.86) {
           return {
             type: 'edge',
             index: i,
             draft: d,
             handleKey: `edge-${i}`,
             cursor: i % 2 === 0 ? 'ns-resize' : 'ew-resize',
-            hint: 'Drag side bar to stretch edge'
+            hint: 'Drag bottom side bar to stretch edge'
           };
         }
       }
@@ -2055,6 +2090,20 @@ export default function MapView3D({
 
       const centerScreen = mapRef.current.project([hit.draft.centerLng, hit.draft.centerLat]);
       const startAngleRad = Math.atan2(py - centerScreen.y, px - centerScreen.x);
+      const origHeightMeters = Number(hit.draft.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters);
+      const hitGeom = computePrismScreenGeometry(mapRef.current, maplibregl, hit.draft);
+      let heightMetersPerPx = 0.35;
+      if (hitGeom && origHeightMeters > 0) {
+        const verticalScreenPx =
+          hitGeom.bottom.reduce(
+            (sum, pt, idx) =>
+              sum + Math.hypot(pt.x - hitGeom.top[idx].x, pt.y - hitGeom.top[idx].y),
+            0
+          ) / 4;
+        if (verticalScreenPx >= 6) {
+          heightMetersPerPx = Math.max(0.08, Math.min(2.5, origHeightMeters / verticalScreenPx));
+        }
+      }
 
       gizmoDragRef.current = {
         ...hit,
@@ -2065,7 +2114,8 @@ export default function MapView3D({
         origLat: hit.draft.centerLat,
         origLng: hit.draft.centerLng,
         origRotationDeg: normalizeRotationDeg(hit.draft.rotationDeg || 0),
-        origHeightMeters: Number(hit.draft.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters),
+        origHeightMeters,
+        heightMetersPerPx,
         centerScreenX: centerScreen.x,
         centerScreenY: centerScreen.y,
         startAngleRad,
@@ -2270,6 +2320,36 @@ export default function MapView3D({
     // Active gizmo handle manipulation
     if (gizmoDragRef.current) {
       const g = gizmoDragRef.current;
+
+      if (g.type === 'vbar') {
+        const curAngle = Math.atan2(py - g.centerScreenY, px - g.centerScreenX);
+        const deltaDeg = ((curAngle - g.startAngleRad) * 180) / Math.PI;
+        const nextRot = Math.round(normalizeRotationDeg(g.origRotationDeg + deltaDeg));
+        onUpdateDraftRef.current?.(g.draft.id, { rotationDeg: nextRot });
+        setGizmoHint(`Rotating ${nextRot}°`);
+        drawWireframes();
+        return;
+      }
+      if (g.type === 'height') {
+        const maxHInfo = computeMaxHeightForFootprint({
+          widthMeters: g.startDraft.widthMeters,
+          depthMeters: g.startDraft.depthMeters,
+          limits: LAND_VOLUME_LIMITS
+        });
+        const deltaMeters = (g.startPy - py) * (g.heightMetersPerPx || 0.35);
+        const nextHeight = Number(
+          Math.max(
+            LAND_VOLUME_LIMITS.minHeightMeters,
+            Math.min(maxHInfo.heightMeters, g.origHeightMeters + deltaMeters)
+          ).toFixed(1)
+        );
+        const nextZScale = Number((nextHeight / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3));
+        onUpdateDraftRef.current?.(g.draft.id, { heightMeters: nextHeight, zScale: nextZScale });
+        setGizmoHint(`Z Height: ${nextHeight}m (max ${Math.round(maxHInfo.heightMeters)}m)`);
+        drawWireframes();
+        return;
+      }
+
       const ll = mapRef.current.unproject([px, py]);
       if (!ll) return;
 
@@ -2302,28 +2382,6 @@ export default function MapView3D({
           onUpdateDraftRef.current?.(g.draft.id, patch);
           setGizmoHint(`Resizing side ${patch.widthMeters}×${patch.depthMeters}m`);
         }
-      } else if (g.type === 'vbar') {
-        const curAngle = Math.atan2(py - g.centerScreenY, px - g.centerScreenX);
-        const deltaDeg = ((curAngle - g.startAngleRad) * 180) / Math.PI;
-        const nextRot = Math.round(normalizeRotationDeg(g.origRotationDeg + deltaDeg));
-        onUpdateDraftRef.current?.(g.draft.id, { rotationDeg: nextRot });
-        setGizmoHint(`Rotating ${nextRot}°`);
-      } else if (g.type === 'height') {
-        const maxHInfo = computeMaxHeightForFootprint({
-          widthMeters: g.startDraft.widthMeters,
-          depthMeters: g.startDraft.depthMeters,
-          limits: LAND_VOLUME_LIMITS
-        });
-        const deltaMeters = (g.startPy - py) * 0.65;
-        const nextHeight = Number(
-          Math.max(
-            LAND_VOLUME_LIMITS.minHeightMeters,
-            Math.min(maxHInfo.heightMeters, g.origHeightMeters + deltaMeters)
-          ).toFixed(1)
-        );
-        const nextZScale = Number((nextHeight / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3));
-        onUpdateDraftRef.current?.(g.draft.id, { heightMeters: nextHeight, zScale: nextZScale });
-        setGizmoHint(`Z Height: ${nextHeight}m (max ${Math.round(maxHInfo.heightMeters)}m)`);
       }
       drawWireframes();
       return;

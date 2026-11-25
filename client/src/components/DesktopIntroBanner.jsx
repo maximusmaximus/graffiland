@@ -239,7 +239,7 @@ export default function DesktopIntroBanner({
               </button>
             )}
             <button type="button" className="btn btn-xs" onClick={onOpenPair}>
-              <XeroIcon emoji="🔗" size={12} /> Pair Phone
+              <XeroIcon emoji="🔗" size={12} /> Pairing
             </button>
             {onOpenQuests && (
               <button type="button" className="btn btn-xs" onClick={onOpenQuests}>

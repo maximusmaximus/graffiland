@@ -478,7 +478,7 @@ export default function MobilePairApprovalDropdown({
               <div className="mobile-pair-card-head">
                 <strong style={{ fontSize: 12.5 }}>Desktop Live 3D Pair</strong>
                 <InfoTip title="Desktop Live Mirror" align="right">
-                  Scan the QR code on Desktop → Pair Phone (or type its 6-character code) to mirror
+                  Scan the QR code on Desktop → Pairing (or type its 6-character code) to mirror
                   your mobile 3D brush live on a big screen.
                 </InfoTip>
               </div>

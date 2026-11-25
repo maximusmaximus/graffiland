@@ -8,7 +8,9 @@ export function isMobileDevice() {
 }
 
 export function getWsUrl() {
-  const apiBase = (import.meta.env.VITE_API_BASE || '').trim();
+  // @ts-expect-error Vite statically replaces literal import.meta.env.VITE_API_BASE during builds
+  const rawApiBase = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_BASE : '';
+  const apiBase = String(rawApiBase || '').trim();
   if (apiBase) {
     const parsed = new URL(apiBase);
     const wsProto = parsed.protocol === 'https:' ? 'wss:' : 'ws:';

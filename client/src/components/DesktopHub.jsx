@@ -148,7 +148,7 @@ export default function DesktopHub({
   const [recentlyMintedParcels, setRecentlyMintedParcels] = useState([]);
   const [mintLimitError, setMintLimitError] = useState(null);
   const [notifRefreshSignal, setNotifRefreshSignal] = useState(0);
-  const [agentPairExpanded, setAgentPairExpanded] = useState(false);
+  const [agentPairExpanded, setAgentPairExpanded] = useState(true);
   const [agentPairPromptPreview, setAgentPairPromptPreview] = useState('');
   const draftCountRef = useRef(0);
   draftCountRef.current = draftParcelsRaw.length;
@@ -437,10 +437,10 @@ export default function DesktopHub({
             notifiedRepairKeysRef.current.add(dedupeKey);
             const msg =
               reason === 'expiring_soon'
-                ? `🔗 Your AI agent pairing (${code || 'MCP'}) expires soon — open Pair Phone to re-pair.`
+                ? `🔗 Your AI agent pairing (${code || 'MCP'}) expires soon — open Pairing to re-pair.`
                 : `🔗 Re-pair needed: your AI agent pairing (${code || 'MCP'}) ${
                     reason === 'disconnected' ? 'was disconnected' : 'expired'
-                  }. Open Pair Phone to reconnect.`;
+                  }. Open Pairing to reconnect.`;
             notifySettingsSaved(msg, { tone: 'warning', durationMs: 6500 });
           }
         }
@@ -619,6 +619,7 @@ export default function DesktopHub({
   function openPairModal() {
     setSelected(null);
     setInfoOpen(false);
+    setAgentPairExpanded(true);
     setPairOpen(true);
   }
 
@@ -1420,7 +1421,7 @@ export default function DesktopHub({
                 : 'Pair your mobile phone via QR for live 3D drawing & in-person AR sculpting'
             }
           >
-            <XeroIcon emoji="🔗" size={16} /> Pair Phone
+            <XeroIcon emoji="🔗" size={16} /> Pairing
             {(mcpState.needsRepair || mcpState.expiringSoon) && (
               <span className="pair-repair-dot" aria-label="Re-pair needed" />
             )}
@@ -2251,10 +2252,10 @@ export default function DesktopHub({
             <div className="modal-header">
               <div>
                 <h2 className="modal-title">
-                  <XeroIcon emoji="🔗" size={22} /> Pair Phone via QR · Large 3D Drawing View
+                  <XeroIcon emoji="🔗" size={22} /> Pairing · Phone QR &amp; AI Agent (MCP)
                 </h2>
                 <p className="pair-modal-subtitle">
-                  Scan on mobile to sculpt in AR with a live full-size 3D desktop monitor — and optionally reveal AI Agent (MCP) pairing below.
+                  Scan on mobile to sculpt in AR with a live full-size 3D desktop monitor, or connect your AI Agent (MCP) below.
                 </p>
               </div>
               <button

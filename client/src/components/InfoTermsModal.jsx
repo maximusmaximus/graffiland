@@ -368,10 +368,10 @@ export default function InfoTermsModal({
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="🔗" size={16} />
-                    <strong>Pair Phone &amp; Land Management</strong>
+                    <strong>Pairing &amp; Land Management</strong>
                     <InfoTip title="QR Mirroring & Parcel Controls">
-                      Tap <strong>Pair Phone</strong> to watch phone AR strokes live on a big
-                      screen. Open <strong>Land Management</strong> to rename owned parcels, add
+                      Tap <strong>Pairing</strong> to watch phone AR strokes live on a big
+                      screen or connect your AI Agent (MCP). Open <strong>Land Management</strong> to rename owned parcels, add
                       IRL Contributors, or allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
                     </InfoTip>
                   </div>

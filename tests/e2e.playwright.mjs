@@ -447,9 +447,10 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(!leaderText.includes('E2E Artist'), 'Leaderboard must never expose Google first/last name');
     assert.ok(leaderText.includes('Playwright Bot Steward'));
 
-    // Open QR Pair modal and verify it stacks above Leaflet
-    await page.getByRole('button', { name: /Pair Phone/i }).click();
-    await page.waitForSelector('text=Pair Phone via QR');
+    // Open Pairing modal and verify it stacks above Leaflet with MCP expanded
+    await page.getByTestId('nav-pair-phone-btn').click();
+    await page.waitForSelector('[data-testid="pair-phone-modal"]');
+    await page.waitForSelector('[data-testid="pair-agent-structured-steps"]');
     const pairZ = await page.evaluate(() =>
       Number(globalThis.getComputedStyle(globalThis.document.querySelector('.modal-backdrop')).zIndex)
     );
@@ -660,17 +661,16 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.map3d-search-pin', { timeout: 5000 });
     await page.waitForTimeout(350);
 
-    // Verify broken Connect Agent button is removed, Pair Phone label is concise & glows, and Pair modal has structured revealable Agent Pairing
+    // Verify broken Connect Agent button is removed, Pairing label is concise & glows, and Pairing modal opens with MCP Agent Pairing already expanded
     assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Connect Agent/i }).count(), 0);
     assert.equal(await page.locator('.desktop-nav').getByRole('button', { name: /Last Viewed/i }).count(), 0);
     const pairNavBtn = page.getByTestId('nav-pair-phone-btn');
-    assert.equal((await pairNavBtn.textContent()).trim(), 'Pair Phone');
+    assert.equal((await pairNavBtn.textContent()).trim(), 'Pairing');
     assert.ok((await pairNavBtn.getAttribute('class')).includes('btn-pair-glow'));
     await pairNavBtn.click();
     await page.waitForSelector('[data-testid="pair-phone-modal"]');
-    assert.equal(await page.locator('[data-testid="pair-agent-structured-steps"]').count(), 0);
-    await page.getByTestId('pair-agent-reveal-toggle').click();
     await page.waitForSelector('[data-testid="pair-agent-structured-steps"]');
+    assert.equal(await page.getByTestId('pair-agent-reveal-toggle').getAttribute('aria-expanded'), 'true');
     await page.getByRole('button', { name: /Close pairing modal/i }).click();
     await page.waitForSelector('[data-testid="pair-phone-modal"]', { state: 'detached' });
 
@@ -749,6 +749,33 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForTimeout(120);
     const zAfterPull = Number(await page.getByLabel('Z-Axis Scale').inputValue());
     assert.ok(zAfterPull > zBeforePull, `Expected pulling center Z handle up to increase height (${zBeforePull} -> ${zAfterPull})`);
+
+    // 1c) Pulling a TOP rim bar UP raises cube height and pulling it DOWN lowers cube height (not footprint in/out!)
+    gizmo = await readGizmo();
+    assert.ok(Array.isArray(gizmo.topBar0), 'Expected topBar0 coords in data-active-gizmo');
+    const zBeforeTopBarUp = Number(await page.getByLabel('Z-Axis Scale').inputValue());
+    await page.mouse.move(mapBox.x + gizmo.topBar0[0], mapBox.y + gizmo.topBar0[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.topBar0[0], mapBox.y + gizmo.topBar0[1] - 42, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const zAfterTopBarUp = Number(await page.getByLabel('Z-Axis Scale').inputValue());
+    assert.ok(
+      zAfterTopBarUp > zBeforeTopBarUp,
+      `Expected pulling top bar UP to raise cube height (${zBeforeTopBarUp} -> ${zAfterTopBarUp})`
+    );
+
+    gizmo = await readGizmo();
+    await page.mouse.move(mapBox.x + gizmo.topBar0[0], mapBox.y + gizmo.topBar0[1]);
+    await page.mouse.down();
+    await page.mouse.move(mapBox.x + gizmo.topBar0[0], mapBox.y + gizmo.topBar0[1] + 72, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+    const zAfterTopBarDown = Number(await page.getByLabel('Z-Axis Scale').inputValue());
+    assert.ok(
+      zAfterTopBarDown < zAfterTopBarUp,
+      `Expected pulling top bar DOWN to lower cube height (${zAfterTopBarUp} -> ${zAfterTopBarDown})`
+    );
 
     // 2) Drag a corner ball outward to scale footprint smoothly
     const beforeCornerText = await page.locator('.land-draft-item').first().textContent();
