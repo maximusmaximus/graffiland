@@ -27,6 +27,12 @@ import {
 import { buildDefaultHudReservedRects } from '../../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../../utils/map3dSculptureLayer.js';
 import {
+  applyGraffilandMapLibreTheme,
+  getFallbackMapLibreStyleForTheme,
+  getMapLibreStyleForTheme,
+  useMapTheme
+} from '../../utils/mapTheme.js';
+import {
   buildNeighborArrowsSignature,
   computeNeighborEdgeArrows
 } from '../../utils/neighborEdgeArrows.js';
@@ -39,38 +45,7 @@ import {
 import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
-const OPENFREEMAP_LIBERTY_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
-
-const FALLBACK_DARK_STYLE = {
-  version: 8,
-  sources: {
-    'carto-dark': {
-      type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-      ],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-    }
-  },
-  layers: [
-    {
-      id: 'mobile-iso-fallback-bg',
-      type: 'background',
-      paint: { 'background-color': '#0b1020' }
-    },
-    {
-      id: 'mobile-iso-fallback-carto',
-      type: 'raster',
-      source: 'carto-dark',
-      minzoom: 0,
-      maxzoom: 22
-    }
-  ]
-};
 
 // Session cache for hydrated sculpture voxel arrays so switching 2D <-> 3D is instant
 const voxelHydrationCache = new Map();
@@ -476,6 +451,12 @@ export default function MobileIsometricMap({
 
   const [webglAvailable, setWebglAvailable] = useState(() => hasWebGLSupport());
   const [mapReady, setMapReady] = useState(false);
+  const { mapTheme, isDarkMap, toggleMapTheme } = useMapTheme();
+  const mapThemeRef = useRef(mapTheme);
+  const appliedMapThemeRef = useRef(mapTheme);
+  useEffect(() => {
+    mapThemeRef.current = mapTheme;
+  }, [mapTheme]);
   const [bearingOffset, setBearingOffset] = useState(0);
   const [liveBearing, setLiveBearing] = useState(-45);
   const [liveZoom, setLiveZoom] = useState(19);
@@ -1083,14 +1064,11 @@ export default function MobileIsometricMap({
       if (!map) return;
       styleReadyRef.current = true;
 
-      try {
-        if (map.getLayer('building-3d')) {
-          map.setPaintProperty('building-3d', 'fill-extrusion-color', '#24324f');
-          map.setPaintProperty('building-3d', 'fill-extrusion-opacity', 0.78);
-        }
-      } catch {
-        // fallback raster style has no building-3d layer
-      }
+      applyGraffilandMapLibreTheme(map, {
+        theme: mapThemeRef.current,
+        showBuildings: true,
+        buildingOpacity: 0.78
+      });
 
       try {
         if (!map.getSource('mobile-iso-lands')) {
@@ -1279,9 +1257,10 @@ export default function MobileIsometricMap({
 
         let map;
         try {
+          appliedMapThemeRef.current = mapThemeRef.current;
           map = new maplibregl.Map({
             container: mapHostRef.current,
-            style: OPENFREEMAP_LIBERTY_STYLE,
+            style: getMapLibreStyleForTheme(mapThemeRef.current),
             center: startCenter,
             zoom: startZoom,
             pitch: startPitch,
@@ -1322,7 +1301,7 @@ export default function MobileIsometricMap({
           if (!styleReadyRef.current && !fallbackAppliedRef.current) {
             fallbackAppliedRef.current = true;
             try {
-              map.setStyle(FALLBACK_DARK_STYLE);
+              map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
             } catch {
               setWebglAvailable(false);
             }
@@ -1431,6 +1410,20 @@ export default function MobileIsometricMap({
       setMapReady(false);
     };
   }, [drawWireframes, fitCameraToTarget, syncMapSources, webglAvailable]);
+
+  // Live Dark / Light basemap theme switching
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || appliedMapThemeRef.current === mapTheme) return;
+    appliedMapThemeRef.current = mapTheme;
+    styleReadyRef.current = false;
+    fallbackAppliedRef.current = false;
+    try {
+      map.setStyle(getMapLibreStyleForTheme(mapTheme));
+    } catch {
+      // ignore if map is unmounting
+    }
+  }, [mapTheme]);
 
   // Keep GeoJSON sources & showcase callouts synced when parcels, sculptures, hydration, full-view, or selection change
   useEffect(() => {
@@ -1784,6 +1777,16 @@ export default function MobileIsometricMap({
             <XeroIcon emoji="📍" size={13} /> Me
           </button>
         )}
+        <button
+          type="button"
+          className="btn map-recenter-fab"
+          data-testid="mobile-map-theme-toggle-btn"
+          aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+          title={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+          onClick={toggleMapTheme}
+        >
+          <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
+        </button>
         {onToggleFullMap && (
           <button
             type="button"

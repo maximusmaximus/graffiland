@@ -22,6 +22,7 @@ import {
 } from '../utils/landMapHelpers.js';
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordUserAction } from '../utils/userHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
@@ -92,7 +93,13 @@ export default function PlotVisitView({
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
+  const tileLayerRef = useRef(null);
   const map2dParcelLayerRef = useRef(null);
+  const { mapTheme, isDarkMap } = useMapTheme();
+  const mapThemeRef = useRef(mapTheme);
+  useEffect(() => {
+    mapThemeRef.current = mapTheme;
+  }, [mapTheme]);
   const map2dUserMovedRef = useRef(false);
   const map2dInitialFittedRef = useRef(false);
   const sharedViewportRef = useRef(null);
@@ -663,11 +670,11 @@ export default function PlotVisitView({
       attributionControl: true
     });
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxNativeZoom: 19,
-      maxZoom: 21.5
-    }).addTo(map);
+    if (mapHostRef.current) {
+      mapHostRef.current.classList.toggle('is-map-light', mapThemeRef.current === 'light');
+    }
+    const tileCfg = getLeafletTileConfig(mapThemeRef.current);
+    tileLayerRef.current = L.tileLayer(tileCfg.url, tileCfg.options).addTo(map);
 
     const markMoved = () => {
       map2dUserMovedRef.current = true;
@@ -719,9 +726,31 @@ export default function PlotVisitView({
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      tileLayerRef.current = null;
       map2dParcelLayerRef.current = null;
     };
   }, [hasCenter, centerLat, centerLng, mapDimensionMode, recompute2dOverlay]);
+
+  useEffect(() => {
+    if (mapDimensionMode !== '2d') return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (mapHostRef.current) {
+      mapHostRef.current.classList.toggle('is-map-light', !isDarkMap);
+    }
+    try {
+      if (tileLayerRef.current) {
+        map.removeLayer(tileLayerRef.current);
+      }
+      const nextCfg = getLeafletTileConfig(mapTheme);
+      tileLayerRef.current = L.tileLayer(nextCfg.url, nextCfg.options).addTo(map);
+      if (typeof tileLayerRef.current.bringToBack === 'function') {
+        tileLayerRef.current.bringToBack();
+      }
+    } catch {
+      // ignore during map teardown
+    }
+  }, [isDarkMap, mapDimensionMode, mapTheme]);
 
   useEffect(() => {
     if (mapDimensionMode !== '2d') return undefined;

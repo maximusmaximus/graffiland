@@ -39,6 +39,12 @@ import {
 } from '../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects, rectsOverlap } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
+import {
+  applyGraffilandMapLibreTheme,
+  getFallbackMapLibreStyleForTheme,
+  getMapLibreStyleForTheme,
+  useMapTheme
+} from '../utils/mapTheme.js';
 import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
@@ -51,38 +57,7 @@ if (typeof maplibregl.setWorkerUrl === 'function' && maplibreWorkerUrl) {
   maplibregl.setWorkerUrl(maplibreWorkerUrl);
 }
 
-const OPENFREEMAP_LIBERTY_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const TERRARIUM_DEM_TILES = ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'];
-
-const FALLBACK_DARK_STYLE = {
-  version: 8,
-  sources: {
-    'carto-dark': {
-      type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-      ],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-    }
-  },
-  layers: [
-    {
-      id: 'fallback-bg',
-      type: 'background',
-      paint: { 'background-color': '#0b1020' }
-    },
-    {
-      id: 'fallback-carto-raster',
-      type: 'raster',
-      source: 'carto-dark',
-      minzoom: 0,
-      maxzoom: 22
-    }
-  ]
-};
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
@@ -458,6 +433,12 @@ export default function MapView3D({
   const [bearingDeg, setBearingDeg] = useState(initBearingVal);
   const [showBuildings, setShowBuildings] = useState(true);
   const [showTerrain, setShowTerrain] = useState(false);
+  const { mapTheme, isDarkMap, toggleMapTheme } = useMapTheme();
+  const mapThemeRef = useRef(mapTheme);
+  const appliedMapThemeRef = useRef(mapTheme);
+  useEffect(() => {
+    mapThemeRef.current = mapTheme;
+  }, [mapTheme]);
 
   // Interactive hover, hold-to-draw, & gizmo cursor state
   const [hoveredDraftId, setHoveredDraftId] = useState('');
@@ -1098,14 +1079,11 @@ export default function MapView3D({
       // ignore if style doesn't allow DEM source
     }
 
-    try {
-      if (map.getLayer('building-3d')) {
-        map.setPaintProperty('building-3d', 'fill-extrusion-color', '#24324f');
-        map.setPaintProperty('building-3d', 'fill-extrusion-opacity', showBuildingsRef.current ? 0.78 : 0);
-      }
-    } catch {
-      // ignore on fallback style
-    }
+    applyGraffilandMapLibreTheme(map, {
+      theme: mapThemeRef.current,
+      showBuildings: showBuildingsRef.current,
+      buildingOpacity: 0.78
+    });
 
     try {
       if (!map.getSource('owned-lands')) {
@@ -1267,9 +1245,10 @@ export default function MapView3D({
 
     let map;
     try {
+      appliedMapThemeRef.current = mapThemeRef.current;
       map = new maplibregl.Map({
         container: mapHostRef.current,
-        style: OPENFREEMAP_LIBERTY_STYLE,
+        style: getMapLibreStyleForTheme(mapThemeRef.current),
         center: centerLngLat,
         zoom: startZoom,
         pitch: initPitch,
@@ -1309,7 +1288,7 @@ export default function MapView3D({
       if (isFatalStyleFetchError && !fallbackAppliedRef.current && !styleReadyRef.current) {
         fallbackAppliedRef.current = true;
         try {
-          map.setStyle(FALLBACK_DARK_STYLE);
+          map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
         } catch {
           // ignore
         }
@@ -1352,7 +1331,7 @@ export default function MapView3D({
       if (!styleReadyRef.current && !fallbackAppliedRef.current) {
         fallbackAppliedRef.current = true;
         try {
-          map.setStyle(FALLBACK_DARK_STYLE);
+          map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
         } catch {
           // ignore
         }
@@ -1421,6 +1400,20 @@ export default function MapView3D({
       // ignore on fallback style
     }
   }, [showBuildings]);
+
+  // Live Dark / Light basemap theme switching
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || appliedMapThemeRef.current === mapTheme) return;
+    appliedMapThemeRef.current = mapTheme;
+    styleReadyRef.current = false;
+    fallbackAppliedRef.current = false;
+    try {
+      map.setStyle(getMapLibreStyleForTheme(mapTheme));
+    } catch {
+      // ignore if map is unmounting
+    }
+  }, [mapTheme]);
 
   // Apply Terrarium 3D terrain toggle
   useEffect(() => {
@@ -2845,6 +2838,17 @@ export default function MapView3D({
               disabled={searchBusy}
             >
               {searchBusy ? '…' : 'Find'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              data-testid="map3d-theme-toggle-btn"
+              style={{ padding: '5px 8px', fontSize: 12, flexShrink: 0 }}
+              title={isDarkMap ? 'Dark Map (click for Light)' : 'Light Map (click for Dark)'}
+              aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+              onClick={toggleMapTheme}
+            >
+              <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
             </button>
           </form>
           {searchError && <div className="map3d-search-error">{searchError}</div>}

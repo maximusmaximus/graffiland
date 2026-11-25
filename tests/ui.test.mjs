@@ -5965,4 +5965,48 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Map theme defaults to dark mode across 3D MapLibre and 2D Leaflet styles and supports live toggling', async () => {
+    const {
+      DEFAULT_MAP_THEME,
+      MAP_THEME_STORAGE_KEY,
+      OPENFREEMAP_DARK_STYLE,
+      OPENFREEMAP_LIGHT_STYLE,
+      applyGraffilandMapLibreTheme,
+      getLeafletTileConfig,
+      getMapLibreStyleForTheme,
+      getStoredMapTheme,
+      setStoredMapTheme
+    } = await import('../client/src/utils/mapTheme.js');
+
+    localStorage.removeItem(MAP_THEME_STORAGE_KEY);
+    assert.equal(DEFAULT_MAP_THEME, 'dark');
+    assert.equal(getStoredMapTheme(), 'dark');
+    assert.equal(getMapLibreStyleForTheme(), OPENFREEMAP_DARK_STYLE);
+    assert.ok(getLeafletTileConfig().url.includes('cartocdn.com/dark_all'));
+
+    // Applying dark theme harmonizes paint properties and injects building-3d extrusion layer before first symbol
+    const addedLayers = [];
+    const paintCalls = [];
+    const mockMap = {
+      getLayer: (id) => (id === 'building-3d' ? null : { id }),
+      getSource: (id) => (id === 'openmaptiles' ? { id } : null),
+      getStyle: () => ({ layers: [{ id: 'background', type: 'background' }, { id: 'water_name', type: 'symbol' }] }),
+      setPaintProperty: (id, prop, val) => paintCalls.push({ id, prop, val }),
+      addLayer: (layer, beforeId) => addedLayers.push({ layer, beforeId })
+    };
+    applyGraffilandMapLibreTheme(mockMap, { theme: 'dark', showBuildings: true, buildingOpacity: 0.78 });
+    assert.ok(paintCalls.some((c) => c.id === 'background' && c.val === '#090d18'));
+    assert.equal(addedLayers.length, 1);
+    assert.equal(addedLayers[0].layer.id, 'building-3d');
+    assert.equal(addedLayers[0].layer.type, 'fill-extrusion');
+    assert.equal(addedLayers[0].beforeId, 'water_name');
+
+    // Toggling to light mode switches styles cleanly and persists, then resets cleanly back to dark
+    setStoredMapTheme('light');
+    assert.equal(getStoredMapTheme(), 'light');
+    assert.equal(getMapLibreStyleForTheme('light'), OPENFREEMAP_LIGHT_STYLE);
+    assert.ok(getLeafletTileConfig('light').url.includes('tile.openstreetmap.org'));
+    localStorage.removeItem(MAP_THEME_STORAGE_KEY);
+  });
 });
