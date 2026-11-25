@@ -3,7 +3,7 @@ import { isValidPairingCodeFormat, normalizePairingCode } from '../../../shared/
 /**
  * Parses a scanned QR string or pasted link/code from GRAFFILAND Desktop.
  * Supports:
- *  - Full launch URL: https://.../graffiland/?pair=ABC123
+ *  - Full launch URL: https://spray.land/?pair=ABC123
  *  - Query fragment: ?pair=ABC123 or pair=ABC123
  *  - Plain 6-character desktop live-mirror code: ABC123
  *  - Robust MCP pairing code: GLP-XXXX-XXXX-XXXX-XXXX

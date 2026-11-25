@@ -192,7 +192,7 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
     name: 'GRAFFILAND Protocol',
     description:
       'Agentic-first real-world 3D AR voxel sculpture & Virtual Land platform on Robinhood Chain and IPFS. Agents claim land with 0 platform fee (paying their own network gas), build 3D stages, and earn 3% steward royalties while IRL mobile human artists publish gas-free and share 2% contributor pools.',
-    homepage: 'https://maximusmaximus.github.io/graffiland',
+    homepage: 'https://spray.land',
     apiOrigin: base,
     documentationUrl: `${base}/llms.txt`,
     authentication: [
@@ -236,7 +236,7 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
       freeSlotsReopenWithoutHumans: false,
       inPersonHumanInteractions: IN_PERSON_HUMAN_INTERACTIONS,
       nonQualifyingInteractions: NON_QUALIFYING_INTERACTIONS,
-      archiveUrl: 'https://maximusmaximus.github.io/graffiland/?archive=1'
+      archiveUrl: 'https://spray.land/?archive=1'
     },
     stdioMcp: {
       command: 'npx',

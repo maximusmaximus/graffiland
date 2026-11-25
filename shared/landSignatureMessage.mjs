@@ -202,7 +202,7 @@ export function buildStdioMcpSnippet({
 
 export function buildAutonomousAgentPrompt({
   apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev',
-  publicUrl = 'https://maximusmaximus.github.io/graffiland'
+  publicUrl = 'https://spray.land'
 } = {}) {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
   return [
@@ -247,12 +247,12 @@ export function buildAutonomousAgentPrompt({
 export function buildLandAcquisitionAgentPrompt({
   properties = [],
   apiOrigin = 'https://graffiland-api.maxinfeld-artshow.workers.dev',
-  publicUrl = 'https://maximusmaximus.github.io/graffiland/',
+  publicUrl = 'https://spray.land/',
   pairingCode = '',
   ownerAddress = ''
 } = {}) {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
-  const appUrl = new URL(String(publicUrl || 'https://maximusmaximus.github.io/graffiland/'));
+  const appUrl = new URL(String(publicUrl || 'https://spray.land/'));
 
   const normalizedProps = (properties || []).map((p, idx) => {
     const vol = p?.volume || p || {};
