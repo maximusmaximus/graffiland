@@ -64,7 +64,8 @@ export function useARPreview({
   isArViewOnly = false,
   editingSculptureId = '',
   fadeOtherItems = false,
-  atmosphericTintRef = null
+  atmosphericTintRef = null,
+  orientationFusionRef = null
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arSculptureEntriesRef = useRef(new Map());
@@ -1007,9 +1008,15 @@ export function useARPreview({
     atmosphericTintRef
   ]);
 
-  // Live ORB visual landmark relocalization loop (skipped in clean AR View to prevent frame lag)
+  // Live off-thread ORB visual landmark relocalization loop (runs inside orbWorker.js
+  // during preview AND land visits to lock visual yaw within ~1-2° without UI frame lag).
   useEffect(() => {
-    if (mode !== 'preview' || isArViewOnly || arSelectedLandId || !location || !cameraReady) {
+    const shouldRelocalize = Boolean(
+      (mode === 'preview' || isArViewOnly || arSelectedLandId || focusedLandId) &&
+        location &&
+        cameraReady
+    );
+    if (!shouldRelocalize) {
       return undefined;
     }
     let cancelled = false;
@@ -1019,24 +1026,27 @@ export function useARPreview({
       if (cancelled || busy || !videoRef.current || videoRef.current.readyState < 2) return;
       const loc = locationRef.current;
       if (!loc) return;
-      const targetSc =
-        arTargetedSculpture?.sculpture ||
-        nearbySculptures.find((sc) => haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) <= 65);
-      if (!targetSc?.parcelId) return;
+      const activeParcelId =
+        arSelectedLandId ||
+        focusedLandId ||
+        arTargetedSculpture?.sculpture?.parcelId ||
+        nearbySculptures.find((sc) => haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) <= 65)?.parcelId ||
+        '';
+      if (!activeParcelId) return;
 
       busy = true;
       try {
-        let packEntry = orbPackCacheRef.current.get(targetSc.parcelId);
+        let packEntry = orbPackCacheRef.current.get(activeParcelId);
         if (packEntry === undefined) {
           const fetched = await api
-            .fetchParcelLandmarkPack(targetSc.parcelId, {
+            .fetchParcelLandmarkPack(activeParcelId, {
               lat: loc.lat,
               lng: loc.lng,
               deviceProfile: { isMobile: true }
             })
             .catch(() => null);
           packEntry = fetched?.available ? fetched.anchorPack : null;
-          orbPackCacheRef.current.set(targetSc.parcelId, packEntry);
+          orbPackCacheRef.current.set(activeParcelId, packEntry);
         }
         if (!packEntry || cancelled) return;
 
@@ -1055,7 +1065,9 @@ export function useARPreview({
           if (Number.isFinite(match.poseCorrectionYawRad) && Math.abs(match.poseCorrectionYawRad) <= 0.65) {
             orbHeadingCorrectionRadRef.current =
               orbHeadingCorrectionRadRef.current * 0.72 + match.poseCorrectionYawRad * 0.28;
-            if (nearbyGroupRef.current) {
+            if (orientationFusionRef?.current) {
+              orientationFusionRef.current.setOrbYawCorrectionRad(orbHeadingCorrectionRadRef.current);
+            } else if (nearbyGroupRef.current) {
               nearbyGroupRef.current.rotation.y = orbHeadingCorrectionRadRef.current;
             }
           }
@@ -1072,7 +1084,7 @@ export function useARPreview({
       }
     }
 
-    const timer = setInterval(tickOrbMatch, 480);
+    const timer = setInterval(tickOrbMatch, isArViewOnly || arSelectedLandId ? 750 : 480);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -1081,6 +1093,7 @@ export function useARPreview({
     arSelectedLandId,
     arTargetedSculpture?.sculpture,
     cameraReady,
+    focusedLandId,
     isArViewOnly,
     latestOrbProofRef,
     location,
@@ -1090,17 +1103,22 @@ export function useARPreview({
     nearbySculptures,
     orbPackCacheRef,
     orbTrackerRef,
+    orientationFusionRef,
     setOrbStatus,
     videoRef
   ]);
 
   const handleRefreshOrbRescan = useCallback(async () => {
-    const targetSc = arTargetedSculpture?.sculpture || nearbySculptures[0];
-    if (targetSc?.parcelId) {
-      orbPackCacheRef.current.delete(targetSc.parcelId);
+    const targetParcelId =
+      arSelectedLandId || arTargetedSculpture?.sculpture?.parcelId || nearbySculptures[0]?.parcelId;
+    if (targetParcelId) {
+      orbPackCacheRef.current.delete(targetParcelId);
     }
     orbKeyframesRef.current.clear();
     orbHeadingCorrectionRadRef.current = 0;
+    if (orientationFusionRef?.current) {
+      orientationFusionRef.current.setOrbYawCorrectionRad(0);
+    }
     if (nearbyGroupRef.current) nearbyGroupRef.current.rotation.y = 0;
     if (videoRef.current?.readyState >= 2) {
       const kf = await orbTrackerRef.current?.extractKeyframeFeatures(videoRef.current, {
@@ -1118,12 +1136,14 @@ export function useARPreview({
     }
     showTemporaryHint('ORB landmark scan refreshed — pan slowly across nearby buildings.');
   }, [
+    arSelectedLandId,
     arTargetedSculpture?.sculpture,
     nearbyGroupRef,
     nearbySculptures,
     orbKeyframesRef,
     orbPackCacheRef,
     orbTrackerRef,
+    orientationFusionRef,
     setOrbStatus,
     showTemporaryHint,
     videoRef

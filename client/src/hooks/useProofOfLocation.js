@@ -14,6 +14,11 @@ import {
 import { describeCameraError, describeGeolocationError } from '../utils/permissionMessages.js';
 import { OrbLandmarkTracker } from '../utils/orbTracker.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
+import {
+  ArOrientationFusion,
+  ArPositionKalmanFilter
+} from '../utils/arSensorFusion.js';
+import { isWebXrArSupported } from '../utils/webxrArSession.js';
 import { ProofOfLocationTracker } from '../components/ProofOfLocation.js';
 import { computeSolarLightVector } from '../components/VoxelEngine3D.js';
 
@@ -40,6 +45,11 @@ export function useProofOfLocation({
 
   const rawOrientationRef = useRef(null);
   const yawOffsetRef = useRef(0);
+  const draftYawOffsetRef = useRef(0);
+  const orientationFusionRef = useRef(new ArOrientationFusion());
+  const positionFilterRef = useRef(new ArPositionKalmanFilter());
+  const orientationDetachRef = useRef(null);
+  const webxrActiveRef = useRef(false);
   const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
   const cameraStreamRef = useRef(null);
   const locationRef = useRef(null);
@@ -117,6 +127,11 @@ export function useProofOfLocation({
   const [mappingRestartPrompt, setMappingRestartPrompt] = useState(null);
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [webxrSupported, setWebxrSupported] = useState(false);
+  const [webxrActive, setWebxrActive] = useState(false);
+  const [sensorStatus, setSensorStatus] = useState(() =>
+    orientationFusionRef.current.getSensorQuality()
+  );
 
   const lastUnmappedMaskRef = useRef('');
   const mappingCompletedNoticeShownRef = useRef(false);
@@ -159,6 +174,8 @@ export function useProofOfLocation({
       (pos) => {
         if (unmountedRef.current) return;
         polRef.current.recordGps(pos);
+        orientationFusionRef.current.setLocation(pos.coords.latitude, pos.coords.longitude);
+        const kalmanLoc = positionFilterRef.current.updateGps(pos);
         const loc = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -169,7 +186,17 @@ export function useProofOfLocation({
           speed: pos.coords.speed,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         };
-        const refined = polRef.current.getRefinedLocation(loc) || loc;
+        const polRefined = polRef.current.getRefinedLocation(loc) || loc;
+        const refined = kalmanLoc
+          ? {
+              ...polRefined,
+              lat: kalmanLoc.lat,
+              lng: kalmanLoc.lng,
+              accuracy: kalmanLoc.accuracy,
+              altitude: kalmanLoc.altitude ?? polRefined.altitude,
+              speed: kalmanLoc.speed
+            }
+          : polRefined;
         setLocation(refined);
         locationRef.current = refined;
         if (notifyNearby) {
@@ -953,16 +980,14 @@ export function useProofOfLocation({
   useEffect(() => {
     let active = true;
     const tracker = orbTrackerRef.current;
-    if (typeof navigator !== 'undefined' && navigator.xr?.isSessionSupported) {
-      navigator.xr
-        .isSessionSupported('immersive-ar')
-        .then((supported) => {
-          if (active && supported) {
-            setOrbStatus((prev) => ({ ...prev, engine: 'WebXR+ORB' }));
-          }
-        })
-        .catch(() => {});
-    }
+    isWebXrArSupported()
+      .then((supported) => {
+        if (active && supported) {
+          setWebxrSupported(true);
+          setOrbStatus((prev) => ({ ...prev, engine: 'WebXR+ORB' }));
+        }
+      })
+      .catch(() => {});
     return () => {
       active = false;
       tracker?.dispose();
@@ -1000,6 +1025,29 @@ export function useProofOfLocation({
     }
   }, [refreshPasskeyStatus, user?.id]);
 
+  const syncSensorStatus = useCallback(() => {
+    const next = orientationFusionRef.current.getSensorQuality({
+      gpsAccuracyM: locationRef.current?.accuracy ?? null,
+      webxrActive: webxrActiveRef.current
+    });
+    setSensorStatus((prev) => {
+      if (
+        prev.source === next.source &&
+        prev.trueNorthLocked === next.trueNorthLocked &&
+        prev.headingAccuracyDeg === next.headingAccuracyDeg &&
+        prev.gpsAccuracyM === next.gpsAccuracyM &&
+        prev.magneticInterference === next.magneticInterference &&
+        prev.needsCompassCalibration === next.needsCompassCalibration &&
+        prev.manualYawNudgeDeg === next.manualYawNudgeDeg &&
+        prev.confidenceLabel === next.confidenceLabel &&
+        Math.abs((prev.headingDeg ?? 0) - (next.headingDeg ?? 0)) < 2
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (!navigator.geolocation) {
       setSensorBanner('GPS Geolocation not supported on this browser.');
@@ -1010,6 +1058,13 @@ export function useProofOfLocation({
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         polRef.current.recordGps(pos);
+        orientationFusionRef.current.setLocation(pos.coords.latitude, pos.coords.longitude);
+        orientationFusionRef.current.updateFromGpsCourse({
+          headingDeg: pos.coords.heading,
+          speedMps: pos.coords.speed,
+          accuracyM: pos.coords.accuracy
+        });
+        const kalmanLoc = positionFilterRef.current.updateGps(pos);
         const loc = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -1020,9 +1075,20 @@ export function useProofOfLocation({
           speed: pos.coords.speed,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         };
-        const refined = polRef.current.getRefinedLocation(loc) || loc;
+        const polRefined = polRef.current.getRefinedLocation(loc) || loc;
+        const refined = kalmanLoc
+          ? {
+              ...polRefined,
+              lat: kalmanLoc.lat,
+              lng: kalmanLoc.lng,
+              accuracy: kalmanLoc.accuracy,
+              altitude: kalmanLoc.altitude ?? polRefined.altitude,
+              speed: kalmanLoc.speed
+            }
+          : polRefined;
         setLocation(refined);
         locationRef.current = refined;
+        syncSensorStatus();
 
         if (dirLightRef.current) {
           const sun = computeSolarLightVector(loc.lat, loc.lng, new Date());
@@ -1043,26 +1109,128 @@ export function useProofOfLocation({
       (err) => {
         setSensorBanner(describeGeolocationError(err));
       },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [dirLightRef]);
+  }, [dirLightRef, syncSensorStatus]);
 
   const attachOrientation = useCallback(() => {
-    const handler = (e) => {
+    if (orientationDetachRef.current) {
+      orientationDetachRef.current();
+      orientationDetachRef.current = null;
+    }
+
+    const getScreenAngle = () =>
+      (typeof window !== 'undefined' && (window.screen?.orientation?.angle ?? window.orientation)) || 0;
+
+    let absSensor = null;
+    let absSensorActive = false;
+
+    const onAbsSensorReading = () => {
+      if (!absSensor?.quaternion) return;
+      absSensorActive = true;
+      orientationFusionRef.current.updateFromAbsoluteSensor(absSensor.quaternion, getScreenAngle());
+      const headingDeg = orientationFusionRef.current.getTrueHeadingDeg();
+      rawOrientationRef.current = {
+        alpha: (360 - headingDeg) % 360,
+        beta: rawOrientationRef.current?.beta ?? 90,
+        gamma: rawOrientationRef.current?.gamma ?? 0,
+        absolute: true
+      };
+      setGyroFallbackActive(false);
+    };
+
+    try {
+      if (typeof window !== 'undefined' && typeof window.AbsoluteOrientationSensor === 'function') {
+        absSensor = new window.AbsoluteOrientationSensor({
+          frequency: 60,
+          referenceFrame: 'device'
+        });
+        absSensor.addEventListener('reading', onAbsSensorReading);
+        absSensor.addEventListener('error', () => {
+          absSensorActive = false;
+        });
+        absSensor.start();
+      }
+    } catch {
+      absSensor = null;
+    }
+
+    const absOrientationHandler = (e) => {
       if (e.alpha === null && e.beta === null) return;
+      if (!absSensorActive) {
+        orientationFusionRef.current.updateFromDeviceOrientation(
+          {
+            alpha: e.alpha,
+            beta: e.beta,
+            gamma: e.gamma,
+            absolute: true
+          },
+          getScreenAngle()
+        );
+      }
       rawOrientationRef.current = {
         alpha: e.alpha || 0,
         beta: e.beta || 0,
-        gamma: e.gamma || 0
+        gamma: e.gamma || 0,
+        absolute: true
       };
       setGyroFallbackActive(false);
       polRef.current.recordGyro(e.alpha, e.beta, e.gamma);
     };
-    window.addEventListener('deviceorientation', handler, true);
-    return () => window.removeEventListener('deviceorientation', handler, true);
-  }, []);
+
+    const orientationHandler = (e) => {
+      if (e.alpha === null && e.beta === null) return;
+      orientationFusionRef.current.updateFromDeviceOrientation(e, getScreenAngle());
+      rawOrientationRef.current = {
+        alpha: e.alpha || 0,
+        beta: e.beta || 0,
+        gamma: e.gamma || 0,
+        absolute: Boolean(e.absolute || typeof e.webkitCompassHeading === 'number'),
+        webkitCompassHeading: e.webkitCompassHeading,
+        webkitCompassAccuracy: e.webkitCompassAccuracy
+      };
+      setGyroFallbackActive(false);
+      polRef.current.recordGyro(e.alpha, e.beta, e.gamma);
+    };
+
+    const motionHandler = (e) => {
+      orientationFusionRef.current.updateFromDeviceMotion(e, getScreenAngle());
+      if (orientationFusionRef.current.initialized) {
+        positionFilterRef.current.updateImuMotion({
+          accelWithGravity: e.accelerationIncludingGravity,
+          headingDeg: orientationFusionRef.current.getTrueHeadingDeg()
+        });
+      }
+    };
+
+    window.addEventListener('deviceorientationabsolute', absOrientationHandler, true);
+    window.addEventListener('deviceorientation', orientationHandler, true);
+    window.addEventListener('devicemotion', motionHandler, true);
+
+    const statusInterval = setInterval(() => {
+      syncSensorStatus();
+    }, 650);
+
+    const detach = () => {
+      clearInterval(statusInterval);
+      window.removeEventListener('deviceorientationabsolute', absOrientationHandler, true);
+      window.removeEventListener('deviceorientation', orientationHandler, true);
+      window.removeEventListener('devicemotion', motionHandler, true);
+      if (absSensor) {
+        try {
+          absSensor.removeEventListener('reading', onAbsSensorReading);
+          absSensor.stop();
+        } catch {
+          // ignore sensor teardown error
+        }
+        absSensor = null;
+      }
+    };
+    orientationDetachRef.current = detach;
+    return detach;
+  }, [syncSensorStatus]);
 
   useEffect(() => {
     if (
@@ -1070,11 +1238,16 @@ export function useProofOfLocation({
       typeof DeviceOrientationEvent.requestPermission === 'function'
     ) {
       setNeedsGyroTap(true);
-      return undefined;
+      return () => {
+        if (orientationDetachRef.current) {
+          orientationDetachRef.current();
+          orientationDetachRef.current = null;
+        }
+      };
     }
     const detach = attachOrientation();
     const fallbackProbe = setTimeout(() => {
-      if (!rawOrientationRef.current) {
+      if (!rawOrientationRef.current && !orientationFusionRef.current.initialized) {
         setGyroFallbackActive(true);
       }
     }, 2400);
@@ -1088,6 +1261,13 @@ export function useProofOfLocation({
     enterFullscreen();
     try {
       const res = await DeviceOrientationEvent.requestPermission();
+      if (
+        typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function'
+      ) {
+        // Request DeviceMotion permission on the same user tap for 60Hz gyro + gravity + steps
+        await DeviceMotionEvent.requestPermission().catch(() => {});
+      }
       if (res === 'granted') {
         setNeedsGyroTap(false);
         setGyroFallbackActive(false);
@@ -1104,13 +1284,41 @@ export function useProofOfLocation({
     }
   }, [attachOrientation, enterFullscreen]);
 
+  // Recenter ONLY rotates the local drawing canvas (`draftYawOffsetRef`) so GPS-anchored lands
+  // & sculptures stay strictly locked to True North!
   const recenterAim = useCallback(() => {
-    if (rawOrientationRef.current) {
-      yawOffsetRef.current = rawOrientationRef.current.alpha;
+    if (orientationFusionRef.current.initialized) {
+      const headingDeg = orientationFusionRef.current.getTrueHeadingDeg();
+      draftYawOffsetRef.current = -(headingDeg * Math.PI) / 180;
+    } else if (rawOrientationRef.current) {
+      draftYawOffsetRef.current = ((rawOrientationRef.current.alpha || 0) * Math.PI) / 180;
     } else {
       fallbackEulerRef.current = { yaw: 0, pitch: 0 };
     }
   }, []);
+
+  const adjustCompassNudge = useCallback(
+    (deltaDeg) => {
+      orientationFusionRef.current.adjustManualYawNudgeDeg(deltaDeg);
+      syncSensorStatus();
+    },
+    [syncSensorStatus]
+  );
+
+  const resetCompassNudge = useCallback(() => {
+    orientationFusionRef.current.setManualYawNudgeDeg(0);
+    syncSensorStatus();
+  }, [syncSensorStatus]);
+
+  const setWebxrState = useCallback(
+    (active) => {
+      const next = Boolean(active);
+      webxrActiveRef.current = next;
+      setWebxrActive(next);
+      syncSensorStatus();
+    },
+    [syncSensorStatus]
+  );
 
   const resetOrbKeyframes = useCallback(() => {
     orbKeyframesRef.current.clear();
@@ -1238,8 +1446,10 @@ export function useProofOfLocation({
       setPolStats((prev) => ({ frames: 0, gyro: prev.gyro, flow: 0 }));
       setScanBoxCollapsed(false);
 
-      if (rawOrientationRef.current) {
-        yawOffsetRef.current = rawOrientationRef.current.alpha;
+      if (orientationFusionRef.current.initialized) {
+        draftYawOffsetRef.current = -(orientationFusionRef.current.getTrueHeadingDeg() * Math.PI) / 180;
+      } else if (rawOrientationRef.current) {
+        draftYawOffsetRef.current = ((rawOrientationRef.current.alpha || 0) * Math.PI) / 180;
       }
 
       if (refreshCameraFeed) {
@@ -1290,7 +1500,17 @@ export function useProofOfLocation({
     latestOrbProofRef,
     rawOrientationRef,
     yawOffsetRef,
+    draftYawOffsetRef,
+    orientationFusionRef,
+    positionFilterRef,
     fallbackEulerRef,
+    sensorStatus,
+    adjustCompassNudge,
+    resetCompassNudge,
+    webxrSupported,
+    webxrActive,
+    webxrActiveRef,
+    setWebxrState,
     locationRef,
     cameraReadyRef,
     cameraReady,

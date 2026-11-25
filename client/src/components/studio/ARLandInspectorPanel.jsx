@@ -14,6 +14,7 @@ import {
 } from '../../utils/landMapHelpers.js';
 import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 import { EmojiInput } from '../EmojiField.jsx';
+import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -82,6 +83,12 @@ export default function ARLandInspectorPanel({
   onOpenLandChat = null,
   onOpenSculptureChat = null,
   onShowHint = null,
+  sensorStatus = null,
+  onAdjustCompassNudge = null,
+  onResetCompassNudge = null,
+  webxrSupported = false,
+  webxrActive = false,
+  onToggleWebxr = null,
   onClose
 }) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -527,6 +534,88 @@ export default function ARLandInspectorPanel({
           <XeroIcon emoji="📤" size={12} /> Share
         </button>
       </div>
+
+      {/* Compass Fine-Align Nudge & 6-DoF ARCore Controls */}
+      {typeof onAdjustCompassNudge === 'function' && (
+        <div
+          className="ar-compass-nudge-bar"
+          data-testid="ar-compass-nudge-controls"
+          aria-label="Compass fine alignment"
+        >
+          <div className="ar-compass-nudge-head">
+            <span className="ar-compass-nudge-label">
+              <XeroIcon emoji="🧭" size={12} /> Align
+              <InfoTip title="Fine-Align Compass Bearing">
+                Near steel buildings or cars, phone magnetometers can drift by a few degrees. Tap
+                −5° / −1° / +1° / +5° to fine-align lands to your real-world view, or wave your
+                phone in a figure-8 to recalibrate.
+              </InfoTip>
+            </span>
+            <span className="mono ar-compass-nudge-readout">
+              {sensorStatus?.manualYawNudgeDeg
+                ? `${sensorStatus.manualYawNudgeDeg > 0 ? '+' : ''}${sensorStatus.manualYawNudgeDeg}°`
+                : '0°'}
+            </span>
+          </div>
+          <div className="ar-compass-nudge-btns">
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="ar-compass-nudge-left5"
+              onClick={() => onAdjustCompassNudge(-5)}
+              aria-label="Nudge compass left 5 degrees"
+            >
+              −5°
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="ar-compass-nudge-left1"
+              onClick={() => onAdjustCompassNudge(-1)}
+              aria-label="Nudge compass left 1 degree"
+            >
+              −1°
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="ar-compass-nudge-reset"
+              disabled={!sensorStatus?.manualYawNudgeDeg}
+              onClick={() => onResetCompassNudge?.()}
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="ar-compass-nudge-right1"
+              onClick={() => onAdjustCompassNudge(1)}
+              aria-label="Nudge compass right 1 degree"
+            >
+              +1°
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="ar-compass-nudge-right5"
+              onClick={() => onAdjustCompassNudge(5)}
+              aria-label="Nudge compass right 5 degrees"
+            >
+              +5°
+            </button>
+            {webxrSupported && typeof onToggleWebxr === 'function' && (
+              <button
+                type="button"
+                className={`btn btn-xs ${webxrActive ? 'btn-primary' : ''}`}
+                data-testid="ar-inspector-webxr-btn"
+                onClick={onToggleWebxr}
+              >
+                {webxrActive ? '6-DoF ON' : '6-DoF'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Sculptures Currently on This Land */}
       {sculptures.length > 0 && (
