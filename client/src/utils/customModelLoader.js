@@ -7,6 +7,7 @@ import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { computeLegacyAutoFitCompensation } from '../../../shared/model3d.mjs';
 import { extractSculptureScale } from '../../../shared/sculpturePlacement.mjs';
+import { getStoredToken } from './api.js';
 
 let sharedDracoLoader = null;
 function getSharedDracoLoader() {
@@ -272,34 +273,81 @@ export async function parseCustomModelBytes(
   return normalizeLoadedObject(root, customModel, { maxAnisotropy, applyCustomScale, meshStats });
 }
 
+function decodeBase64ToArrayBuffer(rawBase64) {
+  const clean = String(rawBase64 || '')
+    .trim()
+    .replace(/^data:[^;]+;base64,/i, '')
+    .replace(/\s+/g, '');
+  if (!clean) return null;
+  if (typeof globalThis.atob === 'function') {
+    const binary = globalThis.atob(clean);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+  if (typeof globalThis.Buffer === 'function') {
+    const buf = globalThis.Buffer.from(clean, 'base64');
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  }
+  return null;
+}
+
 async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
   const cm = sculpture?.customModel || {};
+
+  // Fast path for inline pending preview models (modelBase64 / modelData) — zero network latency
+  if (cm.inlineBase64) {
+    const buf = decodeBase64ToArrayBuffer(cm.inlineBase64);
+    if (buf && buf.byteLength > 0) {
+      return { arrayBuffer: buf, resolvedUrl: '' };
+    }
+  }
+  if (cm.inlineText && String(cm.inlineText).trim()) {
+    const encoded = new TextEncoder().encode(String(cm.inlineText));
+    if (encoded.byteLength > 0) {
+      return { arrayBuffer: encoded.buffer, resolvedUrl: '' };
+    }
+  }
+
   const primaryRaw = cm.downloadUrl || sculpture?.modelGlbUrl || '';
   const primaryUrl = primaryRaw ? resolveUrlFn(primaryRaw) : '';
+  const proxyRaw = cm.proxyUrl || '';
+  const proxyUrl = proxyRaw ? resolveUrlFn(proxyRaw) : '';
 
   const candidates = [];
-  if (primaryUrl) candidates.push(primaryUrl);
+  if (primaryUrl) candidates.push({ url: primaryUrl, auth: false });
+  if (proxyUrl) candidates.push({ url: proxyUrl, auth: true });
   const cid = String(cm.ipfsCid || sculpture?.ipfs?.modelCid || '').trim();
   if (cid && /^[a-zA-Z0-9_-]{16,128}$/.test(cid)) {
-    candidates.push(`https://gateway.pinata.cloud/ipfs/${cid}`);
-    candidates.push(`https://ipfs.filebase.io/ipfs/${cid}`);
-    candidates.push(`https://dweb.link/ipfs/${cid}`);
+    candidates.push({ url: `https://gateway.pinata.cloud/ipfs/${cid}`, auth: false });
+    candidates.push({ url: `https://ipfs.filebase.io/ipfs/${cid}`, auth: false });
+    candidates.push({ url: `https://dweb.link/ipfs/${cid}`, auth: false });
   }
 
   let lastErr = null;
-  for (const candidateUrl of candidates) {
+  for (const candidate of candidates) {
     try {
-      const res = await fetch(candidateUrl, { mode: 'cors' });
+      const headers = {};
+      if (candidate.auth) {
+        const token = getStoredToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      }
+      const res = await fetch(candidate.url, {
+        mode: 'cors',
+        ...(Object.keys(headers).length > 0 ? { headers } : {})
+      });
       if (!res.ok) {
-        lastErr = new Error(`Model fetch failed (${res.status}) for ${candidateUrl}`);
+        lastErr = new Error(`Model fetch failed (${res.status}) for ${candidate.url}`);
         continue;
       }
       const buf = await res.arrayBuffer();
       if (!buf || buf.byteLength === 0) {
-        lastErr = new Error(`Empty model response from ${candidateUrl}`);
+        lastErr = new Error(`Empty model response from ${candidate.url}`);
         continue;
       }
-      return { arrayBuffer: buf, resolvedUrl: candidateUrl };
+      return { arrayBuffer: buf, resolvedUrl: candidate.url };
     } catch (err) {
       lastErr = err;
     }

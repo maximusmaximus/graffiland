@@ -6061,4 +6061,301 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(getLeafletTileConfig('light').url.includes('tile.openstreetmap.org'));
     localStorage.removeItem(MAP_THEME_STORAGE_KEY);
   });
+
+  test('Pending sculpture mint transactions show temporary "Preview" labels on maps, 3D preview modal, and direct Approve/Reject inside NotificationCenter', async () => {
+    const { buildPendingPreviewSculptures } = await import(
+      '../client/src/utils/pendingApprovalPreview.js'
+    );
+    const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
+    const { default: NotificationCenter } = await loadJsxModule(
+      'client/src/components/NotificationCenter.jsx'
+    );
+    const { default: SculptureModal } = await loadJsxModule(
+      'client/src/components/SculptureModal.jsx'
+    );
+
+    const ownerUser = {
+      id: 'google:preview-owner',
+      username: 'preview_owner',
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+    const parcel = {
+      parcelId: 'GLAND-PREV01',
+      customName: 'Preview Plaza',
+      ownerSub: ownerUser.id,
+      centerLat: 37.782,
+      centerLng: -122.412,
+      volume: {
+        parcelId: 'GLAND-PREV01',
+        centerLat: 37.782,
+        centerLng: -122.412,
+        widthMeters: 20,
+        depthMeters: 20,
+        heightMeters: 18
+      }
+    };
+    const pendingGlbReq = {
+      id: 'sigreq-glb-preview-1',
+      status: 'pending',
+      action: 'create_sculpture',
+      parcelId: 'GLAND-PREV01',
+      parcelName: 'Preview Plaza',
+      landDisplayName: 'Preview Plaza',
+      ownerAddress: ownerUser.walletAddress,
+      agentName: 'art-agent',
+      summaryTitle: 'Place "Crystal Phoenix"',
+      summaryDescription: 'Add GLB 3D model on "Preview Plaza".',
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      createdAt: new Date().toISOString(),
+      payload: {
+        title: 'Crystal Phoenix',
+        description: 'Glowing crystal sculpture awaiting owner approval.',
+        modelFormat: 'glb',
+        modelUrl: 'https://example.com/crystal-phoenix.glb',
+        modelScale: 1.5,
+        anchorOffset: { dx: 1, dy: 0, dz: -1, yaw: 30 }
+      }
+    };
+    const pendingVoxelReq = {
+      id: 'sigreq-vox-preview-2',
+      status: 'pending',
+      action: 'create_sculpture',
+      parcelId: 'GLAND-PREV01',
+      parcelName: 'Preview Plaza',
+      ownerAddress: ownerUser.walletAddress,
+      agentName: 'voxel-bot',
+      summaryTitle: 'Place "Voxel Beacon"',
+      summaryDescription: 'Add 2-block voxel sculpture on "Preview Plaza".',
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      createdAt: new Date().toISOString(),
+      payload: {
+        title: 'Voxel Beacon',
+        description: 'Temporary voxel preview.',
+        voxels: [
+          { x: 0, y: 0, z: 0, color: '#00f5d4' },
+          { x: 0, y: 1, z: 0, color: '#ff1f8f' }
+        ]
+      }
+    };
+    const nonSculptureReq = {
+      id: 'sigreq-rename-3',
+      status: 'pending',
+      action: 'update_parcel',
+      parcelId: 'GLAND-PREV01',
+      payload: { customName: 'Renamed Plaza' }
+    };
+
+    // 1) Pure converter produces preview sculptures for both GLB (with auth proxy URL) and voxel pending mints, skipping non-sculpture actions
+    const previews = buildPendingPreviewSculptures(
+      [pendingGlbReq, pendingVoxelReq, nonSculptureReq],
+      { parcels: [parcel] }
+    );
+    assert.equal(previews.length, 2);
+    assert.equal(previews[0].isPendingPreview, true);
+    assert.equal(previews[0].pendingRequestId, 'sigreq-glb-preview-1');
+    assert.equal(previews[0].modelType, 'custom-3d');
+    assert.equal(previews[0].customModel.format, 'glb');
+    assert.equal(
+      previews[0].customModel.proxyUrl,
+      '/api/signatures/requests/sigreq-glb-preview-1/preview-model'
+    );
+    assert.equal(previews[0].lat, 37.782);
+    assert.equal(previews[0].lng, -122.412);
+    assert.equal(previews[1].modelType, 'voxel');
+    assert.equal(previews[1].voxels.length, 2);
+
+    const origFetch = globalThis.fetch;
+    const signedCalls = [];
+    const rejectedCalls = [];
+    let simulateBoundsErrOnce = true;
+
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url);
+      const body = init.body ? JSON.parse(init.body) : {};
+      if (u.includes('/api/signatures/pending')) {
+        return {
+          ok: true,
+          json: async () => ({ requests: [pendingGlbReq, pendingVoxelReq] })
+        };
+      }
+      if (u.includes('/api/mcp/pairings')) {
+        return { ok: true, json: async () => ({ mcpActive: true, pairings: [] }) };
+      }
+      if (u.includes('/api/notifications/read')) {
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      if (u.includes('/api/notifications')) {
+        return {
+          ok: true,
+          json: async () => ({
+            notifications: [
+              {
+                id: 'notif-sig-1',
+                category: 'land_activity',
+                severity: 'action',
+                title: '✍️ Approval needed: Place "Crystal Phoenix"',
+                message: 'art-agent requested "Place Crystal Phoenix" on "Preview Plaza". Preview on the map or approve right here.',
+                parcelId: 'GLAND-PREV01',
+                actionType: 'open_land_approval',
+                actionLabel: 'Preview on Land',
+                read: false,
+                createdAt: new Date().toISOString(),
+                meta: {
+                  requestId: 'sigreq-glb-preview-1',
+                  action: 'create_sculpture',
+                  hasSculpturePreview: true
+                }
+              }
+            ],
+            unreadCount: 1,
+            preferences: {}
+          })
+        };
+      }
+      if (u.includes('/api/signatures/requests/sigreq-glb-preview-1/mobile-sign')) {
+        signedCalls.push({ id: 'sigreq-glb-preview-1', body });
+        if (simulateBoundsErrOnce && !body.autoFitScale) {
+          simulateBoundsErrOnce = false;
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error: 'Scale 1.5× exceeds bounds (max 0.95×).',
+              code: 'exceeds_land_bounds',
+              maxSafeScale: 0.95
+            })
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            autoFittedScale: body.autoFitScale ? 0.95 : null,
+            result: { sculpture: { id: 'sc-minted-phoenix', title: 'Crystal Phoenix' } }
+          })
+        };
+      }
+      if (u.includes('/api/signatures/requests/sigreq-vox-preview-2/reject')) {
+        rejectedCalls.push('sigreq-vox-preview-2');
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      if (u.includes('/api/lands/GLAND-PREV01')) {
+        return { ok: true, json: async () => ({ parcel, sculptures: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true, parcels: [parcel] }) };
+    };
+
+    try {
+      // 2) PlotVisitView renders temporary "Preview" labels on the map & selector pills + "Preview 3D" button
+      const openedPreviews = [];
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures: [],
+          allParcels: [parcel],
+          user: ownerUser,
+          ownedParcelIds: ['GLAND-PREV01'],
+          onSelectSculpture: (sc) => openedPreviews.push(sc),
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        const badges = plotView.getAllByTestId('map-preview-badge');
+        assert.ok(badges.length >= 1);
+        assert.equal(badges[0].textContent.trim(), 'Preview');
+      });
+      assert.ok(plotView.getAllByTestId('plot-preview-label').length >= 1);
+      assert.ok(plotView.getAllByTestId('plot-tab-preview').length === 2);
+      RTL.fireEvent.click(plotView.getAllByTestId('plot-preview-tx-btn')[0]);
+      assert.equal(openedPreviews.length, 1);
+      assert.equal(openedPreviews[0].isPendingPreview, true);
+      assert.equal(openedPreviews[0].title, 'Crystal Phoenix');
+      cleanup();
+
+      // 3) SculptureModal in pending preview mode shows "Preview" badge + Approve & Mint / Reject controls
+      const modalApproved = [];
+      const modalView = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: previews[0],
+          user: ownerUser,
+          config: {},
+          onApprovePending: (req) => modalApproved.push(req.id),
+          onClose: () => {}
+        })
+      );
+      assert.equal(modalView.getByTestId('preview-modal-badge').textContent.trim(), 'Preview');
+      assert.ok(modalView.getByTestId('sculpture-preview-approval-bar'));
+      RTL.fireEvent.click(modalView.getByTestId('preview-modal-approve-btn'));
+      assert.deepEqual(modalApproved, ['sigreq-glb-preview-1']);
+      cleanup();
+
+      // 4) NotificationCenter allows direct Approve (including Auto-Fit retry), Reject, and Preview right from the menu
+      const resolvedEvents = [];
+      const notifActions = [];
+      const notifView = RTL.render(
+        React.createElement(NotificationCenter, {
+          user: ownerUser,
+          variant: 'desktop',
+          pendingApprovals: [pendingGlbReq, pendingVoxelReq],
+          onApprovalResolved: (ev) => resolvedEvents.push(ev),
+          onAction: (act) => notifActions.push(act)
+        })
+      );
+
+      // Open notification popover -> shows both persisted notification AND synthetic pending approval
+      await RTL.act(async () => {
+        RTL.fireEvent.click(notifView.getByRole('button', { name: /Notifications/i }));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(notifView.getAllByTestId('notif-inline-approve-btn').length, 2);
+      });
+
+      // Clicking Preview triggers preview_pending_sculpture action
+      RTL.fireEvent.click(notifView.getAllByTestId('notif-preview-btn')[0]);
+      assert.equal(notifActions.length, 1);
+      assert.equal(notifActions[0].actionType, 'preview_pending_sculpture');
+
+      // Reopen popover, approve Crystal Phoenix -> first attempt triggers inline Auto-Fit button, second click approves!
+      await RTL.act(async () => {
+        RTL.fireEvent.click(notifView.getByRole('button', { name: /Notifications/i }));
+      });
+      const phoenixCard = notifView.container.querySelector('[data-request-id="sigreq-glb-preview-1"]');
+      assert.ok(phoenixCard);
+      await RTL.act(async () => {
+        RTL.fireEvent.click(phoenixCard.querySelector('[data-testid="notif-inline-approve-btn"]'));
+      });
+      await RTL.waitFor(() => {
+        assert.ok(notifView.getByTestId('notif-approval-error').textContent.includes('0.95×'));
+        assert.ok(notifView.getByTestId('notif-autofit-approve-btn'));
+      });
+      await RTL.act(async () => {
+        RTL.fireEvent.click(notifView.getByTestId('notif-autofit-approve-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(resolvedEvents.length, 1);
+        assert.equal(resolvedEvents[0].type, 'approved');
+        assert.equal(resolvedEvents[0].requestId, 'sigreq-glb-preview-1');
+      });
+      assert.equal(signedCalls.length, 2);
+      assert.equal(signedCalls[1].body.autoFitScale, true);
+
+      // Reject second pending transaction directly from the notification menu
+      const voxelCard = notifView.container.querySelector('[data-request-id="sigreq-vox-preview-2"]');
+      assert.ok(voxelCard);
+      await RTL.act(async () => {
+        RTL.fireEvent.click(voxelCard.querySelector('[data-testid="notif-inline-reject-btn"]'));
+      });
+      await RTL.waitFor(() => {
+        assert.deepEqual(rejectedCalls, ['sigreq-vox-preview-2']);
+        assert.equal(resolvedEvents.length, 2);
+        assert.equal(resolvedEvents[1].type, 'rejected');
+      });
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

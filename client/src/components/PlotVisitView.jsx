@@ -23,6 +23,7 @@ import {
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
+import { buildPendingPreviewSculptures } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordUserAction } from '../utils/userHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
@@ -239,10 +240,28 @@ export default function PlotVisitView({
     [activeSculptures]
   );
 
+  const pendingPreviewSculptures = useMemo(
+    () =>
+      buildPendingPreviewSculptures(pendingApprovals, {
+        parcels: stageParcels,
+        existingSculptures: activeSculptures
+      }),
+    [pendingApprovals, stageParcels, activeSculptures]
+  );
+
+  const mapDisplaySculptures = useMemo(
+    () => [...visibleSculptures, ...pendingPreviewSculptures],
+    [visibleSculptures, pendingPreviewSculptures]
+  );
+
   const selectedArtwork = useMemo(() => {
     if (selectedTarget !== 'artwork' || !selectedSculptureId) return null;
-    return activeSculptures.find((s) => s.id === selectedSculptureId) || null;
-  }, [activeSculptures, selectedSculptureId, selectedTarget]);
+    return (
+      activeSculptures.find((s) => s.id === selectedSculptureId) ||
+      pendingPreviewSculptures.find((s) => s.id === selectedSculptureId) ||
+      null
+    );
+  }, [activeSculptures, pendingPreviewSculptures, selectedSculptureId, selectedTarget]);
 
   // If the selected artwork was deleted/removed, fall back cleanly to Land details
   useEffect(() => {
@@ -540,16 +559,16 @@ export default function PlotVisitView({
   );
 
   const activeParcelRef = useRef(activeParcel);
-  const visibleSculpturesRef = useRef(visibleSculptures);
+  const visibleSculpturesRef = useRef(mapDisplaySculptures);
   const selectedSculptureIdRef = useRef(selectedSculptureId);
   const landDisplayNameRef = useRef(landDisplayName);
 
   useEffect(() => {
     activeParcelRef.current = activeParcel;
-    visibleSculpturesRef.current = visibleSculptures;
+    visibleSculpturesRef.current = mapDisplaySculptures;
     selectedSculptureIdRef.current = selectedSculptureId;
     landDisplayNameRef.current = landDisplayName;
-  }, [activeParcel, landDisplayName, selectedSculptureId, visibleSculptures]);
+  }, [activeParcel, landDisplayName, mapDisplaySculptures, selectedSculptureId]);
 
   const recompute2dOverlay = useCallback(() => {
     const map = mapRef.current;
@@ -1201,7 +1220,7 @@ export default function PlotVisitView({
             {mapDimensionMode === '3d' ? (
               <MobileIsometricMap
                 parcels={stageParcels}
-                sculptures={visibleSculptures}
+                sculptures={mapDisplaySculptures}
                 userLocation={userLocation}
                 selectedParcelId={activeParcel.parcelId}
                 selectedSculptureId={selectedTarget === 'artwork' ? selectedSculptureId : ''}
@@ -1267,16 +1286,17 @@ export default function PlotVisitView({
                         <polyline
                           points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
                           fill="none"
-                          stroke={c.isSelected ? '#ffd166' : '#00f5d4'}
-                          strokeWidth={c.isSelected ? '1.8' : '1.25'}
+                          stroke={c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4'}
+                          strokeWidth={c.isPendingPreview || c.isSelected ? '1.8' : '1.25'}
+                          strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
                           strokeLinejoin="round"
                           strokeLinecap="round"
                         />
                         <circle
                           cx={c.targetX}
                           cy={c.targetY}
-                          r={c.isSelected ? '3.2' : '2.4'}
-                          fill={c.isSelected ? '#ffd166' : '#eafffc'}
+                          r={c.isPendingPreview || c.isSelected ? '3.2' : '2.4'}
+                          fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
                         />
                       </g>
                     ))}
@@ -1313,8 +1333,10 @@ export default function PlotVisitView({
                       key={c.sculptureId}
                       className={`plot-iso-artwork-callout is-${c.side} ${
                         c.isSelected ? 'is-selected' : ''
-                      }`}
+                      } ${c.isPendingPreview ? 'is-pending-preview' : ''}`.trim()}
                       data-callout-side={c.side}
+                      data-pending-preview={c.isPendingPreview ? 'true' : undefined}
+                      data-request-id={c.pendingRequestId || undefined}
                       style={{
                         left: `${c.x}px`,
                         top: `${c.y}px`,
@@ -1324,40 +1346,68 @@ export default function PlotVisitView({
                       <button
                         type="button"
                         className="plot-iso-callout-main"
-                        data-testid="plot-artwork-label"
+                        data-testid={c.isPendingPreview ? 'plot-preview-label' : 'plot-artwork-label'}
                         data-sculpture-id={c.sculptureId}
                         data-callout-side={c.side}
                         onClick={() => handleSelectArtworkTarget(c.sculpture)}
-                        title={`Inspect "${c.title}"`}
+                        title={
+                          c.isPendingPreview
+                            ? `Preview (Pending Approval) — "${c.title}"`
+                            : `Inspect "${c.title}"`
+                        }
                       >
-                        <span className="plot-iso-callout-title">{c.title}</span>
+                        <span className="plot-iso-callout-title-row">
+                          {c.isPendingPreview && (
+                            <span className="map-preview-pill" data-testid="map-preview-badge">
+                              Preview
+                            </span>
+                          )}
+                          <span className="plot-iso-callout-title">{c.title}</span>
+                        </span>
                         <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
                       </button>
-                      <a
-                        href={c.sculptureUrl}
-                        className="plot-iso-callout-open-btn"
-                        data-testid="plot-artwork-view-btn"
-                        data-sculpture-id={c.sculptureId}
-                        aria-label={`Open 3D art link for ${c.title}`}
-                        title={`Open link for "${c.title}" (${c.sculptureUrl})`}
-                        onClick={(e) => {
-                          const openHandler = onSelectSculpture || handleSelectArtworkTarget;
-                          if (
-                            openHandler &&
-                            !e.metaKey &&
-                            !e.ctrlKey &&
-                            !e.shiftKey &&
-                            !e.altKey &&
-                            e.button === 0
-                          ) {
-                            e.preventDefault();
+                      {c.isPendingPreview ? (
+                        <button
+                          type="button"
+                          className="plot-iso-callout-open-btn"
+                          data-testid="plot-preview-open-btn"
+                          data-sculpture-id={c.sculptureId}
+                          aria-label={`Open 3D preview for ${c.title}`}
+                          title={`Open 3D preview & approve "${c.title}"`}
+                          onClick={(e) => {
                             e.stopPropagation();
-                            openHandler(c.sculpture);
-                          }
-                        }}
-                      >
-                        ↗
-                      </a>
+                            (onSelectSculpture || handleSelectArtworkTarget)(c.sculpture);
+                          }}
+                        >
+                          👁️
+                        </button>
+                      ) : (
+                        <a
+                          href={c.sculptureUrl}
+                          className="plot-iso-callout-open-btn"
+                          data-testid="plot-artwork-view-btn"
+                          data-sculpture-id={c.sculptureId}
+                          aria-label={`Open 3D art link for ${c.title}`}
+                          title={`Open link for "${c.title}" (${c.sculptureUrl})`}
+                          onClick={(e) => {
+                            const openHandler = onSelectSculpture || handleSelectArtworkTarget;
+                            if (
+                              openHandler &&
+                              !e.metaKey &&
+                              !e.ctrlKey &&
+                              !e.shiftKey &&
+                              !e.altKey &&
+                              e.button === 0
+                            ) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openHandler(c.sculpture);
+                            }
+                          }}
+                        >
+                          ↗
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1456,6 +1506,25 @@ export default function PlotVisitView({
                       </button>
                     );
                   })}
+                  {pendingPreviewSculptures.map((sc) => {
+                    const active = selectedTarget === 'artwork' && selectedSculptureId === sc.id;
+                    return (
+                      <button
+                        key={sc.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        className={`plot-selector-pill is-pending-preview ${active ? 'is-active' : ''}`}
+                        data-testid="plot-tab-preview"
+                        data-sculpture-id={sc.id}
+                        data-request-id={sc.pendingRequestId}
+                        onClick={() => handleSelectArtworkTarget(sc)}
+                      >
+                        <span className="map-preview-pill">Preview</span>
+                        <span>{sc.title || 'Pending Artwork'}</span>
+                      </button>
+                    );
+                  })}
                 </div>
                 <button
                   type="button"
@@ -1470,7 +1539,114 @@ export default function PlotVisitView({
 
               {detailsExpanded && (
                 <div className="mobile-parcel-body plot-visit-body">
-                  {selectedTarget === 'artwork' && selectedArtwork ? (
+                  {selectedTarget === 'artwork' && selectedArtwork?.isPendingPreview ? (
+                    /* ================= PENDING PREVIEW SCULPTURE APPROVAL ================= */
+                    (() => {
+                      const reqItem = selectedArtwork.pendingRequest;
+                      const busy = approvalBusyId === reqItem?.id;
+                      const itemError = approvalErrors?.[reqItem?.id] || null;
+                      const canAutoFit =
+                        itemError?.code === 'exceeds_land_bounds' &&
+                        Number(itemError?.maxSafeScale) >= 0.001;
+                      return (
+                        <div className="plot-detail-card" data-testid="plot-preview-artwork-details">
+                          <div className="plot-detail-head">
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span className="map-preview-pill">Preview</span>
+                                <h2 className="plot-detail-title">{selectedArtwork.title}</h2>
+                                <span className="badge gold" style={{ fontSize: 10 }}>
+                                  ⏳ Needs Approval
+                                </span>
+                              </div>
+                              <div className="plot-detail-meta-chips">
+                                <span className="mobile-sc-chip">
+                                  🤖 {selectedArtwork.pendingAgentName || 'Paired Agent'}
+                                </span>
+                                <span className="mobile-sc-chip">
+                                  {selectedArtwork.modelType === 'custom-3d'
+                                    ? `📦 ${String(selectedArtwork.customModel?.format || '3D').toUpperCase()} · ${Number(
+                                        selectedArtwork.customModel?.scale || 1
+                                      )}×`
+                                    : `🧱 ${selectedArtwork.voxelCount || selectedArtwork.voxels?.length || 0} blocks`}
+                                </span>
+                                {reqItem?.expiresAt && (
+                                  <span className="mobile-sc-chip mono">
+                                    {formatApprovalExpiresIn(reqItem.expiresAt)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="mobile-parcel-desc" style={{ marginTop: 6 }}>
+                            {selectedArtwork.description ||
+                              `Temporary preview on "${landDisplayName}". Approve below to mint and place it permanently on your land.`}
+                          </p>
+
+                          {itemError?.message && (
+                            <div
+                              className="approval-inline-error"
+                              data-testid="plot-approval-error"
+                              role="alert"
+                            >
+                              <div className="approval-inline-error-msg">⚠️ {itemError.message}</div>
+                              {canAutoFit && reqItem && (
+                                <button
+                                  type="button"
+                                  className="btn btn-xs btn-primary"
+                                  data-testid="plot-autofit-approve-btn"
+                                  disabled={Boolean(approvalBusyId)}
+                                  onClick={() =>
+                                    handleApprovePendingTx(reqItem, { autoFitScale: true })
+                                  }
+                                >
+                                  {busy
+                                    ? 'Fitting & Placing…'
+                                    : `📐 Auto-Fit (${itemError.maxSafeScale}×) & Approve`}
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="plot-pending-item-actions" style={{ marginTop: 10 }}>
+                            {reqItem && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-primary"
+                                data-testid="plot-preview-approve-btn"
+                                disabled={Boolean(approvalBusyId)}
+                                onClick={() => handleApprovePendingTx(reqItem)}
+                              >
+                                {busy ? 'Approving…' : '✅ Approve & Mint'}
+                              </button>
+                            )}
+                            {reqItem && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-danger"
+                                data-testid="plot-preview-reject-btn"
+                                disabled={Boolean(approvalBusyId)}
+                                onClick={() => handleRejectPendingTx(reqItem)}
+                              >
+                                {busy ? 'Working…' : '✕ Reject'}
+                              </button>
+                            )}
+                            {onSelectSculpture && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                data-testid="plot-preview-3d-modal-btn"
+                                onClick={() => onSelectSculpture(selectedArtwork)}
+                              >
+                                👁️ Full 3D Preview
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : selectedTarget === 'artwork' && selectedArtwork ? (
                     /* ================= ARTWORK DETAILS + MANAGEMENT ================= */
                     <div className="plot-detail-card" data-testid="plot-artwork-details">
                       <div className="plot-detail-head">
@@ -1860,6 +2036,28 @@ export default function PlotVisitView({
                                     >
                                       {busy ? 'Approving…' : '✅ Approve & Execute'}
                                     </button>
+                                    {(() => {
+                                      const previewSc = pendingPreviewSculptures.find(
+                                        (p) => p.pendingRequestId === item.id
+                                      );
+                                      if (!previewSc) return null;
+                                      return (
+                                        <button
+                                          type="button"
+                                          className="btn btn-xs"
+                                          data-testid="plot-preview-tx-btn"
+                                          onClick={() => {
+                                            if (onSelectSculpture) {
+                                              onSelectSculpture(previewSc);
+                                            } else {
+                                              handleSelectArtworkTarget(previewSc);
+                                            }
+                                          }}
+                                        >
+                                          👁️ Preview 3D
+                                        </button>
+                                      );
+                                    })()}
                                     <button
                                       type="button"
                                       className="btn btn-xs btn-danger"

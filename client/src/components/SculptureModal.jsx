@@ -93,9 +93,16 @@ export default function SculptureModal({
   onOpenLandManagement = null,
   onOpenAddLandItem = null,
   onRequestLogin = null,
+  onApprovePending = null,
+  onRejectPending = null,
+  pendingApprovalBusy = false,
+  pendingApprovalError = null,
   onClose
 }) {
   const [sculpture, setSculpture] = useState(initialSculpture);
+  const isPendingPreview = Boolean(sculpture?.isPendingPreview);
+  const [localPendingBusy, setLocalPendingBusy] = useState(false);
+  const [localPendingError, setLocalPendingError] = useState(null);
   const scFallbackCoords =
     Number.isFinite(Number(sculpture?.lat)) && Number.isFinite(Number(sculpture?.lng))
       ? { lat: Number(sculpture.lat), lng: Number(sculpture.lng) }
@@ -174,7 +181,9 @@ export default function SculptureModal({
     setPinDraftText('');
     setEditModalPinId('');
     setPinBatchInfo(initialSculpture?.pinSummary || null);
-    if (!initialSculpture?.id) return;
+    setLocalPendingBusy(false);
+    setLocalPendingError(null);
+    if (!initialSculpture?.id || initialSculpture?.isPendingPreview) return;
     let cancelled = false;
     api
       .getSculpture(initialSculpture.id)
@@ -1029,12 +1038,69 @@ export default function SculptureModal({
     }
   };
 
+  const effectivePendingBusy = Boolean(pendingApprovalBusy || localPendingBusy);
+  const effectivePendingError = pendingApprovalError || localPendingError;
+
+  async function handlePreviewApprove(options = {}) {
+    const reqObj = sculpture?.pendingRequest;
+    if (!reqObj?.id || effectivePendingBusy) return;
+    setLocalPendingError(null);
+    if (typeof onApprovePending === 'function') {
+      await onApprovePending(reqObj, options);
+      return;
+    }
+    setLocalPendingBusy(true);
+    try {
+      const autoFitScale = Boolean(options?.autoFitScale);
+      const res = await api.mobileSignRequest(reqObj.id, autoFitScale ? { autoFitScale: true } : {});
+      notifySettingsSaved(`Approved & minted "${sculpture.title || 'Sculpture'}"!`);
+      if (res?.result?.sculpture) {
+        onSculptureUpdated?.(res.result.sculpture);
+      }
+      onClose?.();
+    } catch (err) {
+      const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);
+      setLocalPendingError({
+        message: err?.message || 'Could not approve transaction.',
+        code: String(err?.data?.code || ''),
+        maxSafeScale: Number.isFinite(maxSafe) && maxSafe > 0 ? maxSafe : null
+      });
+    } finally {
+      setLocalPendingBusy(false);
+    }
+  }
+
+  async function handlePreviewReject() {
+    const reqObj = sculpture?.pendingRequest;
+    if (!reqObj?.id || effectivePendingBusy) return;
+    setLocalPendingError(null);
+    if (typeof onRejectPending === 'function') {
+      await onRejectPending(reqObj);
+      return;
+    }
+    setLocalPendingBusy(true);
+    try {
+      await api.rejectSignatureRequest(reqObj.id);
+      notifySettingsSaved(`Rejected "${sculpture.title || 'Sculpture'}".`);
+      onClose?.();
+    } catch (err) {
+      setLocalPendingError({
+        message: err?.message || 'Could not reject transaction.',
+        code: '',
+        maxSafeScale: null
+      });
+    } finally {
+      setLocalPendingBusy(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal-card sculpture-modal-card"
         style={{ maxWidth: 820 }}
         data-testid="sculpture-modal"
+        data-pending-preview={isPendingPreview ? 'true' : undefined}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Pinned Top 3D Model Window — Stays in view while modifiers scroll smoothly behind it */}
@@ -1042,20 +1108,31 @@ export default function SculptureModal({
           <div className="modal-header sculpture-modal-header">
             <div className="sculpture-modal-title-group">
               <h2 className="modal-title">
-                <XeroIcon emoji="🧊" size={22} />
+                <XeroIcon emoji={isPendingPreview ? '⏳' : '🧊'} size={22} />
+                {isPendingPreview && (
+                  <span className="map-preview-pill" data-testid="preview-modal-badge">
+                    Preview
+                  </span>
+                )}
                 <span>{sculpture.title}</span>
               </h2>
-              {(sculpture.creatorUsername || sculpture.creatorName) && (
-                <UserHandleBadge
-                  user={{
-                    id: sculpture.creatorSub,
-                    username: sculpture.creatorUsername,
-                    creatorName: sculpture.creatorName,
-                    avatarImage: sculpture.creatorAvatar
-                  }}
-                  fallback="Creator"
-                  size="xs"
-                />
+              {isPendingPreview ? (
+                <span className="badge gold" style={{ fontSize: 10.5 }}>
+                  Needs Approval · {scLandDisplayName}
+                </span>
+              ) : (
+                (sculpture.creatorUsername || sculpture.creatorName) && (
+                  <UserHandleBadge
+                    user={{
+                      id: sculpture.creatorSub,
+                      username: sculpture.creatorUsername,
+                      creatorName: sculpture.creatorName,
+                      avatarImage: sculpture.creatorAvatar
+                    }}
+                    fallback="Creator"
+                    size="xs"
+                  />
+                )
               )}
             </div>
             <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
@@ -1068,20 +1145,20 @@ export default function SculptureModal({
             voxels={sculpture.voxels || []}
             height={isCompactViewport ? 224 : 284}
             autoRotate
-            liveTransform={canModifySculpture ? viewerLiveTransform : null}
+            liveTransform={!isPendingPreview && canModifySculpture ? viewerLiveTransform : null}
             parcelVolume={placementVolume}
             siblingBoxes={viewerSiblingBoxes}
-            showLandBounds={canModifySculpture && showLandBoundsPreview}
-            showEditGizmo={canModifySculpture && showGizmoHandles}
+            showLandBounds={isPendingPreview ? Boolean(placementVolume) : canModifySculpture && showLandBoundsPreview}
+            showEditGizmo={!isPendingPreview && canModifySculpture && showGizmoHandles}
             maxSafeScale={maxSafeScale}
             moveRanges={moveRanges}
-            placementBlocked={Boolean(canModifySculpture && livePlacement && !livePlacement.ok)}
+            placementBlocked={Boolean(!isPendingPreview && canModifySculpture && livePlacement && !livePlacement.ok)}
             unitSystem={unitSystem}
             onModelBoundsMeasured={handleMeasuredBounds}
-            onTransformChange={canModifySculpture ? handleGizmoTransformChange : null}
+            onTransformChange={!isPendingPreview && canModifySculpture ? handleGizmoTransformChange : null}
           />
 
-          {canModifySculpture && (
+          {!isPendingPreview && canModifySculpture && (
             <div className="sculpture-sticky-toolbar">
               <div className="sculpture-sticky-toggles">
                 <button
@@ -1116,6 +1193,83 @@ export default function SculptureModal({
 
         {/* Scrollable Modifiers & Details Body — Slides behind the pinned 3D model window */}
         <div className="sculpture-modal-scroll-body" data-testid="sculpture-scroll-body">
+        {isPendingPreview ? (
+          <div
+            className="card preview-approval-modal-card"
+            data-testid="sculpture-preview-approval-bar"
+          >
+            <div className="preview-approval-modal-head">
+              <div>
+                <strong>⏳ Temporary Preview — Approval Required to Mint</strong>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                  Requested by <strong>{sculpture.pendingAgentName || 'Paired Agent'}</strong> on{' '}
+                  <strong>{scLandDisplayName}</strong>. This sculpture is not minted yet — approve
+                  below to place it permanently on your land.
+                </div>
+              </div>
+              <span className="badge gold" style={{ fontSize: 10.5, flexShrink: 0 }}>
+                {sculpture.modelType === 'custom-3d'
+                  ? `${String(sculpture.customModel?.format || '3D').toUpperCase()} · ${Number(
+                      sculpture.customModel?.scale || 1
+                    )}×`
+                  : `${sculpture.voxelCount || sculpture.voxels?.length || 0} blocks`}
+              </span>
+            </div>
+
+            {sculpture.description && (
+              <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text)', lineHeight: 1.45 }}>
+                {sculpture.description}
+              </p>
+            )}
+
+            {effectivePendingError?.message && (
+              <div
+                className="approval-inline-error"
+                data-testid="preview-modal-approval-error"
+                role="alert"
+                style={{ marginTop: 10 }}
+              >
+                <div className="approval-inline-error-msg">⚠️ {effectivePendingError.message}</div>
+                {effectivePendingError.code === 'exceeds_land_bounds' &&
+                  Number(effectivePendingError.maxSafeScale) >= 0.001 && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      data-testid="preview-modal-autofit-btn"
+                      disabled={effectivePendingBusy}
+                      onClick={() => handlePreviewApprove({ autoFitScale: true })}
+                    >
+                      {effectivePendingBusy
+                        ? 'Fitting & Minting…'
+                        : `📐 Auto-Fit (${effectivePendingError.maxSafeScale}×) & Approve`}
+                    </button>
+                  )}
+              </div>
+            )}
+
+            <div className="preview-approval-modal-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="preview-modal-approve-btn"
+                disabled={effectivePendingBusy}
+                onClick={() => handlePreviewApprove()}
+              >
+                {effectivePendingBusy ? 'Approving & Minting…' : '✅ Approve & Mint on Land'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                data-testid="preview-modal-reject-btn"
+                disabled={effectivePendingBusy}
+                onClick={handlePreviewReject}
+              >
+                {effectivePendingBusy ? 'Working…' : '✕ Reject'}
+              </button>
+            </div>
+          </div>
+        ) : (
+        <>
         {/* Immediate Logged-In Artwork Studio (Modify, Scale, Move, Rotate, Hide & Remove) */}
         {canModifySculpture ? (
           <div className="card sculpture-transform-studio" data-testid="sculpture-transform-studio">
@@ -2534,6 +2688,8 @@ export default function SculptureModal({
             </span>
           </div>
         </div>
+        </>
+        )}
         </div>
       </div>
     </div>

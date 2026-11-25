@@ -7,6 +7,7 @@ import {
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
 import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
+import { buildPendingPreviewSculpture } from '../utils/pendingApprovalPreview.js';
 import {
   countUnseenMapItems,
   loadSeenLands,
@@ -1334,11 +1335,81 @@ export default function MobileStudio({
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
           notifRefreshSignal={lands.ownedLandCount}
+          onApprovalResolved={({ requestId = '' } = {}) => {
+            if (
+              requestId &&
+              ar.mapSelectedSculpture?.isPendingPreview &&
+              ar.mapSelectedSculpture.pendingRequestId === requestId
+            ) {
+              ar.setMapSelectedSculpture(null);
+            }
+            pairing.refreshPendingSignatures?.();
+            ar.loadPublicMapData();
+            lands.refreshMyLands();
+            if (parcelVisit?.parcel?.parcelId) {
+              api
+                .getLandDetail(parcelVisit.parcel.parcelId)
+                .then((res) => {
+                  if (res?.parcel) {
+                    setParcelVisit({
+                      loading: false,
+                      parcel: res.parcel,
+                      sculptures: res.sculptures || [],
+                      error: ''
+                    });
+                  }
+                })
+                .catch(() => {});
+            }
+          }}
+          onPreviewPending={(reqItem) => {
+            if (!reqItem) return;
+            const previewSc = buildPendingPreviewSculpture(reqItem, {
+              parcels: [
+                ...(ar.mapParcels || []),
+                ...(ar.nearbyParcels || []),
+                ...(lands.myLands?.parcels || [])
+              ],
+              existingSculptures: [...(ar.mapSculptures || []), ...(ar.nearbySculptures || [])]
+            });
+            if (previewSc) {
+              ar.setMapSelectedSculpture(previewSc);
+              return;
+            }
+            if (reqItem.parcelId) {
+              ar.openAreaMap({ focusParcelId: reqItem.parcelId });
+            }
+          }}
           onNotificationAction={async (item) => {
             if (!item) return;
             if (item.actionType === 'open_pair_mobile') {
               setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
               return;
+            }
+            if (item.actionType === 'preview_pending_sculpture') {
+              const reqObj =
+                item.pendingRequest ||
+                (pairing.pendingSignatures || []).find(
+                  (r) => r.id === item.meta?.requestId
+                ) ||
+                null;
+              const previewSc = reqObj
+                ? buildPendingPreviewSculpture(reqObj, {
+                    parcels: [
+                      ...(ar.mapParcels || []),
+                      ...(ar.nearbyParcels || []),
+                      ...(lands.myLands?.parcels || [])
+                    ],
+                    existingSculptures: [
+                      ...(ar.mapSculptures || []),
+                      ...(ar.nearbySculptures || [])
+                    ]
+                  })
+                : null;
+              if (previewSc) {
+                ar.setMapSelectedSculpture(previewSc);
+                return;
+              }
             }
             if (item.actionType === 'open_land_approval' && item.parcelId) {
               setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
@@ -1855,6 +1926,7 @@ export default function MobileStudio({
           displayedMapSculptures={ar.displayedMapSculptures}
           areaSculpturesSorted={ar.areaSculpturesSorted}
           mapParcels={ar.mapParcels}
+          pendingSignatures={pairing.pendingSignatures}
           mapSelectedSculpture={ar.mapSelectedSculpture}
           selectedParcelId={ar.mapSelectedParcelId}
           focusParcelTick={ar.mapFocusParcelTick}
@@ -1958,6 +2030,30 @@ export default function MobileStudio({
             lands.setLandManageParcelId(pid || '');
             lands.setLandManageOpen(true);
           }}
+          onApprovePending={async (reqItem, options = {}) => {
+            if (!reqItem?.id) return;
+            await pairing.handleMobileSignPending(reqItem, options);
+            const stillPending = (pairing.pendingSignatures || []).some(
+              (r) => r.id === reqItem.id
+            );
+            if (!stillPending && !pairing.pendingSigErrors?.[reqItem.id]) {
+              ar.setMapSelectedSculpture(null);
+            }
+          }}
+          onRejectPending={async (reqItem) => {
+            if (!reqItem?.id) return;
+            await pairing.handleMobileRejectPending(reqItem.id);
+            ar.setMapSelectedSculpture(null);
+          }}
+          pendingApprovalBusy={Boolean(
+            ar.mapSelectedSculpture?.pendingRequestId &&
+              pairing.pendingSigBusyId === ar.mapSelectedSculpture.pendingRequestId
+          )}
+          pendingApprovalError={
+            ar.mapSelectedSculpture?.pendingRequestId
+              ? pairing.pendingSigErrors?.[ar.mapSelectedSculpture.pendingRequestId] || null
+              : null
+          }
           onClose={() => ar.setMapSelectedSculpture(null)}
         />
       )}

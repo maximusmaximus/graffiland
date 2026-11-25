@@ -311,14 +311,15 @@ function MobileIsoSvgFallback({
             <polyline
               points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
               fill="none"
-              stroke={c.isSelected ? '#ffd166' : '#00f5d4'}
-              strokeWidth={c.isSelected ? '1.8' : '1.25'}
+              stroke={c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4'}
+              strokeWidth={c.isPendingPreview || c.isSelected ? '1.8' : '1.25'}
+              strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
             />
             <circle
               cx={c.targetX}
               cy={c.targetY}
-              r={c.isSelected ? '3.4' : '2.4'}
-              fill={c.isSelected ? '#ffd166' : '#eafffc'}
+              r={c.isPendingPreview || c.isSelected ? '3.4' : '2.4'}
+              fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
             />
           </g>
         ))}
@@ -341,8 +342,12 @@ function MobileIsoSvgFallback({
           {fallbackCallouts.map((c) => (
             <div
               key={c.sculptureId}
-              className={`plot-iso-artwork-callout is-${c.side} ${c.isSelected ? 'is-selected' : ''}`}
+              className={`plot-iso-artwork-callout is-${c.side} ${c.isSelected ? 'is-selected' : ''} ${
+                c.isPendingPreview ? 'is-pending-preview' : ''
+              }`.trim()}
               data-callout-side={c.side}
+              data-pending-preview={c.isPendingPreview ? 'true' : undefined}
+              data-request-id={c.pendingRequestId || undefined}
               style={{
                 left: c.side === 'left' ? 8 : undefined,
                 right: c.side === 'right' ? 8 : undefined,
@@ -352,44 +357,70 @@ function MobileIsoSvgFallback({
               <button
                 type="button"
                 className="plot-iso-callout-main"
-                data-testid="plot-artwork-label"
+                data-testid={c.isPendingPreview ? 'plot-preview-label' : 'plot-artwork-label'}
                 data-sculpture-id={c.sculptureId}
                 data-callout-side={c.side}
                 onClick={() => onSelectSculpture?.(c.sculpture)}
                 title={
-                  c.isSelected && onOpenSculptureView
-                    ? `Open 3D view of "${c.title}"`
-                    : `Inspect "${c.title}"`
+                  c.isPendingPreview
+                    ? `Preview (Pending Approval) — "${c.title}". Click to inspect & approve.`
+                    : c.isSelected && onOpenSculptureView
+                      ? `Open 3D view of "${c.title}"`
+                      : `Inspect "${c.title}"`
                 }
               >
-                <span className="plot-iso-callout-title">{c.title}</span>
+                <span className="plot-iso-callout-title-row">
+                  {c.isPendingPreview && (
+                    <span className="map-preview-pill" data-testid="map-preview-badge">
+                      Preview
+                    </span>
+                  )}
+                  <span className="plot-iso-callout-title">{c.title}</span>
+                </span>
                 <span className="plot-iso-callout-meta mono">{c.subtitle}</span>
               </button>
-              <a
-                href={c.sculptureUrl}
-                className="plot-iso-callout-open-btn"
-                data-testid="plot-artwork-view-btn"
-                data-sculpture-id={c.sculptureId}
-                aria-label={`Open 3D art link for ${c.title}`}
-                title={`Open link for "${c.title}" (${c.sculptureUrl})`}
-                onClick={(e) => {
-                  const openHandler = onOpenSculptureView || onSelectSculpture;
-                  if (
-                    openHandler &&
-                    !e.metaKey &&
-                    !e.ctrlKey &&
-                    !e.shiftKey &&
-                    !e.altKey &&
-                    e.button === 0
-                  ) {
-                    e.preventDefault();
+              {c.isPendingPreview ? (
+                <button
+                  type="button"
+                  className="plot-iso-callout-open-btn"
+                  data-testid="plot-preview-open-btn"
+                  data-sculpture-id={c.sculptureId}
+                  aria-label={`Open 3D preview for ${c.title}`}
+                  title={`Open 3D preview & approve "${c.title}"`}
+                  onClick={(e) => {
                     e.stopPropagation();
-                    openHandler(c.sculpture);
-                  }
-                }}
-              >
-                ↗
-              </a>
+                    (onOpenSculptureView || onSelectSculpture)?.(c.sculpture);
+                  }}
+                >
+                  👁️
+                </button>
+              ) : (
+                <a
+                  href={c.sculptureUrl}
+                  className="plot-iso-callout-open-btn"
+                  data-testid="plot-artwork-view-btn"
+                  data-sculpture-id={c.sculptureId}
+                  aria-label={`Open 3D art link for ${c.title}`}
+                  title={`Open link for "${c.title}" (${c.sculptureUrl})`}
+                  onClick={(e) => {
+                    const openHandler = onOpenSculptureView || onSelectSculpture;
+                    if (
+                      openHandler &&
+                      !e.metaKey &&
+                      !e.ctrlKey &&
+                      !e.shiftKey &&
+                      !e.altKey &&
+                      e.button === 0
+                    ) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openHandler(c.sculpture);
+                    }
+                  }}
+                >
+                  ↗
+                </a>
+              )}
             </div>
           ))}
         </div>
@@ -555,6 +586,7 @@ export default function MobileIsometricMap({
         (sc) =>
           sc &&
           sc.id &&
+          !sc.isPendingPreview &&
           !sc.hidden &&
           sc.modelType !== 'custom-3d' &&
           (!Array.isArray(sc.voxels) || sc.voxels.length === 0) &&
@@ -1643,12 +1675,15 @@ export default function MobileIsometricMap({
               )}
               {visibleShowcaseSculptures.map((sc) => {
                 const isSel = Boolean(selectedSculptureId && selectedSculptureId === sc.id);
-                const sub =
+                const isPendingPreview = Boolean(sc.isPendingPreview);
+                const baseSub =
                   sc.modelType === 'custom-3d'
                     ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
                     : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
-                const sculptureUrl =
-                  buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
+                const sub = isPendingPreview ? 'Preview · Needs Approval' : baseSub;
+                const sculptureUrl = isPendingPreview
+                  ? ''
+                  : buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
                 return (
                   <div
                     key={sc.id}
@@ -1656,49 +1691,79 @@ export default function MobileIsometricMap({
                       if (el) calloutBtnMapRef.current.set(sc.id, el);
                       else calloutBtnMapRef.current.delete(sc.id);
                     }}
-                    className={`plot-iso-artwork-callout ${isSel ? 'is-selected' : ''}`}
+                    className={`plot-iso-artwork-callout ${isSel ? 'is-selected' : ''} ${
+                      isPendingPreview ? 'is-pending-preview' : ''
+                    }`.trim()}
+                    data-pending-preview={isPendingPreview ? 'true' : undefined}
+                    data-request-id={sc.pendingRequestId || undefined}
                     style={{ display: 'none' }}
                   >
                     <button
                       type="button"
                       className="plot-iso-callout-main"
-                      data-testid="plot-artwork-label"
+                      data-testid={isPendingPreview ? 'plot-preview-label' : 'plot-artwork-label'}
                       data-sculpture-id={sc.id}
                       onClick={() => onSelectSculpture?.(sc)}
                       title={
-                        isSel && onOpenSculptureView
-                          ? `Open 3D view of "${sc.title || '3D Artwork'}"`
-                          : `Inspect "${sc.title || '3D Artwork'}"`
+                        isPendingPreview
+                          ? `Preview (Pending Approval) — "${sc.title || '3D Artwork'}". Click to inspect & approve.`
+                          : isSel && onOpenSculptureView
+                            ? `Open 3D view of "${sc.title || '3D Artwork'}"`
+                            : `Inspect "${sc.title || '3D Artwork'}"`
                       }
                     >
-                      <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
+                      <span className="plot-iso-callout-title-row">
+                        {isPendingPreview && (
+                          <span className="map-preview-pill" data-testid="map-preview-badge">
+                            Preview
+                          </span>
+                        )}
+                        <span className="plot-iso-callout-title">{sc.title || '3D Artwork'}</span>
+                      </span>
                       <span className="plot-iso-callout-meta mono">{sub}</span>
                     </button>
-                    <a
-                      href={sculptureUrl}
-                      className="plot-iso-callout-open-btn"
-                      data-testid="plot-artwork-view-btn"
-                      data-sculpture-id={sc.id}
-                      aria-label={`Open 3D art link for ${sc.title || '3D Artwork'}`}
-                      title={`Open link for "${sc.title || '3D Artwork'}" (${sculptureUrl})`}
-                      onClick={(e) => {
-                        const openHandler = onOpenSculptureView || onSelectSculpture;
-                        if (
-                          openHandler &&
-                          !e.metaKey &&
-                          !e.ctrlKey &&
-                          !e.shiftKey &&
-                          !e.altKey &&
-                          e.button === 0
-                        ) {
-                          e.preventDefault();
+                    {isPendingPreview ? (
+                      <button
+                        type="button"
+                        className="plot-iso-callout-open-btn"
+                        data-testid="plot-preview-open-btn"
+                        data-sculpture-id={sc.id}
+                        aria-label={`Open 3D preview for ${sc.title || '3D Artwork'}`}
+                        title={`Open 3D preview & approve "${sc.title || '3D Artwork'}"`}
+                        onClick={(e) => {
                           e.stopPropagation();
-                          openHandler(sc);
-                        }
-                      }}
-                    >
-                      ↗
-                    </a>
+                          (onOpenSculptureView || onSelectSculpture)?.(sc);
+                        }}
+                      >
+                        👁️
+                      </button>
+                    ) : (
+                      <a
+                        href={sculptureUrl}
+                        className="plot-iso-callout-open-btn"
+                        data-testid="plot-artwork-view-btn"
+                        data-sculpture-id={sc.id}
+                        aria-label={`Open 3D art link for ${sc.title || '3D Artwork'}`}
+                        title={`Open link for "${sc.title || '3D Artwork'}" (${sculptureUrl})`}
+                        onClick={(e) => {
+                          const openHandler = onOpenSculptureView || onSelectSculpture;
+                          if (
+                            openHandler &&
+                            !e.metaKey &&
+                            !e.ctrlKey &&
+                            !e.shiftKey &&
+                            !e.altKey &&
+                            e.button === 0
+                          ) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openHandler(sc);
+                          }
+                        }}
+                      >
+                        ↗
+                      </a>
+                    )}
                   </div>
                 );
               })}

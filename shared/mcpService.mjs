@@ -60,6 +60,7 @@ import {
 import {
   createPublishSignatureRequestForMobile,
   getSignatureRequest,
+  getSignatureRequestPreviewModel,
   handlePairedLandMutationViaMcp,
   listPendingSignaturesForUser,
   listSignatureHistoryForUser,
@@ -91,6 +92,7 @@ export {
   getMyLandsWorkspace,
   getPublicParcelDetail,
   getSignatureRequest,
+  getSignatureRequestPreviewModel,
   inspectParcelFitForModel,
   isUserLandOwner,
   isUserParcelContributor,

@@ -2134,4 +2134,168 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(errors, []);
     await ctx.close();
   });
+
+  test('Pending sculpture mint shows temporary "Preview" label on map, 3D preview modal, preview-model endpoint, and direct Approve from Notification Menu', async () => {
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: { email: 'preview-approve-e2e@graffiland.test', name: 'Preview Approve Owner' }
+      })
+    }).then((r) => r.json());
+    assert.ok(ownerAuth.token);
+
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({ username: 'preview_approve_owner', bio: 'Preview approval E2E' })
+    });
+
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({
+        lat: 37.7845,
+        lng: -122.4095,
+        customName: 'Preview Gallery Lot',
+        volume: {
+          centerLat: 37.7845,
+          centerLng: -122.4095,
+          widthMeters: 16,
+          depthMeters: 16,
+          heightMeters: 16,
+          rotationDeg: 0
+        }
+      })
+    }).then((r) => r.json());
+    const pid = claimRes.parcelId;
+    assert.ok(pid);
+
+    // Pair an MCP agent and queue a pending OBJ 3D sculpture mint transaction
+    const pairCreate = await fetch(`${baseUrl}/api/mcp/pairings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerAuth.token}` },
+      body: JSON.stringify({ apiOrigin: baseUrl })
+    }).then((r) => r.json());
+    const pairingCode = pairCreate?.pairing?.code;
+    assert.ok(pairingCode);
+
+    await fetch(`${baseUrl}/api/mcp/pairings/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingCode, agentName: 'preview-e2e-agent' })
+    });
+
+    const tinyObj = [
+      'v -0.5 0 -0.5',
+      'v 0.5 0 -0.5',
+      'v 0.5 1.2 -0.5',
+      'v -0.5 1.2 -0.5',
+      'v -0.5 0 0.5',
+      'v 0.5 0 0.5',
+      'v 0.5 1.2 0.5',
+      'v -0.5 1.2 0.5',
+      'f 1 2 3 4',
+      'f 5 6 7 8',
+      'f 1 2 6 5',
+      'f 2 3 7 6',
+      'f 3 4 8 7',
+      'f 4 1 5 8'
+    ].join('\n');
+
+    const mcpRes = await fetch(`${baseUrl}/api/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Graffiland-Pairing-Code': pairingCode
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'e2e-preview-1',
+        method: 'tools/call',
+        params: {
+          name: 'load_3d_model_on_land',
+          arguments: {
+            parcelId: pid,
+            title: 'Golden Obelisk',
+            description: 'Temporary preview sculpture awaiting owner approval.',
+            modelFormat: 'obj',
+            modelData: tinyObj,
+            modelScale: 1
+          }
+        }
+      })
+    }).then((r) => r.json());
+    const reqId = mcpRes?.result?.structuredContent?.request?.id;
+    assert.ok(reqId, `Expected pending signature request id, got ${JSON.stringify(mcpRes)}`);
+
+    // Verify authenticated owner preview-model endpoint serves the exact model bytes
+    const previewModelRes = await fetch(
+      `${baseUrl}/api/signatures/requests/${encodeURIComponent(reqId)}/preview-model`,
+      { headers: { Authorization: `Bearer ${ownerAuth.token}` } }
+    );
+    assert.equal(previewModelRes.status, 200);
+    const previewModelText = await previewModelRes.text();
+    assert.ok(previewModelText.includes('v -0.5 0 -0.5'));
+
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await ctx.addInitScript((token) => {
+      globalThis.localStorage.setItem('graffiland_jwt', token);
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+    }, ownerAuth.token);
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.desktop-nav');
+
+    // Focus the owner's land so the 3D map frames it, and confirm the temporary "Preview" label renders on the map
+    await page.waitForSelector('[data-testid="desktop-land-item"]');
+    const targetLandCard = page
+      .locator('[data-testid="desktop-land-item"]')
+      .filter({ hasText: 'Preview Gallery Lot' })
+      .first();
+    await targetLandCard.click();
+    await page.waitForSelector('[data-testid="map3d-preview-label"]', { timeout: 10000 });
+    const mapPreviewText = await page.locator('[data-testid="map3d-preview-label"]').first().textContent();
+    assert.ok(mapPreviewText.includes('Preview'), `Expected temporary "Preview" badge on map, got: ${mapPreviewText}`);
+    assert.ok(mapPreviewText.includes('Golden Obelisk'));
+
+    // Open Notification Menu -> preview the sculpture in 3D modal first
+    await page.getByRole('button', { name: /Notifications/i }).click();
+    await page.waitForSelector('[data-testid="notif-inline-approve-btn"]', { timeout: 10000 });
+    await page.getByTestId('notif-preview-btn').first().click();
+    await page.waitForSelector('[data-testid="preview-modal-badge"]', { timeout: 10000 });
+    assert.equal(
+      (await page.getByTestId('preview-modal-badge').textContent()).trim(),
+      'Preview'
+    );
+    assert.ok(await page.isVisible('[data-testid="sculpture-preview-approval-bar"]'));
+
+    // Close preview modal, reopen Notification Menu, and approve directly from the Notification Menu!
+    await page.getByRole('button', { name: /Close sculpture details/i }).click();
+    await page.waitForSelector('[data-testid="sculpture-modal"]', { state: 'detached' });
+
+    await page.getByRole('button', { name: /Notifications/i }).click();
+    await page.waitForSelector('[data-testid="notif-inline-approve-btn"]', { timeout: 10000 });
+    await page.getByTestId('notif-inline-approve-btn').first().click();
+    await page.waitForSelector('[data-testid="notif-approval-status"]', { timeout: 15000 });
+
+    // Once approved, temporary "Preview" label disappears and the real sculpture is minted on the land
+    await page.waitForSelector('[data-testid="map3d-preview-label"]', {
+      state: 'detached',
+      timeout: 10000
+    });
+    const landDetail = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(pid)}`).then((r) =>
+      r.json()
+    );
+    assert.ok(
+      (landDetail.sculptures || []).some((s) => s.title === 'Golden Obelisk'),
+      `Expected Golden Obelisk minted on ${pid}, got ${JSON.stringify(landDetail.sculptures)}`
+    );
+
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
 });

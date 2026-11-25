@@ -148,6 +148,7 @@ import {
   getPublicParcelDetail,
   inspectParcelFitForModel,
   getSignatureRequest,
+  getSignatureRequestPreviewModel,
   handleMcpJsonRpc,
   isUserLandOwner,
   isUserParcelContributor,
@@ -1832,6 +1833,21 @@ export function createAppServer(serverOptions = {}) {
         error: err.message || 'Failed to create signature request',
         ...(err?.extra || {})
       });
+    }
+  });
+
+  app.get('/api/signatures/requests/:id/preview-model', requireAuth, async (req, res) => {
+    try {
+      const out = await getSignatureRequestPreviewModel(chatDb, {
+        requestId: req.params.id,
+        user: req.user
+      });
+      res.setHeader('Content-Type', out.mimeType || 'model/gltf-binary');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.send(Buffer.from(out.bytes));
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Preview model unavailable' });
     }
   });
 

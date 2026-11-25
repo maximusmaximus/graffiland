@@ -194,10 +194,13 @@ function buildSculptureSignature(sc, parcelVolume) {
     : 'none';
   return [
     sc?.id || '',
+    sc?.isPendingPreview ? 'preview' : 'live',
     sc?.currentRev || 1,
     sc?.modelType || 'voxel',
     cm.format || '',
-    cm.downloadUrl || sc?.modelGlbUrl || '',
+    cm.downloadUrl || cm.proxyUrl || sc?.modelGlbUrl || '',
+    cm.inlineBase64 ? `b64:${cm.inlineBase64.length}` : '',
+    cm.inlineText ? `txt:${cm.inlineText.length}` : '',
     cm.ipfsCid || '',
     extractSculptureScale(sc),
     cm.rotationY ?? 0,
@@ -414,11 +417,15 @@ export function createSculptureThreeLayer({
       transform.renderedSize.x,
       transform.renderedSize.z
     );
+    if (sc?.isPendingPreview && selectionRing.material) {
+      selectionRing.material.color.setHex(0xff9f1c);
+      selectionRing.material.opacity = 0.95;
+    }
     selectionRing.position.set(transform.worldDx, 0.04, transform.worldDz);
     if (transform.worldYawRad !== 0) {
       selectionRing.rotation.z = transform.worldYawRad;
     }
-    selectionRing.visible = selectedId === entry.id;
+    selectionRing.visible = Boolean(sc?.isPendingPreview) || selectedId === entry.id;
     container.add(selectionRing);
 
     container.visible = false;
@@ -474,7 +481,7 @@ export function createSculptureThreeLayer({
       const existing = entries.get(scId);
       if (existing && existing.sig === sig) {
         if (existing.selectionRing) {
-          existing.selectionRing.visible = selectedId === scId;
+          existing.selectionRing.visible = Boolean(sc?.isPendingPreview) || selectedId === scId;
         }
         continue;
       }

@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { verifyAndEnrichLocation } from '../../server/services/pol.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
 import { resolveLandDisplayName } from '../landVolume.mjs';
+import { extractCustomModelInput, validate3dModelUrl } from '../model3d.mjs';
 import { computeVerticalBounds } from '../sculpture.mjs';
 import {
   buildAgentSignPublishPrompt,
@@ -639,6 +640,44 @@ export async function getSignatureRequest(db, { requestId, user = null, pairingC
     throw new McpServiceError('Forbidden signature request access.', 403);
   }
   return { request: formatSignatureRequestRow(row) };
+}
+
+export async function getSignatureRequestPreviewModel(db, { requestId, user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
+  if (!row) throw new McpServiceError('Signature request not found.', 404);
+  const callerWallets = resolveUserWalletAddresses(user);
+  const ownsRequest =
+    row.owner_sub === user.id ||
+    (row.owner_address && callerWallets.includes(String(row.owner_address).toLowerCase()));
+  if (!ownsRequest) {
+    throw new McpServiceError('Only the property owner can preview this request.', 403);
+  }
+  const payload = JSON.parse(row.payload_json || '{}');
+  const extracted = extractCustomModelInput(payload);
+  if (!extracted.provided || extracted.error || !extracted.customModel) {
+    throw new McpServiceError(extracted.error || 'No 3D model file attached to this request.', 404);
+  }
+  let resolved = extracted.customModel;
+  if (!resolved.bytes && resolved.externalUrl) {
+    const formatHint = resolved.format && resolved.format !== 'auto' ? resolved.format : '';
+    const checked = await validate3dModelUrl(resolved.externalUrl, { formatHint });
+    if (!checked.valid || !checked.customModel?.bytes) {
+      throw new McpServiceError(
+        checked.error || 'Could not load 3D model preview from source URL.',
+        502
+      );
+    }
+    resolved = checked.customModel;
+  }
+  if (!resolved.bytes || resolved.bytes.length === 0) {
+    throw new McpServiceError('Empty 3D model preview payload.', 404);
+  }
+  return {
+    bytes: resolved.bytes,
+    format: resolved.format || 'glb',
+    mimeType: resolved.mimeType || 'model/gltf-binary'
+  };
 }
 
 export async function signRequestByMobile(

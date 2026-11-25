@@ -28,6 +28,10 @@ import {
   isLandOwnedByUser,
   resolveLandCoords
 } from '../utils/landMapHelpers.js';
+import {
+  buildPendingPreviewSculpture,
+  buildPendingPreviewSculptures
+} from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
@@ -217,6 +221,8 @@ export default function DesktopHub({
     pairings: []
   });
   const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [previewApprovalBusyId, setPreviewApprovalBusyId] = useState('');
+  const [previewApprovalErrors, setPreviewApprovalErrors] = useState({});
   const notifiedRepairKeysRef = useRef(new Set());
   const [mcpNotice, setMcpNotice] = useState('');
   const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
@@ -667,6 +673,7 @@ export default function DesktopHub({
     setInfoOpen(false);
     focusLandForSculpture(sc);
     setSelected(sc);
+    if (sc.isPendingPreview) return;
     setLastSculpture(sc);
     const landName = getLiveLandName(sc);
     recordLastViewedItem(user?.id, {
@@ -687,6 +694,114 @@ export default function DesktopHub({
       parcelId: sc.parcelId || '',
       linkLabel: 'View'
     });
+  }
+
+  const pendingPreviewSculptures = useMemo(
+    () =>
+      buildPendingPreviewSculptures(pendingApprovals, {
+        parcels,
+        existingSculptures: sculptures
+      }),
+    [pendingApprovals, parcels, sculptures]
+  );
+
+  const mapViewSculptures = useMemo(
+    () => [...displayedSculptures, ...pendingPreviewSculptures],
+    [displayedSculptures, pendingPreviewSculptures]
+  );
+
+  function handleDesktopApprovalResolved({ requestId = '' } = {}) {
+    if (requestId) {
+      setPendingApprovals((prev) => prev.filter((r) => r.id !== requestId));
+      setSelected((prev) =>
+        prev?.isPendingPreview && prev.pendingRequestId === requestId ? null : prev
+      );
+    }
+    refreshData();
+    refreshMyLands();
+    refreshPairingAndApprovals();
+    refreshVisitedParcelDetail();
+    setNotifRefreshSignal((n) => n + 1);
+  }
+
+  async function handleApprovePendingFromPreview(reqItem, options = {}) {
+    if (!reqItem?.id || !user?.id || previewApprovalBusyId) return;
+    const autoFitScale = Boolean(options?.autoFitScale);
+    setPreviewApprovalBusyId(reqItem.id);
+    setPreviewApprovalErrors((prev) => {
+      if (!prev[reqItem.id]) return prev;
+      const next = { ...prev };
+      delete next[reqItem.id];
+      return next;
+    });
+    try {
+      let extSig = '';
+      if (
+        !autoFitScale &&
+        reqItem.canonicalMessage &&
+        reqItem.ownerAddress &&
+        user?.walletAddress &&
+        user.walletAddress.toLowerCase() !== reqItem.ownerAddress.toLowerCase() &&
+        typeof window !== 'undefined' &&
+        window.ethereum
+      ) {
+        extSig = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [reqItem.canonicalMessage, reqItem.ownerAddress]
+        });
+      }
+      const signPayload = {
+        ...(extSig ? { signature: extSig } : {}),
+        ...(autoFitScale ? { autoFitScale: true } : {})
+      };
+      const signRes = await api.mobileSignRequest(reqItem.id, signPayload);
+      const title = reqItem.summaryTitle || reqItem.payload?.title || 'Sculpture';
+      const fitSuffix = signRes?.autoFittedScale ? ` (auto-fitted to ${signRes.autoFittedScale}×)` : '';
+      const landTitle = getLiveLandName({ parcelId: reqItem.parcelId }, reqItem.landDisplayName || 'your land');
+      recordUserAction(user?.id, {
+        type: 'approve_land_tx',
+        icon: '✅',
+        title: `Approved "${title}"${fitSuffix}`,
+        detail: landTitle,
+        parcelId: reqItem.parcelId || '',
+        sculptureId: signRes?.result?.sculpture?.id || reqItem.sculptureId || '',
+        linkLabel: 'Land'
+      });
+      notifySettingsSaved(`Approved & minted "${title}"${fitSuffix} on "${landTitle}"!`);
+      handleDesktopApprovalResolved({ requestId: reqItem.id });
+    } catch (err) {
+      const errMsg = err?.message || 'Could not approve transaction.';
+      const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);
+      setPreviewApprovalErrors((prev) => ({
+        ...prev,
+        [reqItem.id]: {
+          message: errMsg,
+          code: String(err?.data?.code || ''),
+          maxSafeScale: Number.isFinite(maxSafe) && maxSafe > 0 ? maxSafe : null
+        }
+      }));
+      notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 6500 });
+    } finally {
+      setPreviewApprovalBusyId('');
+    }
+  }
+
+  async function handleRejectPendingFromPreview(reqItem) {
+    if (!reqItem?.id || !user?.id || previewApprovalBusyId) return;
+    setPreviewApprovalBusyId(reqItem.id);
+    try {
+      await api.rejectSignatureRequest(reqItem.id);
+      const title = reqItem.summaryTitle || reqItem.payload?.title || 'Transaction';
+      notifySettingsSaved(`Rejected "${title}".`);
+      handleDesktopApprovalResolved({ requestId: reqItem.id });
+    } catch (err) {
+      notifySettingsSaved(`⚠️ ${err?.message || 'Could not reject transaction.'}`, {
+        tone: 'error',
+        durationMs: 5000
+      });
+    } finally {
+      setPreviewApprovalBusyId('');
+    }
   }
 
   async function handleBuyListing(listing) {
@@ -835,6 +950,27 @@ export default function DesktopHub({
         setAgentPairExpanded(true);
       }
       openPairModal();
+    } else if (item.actionType === 'preview_pending_sculpture') {
+      const reqId = item.pendingRequest?.id || item.meta?.requestId || '';
+      const matchedPreview =
+        (reqId && pendingPreviewSculptures.find((p) => p.pendingRequestId === reqId)) ||
+        (item.pendingRequest
+          ? buildPendingPreviewSculpture(item.pendingRequest, {
+              parcels,
+              existingSculptures: sculptures
+            })
+          : null);
+      if (matchedPreview) {
+        openSculpture(matchedPreview);
+        return;
+      }
+      if (item.parcelId) {
+        const localParcel =
+          (parcels || []).find(
+            (p) => String(p.parcelId || '').toUpperCase() === String(item.parcelId).toUpperCase()
+          ) || { parcelId: item.parcelId };
+        openLandShowcase(localParcel);
+      }
     } else if (item.actionType === 'open_land_approval' && item.parcelId) {
       const localParcel =
         (parcels || []).find(
@@ -1575,6 +1711,8 @@ export default function DesktopHub({
             user={user}
             variant="desktop"
             refreshSignal={notifRefreshSignal}
+            pendingApprovals={pendingApprovals}
+            onApprovalResolved={handleDesktopApprovalResolved}
             onAction={handleNotificationAction}
           />
           {user ? (
@@ -1617,7 +1755,7 @@ export default function DesktopHub({
         <div className="desktop-map-layout">
           <div className="desktop-map-stage">
             <MapView3D
-              sculptures={displayedSculptures}
+              sculptures={mapViewSculptures}
               parcels={parcels}
               draftParcels={draftParcels}
               ownedParcelIds={ownedParcelIds}
@@ -2710,6 +2848,16 @@ export default function DesktopHub({
             setLandManageOpen(true);
           }}
           onOpenAddLandItem={(pid) => handleOpenAddLandItem(pid)}
+          onApprovePending={handleApprovePendingFromPreview}
+          onRejectPending={handleRejectPendingFromPreview}
+          pendingApprovalBusy={Boolean(
+            selected?.pendingRequestId && previewApprovalBusyId === selected.pendingRequestId
+          )}
+          pendingApprovalError={
+            selected?.pendingRequestId
+              ? previewApprovalErrors?.[selected.pendingRequestId] || null
+              : null
+          }
           onClose={() => {
             setSelected(null);
             refreshData();

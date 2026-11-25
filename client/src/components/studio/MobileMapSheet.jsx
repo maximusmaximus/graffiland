@@ -17,6 +17,7 @@ import {
   formatRadiusLabel,
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
+import { buildPendingPreviewSculptures } from '../../utils/pendingApprovalPreview.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
@@ -35,6 +36,7 @@ export default function MobileMapSheet({
   displayedMapSculptures = [],
   areaSculpturesSorted = [],
   mapParcels = [],
+  pendingSignatures = [],
   mapSelectedSculpture = null,
   selectedParcelId = '',
   focusParcelTick = 0,
@@ -124,6 +126,18 @@ export default function MobileMapSheet({
 
   const displayedLands = grouped.displayedLands;
   const totalSculpturesInView = grouped.displayedSculptures.length;
+  const pendingPreviewSculptures = useMemo(
+    () =>
+      buildPendingPreviewSculptures(pendingSignatures, {
+        parcels: displayedLands,
+        existingSculptures: grouped.displayedSculptures
+      }),
+    [pendingSignatures, displayedLands, grouped.displayedSculptures]
+  );
+  const mapDisplaySculptures = useMemo(
+    () => [...grouped.displayedSculptures, ...pendingPreviewSculptures],
+    [grouped.displayedSculptures, pendingPreviewSculptures]
+  );
   const isFullMap = mapHeightMode === 'fullscreen';
   const focusedLand = useMemo(
     () =>
@@ -352,7 +366,7 @@ export default function MobileMapSheet({
         {mapDimensionMode === '3d' ? (
           <MobileIsometricMap
             parcels={displayedLands}
-            sculptures={grouped.displayedSculptures}
+            sculptures={mapDisplaySculptures}
             userLocation={location}
             selectedParcelId={effectiveSelectedParcelId}
             selectedSculptureId={mapSelectedSculpture?.id || ''}
@@ -370,7 +384,7 @@ export default function MobileMapSheet({
           />
         ) : (
           <MapView
-            sculptures={grouped.displayedSculptures}
+            sculptures={mapDisplaySculptures}
             parcels={displayedLands}
             userLocation={location}
             focusArea={areaFilterMode === 'nearby' && !grouped.autoFallbackToAll}
