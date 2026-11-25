@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
   buildAutonomousAgentPrompt,
   buildPropertyOwnerPrompt,
@@ -205,7 +206,8 @@ export default function DesktopIntroBanner({
               Draw 3D Land
               <InfoTip title="Desktop 3D Land Builder" mode="popover">
                 Click <strong>Draw Land</strong> on the map to place a 3D parcel, drag corners to
-                scale up to 5,000 m², hold vertical bars to rotate, and mint 3 free starter plots.
+                scale up to 5,000 m², hold vertical bars to rotate, and mint{' '}
+                {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots.
               </InfoTip>
             </span>
             <span className="intro-chip">

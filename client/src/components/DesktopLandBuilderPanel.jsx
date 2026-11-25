@@ -10,7 +10,6 @@ import {
 } from '../../../shared/landVolume.mjs';
 import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { api } from '../utils/api.js';
-import { getMobileLaunchUrl } from '../utils/device.js';
 import { EmojiInput } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 
@@ -108,7 +107,6 @@ export function DesktopLandBuilderPanel({
   onCopyOwnedShareLink = null,
   onToggleFreezeParcel = null,
   onOpenLandManagement = null,
-  onOpenPairMobile = null,
   mintLimitError = null,
   onDismissMintLimitError = null,
   checkLandNameFn = null,
@@ -487,7 +485,6 @@ export function DesktopLandBuilderPanel({
   const statusText = typeof landStatus === 'string' ? landStatus : landStatus?.text || '';
   const statusIsError = typeof landStatus === 'object' ? Boolean(landStatus?.isError) : false;
   const isDrawActive = drawMode === true || drawMode === 'draw';
-  const mobileDirectUrl = useMemo(() => getMobileLaunchUrl(), []);
 
   return (
     <div className="land-builder-panel" data-testid="desktop-land-builder-panel">
@@ -618,7 +615,7 @@ export function DesktopLandBuilderPanel({
         </InfoTip>
       </div>
 
-      {/* Rich 3-Free-Lands Limit Notification Card */}
+      {/* Rich Free Desktop Land Limit Notification Card */}
       {mintLimitError && (
         <div className="land-limit-alert-card" role="alert" data-testid="mint-limit-notification">
           <div className="land-limit-alert-head">
@@ -667,27 +664,6 @@ export function DesktopLandBuilderPanel({
                 You can still make sculptures in person on Mobile AR — every IRL sculpture
                 automatically claims land with no Desktop slot wait!
               </span>
-            </div>
-            <div className="land-limit-mobile-actions">
-              {onOpenPairMobile && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary btn-pair-glow"
-                  data-testid="mint-limit-pair-mobile-btn"
-                  onClick={onOpenPairMobile}
-                >
-                  🔗 Pair Phone via QR
-                </button>
-              )}
-              <a
-                href={mobileDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-sm btn-outline"
-                data-testid="mint-limit-mobile-link"
-              >
-                📱 Open Mobile Studio ↗
-              </a>
             </div>
           </div>
         </div>

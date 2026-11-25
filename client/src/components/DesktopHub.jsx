@@ -2374,7 +2374,6 @@ export default function DesktopHub({
                   setLandManageParcelId(pid || '');
                   setLandManageOpen(true);
                 }}
-                onOpenPairMobile={openPairModal}
                 mintLimitError={mintLimitError}
                 onDismissMintLimitError={() => setMintLimitError(null)}
                 mintBusy={mintBusy}

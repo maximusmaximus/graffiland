@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import { api } from '../utils/api';
 import { isPendingSculptureAction } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
@@ -21,7 +22,7 @@ const CATEGORY_META = [
     key: 'mint_limit_reached',
     icon: '📱',
     label: 'Free mint cap & Mobile IRL tips',
-    hint: 'Next steps when your 3 starter Desktop land slots are full.'
+    hint: `Next steps when your ${LAND_VOLUME_LIMITS.starterFreeHumanClaims} starter Desktop land slots are full.`
   },
   {
     key: 'land_expiring',
