@@ -25,6 +25,7 @@ import {
   ERC721_TRANSFER_ABI
 } from '../../../shared/transferMessage.mjs';
 import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
+import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
 import {
   decryptPinnedIpfsBatch,
   encryptPinnedIpfsBatch,
@@ -374,12 +375,15 @@ export default function SculptureModal({
     });
   }, []);
 
+  const { mapTheme } = useMapTheme();
+
   useEffect(() => {
     const host = landMapHostRef.current;
     const latNum = Number(scMapLat);
     const lngNum = Number(scMapLng);
     if (!host || !scMapId || !Number.isFinite(latNum) || !Number.isFinite(lngNum)) return undefined;
 
+    host.classList.toggle('is-map-light', mapTheme === 'light');
     const map = L.map(host, {
       center: [latNum, lngNum],
       zoom: 18,
@@ -387,9 +391,8 @@ export default function SculptureModal({
       attributionControl: false
     });
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19
-    }).addTo(map);
+    const tileCfg = getLeafletTileConfig(mapTheme);
+    L.tileLayer(tileCfg.url, { ...tileCfg.options, maxZoom: 19 }).addTo(map);
 
     if (scMapBounds?.sw && scMapBounds?.ne) {
       L.rectangle([scMapBounds.sw, scMapBounds.ne], {
@@ -421,7 +424,7 @@ export default function SculptureModal({
       clearTimeout(timer);
       map.remove();
     };
-  }, [scMapId, scMapLat, scMapLng, scMapBounds, scLandDisplayName]);
+  }, [scMapId, scMapLat, scMapLng, scMapBounds, scLandDisplayName, mapTheme]);
 
   const pol = sculpture?.proofOfLocation || {};
   const geo = pol.geoInfo || {};

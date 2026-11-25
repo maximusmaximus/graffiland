@@ -16,6 +16,7 @@ import {
   computeNeighborEdgeArrows
 } from '../utils/neighborEdgeArrows.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -73,9 +74,33 @@ export default function MapView({
   const focusedArrowsContextRef = useRef({ focusedEntry: null, otherEntries: [] });
   const { unitSystem } = useMeasurementUnits(userLocation);
   const unitSystemRef = useRef(unitSystem);
+  const tileLayerRef = useRef(null);
+  const { mapTheme, isDarkMap, toggleMapTheme } = useMapTheme();
+  const mapThemeRef = useRef(mapTheme);
   useEffect(() => {
     unitSystemRef.current = unitSystem;
   }, [unitSystem]);
+  useEffect(() => {
+    mapThemeRef.current = mapTheme;
+    const map = mapRef.current;
+    if (!map) return;
+    const hostEl = mapHostRef.current;
+    if (hostEl) {
+      hostEl.classList.toggle('is-map-light', mapTheme === 'light');
+    }
+    try {
+      if (tileLayerRef.current) {
+        map.removeLayer(tileLayerRef.current);
+      }
+      const nextCfg = getLeafletTileConfig(mapTheme);
+      tileLayerRef.current = L.tileLayer(nextCfg.url, nextCfg.options).addTo(map);
+      if (typeof tileLayerRef.current.bringToBack === 'function') {
+        tileLayerRef.current.bringToBack();
+      }
+    } catch {
+      // ignore during map teardown
+    }
+  }, [mapTheme]);
 
   const recomputeFocusedNeighborArrows = useCallback(() => {
     const map = mapRef.current;
@@ -149,11 +174,8 @@ export default function MapView({
       zoomDelta: 0.5
     });
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxNativeZoom: 19,
-      maxZoom: 21.5
-    }).addTo(map);
+    const tileCfg = getLeafletTileConfig(mapThemeRef.current);
+    tileLayerRef.current = L.tileLayer(tileCfg.url, tileCfg.options).addTo(map);
 
     const markUserAdjusted = () => {
       if (!suppressViewSaveRef.current) {
@@ -632,8 +654,8 @@ export default function MapView({
         </div>
       )}
 
-      <div className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d">
-        <div ref={mapHostRef} style={{ width: '100%', height: '100%' }} />
+      <div className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d" data-map-theme={mapTheme}>
+        <div ref={mapHostRef} className={isDarkMap ? '' : 'is-map-light'} style={{ width: '100%', height: '100%' }} />
         <NeighborEdgeArrowsOverlay
           arrows={neighborArrows}
           onSelectParcel={(p) => onSelectParcelRef.current?.(p)}
@@ -679,6 +701,16 @@ export default function MapView({
                 <XeroIcon emoji="🎯" size={13} /> Me
               </button>
             )}
+            <button
+              type="button"
+              className="btn map-recenter-fab"
+              data-testid="mobile-map-theme-toggle-btn"
+              onClick={toggleMapTheme}
+              aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+              title={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+            >
+              <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
+            </button>
             {onToggleFullMap && (
               <button
                 type="button"

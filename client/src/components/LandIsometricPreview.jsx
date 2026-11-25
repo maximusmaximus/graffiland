@@ -29,42 +29,17 @@ import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import {
+  applyGraffilandMapLibreTheme,
+  getFallbackMapLibreStyleForTheme,
+  getMapLibreStyleForTheme,
+  useMapTheme
+} from '../utils/mapTheme.js';
 import InfoTip from './InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
-const OPENFREEMAP_LIBERTY_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
-
-const FALLBACK_DARK_STYLE = {
-  version: 8,
-  sources: {
-    'carto-dark': {
-      type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-      ],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-    }
-  },
-  layers: [
-    {
-      id: 'preview-fallback-bg',
-      type: 'background',
-      paint: { 'background-color': '#0b1020' }
-    },
-    {
-      id: 'preview-fallback-carto',
-      type: 'raster',
-      source: 'carto-dark',
-      minzoom: 0,
-      maxzoom: 22
-    }
-  ]
-};
 
 // Cache reverse-geocoded place summaries & hydrated sculpture voxels across parcel switches
 const reverseGeoCache = new Map();
@@ -393,6 +368,12 @@ export default function LandIsometricPreview({
   const [liveZoom, setLiveZoom] = useState(17.5);
   const [mapReady, setMapReady] = useState(false);
   const [webglAvailable, setWebglAvailable] = useState(() => hasWebGLSupport());
+  const { mapTheme } = useMapTheme();
+  const mapThemeRef = useRef(mapTheme);
+  const appliedMapThemeRef = useRef(mapTheme);
+  useEffect(() => {
+    mapThemeRef.current = mapTheme;
+  }, [mapTheme]);
   const [placeContext, setPlaceContext] = useState(null);
   const [placeLoading, setPlaceLoading] = useState(false);
   const [coordsCopied, setCoordsCopied] = useState(false);
@@ -876,14 +857,11 @@ export default function LandIsometricPreview({
     const ensureLayers = (map) => {
       if (!map) return;
       styleReadyRef.current = true;
-      try {
-        if (map.getLayer('building-3d')) {
-          map.setPaintProperty('building-3d', 'fill-extrusion-color', '#24324f');
-          map.setPaintProperty('building-3d', 'fill-extrusion-opacity', 0.78);
-        }
-      } catch {
-        // fallback style has no 3D buildings layer
-      }
+      applyGraffilandMapLibreTheme(map, {
+        theme: mapThemeRef.current,
+        showBuildings: true,
+        buildingOpacity: 0.78
+      });
 
       try {
         if (!map.getSource('preview-other-lands')) {
@@ -1029,9 +1007,10 @@ export default function LandIsometricPreview({
           bearingOffsetDeg: bearingOffsetRef.current
         });
 
+        appliedMapThemeRef.current = mapThemeRef.current;
         const map = new maplibregl.Map({
           container: mapHostRef.current,
-          style: OPENFREEMAP_LIBERTY_STYLE,
+          style: getMapLibreStyleForTheme(mapThemeRef.current),
           center: initFit ? initFit.center : [initVol.centerLng, initVol.centerLat],
           zoom: initFit ? initFit.zoom : 17.5,
           pitch: initFit ? initFit.pitch : 55,
@@ -1069,7 +1048,7 @@ export default function LandIsometricPreview({
           if (!fallbackAppliedRef.current && !styleReadyRef.current) {
             fallbackAppliedRef.current = true;
             try {
-              map.setStyle(FALLBACK_DARK_STYLE);
+              map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
             } catch {
               // ignore
             }
@@ -1143,6 +1122,20 @@ export default function LandIsometricPreview({
       }
     };
   }, [drawWireframes, setUserMovedCamera, syncMapData, webglAvailable]);
+
+  // Live Dark / Light basemap theme switching
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || appliedMapThemeRef.current === mapTheme) return;
+    appliedMapThemeRef.current = mapTheme;
+    styleReadyRef.current = false;
+    fallbackAppliedRef.current = false;
+    try {
+      map.setStyle(getMapLibreStyleForTheme(mapTheme));
+    } catch {
+      // ignore if map is unmounting
+    }
+  }, [mapTheme]);
 
   // Whenever the selected parcel, display overrides, hydrated sculptures, or other lands update, sync layers
   useEffect(() => {

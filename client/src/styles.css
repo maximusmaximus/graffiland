@@ -1722,11 +1722,58 @@ select {
 .leaflet-container {
   width: 100%;
   height: 100%;
-  background: #090c14;
+  background: #090d18;
 }
 
-.leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(94%) saturate(80%);
+.leaflet-container.is-map-light {
+  background: #e8edf3;
+}
+
+.leaflet-container:not(.is-map-light) .leaflet-control-attribution {
+  background: rgba(9, 13, 24, 0.78);
+  color: rgba(186, 202, 228, 0.8);
+}
+
+.leaflet-container:not(.is-map-light) .leaflet-control-attribution a {
+  color: #5eead4;
+}
+
+.leaflet-container:not(.is-map-light) .leaflet-bar a {
+  background: rgba(12, 18, 34, 0.92);
+  color: #e2e8f0;
+  border-bottom-color: rgba(148, 163, 184, 0.24);
+}
+
+.leaflet-container:not(.is-map-light) .leaflet-bar a:hover {
+  background: rgba(24, 35, 62, 0.96);
+  color: #ffffff;
+}
+
+.maplibregl-map {
+  background: #090d18;
+}
+
+.maplibregl-ctrl-group {
+  background: rgba(10, 15, 28, 0.9) !important;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45) !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(90%) hue-rotate(180deg);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(9, 13, 24, 0.76) !important;
+  color: rgba(186, 202, 228, 0.78) !important;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: #5eead4 !important;
 }
 
 .desktop-nav .badge,
