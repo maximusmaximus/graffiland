@@ -5562,10 +5562,16 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
       assert.ok(view.getByTestId('desktop-nearby-sculptures-list').textContent.includes('Neon Archway'));
 
-      // 5) Pair Phone button omits "(QR · Large 3D View)" and Last Viewed does NOT appear in nav or sidebar
-      const pairBtnText = view.getByTestId('nav-pair-phone-btn').textContent.trim();
-      assert.equal(pairBtnText, 'Pair Phone');
+      // 5) Nav pairing button says "Pairing" (no QR subtitle), opens with MCP section already expanded, and Last Viewed does NOT appear in nav or sidebar
+      const pairBtn = view.getByTestId('nav-pair-phone-btn');
+      const pairBtnText = pairBtn.textContent.trim();
+      assert.equal(pairBtnText, 'Pairing');
       assert.ok(!pairBtnText.includes('QR') && !pairBtnText.includes('Large 3D View'));
+      RTL.fireEvent.click(pairBtn);
+      assert.ok(view.getByTestId('pair-phone-modal'));
+      assert.equal(view.getByTestId('pair-agent-reveal-toggle').getAttribute('aria-expanded'), 'true');
+      assert.ok(view.getByTestId('pair-agent-structured-steps'));
+      RTL.fireEvent.click(view.getByRole('button', { name: /Close pairing modal/i }));
       const firstSculptureBtn = view
         .getByTestId('desktop-nearby-sculptures-list')
         .querySelector('button');
