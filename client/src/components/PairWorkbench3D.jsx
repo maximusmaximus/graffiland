@@ -23,9 +23,11 @@ function loadSavedPairVoxels() {
   }
 }
 
-export default function PairWorkbench3D({ inModal = false }) {
+export default function PairWorkbench3D({ inModal = false, onPhonePairedChange = null }) {
   const wsRef = useRef(null);
   const noticeTimerRef = useRef(null);
+  const onPhonePairedChangeRef = useRef(onPhonePairedChange);
+  onPhonePairedChangeRef.current = onPhonePairedChange;
   const [pairCode, setPairCode] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [mobileConnected, setMobileConnected] = useState(false);
@@ -75,9 +77,11 @@ export default function PairWorkbench3D({ inModal = false }) {
           setMobileConnected(true);
           setNeedsPhoneRepair(false);
           setRestoredFromLastSession(false);
+          onPhonePairedChangeRef.current?.(true);
         } else if (msg.type === 'mobile_disconnected') {
           setMobileConnected(false);
           setLiveCursor(null);
+          onPhonePairedChangeRef.current?.(false);
           if (phoneWasConnectedRef.current) {
             setNeedsPhoneRepair(true);
             notifySettingsSaved(

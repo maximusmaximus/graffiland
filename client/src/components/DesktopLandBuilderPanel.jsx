@@ -90,6 +90,16 @@ export function DesktopLandBuilderPanel({
   onUpdateDraft,
   onRemoveDraft,
   onClearDrafts,
+  onUndoDraft = null,
+  onRedoDraft = null,
+  canUndo = false,
+  canRedo = false,
+  undoLabel = '',
+  hasCopiedDraft = false,
+  onCopySelectedLand = null,
+  onPasteCopiedLand = null,
+  onDraftGestureStart = null,
+  onDraftGestureEnd = null,
   onMintDraft,
   onMintAll,
   onUpdateOwnedVolume,
@@ -456,10 +466,10 @@ export function DesktopLandBuilderPanel({
     );
   };
 
-  const patchActiveDimensions = (patch) => {
+  const patchActiveDimensions = (patch, options = undefined) => {
     if (!activeItem) return;
     if (activeMode === 'draft') {
-      onUpdateDraft?.(activeDraft.id, patch);
+      onUpdateDraft?.(activeDraft.id, patch, options);
     } else if (activeMode === 'owned') {
       setOwnedDraftVol((prev) => ({ ...(prev || activeOwned?.volume || {}), ...patch }));
     }
@@ -505,11 +515,82 @@ export function DesktopLandBuilderPanel({
         )}
         <InfoTip title="On-Map 3D Controls" align="right">
           Hover a plot to select it. Drag <strong>corner balls</strong> to scale, drag{' '}
-          <strong>side bars</strong> to stretch an edge, hold &amp; move{' '}
-          <strong>vertical corner bars</strong> to rotate, or drag the <strong>center</strong> to
-          move.
+          <strong>side bars</strong> to stretch an edge, drag <strong>top rim bars</strong> up/down
+          for height, hold &amp; move <strong>vertical corner bars</strong> to rotate, or drag the{' '}
+          <strong>center</strong> to move. Shortcuts: <strong>Ctrl/Cmd+Z</strong> undo,{' '}
+          <strong>Delete</strong> removes an unminted plot, <strong>Ctrl/Cmd+C</strong> &amp;{' '}
+          <strong>Ctrl/Cmd+V</strong> duplicate.
         </InfoTip>
       </div>
+
+      {(onUndoDraft || onCopySelectedLand || onPasteCopiedLand) &&
+        (canUndo || canRedo || hasCopiedDraft || Boolean(activeItem)) && (
+          <div className="land-draft-history-bar" data-testid="land-draft-history-bar">
+            {onUndoDraft && (
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                data-testid="land-undo-btn"
+                disabled={!canUndo}
+                onClick={onUndoDraft}
+                title={
+                  undoLabel
+                    ? `Undo: ${undoLabel} (Ctrl+Z / Cmd+Z)`
+                    : 'Undo last land action (Ctrl+Z / Cmd+Z)'
+                }
+              >
+                ↩ Undo
+              </button>
+            )}
+            {onRedoDraft && (
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                data-testid="land-redo-btn"
+                disabled={!canRedo}
+                onClick={onRedoDraft}
+                title="Redo land action (Ctrl+Shift+Z / Cmd+Shift+Z)"
+              >
+                ↪ Redo
+              </button>
+            )}
+            {onCopySelectedLand && (
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                data-testid="land-copy-btn"
+                disabled={!activeItem}
+                onClick={onCopySelectedLand}
+                title="Copy selected land (Ctrl+C / Cmd+C)"
+              >
+                📋 Copy
+              </button>
+            )}
+            {onPasteCopiedLand && (
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                data-testid="land-paste-btn"
+                disabled={!hasCopiedDraft || draftParcels.length >= limits.maxSelectionBatch}
+                onClick={onPasteCopiedLand}
+                title="Paste duplicate land (Ctrl+V / Cmd+V)"
+              >
+                📌 Paste
+              </button>
+            )}
+            {activeMode === 'draft' && activeDraft && onRemoveDraft && (
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost land-delete-draft-btn"
+                data-testid="land-delete-draft-btn"
+                onClick={() => onRemoveDraft(activeDraft.id)}
+                title="Delete selected unminted land (Delete / Backspace — Undo brings it back)"
+              >
+                🗑️ Delete
+              </button>
+            )}
+          </div>
+        )}
 
       <div className="land-limits-compact" data-testid="land-limits-card">
         <span className="mono">
@@ -859,6 +940,13 @@ export function DesktopLandBuilderPanel({
                     max={100}
                     step={1}
                     value={Math.round(footprintScaleRatio * 100)}
+                    onPointerDown={() =>
+                      activeMode === 'draft' &&
+                      activeDraft &&
+                      onDraftGestureStart?.(activeDraft.id, 'scale')
+                    }
+                    onPointerUp={() => onDraftGestureEnd?.()}
+                    onBlur={() => onDraftGestureEnd?.()}
                     onChange={(e) => {
                       const scaled = scaleFootprintToLimit({
                         widthMeters: activeWidth,
@@ -880,12 +968,15 @@ export function DesktopLandBuilderPanel({
                       type="button"
                       className="btn btn-outline btn-xs"
                       onClick={() =>
-                        patchActiveDimensions({
-                          widthMeters: maxFootprintFit.widthMeters,
-                          depthMeters: maxFootprintFit.depthMeters,
-                          heightMeters: maxFootprintFit.heightMeters,
-                          zScale: maxFootprintFit.zScale
-                        })
+                        patchActiveDimensions(
+                          {
+                            widthMeters: maxFootprintFit.widthMeters,
+                            depthMeters: maxFootprintFit.depthMeters,
+                            heightMeters: maxFootprintFit.heightMeters,
+                            zScale: maxFootprintFit.zScale
+                          },
+                          { discrete: true, label: 'Max land size' }
+                        )
                       }
                     >
                       Max Limit Size ({maxFootprintFit.widthMeters}×{maxFootprintFit.depthMeters}m)
@@ -894,9 +985,12 @@ export function DesktopLandBuilderPanel({
                       type="button"
                       className="btn btn-ghost btn-xs"
                       onClick={() =>
-                        patchActiveDimensions({
-                          rotationDeg: normalizeRotationDeg(cameraBearingDeg)
-                        })
+                        patchActiveDimensions(
+                          {
+                            rotationDeg: normalizeRotationDeg(cameraBearingDeg)
+                          },
+                          { discrete: true, label: 'Match map angle' }
+                        )
                       }
                     >
                       Match Map Angle ({Math.round(normalizeRotationDeg(cameraBearingDeg))}°)
@@ -916,6 +1010,13 @@ export function DesktopLandBuilderPanel({
                     max={limits.maxWidthMeters}
                     step={1}
                     value={activeWidth}
+                    onPointerDown={() =>
+                      activeMode === 'draft' &&
+                      activeDraft &&
+                      onDraftGestureStart?.(activeDraft.id, 'width')
+                    }
+                    onPointerUp={() => onDraftGestureEnd?.()}
+                    onBlur={() => onDraftGestureEnd?.()}
                     onChange={(e) => patchActiveDimensions({ widthMeters: Number(e.target.value) })}
                   />
                 </div>
@@ -932,6 +1033,13 @@ export function DesktopLandBuilderPanel({
                     max={limits.maxDepthMeters}
                     step={1}
                     value={activeDepth}
+                    onPointerDown={() =>
+                      activeMode === 'draft' &&
+                      activeDraft &&
+                      onDraftGestureStart?.(activeDraft.id, 'depth')
+                    }
+                    onPointerUp={() => onDraftGestureEnd?.()}
+                    onBlur={() => onDraftGestureEnd?.()}
                     onChange={(e) => patchActiveDimensions({ depthMeters: Number(e.target.value) })}
                   />
                 </div>
@@ -954,6 +1062,13 @@ export function DesktopLandBuilderPanel({
                     max={limits.rotationMaxDeg}
                     step={1}
                     value={activeRotation}
+                    onPointerDown={() =>
+                      activeMode === 'draft' &&
+                      activeDraft &&
+                      onDraftGestureStart?.(activeDraft.id, 'rotate')
+                    }
+                    onPointerUp={() => onDraftGestureEnd?.()}
+                    onBlur={() => onDraftGestureEnd?.()}
                     onChange={(e) => patchActiveDimensions({ rotationDeg: Number(e.target.value) })}
                   />
                   <div className="land-nudge-row">
@@ -963,9 +1078,12 @@ export function DesktopLandBuilderPanel({
                         type="button"
                         className="btn btn-ghost btn-xs"
                         onClick={() =>
-                          patchActiveDimensions({
-                            rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
-                          })
+                          patchActiveDimensions(
+                            {
+                              rotationDeg: delta === 0 ? 0 : normalizeDeg(activeRotation + delta)
+                            },
+                            { discrete: true, label: 'Rotate land' }
+                          )
                         }
                       >
                         {delta === 0 ? '0°' : delta > 0 ? `+${delta}°` : `${delta}°`}
@@ -995,6 +1113,13 @@ export function DesktopLandBuilderPanel({
                     max={Math.max(limits.minZScale, maxHeightInfo.zScale)}
                     step={0.05}
                     value={Math.min(activeZScale, Math.max(limits.minZScale, maxHeightInfo.zScale))}
+                    onPointerDown={() =>
+                      activeMode === 'draft' &&
+                      activeDraft &&
+                      onDraftGestureStart?.(activeDraft.id, 'height')
+                    }
+                    onPointerUp={() => onDraftGestureEnd?.()}
+                    onBlur={() => onDraftGestureEnd?.()}
                     onChange={(e) => {
                       const nextScale = Number(e.target.value);
                       const nextHeight = clampNum(
@@ -1011,10 +1136,13 @@ export function DesktopLandBuilderPanel({
                       type="button"
                       className="btn btn-ghost btn-xs"
                       onClick={() =>
-                        patchActiveDimensions({
-                          zScale: maxHeightInfo.zScale,
-                          heightMeters: maxHeightInfo.heightMeters
-                        })
+                        patchActiveDimensions(
+                          {
+                            zScale: maxHeightInfo.zScale,
+                            heightMeters: maxHeightInfo.heightMeters
+                          },
+                          { discrete: true, label: 'Max land height' }
+                        )
                       }
                     >
                       Max Height ({maxHeightInfo.heightMeters}m)

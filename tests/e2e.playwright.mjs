@@ -1081,8 +1081,43 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       });
     });
 
-    // Verify minted land has on-map copy share link icon & cleaned-up Land Management ("i" tooltips + ":" emoji entry + isometric map preview)
+    // Verify minted land has on-map copy share link icon & Land Management stays hidden until paired
     await page.waitForSelector('.map3d-parcel-share-btn');
+    assert.equal(
+      await page.locator('.desktop-nav').getByRole('button', { name: /Land Management/i }).count(),
+      0,
+      'Expected Land Management tab to remain hidden before user has paired'
+    );
+
+    // Pair the user's account (MCP pairing connected) -> Land Management tab appears immediately
+    await page.evaluate(async () => {
+      const token = localStorage.getItem('graffiland_jwt') || '';
+      const created = await fetch('/api/mcp/pairings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({})
+      }).then((r) => r.json());
+      const code = created?.pairing?.code;
+      if (code) {
+        await fetch('/api/mcp/pairings/connect', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ pairingCode: code, agentName: 'e2e-land-agent' })
+        });
+      }
+    });
+    // Trigger immediate pairing refresh via opening & closing Pairing modal
+    await page.getByTestId('nav-pair-phone-btn').click();
+    await page.waitForSelector('[data-testid="pair-phone-modal"]');
+    await page.getByRole('button', { name: /Close pairing modal/i }).click();
+    await page.waitForSelector('[data-testid="nav-land-management-btn"]', { timeout: 10000 });
+
     await page.locator('.desktop-nav').getByRole('button', { name: /Land Management/i }).click();
     await page.waitForSelector('[aria-label="Land Management"]');
 
@@ -2319,6 +2354,56 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       (landDetail.sculptures || []).some((s) => s.title === 'Golden Obelisk'),
       `Expected Golden Obelisk minted on ${pid}, got ${JSON.stringify(landDetail.sculptures)}`
     );
+
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  test('Desktop draft land Undo (Ctrl+Z), Delete unminted + Undo restore, and Copy/Paste (Ctrl+C / Ctrl+V) duplicate workflow', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await ctx.addInitScript(() => {
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+    });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.desktop-nav');
+
+    // Open Mint Land mode and add an unminted draft plot
+    await page.locator('.desktop-nav').getByRole('button', { name: /Mint Land/i }).click();
+    await page.getByRole('button', { name: /\+ Add Square/i }).click();
+    await page.waitForSelector('#land-square-name-input');
+    await page.locator('#land-square-name-input').fill('Kbd Plaza');
+    // Blur input so global land keyboard shortcuts apply
+    await page.locator('#land-square-name-input').blur();
+
+    // Ctrl+C copies the selected draft land, Ctrl+V pastes a non-overlapping duplicate
+    await page.keyboard.press('Control+c');
+    await page.waitForSelector('text=/Copied "Kbd Plaza"/i');
+    await page.keyboard.press('Control+v');
+    await page.waitForSelector('text=/Draft Plots \\(2\\//');
+    assert.equal(await page.locator('#land-square-name-input').inputValue(), 'Kbd Plaza Copy');
+
+    // Pressing Delete removes the selected unminted duplicate
+    await page.keyboard.press('Delete');
+    await page.waitForSelector('text=/Draft Plots \\(1\\//');
+
+    // Pressing Ctrl+Z restores the deleted duplicate right back
+    await page.keyboard.press('Control+z');
+    await page.waitForSelector('text=/Draft Plots \\(2\\//');
+    assert.equal(await page.locator('#land-square-name-input').inputValue(), 'Kbd Plaza Copy');
+
+    // Pressing Ctrl+Z again undoes the paste back to 1 plot
+    await page.keyboard.press('Control+z');
+    await page.waitForSelector('text=/Draft Plots \\(1\\//');
+
+    // Pressing Backspace removes the last unminted plot, and clicking Undo toolbar restores it
+    await page.keyboard.press('Backspace');
+    await page.waitForSelector('text=/Draft Plots \\(0\\//');
+    await page.getByTestId('land-undo-btn').click();
+    await page.waitForSelector('text=/Draft Plots \\(1\\//');
 
     assert.deepEqual(errors, []);
     await ctx.close();

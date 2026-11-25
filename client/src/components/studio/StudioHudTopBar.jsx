@@ -304,10 +304,11 @@ export default function StudioHudTopBar({
             </button>
           )}
 
-          {hasOwnedLand && (
+          {isPaired && hasOwnedLand && (
             <button
               type="button"
               className="land-manage-pill"
+              data-testid="mobile-land-management-btn"
               onClick={onOpenLandManage}
               aria-label="Land Management"
               title="Land Management (Contributors, 3D Models & Agent Controls)"
