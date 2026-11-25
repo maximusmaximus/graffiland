@@ -14,6 +14,7 @@ import {
   requestPasskeyAssertion
 } from '../utils/passkeyClient.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import BrandLogo from './BrandLogo.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -141,9 +142,9 @@ export default function InfoTermsModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 className="modal-title">
-            <XeroIcon emoji="ℹ️" size={22} />
-            SPRAY.LAND Guide &amp; Terms
+          <h2 className="modal-title" style={{ gap: 10 }}>
+            <BrandLogo variant="lockup" height={28} />
+            <span className="badge teal">Guide &amp; Terms</span>
           </h2>
           <button className="btn" onClick={onClose} aria-label="Close info">
             <XeroIcon emoji="✕" size={16} />
@@ -285,6 +286,14 @@ export default function InfoTermsModal({
 
         {tab === 'guide' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
+            <div className="welcome-info-hint-pill" data-testid="info-guide-tip-callout">
+              <InfoTip title="How Info Icons Work">
+                Click any <strong>i</strong> icon next to a feature or tool anywhere in SPRAY.LAND
+                to see detailed controls, limits, and technical notes.
+              </InfoTip>
+              <span>&ldquo;i&rdquo; icon gives you info about how something works — click it anytime!</span>
+            </div>
+
             {/* Clean Viewport Menu: Desktop vs Mobile */}
             <div className="info-viewport-menu" role="tablist" aria-label="Choose device guide">
               <button
@@ -312,17 +321,19 @@ export default function InfoTermsModal({
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="🗺️" size={16} />
-                    <strong>Isometric 3D Map &amp; Live Search</strong>
-                    <InfoTip title="Map Camera & Search">
+                    <strong>Isometric 3D Map, Zoom &amp; Live Search</strong>
+                    <InfoTip title="Map Camera, Zoom & Search">
                       Desktop starts in Isometric 3D with real OpenFreeMap buildings. Search any
-                      street intersection (e.g., <em>Market &amp; 5th</em>), nearby business,
-                      address, coordinates, or named Virtual Land. Switch between 2D,
-                      3D, and Isometric anytime, tilt (0°–65°), rotate (±15°), or toggle Terrain.
+                      street intersection (e.g., <em>Market &amp; 5th</em>), business, address,
+                      coordinates, or named land. Use scroll wheel, <strong>− Zoom Out</strong> /{' '}
+                      <strong>+</strong>, or <strong>📐 Fit Draft</strong> anytime to zoom out and
+                      see the full height and top rectangle of any land. Switch 2D/3D/Isometric,
+                      tilt (0°–65°), rotate (±15°), or toggle Buildings and Terrain.
                     </InfoTip>
                   </div>
                   <p>
-                    Explore 3D buildings, jump to any intersection or business, and inspect nearby
-                    sculptures, quests, and land parcels.
+                    Explore 3D buildings, jump to any spot, and zoom out freely to frame tall land
+                    volumes.
                   </p>
                 </div>
 
@@ -330,60 +341,64 @@ export default function InfoTermsModal({
                   <div className="info-simple-title">
                     <XeroIcon emoji="🏗️" size={16} />
                     <strong>Draw, Shape &amp; Mint 3D Land</strong>
-                    <InfoTip title="3D Box Controls & Limits">
-                      Click <strong>Draw Land</strong> and drag to place a plot matched to your map
-                      angle. Hover any plot to select it: drag <strong>corner balls</strong> to
-                      scale, drag <strong>side bars</strong> to stretch edges, hold &amp; drag{' '}
-                      <strong>vertical corner bars</strong> to rotate, or drag the{' '}
-                      <strong>center</strong> to move. Limits: 4–120m sides, max 5,000 m² area,
-                      4–250m height, max 500,000 m³ volume,{' '}
-                      {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free human starter claims. Plots
-                      drawn on the map first start with a 28-day timer until a human visits in
-                      person on Mobile AR and adds art to fully mint &amp; permanently own them
-                      (land minted directly from manual Mobile AR art has no timer).
+                    <InfoTip title="3D Box Controls, Shortcuts & Limits">
+                      Click <strong>Draw Land</strong> and drag to place a 3D box. Drag{' '}
+                      <strong>top rim bars</strong> or the <strong>↕ orb</strong> up/down to set
+                      height (the map zooms out automatically so the top stays in view up to 250m),{' '}
+                      <strong>corner balls</strong> to scale, <strong>bottom side bars</strong> to
+                      stretch edges, <strong>gold vertical bars</strong> to rotate, or the center to
+                      move. Keyboard shortcuts: <strong>Ctrl+Z / Cmd+Z</strong> to undo,{' '}
+                      <strong>Delete / Backspace</strong> to remove an unminted draft, and{' '}
+                      <strong>Ctrl+C / Ctrl+V</strong> to duplicate. Limits: 4–120m sides, max 5,000
+                      m² area, 4–250m height, max 500,000 m³ volume,{' '}
+                      {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free human starter claims (28-day
+                      timer until in-person Mobile AR art makes it permanent).
                     </InfoTip>
                   </div>
                   <p>
-                    Draw a 3D box on the map, adjust corners, edges, rotation, and height right on
-                    canvas, then mint or copy all plots for your AI agent.
+                    Shape corners, edges, rotation, and height on canvas, use Undo or Copy/Paste,
+                    and mint up to {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🖼️" size={16} />
+                    <strong>Gallery, Land Details &amp; Pending Previews</strong>
+                    <InfoTip title="Inspecting Art & Approving Mints">
+                      Browse live 3D thumbnails in the <strong>Gallery</strong> tab and click any
+                      thumbnail to load that sculpture and zoom into its land. Click any minted land
+                      label or 3D boundary on the map to open its full detailed view. Pending agent
+                      sculpture mints appear on the map with a temporary <strong>Preview</strong>{' '}
+                      label and can be approved or rejected directly inside the{' '}
+                      <strong>Notifications</strong> menu.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Preview sculptures in the Gallery, click any minted land to inspect it, and
+                    approve pending art straight from Notifications.
                   </p>
                 </div>
 
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="🤖" size={16} />
-                    <strong>AI Agents, Quests &amp; 5% / 3% / 2% Splits</strong>
-                    <InfoTip title="Agentic Stewardship Economics">
-                      AI Agents sign in directly with a wallet (<code>npx graffiland-mcp</code> or{' '}
-                      <code>/llms.txt</code>) with {STEWARD_DEFAULTS.starterDormantSlots} starter
-                      slots ($0 platform fee — agents pay own gas). Agent-created lands must receive
-                      a verified in-person human interaction within{' '}
-                      <strong>{STEWARD_DEFAULTS.dormantLeaseTtlHours} hours</strong> (even if the
-                      agent adds 3D models) or they are archived &amp; destroyed and the consumed
-                      free slot does not reopen. When an IRL human adds 3+ blocks, the land unlocks
-                      +2 agent slots and every sale splits 90% Seller · 5% Platform · 3% Agent · 2%
-                      Human Pool.
+                    <strong>AI Agents, Pairing &amp; Land Management</strong>
+                    <InfoTip title="Agent Pairing, MCP & Royalty Split">
+                      Invite your AI agents to add art to the land: open <strong>Pairing</strong> to
+                      copy your persistent pairing code (one-click code or copy icon) for Phone AR
+                      mirroring or AI Agent MCP (<code>GLP-...</code>). Once paired, the{' '}
+                      <strong>Land Management</strong> tab unlocks so you can rename parcels, invite
+                      contributors, and allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
+                      Autonomous agents connect with a wallet via <code>npx graffiland-mcp</code> or{' '}
+                      <code>/llms.txt</code> ({STEWARD_DEFAULTS.starterDormantSlots} starter slots,{' '}
+                      {STEWARD_DEFAULTS.dormantLeaseTtlHours}h visit timer, +2 slots per awakened
+                      land). Sales split 90% Seller · 5% Platform · 3% AI Agent · 2% Human Artists.
                     </InfoTip>
                   </div>
                   <p>
-                    Connect an autonomous AI steward or pair a personal helper (<code>GLP-...</code>
-                    ) to build stages, launch quests, and share sales.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🔗" size={16} />
-                    <strong>Pairing &amp; Land Management</strong>
-                    <InfoTip title="QR Mirroring & Parcel Controls">
-                      Tap <strong>Pairing</strong> to watch phone AR strokes live on a big
-                      screen or connect your AI Agent (MCP). Open <strong>Land Management</strong> to rename owned parcels, add
-                      IRL Contributors, or allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Mirror mobile AR sculpting live over QR and manage permissions on parcels you
-                    own.
+                    Invite your agents to add art to the land, pair your phone over QR, and unlock
+                    Land Management once paired.
                   </p>
                 </div>
               </div>
@@ -391,35 +406,35 @@ export default function InfoTermsModal({
               <div key="mobile" className="info-simple-list" data-testid="info-guide-mobile">
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
-                    <XeroIcon emoji="🖌️" size={16} />
-                    <strong>Tap Surface &amp; Paint 3D Voxels</strong>
-                    <InfoTip title="Mobile Tool Carousel">
-                      Tap any floor, wall, or table to anchor your grid, then swipe the bottom Key
-                      Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger Z-rotate
-                      &amp; sliders) → Stack → Preview → Agent Code → Publish</strong>. Supports 4x
-                      precision (<code>0.05m</code> grid), matte/neon/glass finishes, up to 4,096
-                      blocks, and auto-saved cloud drafts.
+                    <XeroIcon emoji="📡" size={16} />
+                    <strong>Quick Start, Camera &amp; Scene Scan</strong>
+                    <InfoTip title="Hybrid WebXR, ORB & Passkeys">
+                      Allow Camera, GPS, and Gyroscope, then sweep your phone around to clear
+                      grayscale scan cells and prove you are standing at that real spot. Binary ORB
+                      landmarks anchor art without uploading raw photos; landholders can add
+                      hardware ES256 Passkeys for locked notes.
                     </InfoTip>
                   </div>
                   <p>
-                    Point your phone camera outdoors, tap a real surface, and draw or stack glowing
-                    3D blocks in space.
+                    Allow camera &amp; motion sensors, scan your real-world spot, and tap a surface
+                    to lock in.
                   </p>
                 </div>
 
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
-                    <XeroIcon emoji="📡" size={16} />
-                    <strong>Scene Scan &amp; Proof of Location</strong>
-                    <InfoTip title="Hybrid WebXR, ORB & Passkeys">
-                      Move your phone across angles to clear grayscale cells and lock GPS/altitude.
-                      Binary ORB descriptors anchor art without uploading raw photos; landholders
-                      can add hardware ES256 Passkeys for locked notes.
+                    <XeroIcon emoji="🖌️" size={16} />
+                    <strong>Tap Surface &amp; Paint 3D Voxels</strong>
+                    <InfoTip title="Mobile Tool Carousel">
+                      Hold and move your phone like a spray can to paint in 3D, or swipe the bottom
+                      Key Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger
+                      Z-rotate &amp; sliders) → Stack → Preview → Agent Code → Publish</strong>.
+                      Supports 4x precision (<code>0.05m</code> grid), Matte/Neon/Glass finishes, up
+                      to 4,096 blocks, Quick vs Pro HUD, and auto-saved cloud drafts.
                     </InfoTip>
                   </div>
                   <p>
-                    Sweep your phone around to clear grayscale areas and prove you are standing at
-                    that real spot before publishing.
+                    Move your phone like a spray can to paint or stack glowing 3D blocks in space.
                   </p>
                 </div>
 
@@ -428,32 +443,33 @@ export default function InfoTermsModal({
                     <XeroIcon emoji="🪙" size={16} />
                     <strong>Free Gas Minting &amp; Local AR Chat</strong>
                     <InfoTip title="ERC-721, GLB & Encrypted Chat">
-                      Human IRL mints run gas-free on{' '}
+                      Human IRL art mints run gas-free on{' '}
                       <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> as
-                      standard ERC-721 NFTs with <code>.glb</code> 3D files and a 5% ERC-2981
-                      royalty. Tap glowing AR bases outdoors to join camera-locked AES-256-GCM
-                      chat or decrypt parcel-locked IPFS notes.
+                      ERC-721 NFTs with <code>.glb</code> 3D files, permanent land ownership (no
+                      expiry timer), and a 5% ERC-2981 royalty. Tap glowing AR bases outdoors within
+                      75m to join camera-locked AES-256-GCM chat or decrypt parcel-locked notes.
                     </InfoTip>
                   </div>
                   <p>
-                    Publish gas-free 3D NFTs, unlock spot-locked encrypted chat outdoors, and earn
-                    quest bounties + 2% royalties.
+                    Make art on the land in person IRL to mint permanent gas-free land and unlock
+                    local AR chat.
                   </p>
                 </div>
 
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="🗺️" size={16} />
-                    <strong>Area Map, Navigation &amp; Agent Drafts</strong>
-                    <InfoTip title="Navigate & Stage with AI">
-                      Open the bottom-left Map to inspect nearby sculptures and launch Google Maps
-                      directions. Generate a <code>GRF-...</code> code so an AI agent can stage a
-                      3D draft at your GPS spot for you to review and publish.
+                    <strong>Area Map, Nearest Lands &amp; Agent Approvals</strong>
+                    <InfoTip title="3D Map, Directions & Pending Mints">
+                      Open the bottom-left Map to explore nearby lands and sculptures in 3D, tap any
+                      land for details or walking directions, generate a <code>GRF-...</code> code
+                      for AI agent drafts, preview pending agent mints marked{' '}
+                      <strong>Preview</strong>, and approve them directly from Notifications.
                     </InfoTip>
                   </div>
                   <p>
-                    Walk to nearby artworks with Google Maps or invite an AI agent to stage a 3D
-                    draft right where you stand.
+                    Explore nearby lands in 3D, get walking directions, or approve AI agent art from
+                    Notifications.
                   </p>
                 </div>
               </div>
@@ -557,7 +573,8 @@ export default function InfoTermsModal({
             </div>
 
             <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 2 }}>
-              Icons: Xero Emoji by Max Infeld (CC BY 4.0)
+              Brand: SPRAY.LAND Voxel Spray Can · Typeface: Audiowide (SIL OFL 1.1) · Icons: Xero
+              Emoji by Max Infeld (CC BY 4.0)
             </div>
           </div>
         )}

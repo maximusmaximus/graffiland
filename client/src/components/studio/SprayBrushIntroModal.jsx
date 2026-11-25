@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+import BrandLogo from '../BrandLogo.jsx';
+import InfoTip from '../InfoTip.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 /**
@@ -44,9 +46,15 @@ export default function SprayBrushIntroModal({ onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="spray-guide-header">
-          <h2 id="spray-brush-guide-title" className="spray-guide-title">
-            <XeroIcon emoji="🖌️" size={20} /> Spray Paint in 3D
-          </h2>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <h2 id="spray-brush-guide-title" className="spray-guide-title">
+              <BrandLogo variant="mark" size={26} decorative /> Spray Paint in 3D
+            </h2>
+            <InfoTip title="Spray Brush Tips">
+              Tap the 🎨 dock anytime to pick colors, change block size (S/M/L/XL), switch finishes
+              (Matte, Neon, Glass), or use Stack, Pencil, and Eraser.
+            </InfoTip>
+          </div>
           <button
             type="button"
             className="direct-link-intro-close-box"

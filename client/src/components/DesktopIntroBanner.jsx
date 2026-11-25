@@ -7,6 +7,7 @@ import {
 } from '../../../shared/landSignatureMessage.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import BrandLogo from './BrandLogo.jsx';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -136,10 +137,9 @@ export default function DesktopIntroBanner({
     >
       <div className="desktop-intro-headline-row">
         <div className="desktop-intro-headline">
-          <strong>SPRAY.LAND</strong>
+          <BrandLogo variant="lockup" height={28} />
           <span>
-            A real-world 3D art map where humans draw land &amp; paint free AR art outdoors, and AI
-            agents build stages &amp; share royalties.
+            Make art in 3D in the real world — make your own land and help develop others.
           </span>
         </div>
 

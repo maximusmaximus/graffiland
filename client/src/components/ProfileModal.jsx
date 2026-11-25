@@ -34,6 +34,7 @@ import {
   recordUserAction,
   subscribeUserHistory
 } from '../utils/userHistory.js';
+import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
@@ -702,36 +703,12 @@ export default function ProfileModal({
                           data-testid="profile-default-avatar"
                           aria-label="Default SPRAY.LAND creator icon"
                         >
-                          <svg
-                            viewBox="0 0 48 48"
-                            width="42"
-                            height="42"
-                            aria-hidden="true"
+                          <BrandLogo
+                            variant="mark"
+                            size={44}
+                            decorative
                             className="profile-default-emblem-svg"
-                          >
-                            <polygon
-                              points="24,6 40,15 40,33 24,42 8,33 8,15"
-                              fill="rgba(0,245,212,0.14)"
-                              stroke="#00f5d4"
-                              strokeWidth="2.2"
-                              strokeLinejoin="round"
-                            />
-                            <polyline
-                              points="8,15 24,24 40,15"
-                              fill="none"
-                              stroke="#00f5d4"
-                              strokeWidth="1.8"
-                              strokeLinejoin="round"
-                            />
-                            <line
-                              x1="24"
-                              y1="24"
-                              x2="24"
-                              y2="42"
-                              stroke="#00f5d4"
-                              strokeWidth="1.8"
-                            />
-                          </svg>
+                          />
                           <span className="profile-default-emblem-monogram">{monogram}</span>
                         </div>
                       )}

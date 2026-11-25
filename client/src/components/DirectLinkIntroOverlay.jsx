@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+import BrandLogo from './BrandLogo.jsx';
+import InfoTip from './InfoTip.jsx';
 
 export const DIRECT_LINK_INTRO_COPY =
   'You can see virtual art right here. You can also make your own virtual art while minting land to preserve it forever. Sign in for free to save your art, own your land, and keep everything in your account.';
@@ -42,9 +44,18 @@ export default function DirectLinkIntroOverlay({ onClose, onSignIn = null }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="direct-link-intro-header">
-          <h2 id="direct-link-intro-title" className="direct-link-intro-title">
-            Welcome to SPRAY.LAND
-          </h2>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <h2
+              id="direct-link-intro-title"
+              className="direct-link-intro-title"
+              aria-label="SPRAY.LAND"
+            >
+              <BrandLogo variant="lockup" height={32} />
+            </h2>
+            <InfoTip title="How Info Icons Work">
+              Tap any <strong>i</strong> icon anytime to learn how a feature or tool works.
+            </InfoTip>
+          </div>
           <button
             type="button"
             className="direct-link-intro-close-box"

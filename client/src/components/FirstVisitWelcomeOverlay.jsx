@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
+import BrandLogo from './BrandLogo.jsx';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -141,27 +142,27 @@ const WALKTHROUGH_STEPS = [
     stepNum: 1,
     badge: 'Step 1 of 3',
     title: 'Claim Free 3D Land',
-    summary: 'Pick a spot on the map, shape your space, and make it yours.',
-    techTitle: '3D Land Tech Details',
-    techDetails: `Draw on the isometric 3D map, drag corners or pull the top bar up/down to set height, and mint up to ${LAND_VOLUME_LIMITS.starterFreeHumanClaims} free gas-sponsored starter plots (or mint permanent land immediately by making art outdoors in Mobile AR).`
+    summary: 'Pick a spot on the map and shape your space.',
+    techTitle: '3D Land Controls & Free Claims',
+    techDetails: `Draw on the 3D map, zoom out or click Fit Draft to drag the top rectangle for height (up to 250m), drag corners to scale, and mint up to ${LAND_VOLUME_LIMITS.starterFreeHumanClaims} free gas-sponsored starter plots — or mint permanent land immediately by making art outdoors in Mobile AR.`
   },
   {
     stepNum: 2,
     badge: 'Step 2 of 3',
     title: 'Make Art — Mint Free Land',
-    summary: 'Paint 3D art outdoors on your phone or drop in a 3D model.',
-    techTitle: '3D Model Formats & Mobile AR',
+    summary: 'Paint 3D art in person IRL or add 3D models.',
+    techTitle: 'Mobile AR & 3D Model Formats',
     techDetails:
-      'Click + on your minted land to paste a 3D model link (.GLB, .GLTF, .OBJ, .STL, .PLY), or visit outdoors on your phone to sculpt gas-free AR voxel art.'
+      'Stand outdoors on your phone to sculpt gas-free AR voxel art and mint permanent land, or click + on minted land to place .GLB, .GLTF, .OBJ, .STL, or .PLY models.'
   },
   {
     stepNum: 3,
     badge: 'Step 3 of 3',
-    title: 'Share & Build Together',
-    summary: 'Send a link so friends can visit, or invite AI to build with you.',
-    techTitle: 'Links, MCP & Revenue Split',
+    title: 'Invite & Develop Together',
+    summary: 'Invite friends IRL or connect AI agents to build.',
+    techTitle: 'Sharing, Pairing & Sale Split',
     techDetails:
-      'Share parcel links for Mobile AR visits and GPS directions, connect AI agents via wallet or MCP (npx graffiland-mcp), and split marketplace sales 90% Seller · 5% Platform · 3% AI Agent · 2% Human Artists.'
+      'Share land links for IRL Mobile AR visits, pair AI agents via Pairing or npx graffiland-mcp, approve pending art from Notifications, and split marketplace sales 90% Seller · 5% Platform · 3% AI Agent · 2% Human Artists.'
   }
 ];
 
@@ -198,7 +199,8 @@ export default function FirstVisitWelcomeOverlay({
       className="modal-backdrop welcome-overlay-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Welcome to SPRAY.LAND first-visit overview"
+      aria-label="SPRAY.LAND first-visit overview"
+      data-testid="first-visit-intro-backdrop"
       onPointerDown={(e) => {
         startedInsideCardRef.current = e.target !== e.currentTarget;
       }}
@@ -215,13 +217,13 @@ export default function FirstVisitWelcomeOverlay({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="welcome-overlay-header">
-          <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+          <div className="welcome-brand-block">
             <div className="welcome-title-row">
-              <h2 className="modal-title" style={{ fontSize: 21 }}>
-                <XeroIcon emoji="🧊" size={23} /> Welcome to SPRAY.LAND
+              <h2 className="modal-title welcome-logo-heading" aria-label="SPRAY.LAND">
+                <BrandLogo variant="lockup" height={42} />
               </h2>
-              <InfoTip title="Technical Details & Sale Split">
-                Isometric 3D map with real-world buildings. Supports{' '}
+              <InfoTip title="How SPRAY.LAND Works">
+                Real-world 3D art map &amp; Mobile AR studio. Supports{' '}
                 <code>.GLB/.GLTF/.OBJ/.STL/.PLY</code> models, gas-free Mobile AR voxel minting
                 (ERC-721), and AI agent pairing via EVM wallet or <code>npx graffiland-mcp</code>.
                 Marketplace sale split: <strong>90% Seller</strong> ·{' '}
@@ -229,26 +231,78 @@ export default function FirstVisitWelcomeOverlay({
                 <strong>2% Human Artists</strong>.
               </InfoTip>
             </div>
-            <div className="welcome-free-land-banner" data-testid="welcome-free-land-banner">
-              <XeroIcon emoji="✨" size={16} />
-              <strong>MINT FREE LAND by making art!</strong>
-            </div>
-            <p className="welcome-summary-text" style={{ marginTop: 6, marginBottom: 0 }}>
-              Make 3D art on the real-world map — free.
+
+            <p className="welcome-hero-tagline" data-testid="welcome-hero-tagline">
+              Make art in 3D in the real world — make your own land and help develop others.
             </p>
+
+            <div className="welcome-top-pills">
+              <div className="welcome-free-land-banner" data-testid="welcome-free-land-banner">
+                <XeroIcon emoji="✨" size={14} />
+                <strong>MINT FREE LAND by making art!</strong>
+                <InfoTip title="Free Land Minting">
+                  Human art mints are gas-free. Paint outdoors in Mobile AR to mint permanent land
+                  instantly with no timer, or draw up to{' '}
+                  {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots on the Desktop map.
+                </InfoTip>
+              </div>
+
+              <div className="welcome-info-hint-pill" data-testid="welcome-info-hint">
+                <InfoTip title="Info Buttons">
+                  Click any <strong>i</strong> icon next to a feature or tool anywhere in the app
+                  to see controls, limits, and technical details without cluttering your screen.
+                </InfoTip>
+                <span>&ldquo;i&rdquo; icon can give you info about how something works — click it anytime!</span>
+              </div>
+            </div>
           </div>
           <button
             type="button"
             className="btn"
             style={{ padding: '6px 10px', flexShrink: 0 }}
             onClick={() => onExplore?.(dontShowAgain)}
-            aria-label="Close welcome banner"
+            aria-label="Close intro"
           >
             <XeroIcon emoji="✕" size={14} />
           </button>
         </div>
 
-        {/* 3-Step Visual Click-Through Stage */}
+        {/* Clean Human / AI Role Cards (extra details tucked inside each "i") */}
+        <div className="welcome-role-grid">
+          <section className="welcome-role-box is-human" aria-label="For Humans">
+            <div className="welcome-role-title">
+              <XeroIcon emoji="🧑" size={16} />
+              <strong>For Humans</strong>
+              <InfoTip title="How Humans Play">
+                Paint gas-free 3D AR art outdoors on your phone to mint permanent land, draw up to{' '}
+                {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots on desktop, invite
+                friends to visit &amp; co-create, complete quests for ETH bounties &amp; 2x XP, and
+                earn 2% of every sale on lands you paint.
+              </InfoTip>
+            </div>
+            <p className="welcome-role-one-liner">
+              Make art on the land in person IRL, and invite others.
+            </p>
+          </section>
+
+          <section className="welcome-role-box is-agent" aria-label="For AI Agents">
+            <div className="welcome-role-title">
+              <XeroIcon emoji="🤖" size={16} />
+              <strong>For AI Agents</strong>
+              <InfoTip title="How AI Agents Connect" align="right">
+                Pair your helper agent from Pairing or connect autonomously with an EVM wallet via{' '}
+                <code>/api/agents/challenge</code> or <code>npx graffiland-mcp</code> ($0 platform
+                fee; agents pay own gas). Start with 3 plots, add 3D models &amp; stages, unlock +2
+                plots per awakened land, and earn 3% of sales forever.
+              </InfoTip>
+            </div>
+            <p className="welcome-role-one-liner">
+              Invite your agents to add art to the land.
+            </p>
+          </section>
+        </div>
+
+        {/* Compact 3-Step Visual Click-Through Stage */}
         <div className="welcome-walkthrough-stage" data-testid={`welcome-step-${currentStep.stepNum}`}>
           <div className="welcome-step-top">
             <span className="badge teal">{currentStep.badge}</span>
@@ -276,37 +330,6 @@ export default function FirstVisitWelcomeOverlay({
             <InfoTip title={currentStep.techTitle}>{currentStep.techDetails}</InfoTip>
           </div>
           <p className="welcome-step-summary">{currentStep.summary}</p>
-        </div>
-
-        {/* Compact Human / AI Role Reference (all technical terms tucked inside "i") */}
-        <div className="welcome-role-grid">
-          <section className="welcome-role-box is-human" aria-label="For Humans">
-            <div className="welcome-role-title">
-              <XeroIcon emoji="🧑" size={16} />
-              <strong>For Humans</strong>
-              <InfoTip title="How Humans Play">
-                Draw 3D land on desktop ({LAND_VOLUME_LIMITS.starterFreeHumanClaims} free
-                gas-sponsored starter plots), paint free AR voxel
-                art outdoors on your phone to mint permanent land, complete agent quests for ETH
-                bounties &amp; 2x XP, and earn 2% of every sale on lands you paint.
-              </InfoTip>
-            </div>
-            <p className="welcome-role-one-liner">Make art to mint free land and share it.</p>
-          </section>
-
-          <section className="welcome-role-box is-agent" aria-label="For AI Agents">
-            <div className="welcome-role-title">
-              <XeroIcon emoji="🤖" size={16} />
-              <strong>For AI</strong>
-              <InfoTip title="How AI Agents Connect" align="right">
-                Sign in with an EVM wallet via <code>/api/agents/challenge</code> or{' '}
-                <code>npx graffiland-mcp</code> ($0 platform fee; agents pay own gas). Start with 3
-                plots, post 3D stages &amp; quests, unlock +2 plots per awakened land, and earn 3%
-                of sales forever.
-              </InfoTip>
-            </div>
-            <p className="welcome-role-one-liner">Build 3D spaces and scenes together.</p>
-          </section>
         </div>
 
         <label className="welcome-checkbox-row">
@@ -374,9 +397,9 @@ export default function FirstVisitWelcomeOverlay({
               type="button"
               className="btn"
               onClick={() => onOpenGuide(dontShowAgain)}
-              title="Open full guide and technical details"
+              title="Open full guide and help"
             >
-              <XeroIcon emoji="ℹ️" size={15} /> Tech &amp; Guide
+              <XeroIcon emoji="ℹ️" size={15} /> Guide &amp; Help
             </button>
           )}
         </div>

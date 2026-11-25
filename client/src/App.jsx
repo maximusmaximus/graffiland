@@ -1,12 +1,12 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { parseParcelParamFromLocation } from '../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../shared/profileRules.mjs';
+import BrandLogo from './components/BrandLogo.jsx';
 import DirectLinkIntroOverlay from './components/DirectLinkIntroOverlay.jsx';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import GoogleLoginGate from './components/GoogleLoginGate.jsx';
 import SettingsSavedToast from './components/SettingsSavedToast.jsx';
 import UsernameOnboardingModal from './components/UsernameOnboardingModal.jsx';
-import XeroIcon from './components/XeroIcon.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
 import {
   DIRECT_LINK_INTRO_SEEN_KEY,
@@ -100,15 +100,18 @@ export default function App() {
         style={{
           height: '100dvh',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 10,
-          background: '#07090f',
+          gap: 12,
+          background: '#060a14',
           color: '#f3f6ff'
         }}
       >
-        <XeroIcon emoji="🧊" size={28} />
-        <span className="mono">Loading SPRAY.LAND...</span>
+        <BrandLogo variant="stacked" height={96} />
+        <span className="mono" style={{ fontSize: 12, color: 'rgba(186, 202, 228, 0.78)' }}>
+          Loading…
+        </span>
       </div>
     );
   }
@@ -118,15 +121,18 @@ export default function App() {
       style={{
         height: '100dvh',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 10,
-        background: '#07090f',
+        gap: 12,
+        background: '#060a14',
         color: '#f3f6ff'
       }}
     >
-      <XeroIcon emoji="🧊" size={28} />
-      <span className="mono">Loading Workspace...</span>
+      <BrandLogo variant="stacked" height={88} />
+      <span className="mono" style={{ fontSize: 12, color: 'rgba(186, 202, 228, 0.78)' }}>
+        Loading Workspace…
+      </span>
     </div>
   );
 
