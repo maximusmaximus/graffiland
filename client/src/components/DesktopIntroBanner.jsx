@@ -135,7 +135,7 @@ export default function DesktopIntroBanner({
     >
       <div className="desktop-intro-headline-row">
         <div className="desktop-intro-headline">
-          <strong>GRAFFILAND</strong>
+          <strong>SPRAY.LAND</strong>
           <span>
             A real-world 3D art map where humans draw land &amp; paint free AR art outdoors, and AI
             agents build stages &amp; share royalties.
@@ -143,7 +143,7 @@ export default function DesktopIntroBanner({
         </div>
 
         <div className="desktop-intro-controls">
-          <div className="desktop-intro-tabs" role="tablist" aria-label="Choose your GRAFFILAND role">
+          <div className="desktop-intro-tabs" role="tablist" aria-label="Choose your SPRAY.LAND role">
             <button
               type="button"
               role="tab"

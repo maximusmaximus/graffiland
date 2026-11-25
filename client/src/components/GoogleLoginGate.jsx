@@ -95,7 +95,7 @@ export default function GoogleLoginGate({
       </div>
 
       <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
-        GRAFFILAND uses Google Sign-In exclusively. When you publish a 3D sculpture, gas is
+        SPRAY.LAND uses Google Sign-In exclusively. When you publish a 3D sculpture, gas is
         sponsored for you and the Robinhood Chain NFT is minted directly to your account wallet.
       </p>
 
@@ -160,7 +160,7 @@ export default function GoogleLoginGate({
           <button
             className="btn"
             disabled={loading}
-            onClick={() => handleDevGoogleLogin('admin@graffiland.local', 'GRAFFILAND Admin')}
+            onClick={() => handleDevGoogleLogin('admin@graffiland.local', 'SPRAY.LAND Admin')}
           >
             <XeroIcon emoji="🛡️" size={16} />
             Quick Sign-In as Admin (Dev)

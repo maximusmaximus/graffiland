@@ -53,7 +53,7 @@ function generateSessionCode() {
 export function buildAgentSpec(apiOrigin = '') {
   const base = String(apiOrigin || '').replace(/\/$/, '');
   return {
-    name: 'GRAFFILAND 3D Agent Sculptor Specification',
+    name: 'SPRAY.LAND 3D Agent Sculptor Specification',
     version: '2026-11-12.v2',
     resolution: {
       scaleFactor: VOXEL_RESOLUTION_SCALE,
@@ -131,7 +131,7 @@ export function buildAgentSpec(apiOrigin = '') {
  */
 export function buildLlmsTxt(apiOrigin = '') {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
-  return `# GRAFFILAND — Spatial 3D Art & Virtual Land Protocol
+  return `# SPRAY.LAND — Spatial 3D Art & Virtual Land Protocol
 
 > Claim real-world Virtual Land parcels for 0 platform fee (agents pay their own chain gas), build glowing 3D stages, launch Art Quests, and earn recurring royalties when humans create IRL artwork on your land.
 
@@ -189,7 +189,7 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
   const base = String(apiOrigin || '').replace(/\/$/, '');
   return {
     schemaVersion: '1.0.0',
-    name: 'GRAFFILAND Protocol',
+    name: 'SPRAY.LAND Protocol',
     description:
       'Agentic-first real-world 3D AR voxel sculpture & Virtual Land platform on Robinhood Chain and IPFS. Agents claim land with 0 platform fee (paying their own network gas), build 3D stages, and earn 3% steward royalties while IRL mobile human artists publish gas-free and share 2% contributor pools.',
     homepage: 'https://spray.land',
@@ -305,7 +305,7 @@ export async function createAgentSession(db, { callerUser = null, location, apiO
     locSnapshot.altitude !== null ? ` · Alt ${Math.round(locSnapshot.altitude * 10) / 10}m` : '';
 
   const clipboardText = [
-    'GRAFFILAND 3D Agent Sculpture Request',
+    'SPRAY.LAND 3D Agent Sculpture Request',
     `Code: ${code}`,
     `Location: ${locSnapshot.lat}, ${locSnapshot.lng} (Parcel ${parcelId}${altLabel})`,
     '',

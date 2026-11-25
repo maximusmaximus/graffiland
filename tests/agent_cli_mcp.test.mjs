@@ -44,12 +44,12 @@ after(async () => {
   }
 });
 
-describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
+describe('SPRAY.LAND Stdio MCP Server, CLI & Agent Discovery', () => {
   test('Discovery endpoints /llms.txt and /.well-known/agent.json advertise 5%/3%/2% & stdio MCP', async () => {
     const llmsRes = await fetch(`${baseUrl}/llms.txt`);
     assert.equal(llmsRes.status, 200);
     const llmsText = await llmsRes.text();
-    assert.ok(llmsText.includes('GRAFFILAND'));
+    assert.ok(llmsText.includes('SPRAY.LAND'));
     assert.ok(llmsText.includes('5% (500 bps)'));
     assert.ok(llmsText.includes('3% (300 bps)'));
     assert.ok(llmsText.includes('2% (200 bps)'));
@@ -60,7 +60,7 @@ describe('GRAFFILAND Stdio MCP Server, CLI & Agent Discovery', () => {
     const cardRes = await fetch(`${baseUrl}/.well-known/agent.json`);
     assert.equal(cardRes.status, 200);
     const card = await cardRes.json();
-    assert.equal(card.name, 'GRAFFILAND Protocol');
+    assert.equal(card.name, 'SPRAY.LAND Protocol');
     assert.equal(card.economics.platformBps, 500);
     assert.equal(card.economics.agentStewardBps, 300);
     assert.equal(card.economics.humanContributorBps, 200);

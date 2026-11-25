@@ -69,7 +69,7 @@ function align4(n) {
 }
 
 /**
- * Generates a glTF 2.0 binary (.glb) buffer directly from GRAFFILAND voxels.
+ * Generates a glTF 2.0 binary (.glb) buffer directly from SPRAY.LAND voxels.
  * Pure JS / TypedArray implementation compatible with both Node.js and Cloudflare Workers.
  */
 export function buildSculptureGlb(voxels = [], meta = {}) {
@@ -239,11 +239,11 @@ export function buildSculptureGlb(voxels = [], meta = {}) {
   const gltf = {
     asset: {
       version: '2.0',
-      generator: 'GRAFFILAND-GLB-Exporter/1.0',
+      generator: 'SPRAY.LAND-GLB-Exporter/1.0',
       ...(meta.copyright ? { copyright: String(meta.copyright) } : {})
     },
     scene: 0,
-    scenes: [{ name: String(meta.title || 'GRAFFILAND Sculpture'), nodes: [0] }],
+    scenes: [{ name: String(meta.title || 'SPRAY.LAND Sculpture'), nodes: [0] }],
     nodes: [
       {
         name: String(meta.title || 'SculptureRoot'),

@@ -939,7 +939,7 @@ function deriveSuggestedTitleFromUrl(rawUrl = '') {
 
 /**
  * Fetches and validates an external 3D model URL (https://, http://, or ipfs://) against
- * GRAFFILAND's supported formats (.glb, .gltf, .obj, .stl, .ply), size limit, and WebGL budgets.
+ * SPRAY.LAND's supported formats (.glb, .gltf, .obj, .stl, .ply), size limit, and WebGL budgets.
  */
 /**
  * Rejects loopback, private, link-local, CGNAT and cloud-metadata hosts so server-side model URL
@@ -1077,7 +1077,7 @@ export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 
   if (!detectedFormat) {
     return {
       valid: false,
-      error: `Unsupported file format. GRAFFILAND supports: ${SUPPORTED_3D_FORMATS.map((f) => `.${f}`).join(', ')}.`
+      error: `Unsupported file format. SPRAY.LAND supports: ${SUPPORTED_3D_FORMATS.map((f) => `.${f}`).join(', ')}.`
     };
   }
 

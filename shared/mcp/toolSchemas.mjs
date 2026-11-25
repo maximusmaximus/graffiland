@@ -1,7 +1,7 @@
 export const MCP_TOOLS = [
   {
     name: 'get_spec',
-    description: 'Read GRAFFILAND 4x voxel resolution spec, colors, block finishes, and limits.',
+    description: 'Read SPRAY.LAND 4x voxel resolution spec, colors, block finishes, and limits.',
     inputSchema: { type: 'object', properties: {} }
   },
   {

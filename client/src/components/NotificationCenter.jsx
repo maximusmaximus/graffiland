@@ -514,7 +514,7 @@ export default function NotificationCenter({
       setPushFeedback('Browser notifications enabled!');
       flashSettingsSaved('Saved: Browser notifications enabled.');
       fireBrowserNotification(
-        'GRAFFILAND Notifications Active',
+        'SPRAY.LAND Notifications Active',
         'You will be alerted when sculptures land on your parcels or new mint slots unlock.',
         'graffiland-push-enabled'
       );

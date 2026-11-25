@@ -310,7 +310,7 @@ export default function PublishSculptureModal({
                     cursor: 'pointer'
                   }}
                 >
-                  GRAFFILAND Terms &amp; Virtual Land Policy
+                  SPRAY.LAND Terms &amp; Virtual Land Policy
                 </button>
                 , confirm real physical presence, and acknowledge the 5% Robinhood resale royalty.
               </span>

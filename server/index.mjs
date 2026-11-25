@@ -500,7 +500,7 @@ export function createAppServer(serverOptions = {}) {
       if (taken) {
         return res
           .status(409)
-          .json({ error: 'That wallet address is already linked to another GRAFFILAND account.' });
+          .json({ error: 'That wallet address is already linked to another SPRAY.LAND account.' });
       }
       db.prepare(
         `INSERT INTO payout_address_proofs (user_id, address, message, signature, verified_at)
@@ -2499,6 +2499,6 @@ export function createAppServer(serverOptions = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { server } = createAppServer();
   server.listen(CONFIG.port, '0.0.0.0', () => {
-    console.log(`GRAFFILAND API & WS server listening on http://0.0.0.0:${CONFIG.port}`);
+    console.log(`SPRAY.LAND API & WS server listening on http://0.0.0.0:${CONFIG.port}`);
   });
 }

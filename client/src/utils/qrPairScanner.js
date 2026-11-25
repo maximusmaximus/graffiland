@@ -1,7 +1,7 @@
 import { isValidPairingCodeFormat, normalizePairingCode } from '../../../shared/landSignatureMessage.mjs';
 
 /**
- * Parses a scanned QR string or pasted link/code from GRAFFILAND Desktop.
+ * Parses a scanned QR string or pasted link/code from SPRAY.LAND Desktop.
  * Supports:
  *  - Full launch URL: https://spray.land/?pair=ABC123
  *  - Query fragment: ?pair=ABC123 or pair=ABC123

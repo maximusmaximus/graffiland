@@ -335,7 +335,7 @@ function buildVoxelSculptureFeatures(sc, isSelected, parcelVolume = null) {
 }
 
 /**
- * Converts GRAFFILAND sculptures (3D voxels and custom .glb/.gltf/.obj/.stl/.ply models)
+ * Converts SPRAY.LAND sculptures (3D voxels and custom .glb/.gltf/.obj/.stl/.ply models)
  * into a MapLibre GeoJSON FeatureCollection for native depth-buffered 3D rendering on Desktop & Mobile 3D maps.
  */
 export function buildSculptures3DGeoJson(sculptures = [], selectedSculptureId = '', parcels = []) {

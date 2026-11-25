@@ -50,7 +50,7 @@ function normalizeAnchorOffset(rawOffset = null, fallbackOffset = null) {
 
 /**
  * Converts a pending signature request (create_sculpture / publish_sculpture / update_sculpture)
- * into a temporary GRAFFILAND sculpture preview object so 3D/2D maps, land showcases,
+ * into a temporary SPRAY.LAND sculpture preview object so 3D/2D maps, land showcases,
  * and the 3D Sculpture Viewer can render the live preview with an unmistakable "Preview" label
  * before the land holder approves & mints it.
  */

@@ -329,7 +329,7 @@ async function renderOneThumbnail(sc) {
 }
 
 /**
- * Renders (and caches) a crisp 3D thumbnail image for any GRAFFILAND sculpture using one shared
+ * Renders (and caches) a crisp 3D thumbnail image for any SPRAY.LAND sculpture using one shared
  * offscreen WebGL context queued sequentially so scrolling large galleries never exhausts GPU contexts.
  */
 export function renderSculptureThumbnail(sc) {

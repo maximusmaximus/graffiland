@@ -1992,7 +1992,7 @@ export default function DesktopHub({
       <header className="desktop-nav">
         <div className="brand">
           <XeroIcon emoji="🧊" size={26} />
-          <span>GRAFFILAND</span>
+          <span>SPRAY.LAND</span>
           <span className="badge teal">Desktop Map Explorer</span>
         </div>
 
@@ -2458,7 +2458,7 @@ export default function DesktopHub({
                 )}
               </div>
             ) : sidebarTab === 'market' ? (
-              <div className="desktop-nearby-list" aria-label="GRAFFILAND Marketplace">
+              <div className="desktop-nearby-list" aria-label="SPRAY.LAND Marketplace">
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--accent)', padding: '2px 2px 6px' }}>
                   Every trade pays: 5% Platform · 3% Agent Steward · 2% Human Contributors Pool · 90% Seller
                 </div>
@@ -2860,7 +2860,7 @@ export default function DesktopHub({
               <div className="desktop-nearby-list" data-testid="desktop-nearby-sculptures-list">
               {displayedSculptures.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
-                  No published sculptures on the map yet. Pair or open GRAFFILAND on your mobile phone to create the first piece nearby!
+                  No published sculptures on the map yet. Pair or open SPRAY.LAND on your mobile phone to create the first piece nearby!
                 </div>
               ) : (
                 displayedSculptures.map((sc) => {

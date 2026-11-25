@@ -1,4 +1,4 @@
-# GRAFFILAND — Location-Bound 3D Voxel Graffiti & Virtual Land
+# SPRAY.LAND — Location-Bound 3D Voxel Graffiti & Virtual Land
 
 > Turn the physical world into a shared 3D voxel canvas. Wave your phone like a spatial spray-can over a live camera feed, verify you're really standing there using **Camera + GPS Proof of Location**, claim a **Virtual Land** parcel, and mint gas-sponsored 3D NFTs to **IPFS** and **Robinhood Chain** with a **5% resale royalty**.
 
@@ -10,7 +10,7 @@
 
 ## What It Does
 
-GRAFFILAND splits into two purpose-built interfaces depending on the device you open it on:
+SPRAY.LAND splits into two purpose-built interfaces depending on the device you open it on:
 
 ### 1. Mobile Full-Screen AR Sculpting Studio
 Sculpting and publishing **require a mobile device** with a camera, gyroscope, and GPS:
@@ -25,7 +25,7 @@ Sculpting and publishing **require a mobile device** with a camera, gyroscope, a
 - **Gas-Free Publish & Permanent Art-Minted Land (`🚀`)**: Sign in with **Google**, add a limited-terms title (`3–48` chars) and description (`10–240` chars, max `45` words), accept the Virtual Land Terms, and publish directly to IPFS + Robinhood Chain. You receive the minted ERC-721 NFT straight in your wallet at zero gas cost — and because you physically stood on-site and manually drew art in Mobile AR, **the land minted from your art is immediately permanently owned with no expiry timer and will never expire or get recycled**.
 
 ### 2. Desktop 3D Isometric Explorer & Land Builder (`100dvh`)
-Opening GRAFFILAND on desktop opens a **100% full-viewport 3D Isometric Land Studio & explorer**:
+Opening SPRAY.LAND on desktop opens a **100% full-viewport 3D Isometric Land Studio & explorer**:
 - **Real 3D Buildings, Terrain & Dynamic Live Search**: Opens directly in **Isometric 3D view (`52°` tilt, `-45°` bearing)** with real 3D OpenFreeMap buildings, toggleable DEM terrain, smooth **2D / 3D / Isometric** switching, compass rotation (`-15°` / `+15°` / `North`), **Tilt (`0°–65°`)** slider, and live debounced **type-ahead search** (ArcGIS World Geocoder + Photon + Nominatim with proximity/intersection ranking) for street intersections (e.g., `Market & 5th`), nearby businesses, addresses, coordinates, or `GLAND-...` parcels via `/api/geocode/search`.
 - **Hold-to-Draw 3D Cube, Pronounced Up/Down Z Handle & On-Map 3D Sculptures (`✏️ Draw Land` / `🏗️ Mint Land`)**: Press and **hold down in one spot** on the map (or click **Draw Land**) and drag to draw a camera-aligned 3D cube (auto-exiting draw mode after placement). Hover any unminted plot to select it and manipulate it directly on canvas: drag glowing **corner balls** to scale (up to `5,000 m²` / `120m`), drag **side segment bars** to stretch edges, hold & drag **vertical gold corner bars** to rotate (`0°–359°`), pull the **pronounced center `↕` elevator orb** up or down to scale Z-height (`4–250m`, max `500,000 m³`), or drag the center body to reposition. Published voxel sculptures and `.glb`/`.gltf`/`.obj`/`.stl`/`.ply` models render **in real 3D right on the Desktop map** — click any artwork to inspect its interactive 3D viewer and **all metadata** (including expandable complete JSON).
 - **Post-Mint `+` 3D Item Prompt, Artwork Moderation & Land Freeze**: After minting a land, a glowing **`+` button** appears right on the minted parcel on the map and in Owned Plots so you can pick any supported 3D format (`voxels`, `.glb`, `.gltf`, `.obj`, `.stl`, `.ply`) and copy a tailored AI agent prompt to place new 3D items, modify/reposition **any artwork placed on your land**, **hide/unhide** artworks (`POST /api/sculptures/:id/visibility` / MCP `set_sculpture_visibility`), or **❄️ Freeze Land** (`POST /api/lands/:parcelId/settings` / MCP `update_land_settings`) so no new sculptures can be placed there until unfrozen.
@@ -48,7 +48,7 @@ flowchart LR
 ```
 
 ### 1. Camera + GPS Proof of Location (Anti-Spoof Presence)
-Instead of trusting raw GPS coordinates alone (which can be mocked), GRAFFILAND captures multi-sensor evidence during the sculpting session via [`ProofOfLocationTracker`](client/src/components/ProofOfLocation.js) and verifies it in [`verifyAndEnrichLocation`](server/services/pol.mjs):
+Instead of trusting raw GPS coordinates alone (which can be mocked), SPRAY.LAND captures multi-sensor evidence during the sculpting session via [`ProofOfLocationTracker`](client/src/components/ProofOfLocation.js) and verifies it in [`verifyAndEnrichLocation`](server/services/pol.mjs):
 
 1. **Camera-Gyro Optical-Flow Correlation**: Every `450ms`, the client samples a downsampled `48×36` frame from the live camera stream and measures horizontal image displacement (`SAD` shift match) against simultaneous `DeviceOrientationEvent` yaw deltas (`Δalpha`). Physically panning a phone through real space produces correlated image motion; static photos or GPS spoofers without real camera parallax score poorly.
 2. **Astronomical Solar vs. Horizon Luminance Check**: Using `(lat, lng, UTC timestamp)`, the backend computes the sun's expected altitude angle (`daylight`, `twilight`, or `night`) and compares it against the upper-horizon brightness of the live camera feed.
@@ -126,7 +126,7 @@ Every `(lat, lng)` coordinate encodes into an **8-character Geohash** (e.g., `GL
 If you hold Virtual Land property (at least one published sculpture on a `GLAND-...` parcel), copy the entire prompt below into your AI agent after generating your robust **`GLP-XXXX-XXXX-XXXX-XXXX`** pairing code in Mobile Studio or Desktop QR Pair:
 
 ```markdown
-You are connected as my GRAFFILAND Property Agent. I own Virtual Land parcel(s) and sculptures on GRAFFILAND (`https://graffiland-api.maxinfeld-artshow.workers.dev`).
+You are connected as my SPRAY.LAND Property Agent. I own Virtual Land parcel(s) and sculptures on SPRAY.LAND (`https://graffiland-api.maxinfeld-artshow.workers.dev`).
 
 My Session Credentials (fill in before sending):
 - API Base URL: `https://graffiland-api.maxinfeld-artshow.workers.dev`
@@ -164,7 +164,7 @@ Follow these rules & capabilities strictly:
 
 5. **Two-Way Signing & Mobile Signature Notifications**
    - **If you hold my private key locally**: sign `canonicalMessage` via EIP-191 (`wallet.signMessage(canonicalMessage)`) and call `sign_and_execute_pending` (`{ requestId, signature, txHash? }`) or `POST {API_BASE}/api/signatures/requests/{requestId}/agent-sign` to execute from the agent side.
-   - **If you do NOT hold my private key**: call the MCP mutation tool without `signature` — GRAFFILAND automatically sends a real-time signature notification to my mobile phone so I can review and tap **Sign & Approve**.
+   - **If you do NOT hold my private key**: call the MCP mutation tool without `signature` — SPRAY.LAND automatically sends a real-time signature notification to my mobile phone so I can review and tap **Sign & Approve**.
 
 6. **Sign & Publish on My Behalf When Prompted From Mobile**
    When I tap **Copy Agent Sign & Publish Prompt** on mobile during publishing, I will give you a `requestId` and `canonicalMessage` (already verified with live Mobile Camera + GPS Proof of Location). Sign `canonicalMessage` with my key and submit via `sign_and_execute_pending` or `POST {API_BASE}/api/signatures/requests/{requestId}/agent-sign` to finalize IPFS pinning & minting to my wallet.
@@ -196,7 +196,7 @@ Every icon across mobile HUD triggers, map pins, desktop tabs, and modals is ren
 
 ## Security Threat Model, Performance & Operational Readiness
 
-- **Proof of Location Threat Model**: GRAFFILAND fuses live rear-camera frames, optical-flow correlation, gyroscope motion, GPS/geohash proximity, **server-verified binary ORB Hamming matching** (`matchedDescriptors` against parcel `landmark_anchors`), and optional hardware **ES256 WebAuthn Passkeys**. Because web browsers supply client sensor streams, a determined attacker with a virtual camera + simulated GPS/gyro could spoof weak checks on public parcels; high-value parcels should require strict **ORB + Passkey unlock** policies.
+- **Proof of Location Threat Model**: SPRAY.LAND fuses live rear-camera frames, optical-flow correlation, gyroscope motion, GPS/geohash proximity, **server-verified binary ORB Hamming matching** (`matchedDescriptors` against parcel `landmark_anchors`), and optional hardware **ES256 WebAuthn Passkeys**. Because web browsers supply client sensor streams, a determined attacker with a virtual camera + simulated GPS/gyro could spoof weak checks on public parcels; high-value parcels should require strict **ORB + Passkey unlock** policies.
 - **Takedown & Virtual Land Dispute Resolution**: Prohibited content, physical-safety hazards, and verified IP complaints can be immediately suppressed from public feeds via Admin visibility controls with audit reasons while preserving immutable on-chain ERC-721 history. First-valid PoL claims win initial Virtual Land parcel anchoring.
 - **3D Rendering & Mobile AR Quality**: Voxel sculptures batch via `THREE.InstancedMesh` per color/material bucket with `>25m` distance LOD simplification, WebGL `webglcontextlost` recovery + `SceneErrorBoundary`, smoothed visual ORB heading yaw correction in Preview, and a manual touch-drag fallback when iOS/Android gyroscope permissions are unavailable or denied.
 - **Rate Limiting, Telemetry & Hygiene**: API publish, land-create, and MCP routes enforce sliding-window DB rate limiting (`api_rate_limits`), relayer quotas refund automatically on failed mints, `ops_events` feeds `/api/admin/metrics` alerts, `ALLOW_DEV_GOOGLE_AUTH` is disabled in production Wrangler config, and CI runs `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `npm run contract:compile` (see `.github/workflows/ci.yml` / `deploy/ci-workflow.yml`).

@@ -138,7 +138,7 @@ export default function UsernameOnboardingModal({
       className="modal-backdrop username-onboarding-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Choose your GRAFFILAND username"
+      aria-label="Choose your SPRAY.LAND username"
       data-testid="username-onboarding-modal"
     >
       <div className="modal-card username-onboarding-card">
@@ -153,7 +153,7 @@ export default function UsernameOnboardingModal({
         </div>
 
         <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-          Choose a unique handle for your public GRAFFILAND profile. No one else can claim your
+          Choose a unique handle for your public SPRAY.LAND profile. No one else can claim your
           username, and you can change it anytime in your profile settings.
         </p>
 
@@ -222,7 +222,7 @@ export default function UsernameOnboardingModal({
               maxLength={BIO_MAX_LEN}
               value={bioInput}
               onChange={(e) => setBioInput(e.target.value)}
-              placeholder="Tell others what you build on GRAFFILAND... (type : for emojis)"
+              placeholder="Tell others what you build on SPRAY.LAND... (type : for emojis)"
             />
           </div>
 

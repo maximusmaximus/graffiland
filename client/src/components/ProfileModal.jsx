@@ -653,7 +653,7 @@ export default function ProfileModal({
                       <span
                         className="profile-user-number-pill mono"
                         data-testid="profile-user-number"
-                        title={`GRAFFILAND Member ${userNumberLabel}`}
+                        title={`SPRAY.LAND Member ${userNumberLabel}`}
                       >
                         USER {userNumberLabel}
                       </span>
@@ -700,7 +700,7 @@ export default function ProfileModal({
                         <div
                           className="profile-default-emblem"
                           data-testid="profile-default-avatar"
-                          aria-label="Default GRAFFILAND creator icon"
+                          aria-label="Default SPRAY.LAND creator icon"
                         >
                           <svg
                             viewBox="0 0 48 48"
@@ -824,7 +824,7 @@ export default function ProfileModal({
                       <a
                         className="btn btn-xs"
                         href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                          `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on GRAFFILAND!`
+                          `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on SPRAY.LAND!`
                         )}&url=${encodeURIComponent(publicProfileUrl)}`}
                         target="_blank"
                         rel="noreferrer"
@@ -1039,7 +1039,7 @@ export default function ProfileModal({
 
                 <div>
                   <label className="field-label" htmlFor="profile-edit-username">
-                    <span>Username (unique across GRAFFILAND)</span>
+                    <span>Username (unique across SPRAY.LAND)</span>
                   </label>
                   <div className="profile-username-input-wrap">
                     <span className="profile-username-at" aria-hidden="true">

@@ -121,7 +121,7 @@ export default function DesktopQrScanner({
                   onDetectedRef.current?.(parsed);
                   return;
                 }
-                setStatusText('QR detected, but it is not a GRAFFILAND Pair code.');
+                setStatusText('QR detected, but it is not a SPRAY.LAND Pair code.');
               }
             } finally {
               decoding = false;
@@ -170,7 +170,7 @@ export default function DesktopQrScanner({
       const raw = await decodeQrFromImageFile(file);
       const parsed = parseDesktopPairQrText(raw);
       if (!parsed) {
-        setErrorText('No GRAFFILAND Pair QR code found in that image. Try a clearer shot.');
+        setErrorText('No SPRAY.LAND Pair QR code found in that image. Try a clearer shot.');
         setStatusText('Point camera at Desktop Pair QR code…');
         return;
       }

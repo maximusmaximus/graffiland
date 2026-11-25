@@ -56,7 +56,7 @@ export function resolveSafeUserAvatar(input) {
 function normalizeHandleToken(raw) {
   const clean = String(raw || '').trim().replace(/^@+/, '');
   if (!clean) return '';
-  // Reject values with spaces or quotes — valid GRAFFILAND usernames are 3-24 chars [a-z0-9_]
+  // Reject values with spaces or quotes — valid SPRAY.LAND usernames are 3-24 chars [a-z0-9_]
   if (!/^[a-zA-Z0-9_.-]{2,32}$/.test(clean)) return '';
   return clean;
 }
