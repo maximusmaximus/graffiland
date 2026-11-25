@@ -24,6 +24,11 @@ import {
   voxelKey
 } from '../components/VoxelEngine3D.js';
 import { ForegroundOcclusionCompositor } from '../components/ForegroundOcclusion.js';
+import {
+  collectPlacedItemColliders,
+  testTransformedVoxelsAgainstPlacedItems,
+  testVoxelAgainstPlacedItems
+} from '../utils/arItemCollision.js';
 
 export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
@@ -119,7 +124,8 @@ export function useVoxelBrush({
   openPairModalRef = null,
   openAgentHandoffRef,
   openPublishSheetRef,
-  onFirstBrushUse = null
+  onFirstBrushUse = null,
+  editingSculptureIdRef = null
 }) {
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
 
@@ -194,6 +200,7 @@ export function useVoxelBrush({
   const lastErasedKeyRef = useRef({ key: '', ts: 0 });
   const clearedBackupRef = useRef(null);
   const lastPrereqNotifyRef = useRef({ toolId: '', msg: '', ts: 0 });
+  const lastItemBlockNotifyRef = useRef({ msg: '', ts: 0 });
   const toolAvailabilityRef = useRef({});
   const keyGestureRef = useRef({
     active: false,
@@ -393,6 +400,34 @@ export function useVoxelBrush({
     rebuildDraftMesh(voxels);
   }, [voxels, rebuildDraftMesh]);
 
+  const getActivePlacedItemColliders = useCallback(() => {
+    return collectPlacedItemColliders(nearbyGroupRef?.current, {
+      excludeSculptureId: editingSculptureIdRef?.current || '',
+      voxelStep: VOXEL_STEP
+    });
+  }, [editingSculptureIdRef, nearbyGroupRef]);
+
+  const notifyBlockedByPlacedItem = useCallback(
+    (hit) => {
+      if (!hit) return;
+      const itemLabel = String(hit.title || 'existing art').trim() || 'existing art';
+      const msg =
+        hit.reason === 'occluded' || hit.reason === 'pierce'
+          ? `Can't draw through "${itemLabel}" — paint around existing art on this land.`
+          : `Space occupied by "${itemLabel}" — paint beside existing art on this land.`;
+      const now = Date.now();
+      if (
+        lastItemBlockNotifyRef.current.msg === msg &&
+        now - lastItemBlockNotifyRef.current.ts < 1400
+      ) {
+        return;
+      }
+      lastItemBlockNotifyRef.current = { msg, ts: now };
+      showTemporaryHint(msg);
+    },
+    [showTemporaryHint]
+  );
+
   const computeTargetVoxel = useCallback(
     (forContinuousHold = false, screenPoint = null) => {
       const cam = cameraRef.current;
@@ -421,6 +456,30 @@ export function useVoxelBrush({
         origin = tapRay.ray.origin.clone();
         dir = tapRay.ray.direction.clone().normalize();
       }
+
+      const guardAgainstPlacedItems = (candidate) => {
+        if (!candidate || (candidate.action !== 'add' && candidate.action !== 'replace')) {
+          return candidate;
+        }
+        const colliders = getActivePlacedItemColliders();
+        if (colliders.length === 0) return candidate;
+        const hit = testVoxelAgainstPlacedItems({
+          point: candidate,
+          voxelScale: candidate.scale ?? activeScale,
+          voxelStep: VOXEL_STEP,
+          rayOrigin: origin,
+          colliders
+        });
+        if (hit.blocked) {
+          return {
+            ...candidate,
+            action: 'blocked',
+            blockedReason: hit.reason,
+            blockedByTitle: hit.title
+          };
+        }
+        return candidate;
+      };
 
       if (
         toolRef.current === 'stack' ||
@@ -462,7 +521,7 @@ export function useVoxelBrush({
               blockScale: activeScale,
               aroundVoxel: hitVoxel
             });
-            return {
+            return guardAgainstPlacedItems({
               action: 'replace',
               replaceExisting: true,
               replacedVoxel: hitVoxel,
@@ -471,7 +530,7 @@ export function useVoxelBrush({
               z: hitVoxel.z,
               scale: activeScale,
               nearbySlots
-            };
+            });
           }
           const normal = hit.face.normal
             .clone()
@@ -486,7 +545,7 @@ export function useVoxelBrush({
                 aroundVoxel: hitVoxel
               })
             : [];
-          return {
+          return guardAgainstPlacedItems({
             action: 'add',
             x: snapToVoxelLattice(center.x, VOXEL_STEP, activeScale),
             y: snapToVoxelLattice(center.y, VOXEL_STEP, activeScale),
@@ -498,7 +557,7 @@ export function useVoxelBrush({
               z: snapCoord(hit.object.position.z)
             },
             nearbySlots
-          };
+          });
         }
         if (toolRef.current === 'erase') return null;
 
@@ -517,7 +576,7 @@ export function useVoxelBrush({
             maxDistance: 12
           });
           if (adjSlot) {
-            return {
+            return guardAgainstPlacedItems({
               action: 'add',
               x: adjSlot.x,
               y: adjSlot.y,
@@ -526,7 +585,7 @@ export function useVoxelBrush({
               adjacentTo: adjSlot.parentVoxel,
               adjacentFace: adjSlot.face,
               nearbySlots: adjSlot.nearbySlots || []
-            };
+            });
           }
         }
       }
@@ -546,39 +605,39 @@ export function useVoxelBrush({
               .clone()
               .addScaledVector(dir, t)
               .addScaledVector(normal, cellStep * 0.5);
-            return {
+            return guardAgainstPlacedItems({
               action: 'add',
               x: snapToVoxelLattice(hitPt.x, VOXEL_STEP, activeScale),
               y: snapToVoxelLattice(hitPt.y, VOXEL_STEP, activeScale),
               z: snapToVoxelLattice(hitPt.z, VOXEL_STEP, activeScale),
               scale: activeScale,
               rawPoint: { x: hitPt.x, y: hitPt.y, z: hitPt.z }
-            };
+            });
           }
         }
         const fallbackDepth = Math.min(4.5, Math.max(0.5, anchor.depthM || reachRef.current));
         const fallbackPt = origin.clone().addScaledVector(dir, fallbackDepth);
-        return {
+        return guardAgainstPlacedItems({
           action: 'add',
           x: snapToVoxelLattice(fallbackPt.x, VOXEL_STEP, activeScale),
           y: snapToVoxelLattice(fallbackPt.y, VOXEL_STEP, activeScale),
           z: snapToVoxelLattice(fallbackPt.z, VOXEL_STEP, activeScale),
           scale: activeScale,
           rawPoint: { x: fallbackPt.x, y: fallbackPt.y, z: fallbackPt.z }
-        };
+        });
       }
 
       const pt = origin.clone().addScaledVector(dir, reachRef.current);
-      return {
+      return guardAgainstPlacedItems({
         action: 'add',
         x: snapToVoxelLattice(pt.x, VOXEL_STEP, activeScale),
         y: snapToVoxelLattice(pt.y, VOXEL_STEP, activeScale),
         z: snapToVoxelLattice(pt.z, VOXEL_STEP, activeScale),
         scale: activeScale,
         rawPoint: { x: pt.x, y: pt.y, z: pt.z }
-      };
+      });
     },
-    [cameraRef, canvasHostRef, draftGroupRef]
+    [cameraRef, canvasHostRef, draftGroupRef, getActivePlacedItemColliders]
   );
 
   const setArtTransform = useCallback(
@@ -629,9 +688,22 @@ export function useVoxelBrush({
       const uniqueAdds = [];
       const seenBatch = new Set();
       let hadOutOfBounds = false;
+      let blockedHit = null;
+      const placedColliders = getActivePlacedItemColliders();
+      const rayOrigin = cameraRef?.current?.position || null;
 
       for (const t of targets) {
-        if (!t || (t.action !== 'add' && t.action !== 'replace')) continue;
+        if (!t) continue;
+        if (t.action === 'blocked') {
+          if (!blockedHit) {
+            blockedHit = {
+              reason: t.blockedReason || 'overlap',
+              title: t.blockedByTitle || 'existing art'
+            };
+          }
+          continue;
+        }
+        if (t.action !== 'add' && t.action !== 'replace') continue;
         if (
           Math.abs(t.x) > halfSpan ||
           Math.abs(t.y) > halfSpan ||
@@ -640,6 +712,20 @@ export function useVoxelBrush({
           hadOutOfBounds = true;
           continue;
         }
+        const candScale = normalizeBlockScale(t.scale ?? blockSizeRef.current);
+        if (placedColliders.length > 0) {
+          const hit = testVoxelAgainstPlacedItems({
+            point: t,
+            voxelScale: candScale,
+            voxelStep: VOXEL_STEP,
+            rayOrigin,
+            colliders: placedColliders
+          });
+          if (hit.blocked) {
+            if (!blockedHit) blockedHit = hit;
+            continue;
+          }
+        }
         const k = voxelKey(t.x, t.y, t.z);
         if (!seenBatch.has(k)) {
           seenBatch.add(k);
@@ -647,11 +733,15 @@ export function useVoxelBrush({
             x: t.x,
             y: t.y,
             z: t.z,
-            scale: normalizeBlockScale(t.scale ?? blockSizeRef.current),
+            scale: candScale,
             replaceExisting: Boolean(t.replaceExisting || t.action === 'replace'),
             key: k
           });
         }
+      }
+
+      if (blockedHit) {
+        notifyBlockedByPlacedItem(blockedHit);
       }
 
       if (hadOutOfBounds && uniqueAdds.length === 0) {
@@ -812,9 +902,12 @@ export function useVoxelBrush({
       }
     },
     [
+      cameraRef,
       config?.policy?.areaHalfSpanMeters,
       config?.policy?.humanMaxDrawSpanMeters,
       config?.policy?.maxVoxels,
+      getActivePlacedItemColliders,
+      notifyBlockedByPlacedItem,
       setSensorBanner
     ]
   );
@@ -838,11 +931,18 @@ export function useVoxelBrush({
         eraseTargetVoxel(target);
         return;
       }
+      if (target.action === 'blocked') {
+        notifyBlockedByPlacedItem({
+          reason: target.blockedReason || 'overlap',
+          title: target.blockedByTitle || 'existing art'
+        });
+        return;
+      }
       if (target.action === 'add' || target.action === 'replace') {
         applyVoxelBatch([target]);
       }
     },
-    [applyVoxelBatch, eraseTargetVoxel]
+    [applyVoxelBatch, eraseTargetVoxel, notifyBlockedByPlacedItem]
   );
 
   // Keep transform mesh + bounding box + surface anchor synchronized
@@ -1063,8 +1163,18 @@ export function useVoxelBrush({
           step: VOXEL_STEP,
           maxSpanMeters: maxHumanSpan
         });
+        const placedColliders = getActivePlacedItemColliders();
+        const collisionCheck = testTransformedVoxelsAgainstPlacedItems({
+          voxels: baked,
+          voxelStep: VOXEL_STEP,
+          colliders: placedColliders
+        });
         resetArtTransformState();
-        if (!footprint.exceedsLimit) {
+        if (collisionCheck.blocked) {
+          showTemporaryHint(
+            `Can't move or scale into "${collisionCheck.blockedBy?.title || 'existing art'}" on this land`
+          );
+        } else if (!footprint.exceedsLimit) {
           setVoxels(baked);
         } else {
           showTemporaryHint(
@@ -1087,6 +1197,7 @@ export function useVoxelBrush({
     [
       config?.policy?.areaHalfSpanMeters,
       config?.policy?.humanMaxDrawSpanMeters,
+      getActivePlacedItemColliders,
       resetArtTransformState,
       showTemporaryHint
     ]
@@ -1224,6 +1335,12 @@ export function useVoxelBrush({
       const t = computeTargetVoxel(true);
       if (holdTool === 'erase') {
         eraseTargetVoxel(t);
+      } else if (t && t.action === 'blocked') {
+        lastPaintPosRef.current = null;
+        notifyBlockedByPlacedItem({
+          reason: t.blockedReason || 'overlap',
+          title: t.blockedByTitle || 'existing art'
+        });
       } else if (t && (t.action === 'add' || t.action === 'replace')) {
         lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
         lastStackAtRef.current = performance.now();
@@ -1237,7 +1354,8 @@ export function useVoxelBrush({
       computeTargetVoxel,
       ensureToolUsable,
       enterFullscreen,
-      eraseTargetVoxel
+      eraseTargetVoxel,
+      notifyBlockedByPlacedItem
     ]
   );
 
@@ -1860,7 +1978,12 @@ export function useVoxelBrush({
           if (toolRef.current === 'pencil') {
             if (!ensureToolUsable('pencil') || !assertOriginUnblockedForPaint()) return;
             const tapTarget = computeTargetVoxel(false, { clientX: e.clientX, clientY: e.clientY });
-            if (tapTarget && (tapTarget.action === 'add' || tapTarget.action === 'replace')) {
+            if (tapTarget?.action === 'blocked') {
+              notifyBlockedByPlacedItem({
+                reason: tapTarget.blockedReason || 'overlap',
+                title: tapTarget.blockedByTitle || 'existing art'
+              });
+            } else if (tapTarget && (tapTarget.action === 'add' || tapTarget.action === 'replace')) {
               applyVoxelBatch([tapTarget]);
             }
             return;
@@ -1925,6 +2048,7 @@ export function useVoxelBrush({
       isInteractingWithLandRef,
       locationRef,
       nearbyGroupRef,
+      notifyBlockedByPlacedItem,
       onTapArLand,
       openCameraSelectedChat,
       selectSurfaceAtScreenPoint,
@@ -1984,6 +2108,8 @@ export function useVoxelBrush({
     hasClearedBackup,
     toolAvailability,
     rebuildDraftMesh,
+    getActivePlacedItemColliders,
+    notifyBlockedByPlacedItem,
     computeTargetVoxel,
     applyVoxelBatch,
     eraseTargetVoxel,

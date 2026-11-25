@@ -3,13 +3,18 @@ import * as THREE from 'three';
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import {
+  AR_MAX_VISIBLE_DISTANCE_METERS,
   computeArLandPrismLocalGeometry,
   computeArSculptureVerticalY,
-  findNearbyCameraLands
+  computeParcelEdgeDistanceMeters,
+  findNearbyCameraLands,
+  isWithinArCameraVisibilityRange
 } from '../utils/arLandHelpers.js';
 import {
   applyProximitySharpnessToObject3D,
-  computeProximitySharpness
+  blendHexWithAtmosphericHaze,
+  computeProximitySharpness,
+  DEFAULT_ATMOSPHERIC_HAZE_HEX
 } from '../utils/arLandGuidance.js';
 import {
   computeRotatedBoxDimensions,
@@ -56,7 +61,10 @@ export function useARPreview({
   stopBrushPainting,
   showTemporaryHint,
   focusedLandId = '',
-  isArViewOnly = false
+  isArViewOnly = false,
+  editingSculptureId = '',
+  fadeOtherItems = false,
+  atmosphericTintRef = null
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arSculptureEntriesRef = useRef(new Map());
@@ -65,6 +73,7 @@ export function useARPreview({
   const arTargetedIdRef = useRef('');
   const orbHeadingCorrectionRadRef = useRef(0);
   const [arModelLoadedTick, setArModelLoadedTick] = useState(0);
+  const [visibleOtherItemsCount, setVisibleOtherItemsCount] = useState(0);
 
   const [nearbySculptures, setNearbySculptures] = useState([]);
   const [nearbyParcels, setNearbyParcels] = useState([]);
@@ -137,7 +146,7 @@ export function useARPreview({
           cached &&
           Number(cached.currentRev || 1) === Number(sc.currentRev || 1) &&
           (cached.modelType === 'custom-3d' || (cached.voxels && cached.voxels.length > 0));
-        return d <= 120 && !alreadyHydrated;
+        return isWithinArCameraVisibilityRange(d) && !alreadyHydrated;
       })
       .slice(0, 16);
 
@@ -192,43 +201,19 @@ export function useARPreview({
         location,
         user,
         ownedParcelIds,
-        maxDistanceMeters: 120,
+        maxDistanceMeters: AR_MAX_VISIBLE_DISTANCE_METERS,
         nearThresholdMeters: 45
       }),
     [location, mergedCameraParcels, nearbySculptures, ownedParcelIds, user]
   );
 
-  const renderedCameraLands = useMemo(() => {
-    const base = cameraLands.visibleLands || [];
-    if (!arSelectedLandId || base.some((l) => l.parcelId === arSelectedLandId)) {
-      return base;
-    }
-    const rawMatch = mergedCameraParcels.find((p) => p?.parcelId === arSelectedLandId);
-    if (!rawMatch || !location) return base;
-    const extra = findNearbyCameraLands({
-      parcels: [rawMatch],
-      sculptures: nearbySculptures,
-      location,
-      user,
-      ownedParcelIds,
-      maxDistanceMeters: 50000,
-      nearThresholdMeters: 45
-    }).visibleLands;
-    return extra.length > 0 ? [...base, extra[0]] : base;
-  }, [
-    arSelectedLandId,
-    cameraLands.visibleLands,
-    location,
-    mergedCameraParcels,
-    nearbySculptures,
-    ownedParcelIds,
-    user
-  ]);
+  // Strict < 300 ft (91.44 m) visibility cutoff: never render lands >= 300 ft away in AR camera view
+  const renderedCameraLands = cameraLands.visibleLands;
 
   const activeArLand = useMemo(() => {
     if (!arSelectedLandId) return null;
     const matched = renderedCameraLands.find((l) => l.parcelId === arSelectedLandId);
-    if (matched) return matched;
+    if (matched) return { ...matched, outOfArRange: false };
     const rawFallback =
       mergedCameraParcels.find((p) => p?.parcelId === arSelectedLandId) ||
       (selectedLandSnapshot?.parcel?.parcelId === arSelectedLandId
@@ -248,9 +233,20 @@ export function useARPreview({
       filterMode: 'all'
     }).allLands[0];
     if (!grouped) return null;
+    const resolvedVol = resolveParcelVolume(grouped) || grouped.volume || null;
+    const exactEdgeDist =
+      location && resolvedVol
+        ? computeParcelEdgeDistanceMeters(location.lat, location.lng, resolvedVol)
+        : Number.isFinite(Number(grouped.distanceMeters))
+        ? Number(grouped.distanceMeters)
+        : Number.POSITIVE_INFINITY;
+    const outOfArRange = Boolean(location) && !isWithinArCameraVisibilityRange(exactEdgeDist);
     return {
       ...grouped,
-      volume: resolveParcelVolume(grouped) || grouped.volume || null,
+      volume: resolvedVol,
+      edgeDistanceMeters: Number.isFinite(exactEdgeDist) ? Math.round(exactEdgeDist) : grouped.distanceMeters,
+      edgeDistanceMetersExact: Number.isFinite(exactEdgeDist) ? exactEdgeDist : null,
+      outOfArRange,
       isOwned: isLandOwnedByUser(grouped, { user, ownedParcelIds })
     };
   }, [
@@ -428,6 +424,7 @@ export function useARPreview({
     if ((mode !== 'draw' && mode !== 'preview') || !location) {
       clearAllPrisms();
       clearAllEntries();
+      setVisibleOtherItemsCount((prev) => (prev === 0 ? prev : 0));
       while (group.children.length > 0) {
         const stray = group.children[0];
         group.remove(stray);
@@ -478,17 +475,35 @@ export function useARPreview({
     const parcelRenderedBoxes = new Map();
     const nextSculptureIds = new Set();
     let selectedCustomPending = 0;
+    const cleanEditingId = String(editingSculptureId || '').trim();
+    const activeFadeMultiplier = mode === 'draw' && fadeOtherItems ? 0.22 : 1;
+    const hazeTintHex = Number.isFinite(Number(atmosphericTintRef?.current))
+      ? Number(atmosphericTintRef.current)
+      : DEFAULT_ATMOSPHERIC_HAZE_HEX;
 
     for (const sc of sculpturesPool) {
       if (!sc?.id) continue;
       const scId = String(sc.id);
-      nextSculptureIds.add(scId);
+      if (cleanEditingId && scId === cleanEditingId) continue;
 
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const isOnSelectedLand = Boolean(arSelectedLandId && sc?.parcelId === arSelectedLandId);
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
-      const dist = Math.hypot(offset.east, offset.north);
-      const sharpness = computeProximitySharpness(dist);
+      const ax = Number(sc.anchorOffset?.dx || 0);
+      const az = Number(sc.anchorOffset?.dz || 0);
+      const parentRotDeg = Number(parentLand?.volume?.rotationDeg || 0);
+      const worldOff = parcelLocalMetersToWorldMeters(ax, az, parentRotDeg);
+      const worldX = offset.east + worldOff.east;
+      const worldZ = -offset.north + worldOff.south;
+      const dist = Math.hypot(worldX, worldZ);
+
+      // Strict < 300 ft (91.44 m) AR camera visibility cutoff: never render distant sculptures
+      if (!isWithinArCameraVisibilityRange(dist)) {
+        continue;
+      }
+
+      nextSculptureIds.add(scId);
+      const sharpness = computeProximitySharpness(dist, { hazeTintHex });
       const isCustom3d = Boolean(sc.modelType === 'custom-3d' && sc.customModel?.format);
       const useCoarseLod =
         !isCustom3d &&
@@ -646,7 +661,9 @@ export function useARPreview({
           sculpture: sc,
           parcel: parentLand,
           distanceMeters: dist,
-          _lastSharpness: sharpness.sharpness,
+          _lastSharpness: -1,
+          _lastFadeMul: -1,
+          _lastHazeHex: -1,
           baseRingMat: baseGlowRingMat,
           baseHaloMat,
           baseGlowRing
@@ -719,10 +736,17 @@ export function useARPreview({
               }
               capturedEntry.loaded = true;
               const latestDist = capturedEntry.sub.userData?.distanceMeters ?? dist;
+              const latestFade = Number.isFinite(Number(capturedEntry.sub.userData?._lastFadeMul))
+                ? Number(capturedEntry.sub.userData._lastFadeMul)
+                : activeFadeMultiplier;
+              const latestHaze = Number.isFinite(Number(atmosphericTintRef?.current))
+                ? Number(atmosphericTintRef.current)
+                : DEFAULT_ATMOSPHERIC_HAZE_HEX;
               applyProximitySharpnessToObject3D(
                 capturedEntry.sub,
-                computeProximitySharpness(latestDist),
-                8
+                computeProximitySharpness(latestDist, { hazeTintHex: latestHaze }),
+                8,
+                { fadeMultiplier: latestFade, hazeTintHex: latestHaze }
               );
               setArModelLoadedTick((n) => n + 1);
             })
@@ -752,11 +776,6 @@ export function useARPreview({
         }
       });
 
-      const clampFactor = dist > 55 ? 55 / dist : 1;
-      const ax = Number(sc.anchorOffset?.dx || 0);
-      const az = Number(sc.anchorOffset?.dz || 0);
-      const parentRotDeg = Number(parentLand?.volume?.rotationDeg || 0);
-      const worldOff = parcelLocalMetersToWorldMeters(ax, az, parentRotDeg);
       const worldYawRad = parcelLocalYawToWorldYawRad(sc.anchorOffset?.yaw || 0, parentRotDeg);
       sub.rotation.y = Number.isFinite(worldYawRad) ? worldYawRad : 0;
 
@@ -767,15 +786,21 @@ export function useARPreview({
         groundY: -1.15
       });
 
-      sub.position.set(
-        offset.east * clampFactor + worldOff.east,
-        verticalY,
-        -offset.north * clampFactor + worldOff.south
-      );
+      // Exact true 1:1 world-meter perspective (no artificial clamping within the < 300 ft cutoff)
+      sub.position.set(worldX, verticalY, worldZ);
 
-      if (Math.abs(sharpness.sharpness - (sub.userData._lastSharpness ?? -1)) >= 0.03) {
+      if (
+        Math.abs(sharpness.sharpness - (sub.userData._lastSharpness ?? -1)) >= 0.02 ||
+        Math.abs(activeFadeMultiplier - (sub.userData._lastFadeMul ?? -1)) >= 0.02 ||
+        sub.userData._lastHazeHex !== hazeTintHex
+      ) {
         sub.userData._lastSharpness = sharpness.sharpness;
-        applyProximitySharpnessToObject3D(sub, sharpness, 8);
+        sub.userData._lastFadeMul = activeFadeMultiplier;
+        sub.userData._lastHazeHex = hazeTintHex;
+        applyProximitySharpnessToObject3D(sub, sharpness, 8, {
+          fadeMultiplier: activeFadeMultiplier,
+          hazeTintHex
+        });
       }
 
       if (sub.parent !== group) {
@@ -830,6 +855,9 @@ export function useARPreview({
       }
     }
 
+    const nextVisibleItemCount = nextSculptureIds.size;
+    setVisibleOtherItemsCount((prev) => (prev === nextVisibleItemCount ? prev : nextVisibleItemCount));
+
     if (
       arSelectedLandId &&
       selectedCustomPending === 0 &&
@@ -843,14 +871,17 @@ export function useARPreview({
       );
     }
 
-    // Render interactive 3D Holographic Virtual Land Volume Prisms for visible/focused land(s)
+    // Render interactive 3D Holographic Virtual Land Volume Prisms strictly < 300 ft in exact 1:1 perspective
     const nextPrisms = [];
     for (const land of landsToRender) {
+      const landDistMeters = land.edgeDistanceMetersExact ?? land.edgeDistanceMeters ?? land.distanceMeters ?? 0;
+      if (!isWithinArCameraVisibilityRange(landDistMeters)) {
+        continue;
+      }
       const prism = computeArLandPrismLocalGeometry({
         location,
         volume: land.volume,
         baseY: -1.15,
-        maxClampDistM: 55,
         enclosingLocalBox: parcelRenderedBoxes.get(land.parcelId) || null,
         paddingFraction: 0.1
       });
@@ -866,16 +897,19 @@ export function useARPreview({
         ? 0xff4da6
         : 0xff1f8f;
 
-      const landSharpness = computeProximitySharpness(
-        land.edgeDistanceMeters ?? land.distanceMeters ?? 0
+      const landSharpness = computeProximitySharpness(landDistMeters, { hazeTintHex });
+      const atmosphericHex = blendHexWithAtmosphericHaze(
+        baseHex,
+        landSharpness.atmosphericHaze * 0.72,
+        hazeTintHex
       );
 
       const landGroup = new THREE.Group();
       const bPts = prism.bottomCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
       const tPts = prism.topCorners.map((p) => new THREE.Vector3(p.x, p.y, p.z));
 
-      // 1) Depth-faded 3D boundary wireframe (near lines crisp, far lines faded >=25%, sharpening as user approaches)
-      const wireSegments = createDepthFadedThreePrismWireframe(bPts, tPts, baseHex, {
+      // 1) Depth-faded + atmospherically tinted 3D boundary wireframe (sharpens as user approaches)
+      const wireSegments = createDepthFadedThreePrismWireframe(bPts, tPts, atmosphericHex, {
         nearOpacity: 0.98,
         farOpacity: 0.38,
         opacityScale: (isSelected ? 0.98 : land.isInside ? 0.88 : 0.68) * landSharpness.prismOpacityScale
@@ -918,7 +952,7 @@ export function useARPreview({
       wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wallPositions, 3));
       wallGeo.computeVertexNormals();
       const wallMat = new THREE.MeshBasicMaterial({
-        color: baseHex,
+        color: atmosphericHex,
         transparent: true,
         opacity: (isSelected ? 0.16 : land.isInside ? 0.08 : 0.055) * landSharpness.prismOpacityScale,
         side: THREE.DoubleSide,
@@ -944,7 +978,8 @@ export function useARPreview({
         insideParcel: land.isInside,
         parcelId: land.parcelId,
         displayName: land.displayName || 'Nearby Land',
-        distanceMeters: land.edgeDistanceMeters ?? land.distanceMeters ?? 0,
+        distanceMeters: landDistMeters,
+        baseHex,
         centerLocal: new THREE.Vector3(aimX, aimY, aimZ),
         cornersLocal: [...bPts, ...tPts],
         parcel: land,
@@ -966,7 +1001,10 @@ export function useARPreview({
     focusedLandId,
     selectedLandSnapshot,
     nearbyGroupRef,
-    arModelLoadedTick
+    arModelLoadedTick,
+    editingSculptureId,
+    fadeOtherItems,
+    atmosphericTintRef
   ]);
 
   // Live ORB visual landmark relocalization loop (skipped in clean AR View to prevent frame lag)
@@ -1178,6 +1216,7 @@ export function useARPreview({
     hydratedSculptureMapRef,
     hydrateNearbyList,
     visibleCameraLands: renderedCameraLands,
+    visibleOtherItemsCount,
     immediateCameraLands: cameraLands.immediateLands,
     primaryCameraLand: cameraLands.primaryLand,
     arSelectedLandId,

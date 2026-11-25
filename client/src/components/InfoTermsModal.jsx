@@ -429,8 +429,12 @@ export default function InfoTermsModal({
                       Hold and move your phone like a spray can to paint in 3D, or swipe the bottom
                       Key Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger
                       Z-rotate &amp; sliders) → Stack → Preview → Agent Code → Publish</strong>.
-                      Supports 4x precision (<code>0.05m</code> grid), Matte/Neon/Glass finishes, up
-                      to 4,096 blocks, Quick vs Pro HUD, and auto-saved cloud drafts.
+                      AR lands and sculptures appear in true 1:1 perspective with atmospheric haze
+                      within <strong>300 ft</strong> and sharpen as you approach. Tap{' '}
+                      <strong>Fade Other Art</strong> while drawing on a land to ghost existing
+                      pieces — 3D collision still prevents drawing through them. Supports 4x
+                      precision (<code>0.05m</code> grid), Matte/Neon/Glass finishes, up to 4,096
+                      blocks, Quick vs Pro HUD, and auto-saved cloud drafts.
                     </InfoTip>
                   </div>
                   <p>
