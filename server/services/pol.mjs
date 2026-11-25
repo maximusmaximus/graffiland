@@ -170,7 +170,7 @@ export async function reverseGeocode(lat, lng) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'GRAFFILAND-3D/1.0 (location-metadata-enrichment)'
+        'User-Agent': 'SPRAY.LAND-3D/1.0 (location-metadata-enrichment)'
       }
     });
     clearTimeout(timer);

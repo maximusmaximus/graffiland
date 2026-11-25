@@ -53,7 +53,7 @@ async function loadJsxModule(relPath) {
   return import(`${pathToFileURL(absOut).href}?v=${Date.now()}`);
 }
 
-describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
+describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
   before(async () => {
     const fs = await import('node:fs');
     outTmpDir = fs.mkdtempSync(path.join(ROOT, '.ui-test-cache-'));
@@ -495,7 +495,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(exploreCalls.length, 0);
 
     // Starting a pointer press inside the card and releasing on the backdrop must NOT close it
-    const backdrop = view.getByRole('dialog', { name: /Welcome to GRAFFILAND first-visit overview/i });
+    const backdrop = view.getByRole('dialog', { name: /Welcome to SPRAY.LAND first-visit overview/i });
     const cardEl = view.container.querySelector('.welcome-overlay-card');
     RTL.fireEvent.pointerDown(cardEl);
     RTL.fireEvent.click(backdrop);
@@ -2520,7 +2520,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('ProfileModal hides Gmail fallback picture, renders default GRAFFILAND icon, and shows quick + buttons on unset banner & bio image', async () => {
+  test('ProfileModal hides Gmail fallback picture, renders default SPRAY.LAND icon, and shows quick + buttons on unset banner & bio image', async () => {
     const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
     const mockData = {
       profile: {

@@ -129,11 +129,11 @@ export async function issuePasskeyRegistrationOptions(
 
   return {
     challenge,
-    rp: { id: rpId, name: 'GRAFFILAND' },
+    rp: { id: rpId, name: 'SPRAY.LAND' },
     user: {
       id: uint8ToB64Url(new TextEncoder().encode(user.id)),
       name: user.email || user.id,
-      displayName: user.name || user.email || 'GRAFFILAND Artist'
+      displayName: user.name || user.email || 'SPRAY.LAND Artist'
     },
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
     timeout: 60000,

@@ -105,7 +105,7 @@ export default function LandArchiveModal({
         <div className="modal-header">
           <h2 className="modal-title">
             <XeroIcon emoji="🗄️" size={22} />
-            GRAFFILAND Archive
+            SPRAY.LAND Archive
           </h2>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button

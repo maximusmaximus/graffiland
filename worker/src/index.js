@@ -491,7 +491,7 @@ function decodePreviewDataUrl(previewDataUrl) {
     }
   }
   const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0d0f1a"/><text x="256" y="256" fill="#00f5d4" font-family="monospace" font-size="28" text-anchor="middle">GRAFFILAND 3D</text></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0d0f1a"/><text x="256" y="256" fill="#00f5d4" font-family="monospace" font-size="28" text-anchor="middle">SPRAY.LAND 3D</text></svg>';
   return { bytes: new TextEncoder().encode(svg), mime: 'image/svg+xml' };
 }
 
@@ -1466,7 +1466,7 @@ export default {
           .first();
         if (taken) {
           return jsonResponse(
-            { error: 'That wallet address is already linked to another GRAFFILAND account.' },
+            { error: 'That wallet address is already linked to another SPRAY.LAND account.' },
             409,
             request
           );

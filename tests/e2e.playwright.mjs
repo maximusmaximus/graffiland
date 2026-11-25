@@ -15,7 +15,7 @@ const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const hasChrome = fs.existsSync(CHROME_PATH);
 const hasDist = fs.existsSync(path.join(ROOT, 'dist', 'index.html'));
 
-describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !hasDist }, () => {
+describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !hasDist }, () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graffiland-e2e-'));
   let srv;
   let baseUrl;
@@ -182,7 +182,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     // Allow MapLibre async mount/layout effects to settle; overlay must remain on top
     await page.waitForTimeout(1500);
 
-    const welcomeSelector = '[aria-label="Welcome to GRAFFILAND first-visit overview"]';
+    const welcomeSelector = '[aria-label="Welcome to SPRAY.LAND first-visit overview"]';
     const welcomeVisible = await page.isVisible(welcomeSelector);
     assert.equal(welcomeVisible, true);
     const initialLs = await page.evaluate(() =>
@@ -342,14 +342,14 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.desktop-nav');
 
     // Dismiss initial first-time visitor overlay via magenta Quick Start CTA (verify MINT FREE LAND banner)
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
     const freeLandText = await page.getByTestId('welcome-free-land-banner').textContent();
     assert.ok(freeLandText.includes('MINT FREE LAND by making art!'));
     const quickStartBtn = page.getByTestId('welcome-quick-start-btn');
     assert.ok((await quickStartBtn.textContent()).includes('Quick Start'));
     assert.ok((await quickStartBtn.getAttribute('class')).includes('btn-magenta'));
     await quickStartBtn.click();
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 
@@ -474,8 +474,8 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(questsText.includes('First-Spark'));
 
     await page.getByRole('button', { name: /Market/i }).click();
-    await page.waitForSelector('[aria-label="GRAFFILAND Marketplace"]');
-    const marketText = await page.textContent('[aria-label="GRAFFILAND Marketplace"]');
+    await page.waitForSelector('[aria-label="SPRAY.LAND Marketplace"]');
+    const marketText = await page.textContent('[aria-label="SPRAY.LAND Marketplace"]');
     assert.ok(marketText.includes('5% Platform'));
     assert.ok(marketText.includes('3% Agent Steward'));
     assert.ok(marketText.includes('2% Human Contributors Pool'));
@@ -567,19 +567,19 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     page1.on('pageerror', (err) => errors1.push(err.message));
 
     await page1.goto(baseUrl, { waitUntil: 'networkidle' });
-    await page1.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page1.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
     await page1.waitForTimeout(1000);
 
-    assert.equal(await page1.isVisible('[aria-label="Welcome to GRAFFILAND first-visit overview"]'), true);
-    assert.equal(await page1.locator('[aria-label="GRAFFILAND Quick Start Guide"]').count(), 0);
+    assert.equal(await page1.isVisible('[aria-label="Welcome to SPRAY.LAND first-visit overview"]'), true);
+    assert.equal(await page1.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
     const scrollW = await page1.evaluate(() => globalThis.document.documentElement.scrollWidth);
     assert.ok(scrollW <= 391, `Expected mobile overlay width <= 391px, got ${scrollW}`);
 
     await page1.getByRole('button', { name: /Next: Quick Camera Guide/i }).click();
-    await page1.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+    await page1.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
-    await page1.waitForSelector('[aria-label="GRAFFILAND Quick Start Guide"]');
+    await page1.waitForSelector('[aria-label="SPRAY.LAND Quick Start Guide"]');
     assert.deepEqual(errors1, []);
     await ctx1.close();
 
@@ -589,12 +589,12 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     page2.on('pageerror', (err) => errors2.push(err.message));
 
     await page2.goto(baseUrl, { waitUntil: 'networkidle' });
-    await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page2.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
     await page2.getByRole('button', { name: /Skip to Camera/i }).click();
-    await page2.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+    await page2.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
-    assert.equal(await page2.locator('[aria-label="GRAFFILAND Quick Start Guide"]').count(), 0);
+    assert.equal(await page2.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
     const prefs = await page2.evaluate(() => ({
       welcome: globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1'),
       tutorial: globalThis.localStorage.getItem('graffiland_studio_tutorial_v1')
@@ -695,9 +695,9 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       return /OpenFreeMap|OpenStreetMap|CARTO/i.test(txt);
     }, { timeout: 15000 });
     assert.deepEqual(mapConsoleErrors, []);
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]');
+    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
     await page.getByRole('button', { name: /Quick Start/i }).click();
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 
@@ -1038,7 +1038,7 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Next Step \(3\/3\)/i }).click();
     await page.waitForSelector('[data-testid="welcome-step-3"]');
     await page.getByRole('button', { name: /Quick Start/i }).click();
-    await page.waitForSelector('[aria-label="Welcome to GRAFFILAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 

@@ -33,13 +33,13 @@ export default function FirstRunTutorialModal({
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="GRAFFILAND Quick Start Guide"
+      aria-label="SPRAY.LAND Quick Start Guide"
       onClick={() => onClose(dontShowAgain)}
     >
       <div className="modal-card tutorial-card" style={{ maxWidth: 430 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
-            <XeroIcon emoji={step.emoji} size={22} /> Welcome to GRAFFILAND
+            <XeroIcon emoji={step.emoji} size={22} /> Welcome to SPRAY.LAND
           </h3>
           <button
             type="button"

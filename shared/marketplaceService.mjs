@@ -192,7 +192,7 @@ async function resolveParcelStewardRecipient(db, parcelId, fallbackAddress) {
 }
 
 /**
- * Lists an owned sculpture on the built-in Graffiland Marketplace with live 5%/3%/2% breakdown.
+ * Lists an owned sculpture on the built-in SPRAY.LAND Marketplace with live 5%/3%/2% breakdown.
  */
 export async function createMarketplaceListing(
   db,
@@ -386,7 +386,7 @@ export async function recordFeeLedgerSplit(
     {
       role: 'platform',
       sub: 'platform:treasury',
-      name: 'GRAFFILAND Treasury (5%)',
+      name: 'SPRAY.LAND Treasury (5%)',
       address: splits.platform.address,
       bps: splits.platform.bps,
       amountEth: splits.platform.amountEth,

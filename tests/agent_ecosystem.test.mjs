@@ -116,7 +116,7 @@ function makePolPayload(lat, lng) {
   };
 }
 
-describe('GRAFFILAND Agentic-First Ecosystem, Quests & 5%/3%/2% Marketplace', () => {
+describe('SPRAY.LAND Agentic-First Ecosystem, Quests & 5%/3%/2% Marketplace', () => {
   test('Public /api/config exposes 5%/3%/2% transaction fee breakdown and steward defaults', async () => {
     const res = await apiJson('/api/config');
     assert.equal(res.status, 200);

@@ -105,7 +105,7 @@ export function buildPropertyOwnerPrompt({
 } = {}) {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
   return [
-    '# GRAFFILAND Property Owner & MCP Agent Prompt',
+    '# SPRAY.LAND Property Owner & MCP Agent Prompt',
     '',
     `API Base URL: ${base}`,
     `Robust Pairing Code: ${pairingCode}`,
@@ -130,7 +130,7 @@ export function buildPropertyOwnerPrompt({
     'Step 4 — Edit Land / Place Voxels or Non-Voxel 3D Models / Revisions / Manage & Erase:',
     '- Call MCP tool `put_sculpture_on_land` with `{ "parcelId", "title", "description", "voxels": [{ "x": 0, "y": 0, "z": 0, "color": "#00f5d4", "material": "neon", "scale": 1 }], "anchorOffset?": { "dx": 0, "dy": 0, "dz": 0, "yaw": 0 }, "signature?": "0x..." }`',
     '- Call MCP tool `validate_3d_model_url` with `{ "modelUrl": "https://.../model.glb", "parcelId?": "GLAND-...", "modelScale?": 1 }` to verify format support (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`), size (<= 4 MB), triangle/texture budgets, native meter dimensions, and whether it fits inside the land bounds (`landFit.maxSafeScale`) before uploading',
-    '- Scale & Bounds Guardrail: GRAFFILAND uses strict 1 unit = 1 meter scale with ZERO autoscaling. Every placed object (native dimensions × `modelScale`) must fit 100% inside the land W×D×H bounds without overlapping existing sculptures — oversized placements are rejected (409) with exact `maxSafeScale`.',
+    '- Scale & Bounds Guardrail: SPRAY.LAND uses strict 1 unit = 1 meter scale with ZERO autoscaling. Every placed object (native dimensions × `modelScale`) must fit 100% inside the land W×D×H bounds without overlapping existing sculptures — oversized placements are rejected (409) with exact `maxSafeScale`.',
     '- Call MCP tool `load_3d_model_on_land` to place or update ANY suitable non-voxel 3D model file (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`, <= 150k triangles, <= 8 textures, Draco/Meshopt supported) on your owned parcel: `{ "parcelId", "title", "description", "modelFormat?" (auto-detected from modelUrl), "modelBase64?" / "modelData?" / "modelUrl?", "modelScale?": 1, "anchorOffset?": { "dx": 0, "dy": 0, "dz": 0, "yaw": 0 }, "expectedRev?": 1, "sculptureId?": "<optional-existing-id-to-replace>", "signature?": "0x..." }`',
     '- Call MCP tool `update_land_sculpture` with `{ "sculptureId", "expectedRev?" (optimistic lock -> 409 if stale), "title?", "description?", "voxels?", "modelFormat?", "modelBase64?", "modelData?", "modelUrl?", "anchorOffset?": { "dx", "dy", "dz", "yaw" }, "signature?": "0x..." }` (emits ERC-4906 `MetadataUpdate` on chain when supported and appends an immutable IPFS revision)',
     '- Call MCP tool `set_sculpture_visibility` with `{ "sculptureId", "hidden": true | false, "reason?" }` to hide or restore any artwork on your owned land',
@@ -159,7 +159,7 @@ export function buildAgentSignPublishPrompt({
 }) {
   const base = String(apiOrigin || '').replace(/\/$/, '');
   return [
-    'GRAFFILAND Agent Publish & Mint Signature Request',
+    'SPRAY.LAND Agent Publish & Mint Signature Request',
     `Pairing Code: ${pairingCode}`,
     `Request ID: ${requestId}`,
     `Virtual Land Parcel: ${parcelId}`,
@@ -206,9 +206,9 @@ export function buildAutonomousAgentPrompt({
 } = {}) {
   const base = String(apiOrigin || 'https://graffiland-api.maxinfeld-artshow.workers.dev').replace(/\/$/, '');
   return [
-    '# GRAFFILAND — Autonomous AI Agent Setup & Land Steward Guide',
+    '# SPRAY.LAND — Autonomous AI Agent Setup & Land Steward Guide',
     '',
-    `Connect to GRAFFILAND (${publicUrl}) as an autonomous AI agent.`,
+    `Connect to SPRAY.LAND (${publicUrl}) as an autonomous AI agent.`,
     `API URL: ${base}`,
     `Agent Docs (/llms.txt): ${base}/llms.txt`,
     `Agent Card (/.well-known/agent.json): ${base}/.well-known/agent.json`,
@@ -325,7 +325,7 @@ export function buildLandAcquisitionAgentPrompt({
   }));
 
   return [
-    '# GRAFFILAND — Acquire Selected 3D Virtual Land Properties',
+    '# SPRAY.LAND — Acquire Selected 3D Virtual Land Properties',
     '',
     `API Base URL: ${base}`,
     `Total Selected Properties: ${normalizedProps.length}`,
@@ -440,7 +440,7 @@ export function buildLandAdd3DItemAgentPrompt({
       };
 
   return [
-    `# GRAFFILAND — Add or Modify 3D Item on Minted Land (${parcelId})`,
+    `# SPRAY.LAND — Add or Modify 3D Item on Minted Land (${parcelId})`,
     '',
     `API Base URL: ${base}`,
     `Target Minted Land: ${parcelId}${parcel?.customName ? ` ("${parcel.customName}")` : ''}`,
@@ -459,7 +459,7 @@ export function buildLandAdd3DItemAgentPrompt({
     `- Strict Scale & Bounds Guardrail: 1 unit = 1 meter (ZERO autoscaling). Your object (native dimensions × modelScale) MUST fit strictly inside ${w}m × ${d}m × ${h}m without overlapping existing sculptures, or placement will be rejected (409) with the exact maxSafeScale. Call \`validate_3d_model_url\` with \`parcelId: "${parcelId}"\` first to verify fit.`,
     ...existingLines,
     '',
-    '## Step 1 — Connect to GRAFFILAND MCP',
+    '## Step 1 — Connect to SPRAY.LAND MCP',
     `POST ${base}/api/mcp/pairings/connect`,
     `JSON: { "pairingCode": "${pairingCode}", "agentName": "land-builder-agent", "agentAddress": "${ownerAddress}" }`,
     `Then send MCP JSON-RPC calls to POST ${base}/api/mcp with header \`X-Graffiland-Pairing-Code: ${pairingCode}\`.`,

@@ -157,7 +157,7 @@ function polEvidenceAt(lat, lng) {
   };
 }
 
-describe('GRAFFILAND Full-Stack Verification', () => {
+describe('SPRAY.LAND Full-Stack Verification', () => {
   test('Smart contract compiles with ERC-2981 5% resale fee (500 bps)', () => {
     const artifact = compileContract();
     assert.equal(artifact.contractName, 'GraffilandNFT');
@@ -2003,7 +2003,7 @@ describe('GRAFFILAND Full-Stack Verification', () => {
 
     // Load a non-voxel Wavefront OBJ 3D pyramid via load_3d_model_on_land (signed by agent)
     const objMeshText = [
-      '# GRAFFILAND Non-Voxel Pyramid',
+      '# SPRAY.LAND Non-Voxel Pyramid',
       'v 0 1.2 0',
       'v -0.8 0 0.8',
       'v 0.8 0 0.8',

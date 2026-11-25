@@ -236,7 +236,7 @@ async function main() {
       parcelId: flags.parcel,
       modelUrl: flags.url,
       title: flags.title || 'Uploaded 3D Model',
-      description: flags.desc || '3D model uploaded directly via GRAFFILAND CLI.',
+      description: flags.desc || '3D model uploaded directly via SPRAY.LAND CLI.',
       ...(flags.format ? { modelFormat: flags.format } : {})
     });
     console.log(JSON.stringify(out, null, 2));

@@ -111,7 +111,7 @@ function decodePreviewDataUrl(previewDataUrl) {
     }
   }
   // Minimal deterministic SVG fallback if no canvas snapshot provided
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0d0f1a"/><text x="256" y="256" fill="#00f5d4" font-family="monospace" font-size="28" text-anchor="middle">GRAFFILAND 3D</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#0d0f1a"/><text x="256" y="256" fill="#00f5d4" font-family="monospace" font-size="28" text-anchor="middle">SPRAY.LAND 3D</text></svg>`;
   return { buffer: Buffer.from(svg, 'utf8'), mime: 'image/svg+xml' };
 }
 

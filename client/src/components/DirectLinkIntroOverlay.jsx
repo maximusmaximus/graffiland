@@ -43,7 +43,7 @@ export default function DirectLinkIntroOverlay({ onClose, onSignIn = null }) {
       >
         <div className="direct-link-intro-header">
           <h2 id="direct-link-intro-title" className="direct-link-intro-title">
-            Welcome to GRAFFILAND
+            Welcome to SPRAY.LAND
           </h2>
           <button
             type="button"

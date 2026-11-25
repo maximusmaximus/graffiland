@@ -168,7 +168,7 @@ function safeSetPaint(map, layerId, prop, value) {
 }
 
 /**
- * Harmonizes OpenFreeMap Dark/Light vector basemaps with Graffiland's midnight-obsidian palette
+ * Harmonizes OpenFreeMap Dark/Light vector basemaps with SPRAY.LAND's midnight-obsidian palette
  * and guarantees extruded 3D buildings (`building-3d`) are present in dark mode too.
  */
 export function applyGraffilandMapLibreTheme(

@@ -1,9 +1,9 @@
-# GRAFFILAND Encrypted Location Chat Boards (Server-Blind E2EE Architecture)
+# SPRAY.LAND Encrypted Location Chat Boards (Server-Blind E2EE Architecture)
 
-Each physical GRAFFILAND 3D sculpture hosts a location-locked **Encrypted Chat Board**.  
+Each physical SPRAY.LAND 3D sculpture hosts a location-locked **Encrypted Chat Board**.  
 Only a person standing physically at the sculpture who views it through their smartphone's live AR camera and taps the 3D sculpture mesh can enter the board, read past chat history, and post messages.
 
-**Core Security Invariant:** **Even the GRAFFILAND server (Cloudflare Worker, D1 database, Node/SQLite server, or IPFS storage) can NEVER decrypt or read the plaintext messages or past chat history of any sculpture chat board.**
+**Core Security Invariant:** **Even the SPRAY.LAND server (Cloudflare Worker, D1 database, Node/SQLite server, or IPFS storage) can NEVER decrypt or read the plaintext messages or past chat history of any sculpture chat board.**
 
 ---
 
@@ -14,7 +14,7 @@ A common mistake in "location-based encryption" is deriving the room encryption 
 1. The server stores `(lat, lng, altitude, parcel_id, voxels_json)` so maps and 3D previews know where to render sculptures.
 2. Therefore, any key derivable *solely* from stored coordinates can also be recomputed by the server or anyone scraping public coordinates.
 
-To guarantee **true server-blindness** while still letting physically present visitors read **past chat history**, GRAFFILAND uses a **Hybrid Zero-Server-Knowledge Architecture** combining:
+To guarantee **true server-blindness** while still letting physically present visitors read **past chat history**, SPRAY.LAND uses a **Hybrid Zero-Server-Knowledge Architecture** combining:
 
 1. **Client-Side Random Symmetric Room Keys (`AES-256-GCM`)** — generated on the phone (`crypto.getRandomValues(32)`), stored only locally (`localStorage`) or wrapped via client asymmetric keys. Neither `K_room` nor message plaintext ever leaves client devices.
 2. **Physical Camera Selection Gate (Proof of Camera Sight)** — server-side proximity (`<= 75m`), elevation tolerance (`<= 65m`), live active rear camera (`cameraFrames >= 2`), gyroscope optical-flow telemetry, Three.js frustum visibility, and direct 3D raycast tap hit.
@@ -49,7 +49,7 @@ Even if Gate A were completely compromised or an attacker dumped the entire D1/S
 #### 1. Device Identity Keypairs (`ECDH P-256` + `ECDSA P-256`)
 Each authenticated browser generates a local asymmetric pair (`ecdhPublicJwk/PrivateJwk` and `signPublicJwk/PrivateJwk`) and computes a `16-hex` SHA-256 `pubFingerprint` (`XXXX-XXXX-XXXX-XXXX`).
 - Private keys live strictly in browser storage (`graffiland_e2ee_id_v1_<userId>`).
-- Importantly, GRAFFILAND **never** derives chat identity keys from the server-custodial Ethereum wallet (`encrypted_wallet_json`), because the server possesses the wallet encryption key (`WALLET_ENCRYPTION_KEY`). Chat keys remain completely independent.
+- Importantly, SPRAY.LAND **never** derives chat identity keys from the server-custodial Ethereum wallet (`encrypted_wallet_json`), because the server possesses the wallet encryption key (`WALLET_ENCRYPTION_KEY`). Chat keys remain completely independent.
 
 #### 2. Board Initialization & Blinded Room Commitment
 When a sculpture publishes (or the first physical viewer initializes an older sculpture's board):

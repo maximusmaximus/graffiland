@@ -12,7 +12,7 @@ export class PayoutLinkError extends Error {
 
 /**
  * Canonical EIP-191 message a user signs with an external wallet to prove they control the
- * address they want to use as their mint recipient. Binding the GRAFFILAND user id stops one
+ * address they want to use as their mint recipient. Binding the SPRAY.LAND user id stops one
  * account from replaying another account's signature.
  */
 export function buildPayoutLinkMessage({ userId, address, issuedAt }) {

@@ -1195,7 +1195,7 @@ export default function PlotVisitView({
           <div className="card" style={{ padding: 16, textAlign: 'center' }}>
             <p style={{ margin: '0 0 10px', fontSize: 14 }}>{error}</p>
             <button type="button" className="btn btn-primary" onClick={onClose}>
-              {isDesktop ? 'Return to World Map' : 'Open GRAFFILAND Studio'}
+              {isDesktop ? 'Return to World Map' : 'Open SPRAY.LAND Studio'}
             </button>
           </div>
         </div>

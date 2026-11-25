@@ -198,7 +198,7 @@ export default function FirstVisitWelcomeOverlay({
       className="modal-backdrop welcome-overlay-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Welcome to GRAFFILAND first-visit overview"
+      aria-label="Welcome to SPRAY.LAND first-visit overview"
       onPointerDown={(e) => {
         startedInsideCardRef.current = e.target !== e.currentTarget;
       }}
@@ -218,7 +218,7 @@ export default function FirstVisitWelcomeOverlay({
           <div style={{ minWidth: 0, flex: '1 1 auto' }}>
             <div className="welcome-title-row">
               <h2 className="modal-title" style={{ fontSize: 21 }}>
-                <XeroIcon emoji="🧊" size={23} /> Welcome to GRAFFILAND
+                <XeroIcon emoji="🧊" size={23} /> Welcome to SPRAY.LAND
               </h2>
               <InfoTip title="Technical Details & Sale Split">
                 Isometric 3D map with real-world buildings. Supports{' '}

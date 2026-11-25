@@ -8,7 +8,7 @@ import {
 
 /**
  * Displays a user's chosen `@username` paired with their profile icon
- * (or a crisp GRAFFILAND monogram emblem when no custom icon is uploaded).
+ * (or a crisp SPRAY.LAND monogram emblem when no custom icon is uploaded).
  * NEVER displays raw Google first/last names or raw Gmail profile photos.
  */
 export default function UserHandleBadge({

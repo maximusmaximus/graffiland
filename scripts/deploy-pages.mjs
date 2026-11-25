@@ -23,7 +23,7 @@ try {
   run('git config user.name "Max Infeld"');
   run('git config user.email "maxinfeld@gmail.com"');
   run('git add -A');
-  run('git commit -m "Deploy GRAFFILAND to GitHub Pages"');
+  run('git commit -m "Deploy SPRAY.LAND to GitHub Pages"');
   run(`git push --force "${remoteUrl}" gh-pages`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });

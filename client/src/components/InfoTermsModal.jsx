@@ -142,7 +142,7 @@ export default function InfoTermsModal({
         <div className="modal-header">
           <h2 className="modal-title">
             <XeroIcon emoji="ℹ️" size={22} />
-            GRAFFILAND Guide &amp; Terms
+            SPRAY.LAND Guide &amp; Terms
           </h2>
           <button className="btn" onClick={onClose} aria-label="Close info">
             <XeroIcon emoji="✕" size={16} />
@@ -200,7 +200,7 @@ export default function InfoTermsModal({
                 <strong>1. Draw Art Outdoors in Mobile AR (Fastest · Permanent)</strong>
               </div>
               <p>
-                Open GRAFFILAND on your phone outside, tap a real surface, draw your 3D art, and
+                Open SPRAY.LAND on your phone outside, tap a real surface, draw your 3D art, and
                 tap <strong>Publish</strong>. Your art and Virtual Land mint together on the spot —{' '}
                 <strong>permanent ownership, no expiry timer, and no starter slot limit</strong>.
               </p>
@@ -541,7 +541,7 @@ export default function InfoTermsModal({
                 <strong>Proof of Location Threat Model</strong>
                 <InfoTip title="Transparency & Security Details">
                   {policy?.threatModelSummary ||
-                    'GRAFFILAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB landmarks, and optional ES256 WebAuthn Passkeys. Client sensors remain vulnerable to dedicated hardware replay rigs on public plots; enable Passkeys and ORB checks on high-value parcels.'}
+                    'SPRAY.LAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB landmarks, and optional ES256 WebAuthn Passkeys. Client sensors remain vulnerable to dedicated hardware replay rigs on public plots; enable Passkeys and ORB checks on high-value parcels.'}
                 </InfoTip>
               </div>
               <p>
@@ -604,7 +604,7 @@ export default function InfoTermsModal({
               {Array.isArray(policy?.takedownAndDisputePolicy)
                 ? policy.takedownAndDisputePolicy.join(' ')
                 : policy?.takedownAndDisputePolicy ||
-                  'GRAFFILAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history.'}
+                  'SPRAY.LAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history.'}
             </div>
           </div>
         )}

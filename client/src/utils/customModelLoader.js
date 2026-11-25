@@ -149,7 +149,7 @@ function isDefaultUntexturedObjMat(mat) {
 }
 
 /**
- * Pure format parser supporting ALL 5 GRAFFILAND 3D formats:
+ * Pure format parser supporting ALL 5 SPRAY.LAND 3D formats:
  * - `.glb` (Binary glTF 2.0, including Draco & Meshopt)
  * - `.gltf` (Self-contained JSON glTF 2.0)
  * - `.obj` (Wavefront OBJ — supports vertex colors, upgrades default Phong to PBR, double-sided)

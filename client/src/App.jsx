@@ -108,7 +108,7 @@ export default function App() {
         }}
       >
         <XeroIcon emoji="🧊" size={28} />
-        <span className="mono">Loading GRAFFILAND...</span>
+        <span className="mono">Loading SPRAY.LAND...</span>
       </div>
     );
   }

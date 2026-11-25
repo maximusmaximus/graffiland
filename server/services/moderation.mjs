@@ -138,7 +138,7 @@ export function validatePublishPayload(body) {
   }
 
   if (body?.termsAccepted !== true) {
-    errors.push('You must accept the GRAFFILAND Terms of Service and Virtual Land Rules.');
+    errors.push('You must accept the SPRAY.LAND Terms of Service and Virtual Land Rules.');
   }
 
   const voxelValidation = sanitizeVoxels(body?.voxels);

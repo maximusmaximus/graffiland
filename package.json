@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "GRAFFILAND — Location-bound 3D AR voxel graffiti & Virtual Land NFTs on IPFS and Robinhood Chain",
+  "description": "SPRAY.LAND — Location-bound 3D AR voxel graffiti & Virtual Land NFTs on IPFS and Robinhood Chain",
   "bin": {
     "graffiland-mcp": "./bin/graffiland-mcp.mjs",
     "graffiland": "./bin/graffiland.mjs"

@@ -97,8 +97,8 @@ export function buildShareToXUrl({
   const shareUrl = buildSculptureShareUrl(sculptureId);
   const resolvedLand = resolveLandDisplayName(
     { customName: landName || parcelName || '' },
-    { defaultName: 'GRAFFILAND' }
+    { defaultName: 'SPRAY.LAND' }
   );
-  const text = `Check out "${title}" anchored on "${resolvedLand}" in 3D AR on GRAFFILAND!`;
+  const text = `Check out "${title}" anchored on "${resolvedLand}" in 3D AR on SPRAY.LAND!`;
   return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`;
 }

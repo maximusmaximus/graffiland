@@ -1,6 +1,6 @@
 # Optional GitHub Actions workflow (copy to .github/workflows/deploy-pages.yml
 # once your git token includes the `workflow` scope).
-name: Deploy GRAFFILAND to GitHub Pages
+name: Deploy SPRAY.LAND to GitHub Pages
 
 on:
   push:
