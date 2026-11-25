@@ -895,11 +895,51 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       `Expected center body drag to move parcel (${idBeforeMove})`
     );
 
-    // Verify scale-to-limit & max-height controls keep parcel valid up to the exact limit
+    // Verify scale-to-limit & max-height controls keep parcel valid AND auto-zoom out so the top rectangle stays visible & draggable!
     await page.getByRole('button', { name: /Max Limit Size/i }).click();
     await page.getByRole('button', { name: /Max Height/i }).click();
+    await page.waitForTimeout(550);
     const scaledText = await page.locator('.land-draft-item').first().textContent();
     assert.ok(scaledText.includes('Ready'), `Expected Max Limit Size + Max Height to remain valid Ready, got: ${scaledText}`);
+
+    const tallGizmo = await readGizmo();
+    assert.ok(
+      tallGizmo && Array.isArray(tallGizmo.topBar0) && tallGizmo.topBar0[1] >= 28 && tallGizmo.topBar0[1] < mapBox.height - 20,
+      `Expected map to zoom out so Max Height top rectangle stays visibly inside viewport (topBar0=${JSON.stringify(tallGizmo?.topBar0)}, h=${mapBox.height})`
+    );
+    assert.ok(
+      Array.isArray(tallGizmo.heightHandle) && tallGizmo.heightHandle[1] >= 12,
+      `Expected Max Height ↕ handle to stay visible inside viewport (heightHandle=${JSON.stringify(tallGizmo?.heightHandle)})`
+    );
+
+    // Verify explicit Zoom Out, Fit Draft, and Zoom In toolbar buttons work cleanly while drafting
+    const zoomBeforeOut = Number(await stage.getAttribute('data-map-zoom'));
+    await page.getByTestId('map3d-zoom-out-btn').click();
+    await page.waitForFunction(
+      (prev) => {
+        const z = Number(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-map-zoom') || 0);
+        return z > 0 && z < prev - 0.5;
+      },
+      zoomBeforeOut,
+      { timeout: 5000 }
+    );
+    await page.getByTestId('map3d-fit-draft-btn').click();
+    await page.waitForTimeout(650);
+    const fitGizmo = await readGizmo();
+    assert.ok(
+      fitGizmo && Array.isArray(fitGizmo.topBar0) && fitGizmo.topBar0[1] >= 28,
+      `Expected Fit Draft button to keep drafted land top rectangle clearly visible (topBar0=${JSON.stringify(fitGizmo?.topBar0)})`
+    );
+    const zoomBeforeIn = Number(await stage.getAttribute('data-map-zoom'));
+    await page.getByTestId('map3d-zoom-in-btn').click();
+    await page.waitForFunction(
+      (prev) => {
+        const z = Number(globalThis.document.querySelector('.map3d-stage')?.getAttribute('data-map-zoom') || 0);
+        return z > prev + 0.5;
+      },
+      zoomBeforeIn,
+      { timeout: 5000 }
+    );
 
     // Verify 2D -> 3D auto-switch still works if user clears, switches to 2D, activates Draw Land, and draws
     await page.getByRole('button', { name: /^Clear \(1\)$/i }).click();

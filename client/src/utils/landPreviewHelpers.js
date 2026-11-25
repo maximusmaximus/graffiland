@@ -262,10 +262,11 @@ export function computeIsometricCameraFit(
   const rawIsoZoom = Math.log2(metersPerPxAtZ0 / Math.max(0.006, targetMetersPerPx));
   // Keep small 2-8m lands framed with visible surrounding streets & buildings on mobile screens
   // instead of over-zooming into an empty tile pocket at z21+. Users can still pinch-zoom closer.
+  // Allow zooming out down to z10.5 so tall 250m lands never clip their top boundary off-screen.
   const maxAutoIsoZoom = vw <= 520 ? 19.6 : 20.4;
-  const clampedIsoZoom = Math.max(14.0, Math.min(maxAutoIsoZoom, rawIsoZoom));
+  const clampedIsoZoom = Math.max(10.5, Math.min(maxAutoIsoZoom, rawIsoZoom));
   const zoom = isContext
-    ? Math.max(12.2, Math.min(16.8, clampedIsoZoom - 2.35))
+    ? Math.max(9.5, Math.min(16.8, clampedIsoZoom - 2.35))
     : clampedIsoZoom;
 
   // Shift ground anchor slightly downward by half the extruded prism screen height so the 3D cube
@@ -290,6 +291,119 @@ export function computeIsometricCameraFit(
       bottom: padBottom,
       left: 18,
       right: 18
+    },
+    metersPerPixel: Number(actualMetersPerPx.toFixed(4))
+  };
+}
+
+/**
+ * Computes a zoom & vertical framing target for an active 3D draft land in MapView3D so the
+ * ENTIRE 3D volume — floor, vertical walls, top rectangle, and elevated ↕ height handle —
+ * stays comfortably visible and draggable inside the viewport without clipping at the top.
+ */
+export function computeDraft3DAutoFit(
+  draft,
+  {
+    viewportWidth = 840,
+    viewportHeight = 540,
+    pitchDeg = 52,
+    bearingDeg = -45,
+    topClearancePx = 96,
+    bottomClearancePx = 56,
+    sideClearancePx = 48,
+    minZoom = 3,
+    maxZoom = 18.2
+  } = {}
+) {
+  const centerLat = Number(draft?.centerLat ?? draft?.lat);
+  const centerLng = Number(draft?.centerLng ?? draft?.lng);
+  if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) return null;
+
+  const vw = Math.max(240, Number(viewportWidth) || 840);
+  const vh = Math.max(200, Number(viewportHeight) || 540);
+  const pitch = Math.max(0, Math.min(68, Number(pitchDeg) || 0));
+  const bearing = Number.isFinite(Number(bearingDeg)) ? Number(bearingDeg) : 0;
+  const pitchRad = (pitch * Math.PI) / 180;
+  const bearingRad = (bearing * Math.PI) / 180;
+  const cosB = Math.cos(bearingRad);
+  const sinB = Math.sin(bearingRad);
+
+  const widthM = Math.max(2, Number(draft?.widthMeters || 14));
+  const depthM = Math.max(2, Number(draft?.depthMeters || 14));
+  const baseAltM = Math.max(0, Number(draft?.baseAltitudeM || 0));
+  const heightM = Math.max(2, Number(draft?.heightMeters || 18));
+  const totalTopAltM = baseAltM + heightM;
+
+  let spanU = widthM;
+  let spanV = depthM;
+  if (Array.isArray(draft?.corners) && draft.corners.length >= 4) {
+    const mPerDegLng = metersPerDegLngAtLat(centerLat);
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const [cLng, cLat] of draft.corners.slice(0, 4)) {
+      const eastM = (Number(cLng) - centerLng) * mPerDegLng;
+      const northM = (Number(cLat) - centerLat) * METERS_PER_DEG_LAT;
+      const u = eastM * cosB - northM * sinB;
+      const v = eastM * sinB + northM * cosB;
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (Number.isFinite(maxU - minU) && Number.isFinite(maxV - minV)) {
+      spanU = Math.max(2, maxU - minU);
+      spanV = Math.max(2, maxV - minV);
+    }
+  } else {
+    const rotRad = ((Number(draft?.rotationDeg || 0) - bearing) * Math.PI) / 180;
+    const cR = Math.abs(Math.cos(rotRad));
+    const sR = Math.abs(Math.sin(rotRad));
+    spanU = Math.max(2, widthM * cR + depthM * sR);
+    spanV = Math.max(2, widthM * sR + depthM * cR);
+  }
+
+  // Include slight perspective foreshortening margin (1.18x) on vertical altitude so tall 150-250m
+  // prisms never approach the camera near-plane or clip their top rectangle above the viewport.
+  const verticalLiftM = totalTopAltM * Math.sin(pitchRad) * 1.18;
+  const projectedHeightM = spanV * Math.cos(pitchRad) + verticalLiftM;
+
+  const cosLat = Math.max(0.1, Math.cos((centerLat * Math.PI) / 180));
+  const metersPerPxAtZ0 = (EARTH_CIRCUMFERENCE_M * cosLat) / 512;
+
+  const usableW = Math.max(140, vw - sideClearancePx * 2);
+  const usableH = Math.max(120, vh - topClearancePx - bottomClearancePx);
+  const fillX = 0.68;
+  const fillY = 0.64;
+
+  const targetMetersPerPx = Math.max(
+    spanU / (usableW * fillX),
+    Math.max(1, projectedHeightM) / (usableH * fillY)
+  );
+
+  const rawZoom = Math.log2(metersPerPxAtZ0 / Math.max(0.01, targetMetersPerPx));
+  const zoom = Number(Math.max(minZoom, Math.min(maxZoom, rawZoom)).toFixed(2));
+  const actualMetersPerPx = metersPerPxAtZ0 / Math.pow(2, zoom);
+
+  // Shift ground anchor slightly downward so tall extruded volumes sit optically centered below top HUD
+  const halfLiftPx =
+    pitch < 4
+      ? 0
+      : Math.round(((totalTopAltM * Math.sin(pitchRad)) / Math.max(0.05, actualMetersPerPx)) * 0.42);
+  const maxTopPad = Math.floor(vh * 0.38);
+  const padTop = pitch < 4 ? 24 : Math.min(maxTopPad, Math.max(28, 20 + halfLiftPx));
+
+  return {
+    center: [centerLng, centerLat],
+    zoom,
+    pitch,
+    bearing,
+    padding: {
+      top: padTop,
+      bottom: 24,
+      left: 20,
+      right: 20
     },
     metersPerPixel: Number(actualMetersPerPx.toFixed(4))
   };

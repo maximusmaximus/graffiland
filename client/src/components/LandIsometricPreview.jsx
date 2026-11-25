@@ -1013,12 +1013,17 @@ export default function LandIsometricPreview({
           style: getMapLibreStyleForTheme(mapThemeRef.current),
           center: initFit ? initFit.center : [initVol.centerLng, initVol.centerLat],
           zoom: initFit ? initFit.zoom : 17.5,
+          minZoom: 1,
+          maxZoom: 22,
           pitch: initFit ? initFit.pitch : 55,
           bearing: initFit ? initFit.bearing : -45,
           maxPitch: 70,
           attributionControl: false,
           cooperativeGestures: false
         });
+        map.scrollZoom?.enable?.();
+        map.scrollZoom?.setWheelZoomRate?.(1 / 180);
+        map.scrollZoom?.setZoomRate?.(1 / 65);
 
         mapRef.current = map;
         lastCenteredParcelRef.current = {

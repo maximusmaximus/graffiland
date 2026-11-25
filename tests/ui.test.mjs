@@ -7195,4 +7195,90 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     );
     assert.ok(mobileStudioSrc.includes('renderPaused={Boolean('));
   });
+
+  test('Draft land 3D auto-fit zooms out for tall volumes so the top rectangle stays visible & draggable, with explicit Zoom Out & Fit Draft controls', async () => {
+    const fsMod = await import('node:fs');
+    const helpers = await import('../client/src/utils/landPreviewHelpers.js');
+
+    const baseDraft = {
+      centerLat: 37.7749,
+      centerLng: -122.4194,
+      widthMeters: 28,
+      depthMeters: 30,
+      heightMeters: 18,
+      rotationDeg: 315
+    };
+    const fitShort = helpers.computeDraft3DAutoFit(baseDraft, {
+      viewportWidth: 844,
+      viewportHeight: 540,
+      pitchDeg: 52,
+      bearingDeg: -45
+    });
+    const fitMedium = helpers.computeDraft3DAutoFit(
+      { ...baseDraft, heightMeters: 100 },
+      { viewportWidth: 844, viewportHeight: 540, pitchDeg: 52, bearingDeg: -45 }
+    );
+    const fitMaxTall = helpers.computeDraft3DAutoFit(
+      { ...baseDraft, heightMeters: 250 },
+      { viewportWidth: 844, viewportHeight: 540, pitchDeg: 52, bearingDeg: -45 }
+    );
+    const fitHugeTower = helpers.computeDraft3DAutoFit(
+      { ...baseDraft, widthMeters: 120, depthMeters: 40, heightMeters: 250 },
+      { viewportWidth: 640, viewportHeight: 400, pitchDeg: 55, bearingDeg: -45 }
+    );
+
+    assert.ok(fitShort && fitMedium && fitMaxTall && fitHugeTower);
+    assert.ok(
+      fitMedium.zoom < fitShort.zoom - 0.8,
+      `Expected 100m draft to zoom out below 18m draft (${fitShort.zoom} -> ${fitMedium.zoom})`
+    );
+    assert.ok(
+      fitMaxTall.zoom < fitMedium.zoom - 0.8,
+      `Expected 250m draft to zoom out below 100m draft (${fitMedium.zoom} -> ${fitMaxTall.zoom})`
+    );
+    assert.ok(
+      fitMaxTall.zoom <= 16.2,
+      `Expected 250m draft zoom <= 16.2 so top rectangle stays on screen, got ${fitMaxTall.zoom}`
+    );
+    assert.ok(
+      fitMaxTall.padding.top > fitMaxTall.padding.bottom,
+      'Tall 3D draft auto-fit must add top padding to center the roof below HUD controls'
+    );
+    assert.ok(
+      fitHugeTower.zoom < fitMaxTall.zoom,
+      `Larger footprint/smaller viewport should zoom out further (${fitMaxTall.zoom} -> ${fitHugeTower.zoom})`
+    );
+
+    // Isometric preview camera fit must also zoom below 14.0 for tall 250m parcels instead of clipping
+    const tallPreviewVol = helpers.resolveParcelVolume({
+      parcelId: 'GLAND-9Q8YYK99',
+      volume: {
+        centerLat: 37.7749,
+        centerLng: -122.4194,
+        widthMeters: 100,
+        depthMeters: 50,
+        heightMeters: 250,
+        rotationDeg: 0
+      }
+    });
+    const tallIsoFit = helpers.computeIsometricCameraFit(tallPreviewVol, {
+      viewportWidth: 260,
+      viewportHeight: 160,
+      viewMode: 'isometric'
+    });
+    assert.ok(
+      tallIsoFit && tallIsoFit.zoom < 14.0,
+      `Expected tall 250m parcel preview fit on compact viewport to zoom out below z14.0, got ${tallIsoFit?.zoom}`
+    );
+
+    // MapView3D exposes explicit Zoom Out, Zoom In, Fit Draft controls & unrestricted minZoom
+    const map3dSrc = fsMod.readFileSync(
+      path.join(ROOT, 'client/src/components/MapView3D.jsx'),
+      'utf8'
+    );
+    assert.ok(map3dSrc.includes('minZoom: 1'), 'MapView3D must explicitly allow zooming out to minZoom 1');
+    assert.ok(map3dSrc.includes('data-testid="map3d-zoom-out-btn"'), 'MapView3D must expose Zoom Out button');
+    assert.ok(map3dSrc.includes('data-testid="map3d-fit-draft-btn"'), 'MapView3D must expose Fit Draft button');
+    assert.ok(map3dSrc.includes('computeDraft3DAutoFit'), 'MapView3D must auto-fit tall/wide drafts');
+  });
 });

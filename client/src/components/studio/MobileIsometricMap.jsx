@@ -1313,7 +1313,7 @@ export default function MobileIsometricMap({
             zoom: startZoom,
             pitch: startPitch,
             bearing: startBearing,
-            minZoom: 3,
+            minZoom: 1,
             maxZoom: 22.5,
             maxPitch: 72,
             antialias: true,
