@@ -1319,6 +1319,11 @@ select {
   isolation: isolate;
 }
 
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-bottom-right {
+  z-index: 15 !important;
+}
+
 .maplibregl-ctrl-group button {
   width: 28px;
   height: 28px;
@@ -8379,6 +8384,18 @@ select {
   border-color: #ffffff;
   background: rgba(10, 18, 36, 0.99);
   filter: brightness(1.08);
+}
+
+.map-container.is-draft-interacting .map3d-floating-pins-layer,
+.map-container.is-draft-interacting .map3d-floating-artwork-layer {
+  opacity: 0.32;
+  pointer-events: none !important;
+  transition: opacity 0.14s ease;
+}
+
+.map-container.is-draft-interacting .map3d-floating-pins-layer *,
+.map-container.is-draft-interacting .map3d-floating-artwork-layer * {
+  pointer-events: none !important;
 }
 
 /* Desktop Mint Land Overhaul: Compact Sliders, Title Validation, Batch Mint, Minted Copy, 3-Free Limit Card */

@@ -27,6 +27,7 @@ import {
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
 } from '../utils/landMapHelpers.js';
+import { computeDraft3DAutoFit } from '../utils/landPreviewHelpers.js';
 import {
   computePrismScreenGeometry,
   hitTestMintedParcelPrism,
@@ -533,9 +534,12 @@ export default function MapView3D({
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIdx, setActiveSearchIdx] = useState(-1);
   const [liveCamera, setLiveCamera] = useState({ lat: null, lng: null, zoom: null });
+  const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   const searchSeqRef = useRef(0);
   const skipNextAutoSearchRef = useRef(false);
   const pendingFocusTargetRef = useRef(null);
+  const lastDraftAutoFitRef = useRef({ id: '', width: 0, depth: 0, height: 0, baseAlt: 0 });
+  const appliedDraftPaddingRef = useRef(false);
 
   // Latest props kept in refs for synchronous MapLibre event handlers & 60fps Canvas2D rendering
   const sculpturesRef = useRef(sculptures);
@@ -902,6 +906,7 @@ export default function MapView3D({
 
     // PASS 2: Floating land labels & top-center leader arrows strictly ON TOP of every wireframe
     const placedOverlayRects = [];
+    const landPinEntries = [];
     for (const [pid, pinInfo] of floatingPinMapRef.current.entries()) {
       const entry = parcelGeomMap.get(pid);
       const el = pinInfo?.el;
@@ -922,14 +927,39 @@ export default function MapView3D({
         el.style.display = 'none';
         continue;
       }
-      const pinBottomY = Math.max(46, Math.min(anchor.highestTopY, anchor.roofCenter.y) - 22);
+      landPinEntries.push({ pid, el, entry, anchor });
+    }
+    // Place foreground / selected parcels first so closest lands claim the cleanest anchor spots
+    landPinEntries.sort((a, b) => {
+      const aSel = a.pid === String(selectedParcelIdRef.current || '').toUpperCase() ? 1 : 0;
+      const bSel = b.pid === String(selectedParcelIdRef.current || '').toUpperCase() ? 1 : 0;
+      if (aSel !== bSel) return bSel - aSel;
+      return (a.entry.geom.avgDepth || 0) - (b.entry.geom.avgDepth || 0);
+    });
+
+    for (const { el, entry, anchor } of landPinEntries) {
       el.style.display = 'flex';
+      const pinW = el.offsetWidth || 132;
+      const pinH = el.offsetHeight || 52;
+      let pinBottomY = Math.max(46, Math.min(anchor.highestTopY, anchor.roofCenter.y) - 22);
+      // Stagger vertically above colliding sibling land labels while keeping leader lines strictly plumb
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const rect = {
+          x: anchor.roofCenter.x - pinW / 2,
+          y: pinBottomY - pinH,
+          w: pinW,
+          h: pinH
+        };
+        if (!placedOverlayRects.some((r) => rectsOverlap(rect, r, 4))) break;
+        const shifted = pinBottomY - (pinH + 6);
+        if (shifted < pinH + 6) break;
+        pinBottomY = shifted;
+      }
+
       el.style.transform = `translate3d(${Math.round(anchor.roofCenter.x)}px, ${Math.round(
         pinBottomY
       )}px, 0) translate(-50%, -100%)`;
 
-      const pinW = el.offsetWidth || 132;
-      const pinH = el.offsetHeight || 52;
       placedOverlayRects.push({
         x: anchor.roofCenter.x - pinW / 2,
         y: pinBottomY - pinH,
@@ -1038,20 +1068,41 @@ export default function MapView3D({
       const baseCenterX = Math.max(minCenterX, Math.min(maxCenterX, pt.x));
       const baseBottomY = Math.max(elH + 12, Math.min(h - 14, pt.y - 18));
 
-      // Avoid blocking land labels or sibling artwork pills
+      // Avoid blocking land labels or sibling artwork pills even in dense clusters
+      const stepY = elH + 10;
+      const stepX = Math.max(elW * 0.92 + 14, 128);
       const candidates = [
         { cx: baseCenterX, by: baseBottomY },
-        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - (elH + 8)) },
-        { cx: Math.min(maxCenterX, baseCenterX + elW * 0.65), by: baseBottomY },
-        { cx: Math.max(minCenterX, baseCenterX - elW * 0.65), by: baseBottomY },
-        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18) }
+        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY) },
+        { cx: Math.min(maxCenterX, baseCenterX + stepX), by: baseBottomY },
+        { cx: Math.max(minCenterX, baseCenterX - stepX), by: baseBottomY },
+        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18) },
+        { cx: Math.min(maxCenterX, baseCenterX + stepX), by: Math.max(elH + 12, baseBottomY - stepY) },
+        { cx: Math.max(minCenterX, baseCenterX - stepX), by: Math.max(elH + 12, baseBottomY - stepY) },
+        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY * 2) },
+        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18 + stepY) },
+        { cx: Math.min(maxCenterX, baseCenterX + stepX * 1.45), by: baseBottomY },
+        { cx: Math.max(minCenterX, baseCenterX - stepX * 1.45), by: baseBottomY },
+        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY * 3) }
       ];
       let chosen = candidates[0];
+      let bestOverlapScore = Infinity;
       for (const cand of candidates) {
         const rect = { x: cand.cx - elW / 2, y: cand.by - elH, w: elW, h: elH };
         if (!placedOverlayRects.some((r) => rectsOverlap(rect, r, 6))) {
           chosen = cand;
+          bestOverlapScore = 0;
           break;
+        }
+        let overlapScore = 0;
+        for (const r of placedOverlayRects) {
+          const ox = Math.max(0, Math.min(rect.x + rect.w + 4, r.x + r.w) - Math.max(rect.x - 4, r.x));
+          const oy = Math.max(0, Math.min(rect.y + rect.h + 4, r.y + r.h) - Math.max(rect.y - 4, r.y));
+          overlapScore += ox * oy;
+        }
+        if (overlapScore < bestOverlapScore) {
+          bestOverlapScore = overlapScore;
+          chosen = cand;
         }
       }
       placedOverlayRects.push({
@@ -1358,12 +1409,19 @@ export default function MapView3D({
         style: getMapLibreStyleForTheme(mapThemeRef.current),
         center: centerLngLat,
         zoom: startZoom,
+        minZoom: 1,
+        maxZoom: 22,
         pitch: initPitch,
         bearing: initBearing,
         maxPitch: 68,
         antialias: true,
         attributionControl: true
       });
+      // Keep wheel & pinch zoom responsive and unrestricted while drafting/sizing tall 3D lands
+      map.scrollZoom?.enable?.();
+      map.scrollZoom?.setWheelZoomRate?.(1 / 180);
+      map.scrollZoom?.setZoomRate?.(1 / 65);
+      map.touchZoomRotate?.enable?.();
     } catch {
       return undefined;
     }
@@ -1616,26 +1674,137 @@ export default function MapView3D({
       firstViewModeSyncRef.current = false;
       return;
     }
+    const hostCanvas = map.getCanvas?.();
+    const vw = hostCanvas?.clientWidth || mapHostRef.current?.clientWidth || 840;
+    const vh = hostCanvas?.clientHeight || mapHostRef.current?.clientHeight || 540;
+    const activeDraft =
+      (draftsRef.current || []).find((d) => d.id === selectedDraftIdRef.current) ||
+      (draftsRef.current || [])[0] ||
+      null;
+
     if (viewMode === '2d') {
-      map.easeTo({ pitch: 0, bearing: 0, duration: 550 });
+      map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 550 });
     } else if (viewMode === '3d') {
       const targetPitch = map.getPitch() >= 25 ? map.getPitch() : 56;
       const targetBearing = Math.abs(map.getBearing()) >= 10 ? map.getBearing() : -35;
+      const curZoom = map.getZoom();
+      const draftFit = activeDraft
+        ? computeDraft3DAutoFit(activeDraft, {
+            viewportWidth: vw,
+            viewportHeight: vh,
+            pitchDeg: targetPitch,
+            bearingDeg: targetBearing
+          })
+        : null;
+      const nextZoom = draftFit
+        ? Math.min(Math.max(curZoom, Math.min(16.5, draftFit.zoom)), draftFit.zoom)
+        : Math.max(curZoom, 16.5);
       map.easeTo({
         pitch: targetPitch,
         bearing: targetBearing,
-        zoom: Math.max(map.getZoom(), 16.5),
+        zoom: nextZoom,
+        ...(draftFit ? { padding: draftFit.padding } : {}),
         duration: 600
       });
     } else if (viewMode === 'isometric') {
+      const curZoom = map.getZoom();
+      const draftFit = activeDraft
+        ? computeDraft3DAutoFit(activeDraft, {
+            viewportWidth: vw,
+            viewportHeight: vh,
+            pitchDeg: 52,
+            bearingDeg: -45
+          })
+        : null;
+      const nextZoom = draftFit
+        ? Math.min(Math.max(curZoom, Math.min(17, draftFit.zoom)), draftFit.zoom)
+        : Math.max(curZoom, 17);
       map.easeTo({
         pitch: 52,
         bearing: -45,
-        zoom: Math.max(map.getZoom(), 17),
+        zoom: nextZoom,
+        ...(draftFit ? { padding: draftFit.padding } : {}),
         duration: 600
       });
     }
   }, [viewMode]);
+
+  // Auto-zoom out when drafting/growing a tall or wide land (sliders, Max Height, Max Limit Size, or new plot)
+  // so the top rectangle & ↕ height handle never clip off the top of the map viewport.
+  useEffect(() => {
+    const map = mapRef.current;
+    const activeDraft =
+      (draftParcels || []).find((d) => d.id === selectedDraftId) ||
+      (draftParcels || [])[0] ||
+      null;
+    if (!map || !activeDraft) {
+      if (!activeDraft) {
+        lastDraftAutoFitRef.current = { id: '', width: 0, depth: 0, height: 0, baseAlt: 0 };
+        if (appliedDraftPaddingRef.current && map) {
+          appliedDraftPaddingRef.current = false;
+          map.easeTo({ padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 240 });
+        }
+      }
+      return;
+    }
+
+    const wM = Number(activeDraft.widthMeters || 0);
+    const dM = Number(activeDraft.depthMeters || 0);
+    const hM = Number(activeDraft.heightMeters || 0);
+    const bM = Number(activeDraft.baseAltitudeM || 0);
+    const prev = lastDraftAutoFitRef.current;
+    const switchedDraft = prev.id !== activeDraft.id;
+    const grew =
+      !switchedDraft &&
+      (hM > prev.height + 0.5 ||
+        wM > prev.width + 1 ||
+        dM > prev.depth + 1 ||
+        bM > prev.baseAlt + 0.5);
+
+    lastDraftAutoFitRef.current = { id: activeDraft.id, width: wM, depth: dM, height: hM, baseAlt: bM };
+
+    if ((!switchedDraft && !grew) || gizmoDragRef.current || orbitDragRef.current) {
+      return;
+    }
+
+    const hostCanvas = map.getCanvas?.();
+    const vw = hostCanvas?.clientWidth || mapHostRef.current?.clientWidth || 0;
+    const vh = hostCanvas?.clientHeight || mapHostRef.current?.clientHeight || 0;
+    if (vw <= 0 || vh <= 0) return;
+
+    const geom = computePrismScreenGeometry(map, maplibregl, activeDraft);
+    const topMinY = geom
+      ? Math.min(...geom.top.map((p) => p.y), geom.topCenter.y - HEIGHT_HANDLE_LIFT_PX)
+      : -999;
+    const isClipped =
+      !geom ||
+      topMinY < 42 ||
+      geom.screenBounds.minX < 8 ||
+      geom.screenBounds.maxX > vw - 8;
+    if (!isClipped) return;
+
+    const fit = computeDraft3DAutoFit(activeDraft, {
+      viewportWidth: vw,
+      viewportHeight: vh,
+      pitchDeg: map.getPitch(),
+      bearingDeg: map.getBearing()
+    });
+    if (!fit) return;
+
+    const curZoom = map.getZoom();
+    const targetZoom = Math.min(curZoom, fit.zoom);
+    userAdjustedRef.current = true;
+    if (hM >= 36) {
+      appliedDraftPaddingRef.current = true;
+    }
+    map.easeTo({
+      center: fit.center,
+      zoom: targetZoom,
+      ...(hM >= 36 ? { padding: fit.padding } : {}),
+      duration: !geom ? 280 : 380,
+      essential: true
+    });
+  }, [draftParcels, selectedDraftId]);
 
   // Fit initial view tightly to the perimeter of the closest available lands across the full width
   useEffect(() => {
@@ -2319,6 +2488,7 @@ export default function MapView3D({
       }
       setHoveredDraftId(hit.draft.id);
       setActiveHandle(hit.handleKey);
+      setIsGizmoDragging(true);
       setGizmoCursor(hit.type === 'vbar' ? 'grabbing' : hit.cursor);
       setGizmoHint(hit.hint);
       mapRef.current.dragPan.disable();
@@ -2344,12 +2514,14 @@ export default function MapView3D({
         ...hit,
         startPx: px,
         startPy: py,
+        lastPy: py,
         startLat: ll.lat,
         startLng: ll.lng,
         origLat: hit.draft.centerLat,
         origLng: hit.draft.centerLng,
         origRotationDeg: normalizeRotationDeg(hit.draft.rotationDeg || 0),
         origHeightMeters,
+        currentHeightMeters: origHeightMeters,
         heightMetersPerPx,
         centerScreenX: centerScreen.x,
         centerScreenY: centerScreen.y,
@@ -2596,16 +2768,90 @@ export default function MapView3D({
           depthMeters: g.startDraft.depthMeters,
           limits: LAND_VOLUME_LIMITS
         });
-        const deltaMeters = (g.startPy - py) * (g.heightMetersPerPx || 0.35);
+        const stepPy = (g.lastPy ?? g.startPy) - py;
+        g.lastPy = py;
+        const curMap = mapRef.current;
+        let liveMPerPx = g.heightMetersPerPx || 0.35;
+        if (curMap) {
+          const probeCur = { ...g.startDraft, heightMeters: g.currentHeightMeters };
+          const liveGeom = computePrismScreenGeometry(curMap, maplibregl, probeCur);
+          if (liveGeom && g.currentHeightMeters > 0) {
+            const vPx =
+              liveGeom.bottom.reduce(
+                (sum, pt, idx) =>
+                  sum + Math.hypot(pt.x - liveGeom.top[idx].x, pt.y - liveGeom.top[idx].y),
+                0
+              ) / 4;
+            if (vPx >= 6) {
+              liveMPerPx = Math.max(0.08, Math.min(4.5, g.currentHeightMeters / vPx));
+            }
+          } else {
+            const z = Number(curMap.getZoom?.() || 17);
+            const pRad = (Math.max(12, Number(curMap.getPitch?.() || 52)) * Math.PI) / 180;
+            const cosLat = Math.max(
+              0.1,
+              Math.cos((Number(g.startDraft.centerLat || 0) * Math.PI) / 180)
+            );
+            const mPerPxGround = (40075016.686 * cosLat) / (512 * Math.pow(2, z));
+            liveMPerPx = Math.max(
+              0.08,
+              Math.min(4.5, mPerPxGround / Math.max(0.2, Math.sin(pRad)))
+            );
+          }
+        }
         const nextHeight = Number(
           Math.max(
             LAND_VOLUME_LIMITS.minHeightMeters,
-            Math.min(maxHInfo.heightMeters, g.origHeightMeters + deltaMeters)
+            Math.min(maxHInfo.heightMeters, (g.currentHeightMeters ?? g.origHeightMeters) + stepPy * liveMPerPx)
           ).toFixed(1)
         );
+        g.currentHeightMeters = nextHeight;
         const nextZScale = Number((nextHeight / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3));
         onUpdateDraftRef.current?.(g.draft.id, { heightMeters: nextHeight, zScale: nextZScale });
         setGizmoHint(`Z Height: ${nextHeight}m (max ${Math.round(maxHInfo.heightMeters)}m)`);
+
+        // Smoothly zoom out as the user drags the top rectangle upward so the roof & ↕ handle stay in view
+        if (stepPy > 0 && curMap) {
+          const hostCanvas = curMap.getCanvas?.();
+          const vw = hostCanvas?.clientWidth || mapHostRef.current?.clientWidth || 0;
+          const vh = hostCanvas?.clientHeight || mapHostRef.current?.clientHeight || 0;
+          if (vw > 0 && vh > 0) {
+            const probeNext = { ...g.startDraft, heightMeters: nextHeight };
+            const nextGeom = computePrismScreenGeometry(curMap, maplibregl, probeNext);
+            const topMinY = nextGeom
+              ? Math.min(
+                  ...nextGeom.top.map((p) => p.y),
+                  nextGeom.topCenter.y - HEIGHT_HANDLE_LIFT_PX
+                )
+              : -999;
+            if (topMinY < 82) {
+              const fit = computeDraft3DAutoFit(probeNext, {
+                viewportWidth: vw,
+                viewportHeight: vh,
+                pitchDeg: curMap.getPitch(),
+                bearingDeg: curMap.getBearing()
+              });
+              if (fit) {
+                const curZoom = curMap.getZoom();
+                const targetZoom = Math.min(curZoom, fit.zoom);
+                if (targetZoom < curZoom - 0.01 || !nextGeom) {
+                  const blendZoom = !nextGeom
+                    ? targetZoom
+                    : Math.max(targetZoom, curZoom - Math.max(0.14, (curZoom - targetZoom) * 0.45));
+                  userAdjustedRef.current = true;
+                  appliedDraftPaddingRef.current = true;
+                  curMap.jumpTo({
+                    center: curMap.getCenter(),
+                    zoom: blendZoom,
+                    bearing: curMap.getBearing(),
+                    pitch: curMap.getPitch(),
+                    padding: fit.padding
+                  });
+                }
+              }
+            }
+          }
+        }
         drawWireframes();
         return;
       }
@@ -2766,8 +3012,20 @@ export default function MapView3D({
     }
 
     if (gizmoDragRef.current) {
+      const finishedDraftId = gizmoDragRef.current.draft?.id || '';
       gizmoDragRef.current = null;
+      setIsGizmoDragging(false);
       onDraftGestureEndRef.current?.();
+      const finishedDraft = (draftsRef.current || []).find((d) => d.id === finishedDraftId);
+      if (finishedDraft) {
+        lastDraftAutoFitRef.current = {
+          id: finishedDraft.id,
+          width: Number(finishedDraft.widthMeters || 0),
+          depth: Number(finishedDraft.depthMeters || 0),
+          height: Number(finishedDraft.heightMeters || 0),
+          baseAlt: Number(finishedDraft.baseAltitudeM || 0)
+        };
+      }
       if (
         mapRef.current &&
         !drawModeRef.current &&
@@ -2923,6 +3181,48 @@ export default function MapView3D({
     const map = mapRef.current;
     if (!map) return;
     map.easeTo({ bearing: 0, duration: 300 });
+  }
+
+  function handleZoomBy(deltaZoom) {
+    const map = mapRef.current;
+    if (!map) return;
+    userAdjustedRef.current = true;
+    const minZ = Number(map.getMinZoom?.() ?? 1);
+    const maxZ = Number(map.getMaxZoom?.() ?? 22);
+    const nextZoom = Math.max(minZ, Math.min(maxZ, map.getZoom() + Number(deltaZoom || 0)));
+    const nextOpts = { zoom: nextZoom, duration: 240 };
+    if (deltaZoom < 0 && nextZoom < 14) {
+      nextOpts.padding = { top: 0, bottom: 0, left: 0, right: 0 };
+    }
+    map.easeTo(nextOpts);
+  }
+
+  function handleFitActiveDraft() {
+    const map = mapRef.current;
+    const activeDraft =
+      (draftsRef.current || []).find((d) => d.id === selectedDraftIdRef.current) ||
+      (draftsRef.current || [])[0] ||
+      null;
+    if (!map || !activeDraft) return;
+    const hostCanvas = map.getCanvas?.();
+    const vw = hostCanvas?.clientWidth || mapHostRef.current?.clientWidth || 840;
+    const vh = hostCanvas?.clientHeight || mapHostRef.current?.clientHeight || 540;
+    const fit = computeDraft3DAutoFit(activeDraft, {
+      viewportWidth: vw,
+      viewportHeight: vh,
+      pitchDeg: map.getPitch(),
+      bearingDeg: map.getBearing()
+    });
+    if (!fit) return;
+    userAdjustedRef.current = true;
+    appliedDraftPaddingRef.current = true;
+    map.easeTo({
+      center: fit.center,
+      zoom: fit.zoom,
+      padding: fit.padding,
+      duration: 460,
+      essential: true
+    });
   }
 
   function handleFitClosestLands() {
@@ -3098,6 +3398,40 @@ export default function MapView3D({
         <div className="map3d-toolbar-group">
           <button
             type="button"
+            className="btn"
+            data-testid="map3d-zoom-out-btn"
+            style={{ padding: '4px 8px', fontSize: 11.5 }}
+            onClick={() => handleZoomBy(-1.25)}
+            title="Zoom out to see the full 3D land height and top rectangle"
+            aria-label="Zoom out map"
+          >
+            − Zoom Out
+          </button>
+          <button
+            type="button"
+            className="btn"
+            data-testid="map3d-zoom-in-btn"
+            style={{ padding: '4px 8px', fontSize: 11.5 }}
+            onClick={() => handleZoomBy(1.25)}
+            title="Zoom in closer"
+            aria-label="Zoom in map"
+          >
+            +
+          </button>
+          {draftParcels.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              data-testid="map3d-fit-draft-btn"
+              style={{ padding: '4px 9px', fontSize: 11.5 }}
+              onClick={handleFitActiveDraft}
+              title="Zoom out to frame the entire drafted land boundary including its top rectangle"
+            >
+              📐 Fit Draft
+            </button>
+          )}
+          <button
+            type="button"
             className={`btn ${showBuildings ? 'btn-primary' : ''}`}
             style={{ padding: '4px 9px', fontSize: 11.5 }}
             onClick={() => setShowBuildings((v) => !v)}
@@ -3138,7 +3472,7 @@ export default function MapView3D({
 
       {/* Main 3D WebGL Map + Synchronized Wireframe & Gizmo Overlay */}
       <div
-        className={`map-container ${drawMode && !hoveredDraftId ? 'is-draw-mode' : ''}`}
+        className={`map-container ${drawMode && !hoveredDraftId ? 'is-draw-mode' : ''} ${isGizmoDragging || drawMode ? 'is-draft-interacting' : ''}`}
         style={gizmoCursor ? { cursor: gizmoCursor } : undefined}
         onPointerDown={handleOverlayPointerDown}
         onPointerMove={handleOverlayPointerMove}
