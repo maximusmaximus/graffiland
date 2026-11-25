@@ -48,6 +48,7 @@ import PairWorkbench3D from './PairWorkbench3D.jsx';
 import PlotVisitView from './PlotVisitView.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureModal from './SculptureModal.jsx';
+import SculptureThumbnail from './SculptureThumbnail.jsx';
 import TitleLandModal from './TitleLandModal.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -2230,77 +2231,97 @@ export default function DesktopHub({
                 )}
               </div>
             ) : sidebarTab === 'gallery' ? (
-              <div className="desktop-nearby-list" aria-label="Sculpture Gallery">
-                {displayedSculptures.map((sc) => (
+              <div
+                className="desktop-nearby-list desktop-gallery-grid"
+                aria-label="Sculpture Gallery"
+                data-testid="desktop-gallery-grid"
+              >
+                {displayedSculptures.length === 0 ? (
                   <div
-                    key={sc.id}
-                    className="desktop-nearby-item"
-                    onClick={() => openSculpture(sc)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        openSculpture(sc);
-                      }
+                    style={{
+                      gridColumn: '1 / -1',
+                      fontSize: 12,
+                      color: 'var(--muted)',
+                      padding: '12px 4px'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                      <strong style={{ fontSize: 13 }}>{sc.title}</strong>
-                      <span className="badge gold" style={{ fontSize: 10 }}>{getLiveLandName(sc)}</span>
-                    </div>
-                    {sc.description && (
-                      <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left' }}>
-                        {sc.description}
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, width: '100%', marginTop: 4, flexWrap: 'wrap' }}>
-                      <span className="mono" style={{ fontSize: 10, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                        <UserHandleBadge
-                          user={{
-                            id: sc.creatorSub,
-                            username: sc.creatorUsername,
-                            creatorName: sc.creatorName,
-                            avatarImage: sc.creatorAvatar
-                          }}
-                          fallback="Creator"
-                          size="xs"
-                        />
-                        <span>· {sc.modelType === 'custom-3d' ? '3D File' : `${sc.voxelCount || 0} blocks`} · PoL {sc.polScore}</span>
-                      </span>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ padding: '2px 7px', fontSize: 10.5 }}
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            await copyToClipboard(buildSculptureShareUrl(sc.id));
-                            setCopiedId(sc.id);
-                            setTimeout(() => setCopiedId(''), 1800);
-                          }}
-                        >
-                          {copiedId === sc.id ? 'Copied!' : 'Copy Link'}
-                        </button>
-                        <a
-                          className="btn"
-                          style={{ padding: '2px 7px', fontSize: 10.5 }}
-                          href={buildShareToXUrl({
-                            title: sc.title,
-                            landName: getLiveLandName(sc),
-                            parcelId: sc.parcelId,
-                            sculptureId: sc.id
-                          })}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          𝕏
-                        </a>
-                      </div>
-                    </div>
+                    No published sculptures in the gallery yet.
                   </div>
-                ))}
+                ) : (
+                  displayedSculptures.map((sc) => {
+                    const isActive = (selected?.id || lastSculpture?.id) === sc.id;
+                    return (
+                      <div
+                        key={sc.id}
+                        className={`desktop-gallery-card ${isActive ? 'is-selected' : ''}`}
+                        data-testid="desktop-gallery-card"
+                        data-sculpture-id={sc.id}
+                        onClick={() => openSculpture(sc)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open ${sc.title || 'Sculpture'} in 3D`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            openSculpture(sc);
+                          }
+                        }}
+                      >
+                        <SculptureThumbnail sculpture={sc} />
+                        <div className="gallery-card-body">
+                          <strong className="gallery-card-title" title={sc.title}>
+                            {sc.title}
+                          </strong>
+                          <span className="badge gold gallery-card-land" title={getLiveLandName(sc)}>
+                            {getLiveLandName(sc)}
+                          </span>
+                          <div className="gallery-card-footer">
+                            <UserHandleBadge
+                              user={{
+                                id: sc.creatorSub,
+                                username: sc.creatorUsername,
+                                creatorName: sc.creatorName,
+                                avatarImage: sc.creatorAvatar
+                              }}
+                              fallback="Creator"
+                              size="xs"
+                            />
+                            <div className="gallery-card-actions">
+                              <button
+                                type="button"
+                                className="btn gallery-card-action-btn"
+                                title="Copy sculpture link"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await copyToClipboard(buildSculptureShareUrl(sc.id));
+                                  setCopiedId(sc.id);
+                                  setTimeout(() => setCopiedId(''), 1800);
+                                }}
+                              >
+                                {copiedId === sc.id ? '✓' : '🔗'}
+                              </button>
+                              <a
+                                className="btn gallery-card-action-btn"
+                                title="Share on X"
+                                href={buildShareToXUrl({
+                                  title: sc.title,
+                                  landName: getLiveLandName(sc),
+                                  parcelId: sc.parcelId,
+                                  sculptureId: sc.id
+                                })}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                𝕏
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             ) : nearbyCategory === 'land' ? (
               <div

@@ -482,7 +482,32 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(marketText.includes('Bot Plinth Stage'));
 
     await page.getByRole('button', { name: /Gallery/i }).click();
-    await page.waitForSelector('[aria-label="Sculpture Gallery"]');
+    await page.waitForSelector('[data-testid="desktop-gallery-grid"]');
+    await page.waitForSelector('[data-testid="desktop-gallery-card"]');
+    const galleryThumbCount = await page.locator('[data-testid="gallery-sculpture-thumb"]').count();
+    assert.ok(galleryThumbCount >= 1, `Expected gallery sculpture thumbnails >= 1, got ${galleryThumbCount}`);
+    // Wait for WebGL 3D thumbnail image (or instant voxel SVG preview) to render cleanly
+    await page.waitForSelector(
+      '[data-testid="gallery-sculpture-thumb"] img.gallery-thumb-img, [data-testid="gallery-sculpture-thumb"] svg.gallery-thumb-svg',
+      { timeout: 10000 }
+    );
+    // Clicking a Gallery thumbnail card loads that exact sculpture in SculptureModal
+    const firstGalleryCard = page.locator('[data-testid="desktop-gallery-card"]').first();
+    const expectedGalleryTitle = (
+      await firstGalleryCard.locator('.gallery-card-title').textContent()
+    ).trim();
+    await firstGalleryCard.click();
+    await page.waitForSelector('[data-testid="sculpture-modal"]', { timeout: 10000 });
+    const modalHeading = (
+      await page.locator('[data-testid="sculpture-modal"] .modal-title').first().textContent()
+    ).trim();
+    assert.ok(
+      modalHeading.includes(expectedGalleryTitle),
+      `Expected SculptureModal to load "${expectedGalleryTitle}", got "${modalHeading}"`
+    );
+    await page.getByRole('button', { name: /Close sculpture details/i }).click();
+    await page.waitForSelector('[data-testid="sculpture-modal"]', { state: 'detached' });
+
     await page.getByRole('button', { name: /Leaders/i }).click();
     await page.waitForSelector('[aria-label="Creator Leaderboard"]');
     const leaderText = await page.textContent('[aria-label="Creator Leaderboard"]');

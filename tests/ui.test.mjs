@@ -6358,4 +6358,159 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Gallery tab renders sculpture thumbnails (direct preview, isometric voxel & 3D model) and clicking a thumbnail loads that sculpture', async () => {
+    const { projectVoxelsToIsoCubes } = await import(
+      '../client/src/utils/sculptureThumbnailRenderer.js'
+    );
+    const { default: SculptureThumbnail } = await loadJsxModule(
+      'client/src/components/SculptureThumbnail.jsx'
+    );
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+
+    // 1) Pure isometric projection generates shaded cube faces for voxel sculptures
+    const cubes = projectVoxelsToIsoCubes([
+      { x: 0, y: 0, z: 0, color: '#00f5d4' },
+      { x: 0, y: 0.2, z: 0, color: '#ff1f8f' }
+    ]);
+    assert.equal(cubes.length, 2);
+    assert.ok(cubes[0].top && cubes[0].left && cubes[0].right);
+
+    // 2) SculptureThumbnail renders direct preview image, color voxel SVG, and custom-3d badge
+    const directThumbView = RTL.render(
+      React.createElement(SculptureThumbnail, {
+        sculpture: {
+          id: 'thumb-direct-1',
+          title: 'Captured Statue',
+          previewDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+          voxelCount: 12
+        }
+      })
+    );
+    assert.equal(
+      directThumbView.getByTestId('gallery-sculpture-thumb').getAttribute('data-thumb-kind'),
+      'image'
+    );
+    assert.ok(directThumbView.getByRole('img', { name: /Preview of Captured Statue/i }));
+    cleanup();
+
+    const voxelThumbView = RTL.render(
+      React.createElement(SculptureThumbnail, {
+        sculpture: {
+          id: 'thumb-voxel-2',
+          title: 'Prism Spire',
+          voxels: [
+            { x: 0, y: 0, z: 0, color: '#00f5d4' },
+            { x: 0, y: 0.2, z: 0, color: '#ffd166' }
+          ],
+          voxelCount: 2
+        }
+      })
+    );
+    assert.equal(
+      voxelThumbView.getByTestId('gallery-sculpture-thumb').getAttribute('data-thumb-kind'),
+      'voxel-iso'
+    );
+    assert.ok(voxelThumbView.container.querySelectorAll('polygon').length >= 6);
+    cleanup();
+
+    // 3) DesktopHub Gallery tab displays thumbnail cards and clicking one loads that exact sculpture
+    const origFetch = globalThis.fetch;
+    localStorage.removeItem('graffiland_desktop_session_v1');
+    const mockSculptures = [
+      {
+        id: 'gal-sc-1',
+        title: 'Emerald Spire',
+        description: 'Voxel spire with saved preview',
+        parcelId: 'GLAND-GAL01',
+        parcelName: 'Gallery Court',
+        lat: 37.78,
+        lng: -122.415,
+        previewDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }],
+        voxelCount: 1,
+        polScore: 97
+      },
+      {
+        id: 'gal-sc-2',
+        title: 'Solar Monolith',
+        description: 'Custom GLB sculpture',
+        parcelId: 'GLAND-GAL02',
+        parcelName: 'Sun Deck',
+        lat: 37.782,
+        lng: -122.412,
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', downloadUrl: '' },
+        polScore: 99
+      }
+    ];
+    const mockParcels = [
+      { parcelId: 'GLAND-GAL01', customName: 'Gallery Court', centerLat: 37.78, centerLng: -122.415 },
+      { parcelId: 'GLAND-GAL02', customName: 'Sun Deck', centerLat: 37.782, centerLng: -122.412 }
+    ];
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/sculptures/gal-sc-2')) {
+        return { ok: true, json: async () => ({ sculpture: mockSculptures[1] }) };
+      }
+      if (u.includes('/api/sculptures')) {
+        return { ok: true, json: async () => ({ sculptures: mockSculptures }) };
+      }
+      if (u.includes('/api/parcels')) {
+        return { ok: true, json: async () => ({ parcels: mockParcels }) };
+      }
+      if (u.includes('/api/lands/GLAND-GAL02')) {
+        return { ok: true, json: async () => ({ parcel: mockParcels[1], sculptures: [mockSculptures[1]] }) };
+      }
+      if (u.includes('/api/quests/nearby')) return { ok: true, json: async () => ({ quests: [] }) };
+      if (u.includes('/api/marketplace/listings')) return { ok: true, json: async () => ({ listings: [] }) };
+      if (u.includes('/api/agents/leaderboard')) {
+        return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: null,
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        assert.ok(view.getByRole('button', { name: /^Gallery$/i }));
+      });
+      RTL.fireEvent.click(view.getByRole('button', { name: /^Gallery$/i }));
+
+      await RTL.waitFor(() => {
+        const cards = view.getAllByTestId('desktop-gallery-card');
+        assert.equal(cards.length, 2);
+      });
+      const thumbs = view.getAllByTestId('gallery-sculpture-thumb');
+      assert.equal(thumbs.length, 2);
+      assert.equal(thumbs[0].getAttribute('data-thumb-kind'), 'image');
+
+      // Clicking the second gallery card loads "Solar Monolith" in SculptureModal and focuses its land
+      const monolithCard = view.container.querySelector('[data-sculpture-id="gal-sc-2"]');
+      assert.ok(monolithCard);
+      RTL.fireEvent.click(monolithCard);
+
+      await RTL.waitFor(() => {
+        const modal = view.getByTestId('sculpture-modal');
+        assert.ok(modal.textContent.includes('Solar Monolith'));
+      });
+      assert.equal(
+        view.container.querySelector('.map3d-stage')?.getAttribute('data-selected-parcel-id'),
+        'GLAND-GAL02'
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+      localStorage.removeItem('graffiland_desktop_session_v1');
+      cleanup();
+    }
+  });
 });
