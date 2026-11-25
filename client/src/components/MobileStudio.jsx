@@ -1196,6 +1196,9 @@ export default function MobileStudio({
         isInteractingWithLandRef={isInteractingWithLandRef}
         isArViewOnly={isArViewOnly}
         isArViewOnlyRef={isArViewOnlyRef}
+        renderPaused={Boolean(
+          ar.mapOpen || parcelVisit || lands.landManageOpen || ar.mapSelectedSculpture
+        )}
         mode={brush.mode}
         modeRef={brush.modeRef}
         toolRef={brush.toolRef}

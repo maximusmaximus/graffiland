@@ -6035,7 +6035,10 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(DEFAULT_MAP_THEME, 'dark');
     assert.equal(getStoredMapTheme(), 'dark');
     assert.equal(getMapLibreStyleForTheme(), OPENFREEMAP_DARK_STYLE);
-    assert.ok(getLeafletTileConfig().url.includes('cartocdn.com/dark_all'));
+    const darkLeafletCfg = getLeafletTileConfig();
+    assert.ok(darkLeafletCfg.url.includes('tile.openstreetmap.org'));
+    assert.equal(darkLeafletCfg.isDarkFilter, true);
+    assert.ok(!darkLeafletCfg.url.includes('cartocdn.com'));
 
     // Applying dark theme harmonizes paint properties and injects building-3d extrusion layer before first symbol
     const addedLayers = [];
@@ -7021,5 +7024,176 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       sessionStorage.removeItem('graffiland_desktop_pair_code_v1');
       cleanup();
     }
+  });
+
+  test('Mobile maps use API-key-free OSM tiles (no CARTO), cap tiny-land auto-zoom, avoid WebGL context leaks, and AR keeps land sculptures grounded without GPS thrashing', async () => {
+    const fsMod = await import('node:fs');
+    const mapThemeMod = await import('../client/src/utils/mapTheme.js');
+    const helpers = await import('../client/src/utils/landPreviewHelpers.js');
+    const arHelpers = await import('../client/src/utils/arLandHelpers.js');
+    const loadMlMod = await import('../client/src/utils/loadMapLibre.js');
+
+    // 1) Zero cartocdn.com URLs in mapTheme.js (CARTO returns "API KEY REQUIRED" on spray.land)
+    const mapThemeSrc = fsMod.readFileSync(
+      path.join(ROOT, 'client/src/utils/mapTheme.js'),
+      'utf8'
+    );
+    assert.ok(!/cartocdn\.com/i.test(mapThemeSrc), 'mapTheme.js must not reference cartocdn.com');
+    const darkFallbackTiles =
+      mapThemeMod.FALLBACK_DARK_STYLE.sources['osm-dark-fallback']?.tiles || [];
+    const lightFallbackTiles =
+      mapThemeMod.FALLBACK_LIGHT_STYLE.sources['osm-light-fallback']?.tiles || [];
+    assert.ok(darkFallbackTiles.some((u) => u.includes('tile.openstreetmap.org')));
+    assert.ok(lightFallbackTiles.some((u) => u.includes('tile.openstreetmap.org')));
+    assert.equal(mapThemeMod.getLeafletTileConfig('dark').isDarkFilter, true);
+    assert.equal(mapThemeMod.getLeafletTileConfig('light').isDarkFilter, false);
+
+    // Dark-mode CSS tile filter must exist strictly on .leaflet-container:not(.is-map-light) .leaflet-tile-pane
+    const cssSrc = fsMod.readFileSync(path.join(ROOT, 'client/src/styles.css'), 'utf8');
+    assert.ok(
+      cssSrc.includes('.leaflet-container:not(.is-map-light) .leaflet-tile-pane'),
+      'Dark-mode Leaflet OSM tile filter must be present in styles.css'
+    );
+
+    // 2) Small 2-5m lands on mobile viewports cap auto-zoom so surrounding streets stay visible
+    const tinyLandVol = helpers.resolveParcelVolume({
+      parcelId: 'GLAND-9R1652QK',
+      volume: {
+        centerLat: 39.7287,
+        centerLng: -121.8406,
+        widthMeters: 2.4,
+        depthMeters: 1.1,
+        heightMeters: 1.4,
+        rotationDeg: 0
+      }
+    });
+    const mobileFit = helpers.computeIsometricCameraFit(tinyLandVol, {
+      viewportWidth: 360,
+      viewportHeight: 240,
+      viewMode: 'isometric'
+    });
+    assert.ok(
+      mobileFit && mobileFit.zoom <= 19.6,
+      `Expected mobile small-land auto-zoom <= 19.6 for street visibility, got ${mobileFit?.zoom}`
+    );
+
+    // 3) computeArSculptureVerticalY never buries voxel or custom-3D land sculptures underground
+    const flatLand = { parcelId: 'GLAND-TEST', volume: { baseAltitudeM: 0, heightMeters: 18 } };
+    const elevatedLand = { parcelId: 'GLAND-ELEV', volume: { baseAltitudeM: 5, heightMeters: 18 } };
+
+    // Voxel sculpture with WGS84 vs EGM96 -30m heightAboveGroundMeters & cross-device altitude diff
+    const voxelSc = {
+      id: 'sc-voxel-1',
+      modelType: 'voxel',
+      altitude: 34.1,
+      elevation: {
+        deviceAltitudeMeters: 34.1,
+        terrainElevationMeters: 64,
+        anchorAltitudeMeters: 34.1,
+        heightAboveGroundMeters: -29.9,
+        sculptureVerticalMinM: -1.4
+      },
+      anchorOffset: { dx: 0, dy: 0, dz: 0 }
+    };
+    const voxelYNoAlt = arHelpers.computeArSculptureVerticalY({
+      sculpture: voxelSc,
+      viewerAltitude: null,
+      parentLand: flatLand,
+      groundY: -1.15
+    });
+    assert.ok(
+      voxelYNoAlt >= -1.15 && voxelYNoAlt <= 2,
+      `Voxel sculpture with -29.9m datum offset must stay above ground, got y=${voxelYNoAlt}`
+    );
+    const voxelYCrossDevice = arHelpers.computeArSculptureVerticalY({
+      sculpture: voxelSc,
+      viewerAltitude: 64.5, // iPhone EGM96 vs Android WGS84 34.1m (-30.4m jump)
+      parentLand: flatLand,
+      groundY: -1.15
+    });
+    assert.ok(
+      voxelYCrossDevice >= -1.15 && voxelYCrossDevice <= 2,
+      `Cross-device datum mismatch must not bury voxel sculpture underground, got y=${voxelYCrossDevice}`
+    );
+
+    // Custom 3D model rests squarely on land floor even if altitude differs from viewer GPS
+    const customSc = {
+      id: 'sc-glb-1',
+      modelType: 'custom-3d',
+      altitude: 36.16,
+      customModel: { format: 'glb', scale: 2.5 },
+      anchorOffset: { dx: 0, dy: 0, dz: 0 }
+    };
+    assert.equal(
+      arHelpers.computeArSculptureVerticalY({
+        sculpture: customSc,
+        viewerAltitude: 65,
+        parentLand: flatLand,
+        groundY: -1.15
+      }),
+      -1.15
+    );
+    assert.equal(
+      arHelpers.computeArSculptureVerticalY({
+        sculpture: { ...customSc, anchorOffset: { dx: 0, dy: 1.5, dz: 0 } },
+        viewerAltitude: 65,
+        parentLand: elevatedLand,
+        groundY: -1.15
+      }),
+      5.35
+    );
+
+    // 4) hasWebGLSupport caches result and immediately releases its temporary probe context
+    const doc = globalThis.document;
+    const win = globalThis.window;
+    const origCreateEl = doc.createElement.bind(doc);
+    const origUaDesc = Object.getOwnPropertyDescriptor(win.navigator, 'userAgent');
+    let getCtxCalls = 0;
+    let loseCtxCalls = 0;
+    try {
+      Object.defineProperty(win.navigator, 'userAgent', {
+        configurable: true,
+        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1'
+      });
+      loadMlMod.resetWebGLSupportCache();
+      doc.createElement = (tag, ...rest) => {
+        const el = origCreateEl(tag, ...rest);
+        if (String(tag).toLowerCase() === 'canvas') {
+          el.getContext = () => {
+            getCtxCalls += 1;
+            return {
+              getExtension: (name) =>
+                name === 'WEBGL_lose_context'
+                  ? { loseContext: () => { loseCtxCalls += 1; } }
+                  : null
+            };
+          };
+        }
+        return el;
+      };
+      assert.equal(loadMlMod.hasWebGLSupport(), true);
+      assert.equal(loadMlMod.hasWebGLSupport(), true);
+      assert.equal(getCtxCalls, 1, 'hasWebGLSupport must cache probe after first call');
+      assert.equal(loseCtxCalls, 1, 'hasWebGLSupport must release probe context via WEBGL_lose_context');
+    } finally {
+      doc.createElement = origCreateEl;
+      if (origUaDesc) {
+        Object.defineProperty(win.navigator, 'userAgent', origUaDesc);
+      }
+      loadMlMod.resetWebGLSupportCache();
+    }
+
+    // 5) useARPreview preserves cached sculpture entries across GPS updates & ARViewportCanvas pauses while map overlays are open
+    const arPreviewSrc = fsMod.readFileSync(
+      path.join(ROOT, 'client/src/hooks/useARPreview.js'),
+      'utf8'
+    );
+    assert.ok(arPreviewSrc.includes('arSculptureEntriesRef'));
+    assert.ok(arPreviewSrc.includes('computeArSculptureVerticalY'));
+    const mobileStudioSrc = fsMod.readFileSync(
+      path.join(ROOT, 'client/src/components/MobileStudio.jsx'),
+      'utf8'
+    );
+    assert.ok(mobileStudioSrc.includes('renderPaused={Boolean('));
   });
 });

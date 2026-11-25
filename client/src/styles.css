@@ -1743,6 +1743,10 @@ select {
   background: #e8edf3;
 }
 
+.leaflet-container:not(.is-map-light) .leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(94%) saturate(80%);
+}
+
 .leaflet-container:not(.is-map-light) .leaflet-control-attribution {
   background: rgba(9, 13, 24, 0.78);
   color: rgba(186, 202, 228, 0.8);

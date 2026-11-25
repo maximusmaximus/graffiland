@@ -1343,14 +1343,27 @@ export default function MapView3D({
       });
     };
 
+    let tileErrCount = 0;
     const onMapError = (ev) => {
       const msg = String(ev?.error?.message || '');
+      const isTileSourceError =
+        ev?.sourceId === 'openmaptiles' &&
+        (/failed to fetch|network|cors|timeout|404|429|500|502|503/i.test(msg) ||
+          ev?.error?.status === 0 ||
+          Number(ev?.error?.status) >= 400);
+      if (isTileSourceError) {
+        tileErrCount += 1;
+      }
       const isFatalStyleFetchError =
         !ev?.sourceId &&
-        (/failed to fetch|network|cors|load style|timeout|404|500|502|503/i.test(msg) ||
+        (/failed to fetch|network|cors|load style|timeout|404|429|500|502|503/i.test(msg) ||
           ev?.error?.status === 0);
-      if (isFatalStyleFetchError && !fallbackAppliedRef.current && !styleReadyRef.current) {
+      if (
+        !fallbackAppliedRef.current &&
+        ((isFatalStyleFetchError && !styleReadyRef.current) || tileErrCount >= 3)
+      ) {
         fallbackAppliedRef.current = true;
+        styleReadyRef.current = false;
         try {
           map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
         } catch {
@@ -1358,6 +1371,21 @@ export default function MapView3D({
         }
       }
     };
+
+    const glCanvas = map.getCanvas?.();
+    const onContextLost = (ev) => {
+      ev.preventDefault();
+    };
+    const onContextRestored = () => {
+      try {
+        map.triggerRepaint?.();
+        drawWireframes();
+      } catch {
+        // ignore
+      }
+    };
+    glCanvas?.addEventListener?.('webglcontextlost', onContextLost, false);
+    glCanvas?.addEventListener?.('webglcontextrestored', onContextRestored, false);
 
     const syncCameraUi = () => {
       const nextPitch = Math.round(map.getPitch() * 10) / 10;
@@ -1418,6 +1446,8 @@ export default function MapView3D({
     return () => {
       clearTimeout(styleTimeout);
       observer?.disconnect();
+      glCanvas?.removeEventListener?.('webglcontextlost', onContextLost);
+      glCanvas?.removeEventListener?.('webglcontextrestored', onContextRestored);
       map.off('style.load', onStyleLoad);
       map.off('error', onMapError);
       map.off('render', drawWireframes);

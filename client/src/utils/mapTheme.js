@@ -5,28 +5,40 @@ export const DEFAULT_MAP_THEME = 'dark';
 
 export const OPENFREEMAP_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
 export const OPENFREEMAP_LIGHT_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+export const OSM_RASTER_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
 export const FALLBACK_DARK_STYLE = {
   version: 8,
   sources: {
-    'carto-dark': {
+    'osm-dark-fallback': {
       type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-      ],
+      tiles: [OSM_RASTER_TILE_URL],
       tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      maxzoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
     }
   },
   layers: [
     {
-      id: 'carto-dark-layer',
+      id: 'background',
+      type: 'background',
+      paint: {
+        'background-color': '#090d18'
+      }
+    },
+    {
+      id: 'osm-dark-fallback-layer',
       type: 'raster',
-      source: 'carto-dark',
+      source: 'osm-dark-fallback',
       minzoom: 0,
-      maxzoom: 22
+      maxzoom: 22,
+      paint: {
+        'raster-brightness-min': 0.02,
+        'raster-brightness-max': 0.38,
+        'raster-saturation': -0.72,
+        'raster-contrast': 0.24,
+        'raster-opacity': 0.92
+      }
     }
   ]
 };
@@ -34,22 +46,19 @@ export const FALLBACK_DARK_STYLE = {
 export const FALLBACK_LIGHT_STYLE = {
   version: 8,
   sources: {
-    'carto-light': {
+    'osm-light-fallback': {
       type: 'raster',
-      tiles: [
-        'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'
-      ],
+      tiles: [OSM_RASTER_TILE_URL],
       tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      maxzoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
     }
   },
   layers: [
     {
-      id: 'carto-light-layer',
+      id: 'osm-light-fallback-layer',
       type: 'raster',
-      source: 'carto-light',
+      source: 'osm-light-fallback',
       minzoom: 0,
       maxzoom: 22
     }
@@ -136,24 +145,15 @@ export function getFallbackMapLibreStyleForTheme(theme = DEFAULT_MAP_THEME) {
 }
 
 export function getLeafletTileConfig(theme = DEFAULT_MAP_THEME) {
-  if (normalizeMapTheme(theme) === 'light') {
-    return {
-      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-      options: {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxNativeZoom: 19,
-        maxZoom: 21.5
-      }
-    };
-  }
+  const isLight = normalizeMapTheme(theme) === 'light';
   return {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    url: OSM_RASTER_TILE_URL,
     options: {
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-      subdomains: 'abcd',
-      maxNativeZoom: 20,
+      attribution: '&copy; OpenStreetMap contributors',
+      maxNativeZoom: 19,
       maxZoom: 21.5
-    }
+    },
+    isDarkFilter: !isLight
   };
 }
 
@@ -180,24 +180,24 @@ export function applyGraffilandMapLibreTheme(
 
   if (isDark) {
     safeSetPaint(map, 'background', 'background-color', '#090d18');
-    safeSetPaint(map, 'water', 'fill-color', '#0e1d36');
-    safeSetPaint(map, 'waterway', 'line-color', '#122646');
-    safeSetPaint(map, 'landuse_residential', 'fill-color', '#0d1323');
-    safeSetPaint(map, 'landuse_park', 'fill-color', '#0f2326');
+    safeSetPaint(map, 'water', 'fill-color', '#122a4e');
+    safeSetPaint(map, 'waterway', 'line-color', '#183663');
+    safeSetPaint(map, 'landuse_residential', 'fill-color', '#10182d');
+    safeSetPaint(map, 'landuse_park', 'fill-color', '#132e33');
     safeSetPaint(map, 'landcover_wood', 'fill-pattern', null);
-    safeSetPaint(map, 'landcover_wood', 'fill-color', '#0f2124');
-    safeSetPaint(map, 'building', 'fill-color', '#131c31');
-    safeSetPaint(map, 'building', 'fill-outline-color', '#21304f');
-    safeSetPaint(map, 'highway_path', 'line-color', '#23314c');
-    safeSetPaint(map, 'highway_minor', 'line-color', '#1b263d');
-    safeSetPaint(map, 'highway_major_casing', 'line-color', '#2e3e60');
-    safeSetPaint(map, 'highway_major_inner', 'line-color', '#162036');
-    safeSetPaint(map, 'highway_major_subtle', 'line-color', '#283654');
-    safeSetPaint(map, 'highway_motorway_casing', 'line-color', '#3a4e78');
-    safeSetPaint(map, 'highway_motorway_inner', 'line-color', '#1c2a46');
-    safeSetPaint(map, 'highway_name_other', 'text-color', '#9db3d4');
+    safeSetPaint(map, 'landcover_wood', 'fill-color', '#122b30');
+    safeSetPaint(map, 'building', 'fill-color', '#1b2945');
+    safeSetPaint(map, 'building', 'fill-outline-color', '#324b78');
+    safeSetPaint(map, 'highway_path', 'line-color', '#2e4266');
+    safeSetPaint(map, 'highway_minor', 'line-color', '#283959');
+    safeSetPaint(map, 'highway_major_casing', 'line-color', '#425b8a');
+    safeSetPaint(map, 'highway_major_inner', 'line-color', '#21304f');
+    safeSetPaint(map, 'highway_major_subtle', 'line-color', '#364b73');
+    safeSetPaint(map, 'highway_motorway_casing', 'line-color', '#506fa6');
+    safeSetPaint(map, 'highway_motorway_inner', 'line-color', '#293d66');
+    safeSetPaint(map, 'highway_name_other', 'text-color', '#b8ceee');
     safeSetPaint(map, 'highway_name_other', 'text-halo-color', '#060912');
-    safeSetPaint(map, 'highway_name_motorway', 'text-color', '#b8cae6');
+    safeSetPaint(map, 'highway_name_motorway', 'text-color', '#d0e0f8');
     safeSetPaint(map, 'highway_name_motorway', 'text-halo-color', '#060912');
     for (const placeLayer of [
       'place_other',
@@ -212,7 +212,7 @@ export function applyGraffilandMapLibreTheme(
       'place_country_major',
       'water_name'
     ]) {
-      safeSetPaint(map, placeLayer, 'text-color', placeLayer === 'water_name' ? '#6690c2' : '#c6d6ee');
+      safeSetPaint(map, placeLayer, 'text-color', placeLayer === 'water_name' ? '#79a8de' : '#d2e2f7');
       safeSetPaint(map, placeLayer, 'text-halo-color', 'rgba(6, 9, 18, 0.92)');
     }
   }
@@ -232,14 +232,14 @@ export function applyGraffilandMapLibreTheme(
           paint: {
             'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
             'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 6],
-            'fill-extrusion-color': isDark ? '#1e2c4a' : '#24324f',
+            'fill-extrusion-color': isDark ? '#273a61' : '#24324f',
             'fill-extrusion-opacity': showBuildings ? buildingOpacity : 0
           }
         },
         firstSymbolId
       );
     } else if (map.getLayer?.('building-3d')) {
-      map.setPaintProperty('building-3d', 'fill-extrusion-color', isDark ? '#1e2c4a' : '#24324f');
+      map.setPaintProperty('building-3d', 'fill-extrusion-color', isDark ? '#273a61' : '#24324f');
       map.setPaintProperty(
         'building-3d',
         'fill-extrusion-opacity',

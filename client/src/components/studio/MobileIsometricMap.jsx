@@ -619,7 +619,7 @@ export default function MobileIsometricMap({
     return () => {
       cancelled = true;
     };
-  }, [primaryEntry?.parcel?.parcelId, sculptures]);
+  }, [primaryEntry?.parcel?.parcelId, sculptures, hydrationVersion]);
 
   // Synchronous refs for MapLibre render callbacks
   const entriesRef = useRef(resolvedEntries);
@@ -632,6 +632,7 @@ export default function MobileIsometricMap({
   const bearingOffsetRef = useRef(bearingOffset);
   const onSelectParcelRef = useRef(onSelectParcel);
   const onSelectSculptureRef = useRef(onSelectSculpture);
+  const onToggle2DRef = useRef(onToggle2D);
   const latestLandHitTargetsRef = useRef([]);
 
   useEffect(() => {
@@ -653,7 +654,8 @@ export default function MobileIsometricMap({
   useEffect(() => {
     onSelectParcelRef.current = onSelectParcel;
     onSelectSculptureRef.current = onSelectSculpture;
-  }, [onSelectParcel, onSelectSculpture]);
+    onToggle2DRef.current = onToggle2D;
+  }, [onSelectParcel, onSelectSculpture, onToggle2D]);
 
   const drawWireframes = useCallback(() => {
     const map = mapRef.current;
@@ -1322,7 +1324,11 @@ export default function MobileIsometricMap({
             touchZoomRotate: true
           });
         } catch {
-          setWebglAvailable(false);
+          if (typeof onToggle2DRef.current === 'function') {
+            onToggle2DRef.current();
+          } else {
+            setWebglAvailable(false);
+          }
           return;
         }
 
@@ -1330,12 +1336,70 @@ export default function MobileIsometricMap({
         setLiveBearing(Number(startBearing.toFixed(1)));
         setLiveZoom(Number(startZoom.toFixed(2)));
 
+        let tileErrCount = 0;
+        let contextLostTimer = null;
+
+        const applyOsmFallback = () => {
+          if (fallbackAppliedRef.current) return;
+          fallbackAppliedRef.current = true;
+          styleReadyRef.current = false;
+          try {
+            map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
+          } catch {
+            if (typeof onToggle2DRef.current === 'function') {
+              onToggle2DRef.current();
+            } else {
+              setWebglAvailable(false);
+            }
+          }
+        };
+
+        const styleTimeout = setTimeout(() => {
+          if (!cancelled && !styleReadyRef.current && !fallbackAppliedRef.current) {
+            applyOsmFallback();
+          }
+        }, 8000);
+
+        const glCanvas = map.getCanvas?.();
+        const onContextLost = (ev) => {
+          ev.preventDefault();
+          clearTimeout(contextLostTimer);
+          contextLostTimer = setTimeout(() => {
+            if (cancelled) return;
+            if (typeof onToggle2DRef.current === 'function') {
+              onToggle2DRef.current();
+            } else {
+              setWebglAvailable(false);
+            }
+          }, 2600);
+        };
+        const onContextRestored = () => {
+          clearTimeout(contextLostTimer);
+          contextLostTimer = null;
+          try {
+            map.triggerRepaint?.();
+            drawWireframes();
+          } catch {
+            // ignore
+          }
+        };
+        glCanvas?.addEventListener?.('webglcontextlost', onContextLost, false);
+        glCanvas?.addEventListener?.('webglcontextrestored', onContextRestored, false);
+        map.__graffilandCleanup = () => {
+          clearTimeout(styleTimeout);
+          clearTimeout(contextLostTimer);
+          glCanvas?.removeEventListener?.('webglcontextlost', onContextLost);
+          glCanvas?.removeEventListener?.('webglcontextrestored', onContextRestored);
+        };
+
         map.on('style.load', () => {
+          clearTimeout(styleTimeout);
           ensureLayers(map);
           setMapReady(true);
         });
 
         map.on('load', () => {
+          clearTimeout(styleTimeout);
           ensureLayers(map);
           setMapReady(true);
           if (!userMovedRef.current && !isFullExpandedRef.current && primaryEntryRef.current) {
@@ -1343,14 +1407,12 @@ export default function MobileIsometricMap({
           }
         });
 
-        map.on('error', () => {
-          if (!styleReadyRef.current && !fallbackAppliedRef.current) {
-            fallbackAppliedRef.current = true;
-            try {
-              map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
-            } catch {
-              setWebglAvailable(false);
-            }
+        map.on('error', (ev) => {
+          if (ev?.sourceId === 'openmaptiles') {
+            tileErrCount += 1;
+          }
+          if (!fallbackAppliedRef.current && (!styleReadyRef.current || tileErrCount >= 3)) {
+            applyOsmFallback();
           }
         });
 
@@ -1478,6 +1540,7 @@ export default function MobileIsometricMap({
       fallbackAppliedRef.current = false;
       if (mapRef.current) {
         try {
+          mapRef.current.__graffilandCleanup?.();
           mapRef.current.remove();
         } catch {
           // ignore cleanup errors
