@@ -182,9 +182,18 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     // Allow MapLibre async mount/layout effects to settle; overlay must remain on top
     await page.waitForTimeout(1500);
 
-    const welcomeSelector = '[aria-label="Welcome to SPRAY.LAND first-visit overview"]';
+    const welcomeSelector = '[aria-label="SPRAY.LAND first-visit overview"]';
     const welcomeVisible = await page.isVisible(welcomeSelector);
     assert.equal(welcomeVisible, true);
+    // Verify official Voxel Spray Can brand lockup renders in both navbar & intro card, with NO "Welcome"
+    assert.equal(await page.locator('.desktop-nav [data-testid="brand-logo-lockup"]').isVisible(), true);
+    assert.equal(await page.locator('.welcome-overlay-card [data-testid="brand-logo-lockup"]').isVisible(), true);
+    const introCardText = await page.locator('.welcome-overlay-card').textContent();
+    assert.equal(/welcome/i.test(introCardText || ''), false, 'Intro card should not say Welcome');
+    assert.ok((introCardText || '').includes('icon can give you info about how something works'));
+    assert.ok((introCardText || '').includes('Make art in 3D in the real world'));
+    assert.ok((introCardText || '').includes('Make art on the land in person IRL, and invite others.'));
+    assert.ok((introCardText || '').includes('Invite your agents to add art to the land.'));
     const initialLs = await page.evaluate(() =>
       globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
     );
@@ -305,12 +314,13 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
     assert.ok(selectedTabText.includes('AI Agents'));
 
-    // Reopen via Intro button and test "Tech & Guide" CTA opening viewport-tabbed Info modal above MapLibre
+    // Reopen via Intro button and test "Guide & Help" CTA opening viewport-tabbed Info modal above MapLibre
     await page.getByRole('button', { name: /^Intro$/i }).click();
     await page.waitForSelector(welcomeSelector);
-    await page.getByRole('button', { name: /Tech & Guide/i }).click();
+    await page.getByRole('button', { name: /Guide & Help/i }).click();
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
     await page.waitForSelector('[data-testid="info-guide-desktop"]');
+    await page.waitForSelector('[data-testid="info-guide-tip-callout"]');
     await page.getByRole('tab', { name: /Mobile AR Studio/i }).click();
     await page.waitForSelector('[data-testid="info-guide-mobile"]');
     await page.waitForSelector('text=Proof of Location Threat Model');
@@ -342,20 +352,20 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('.desktop-nav');
 
     // Dismiss initial first-time visitor overlay via magenta Quick Start CTA (verify MINT FREE LAND banner)
-    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
+    await page.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]');
     const freeLandText = await page.getByTestId('welcome-free-land-banner').textContent();
     assert.ok(freeLandText.includes('MINT FREE LAND by making art!'));
     const quickStartBtn = page.getByTestId('welcome-quick-start-btn');
     assert.ok((await quickStartBtn.textContent()).includes('Quick Start'));
     assert.ok((await quickStartBtn.getAttribute('class')).includes('btn-magenta'));
     await quickStartBtn.click();
-    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 
     const bodyText = await page.textContent('body');
     assert.ok(bodyText.includes('Desktop Map Explorer'));
-    assert.ok(bodyText.includes('A real-world 3D art map where humans draw land'));
+    assert.ok(bodyText.includes('Make art in 3D in the real world — make your own land and help develop others.'));
     // Desktop defaults to Land folder tab (larger, emoji icons, no "Around You")
     assert.equal(await page.getByTestId('desktop-nearby-tab-land').getAttribute('aria-selected'), 'true');
     assert.equal(await page.getByTestId('desktop-nearby-tab-sculptures').getAttribute('aria-selected'), 'false');
@@ -567,16 +577,16 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     page1.on('pageerror', (err) => errors1.push(err.message));
 
     await page1.goto(baseUrl, { waitUntil: 'networkidle' });
-    await page1.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
+    await page1.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]');
     await page1.waitForTimeout(1000);
 
-    assert.equal(await page1.isVisible('[aria-label="Welcome to SPRAY.LAND first-visit overview"]'), true);
+    assert.equal(await page1.isVisible('[aria-label="SPRAY.LAND first-visit overview"]'), true);
     assert.equal(await page1.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
     const scrollW = await page1.evaluate(() => globalThis.document.documentElement.scrollWidth);
     assert.ok(scrollW <= 391, `Expected mobile overlay width <= 391px, got ${scrollW}`);
 
     await page1.getByRole('button', { name: /Next: Quick Camera Guide/i }).click();
-    await page1.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
+    await page1.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
     await page1.waitForSelector('[aria-label="SPRAY.LAND Quick Start Guide"]');
@@ -589,9 +599,9 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     page2.on('pageerror', (err) => errors2.push(err.message));
 
     await page2.goto(baseUrl, { waitUntil: 'networkidle' });
-    await page2.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
+    await page2.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]');
     await page2.getByRole('button', { name: /Skip to Camera/i }).click();
-    await page2.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
+    await page2.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
     assert.equal(await page2.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
@@ -695,9 +705,9 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       return /OpenFreeMap|OpenStreetMap|CARTO/i.test(txt);
     }, { timeout: 15000 });
     assert.deepEqual(mapConsoleErrors, []);
-    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]');
+    await page.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]');
     await page.getByRole('button', { name: /Quick Start/i }).click();
-    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 
@@ -1078,7 +1088,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Next Step \(3\/3\)/i }).click();
     await page.waitForSelector('[data-testid="welcome-step-3"]');
     await page.getByRole('button', { name: /Quick Start/i }).click();
-    await page.waitForSelector('[aria-label="Welcome to SPRAY.LAND first-visit overview"]', {
+    await page.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
 

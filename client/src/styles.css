@@ -1250,6 +1250,24 @@ select {
   font-size: 16px;
 }
 
+.brand-logo {
+  display: block;
+  flex-shrink: 0;
+  max-width: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.brand-logo.is-lockup,
+.brand-logo.is-wordmark {
+  width: auto;
+}
+
+.brand-logo.is-stacked {
+  width: auto;
+}
+
 .nav-tabs {
   display: flex;
   gap: 8px;
@@ -2434,7 +2452,15 @@ select {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.welcome-brand-block {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .welcome-title-row {
@@ -2444,19 +2470,55 @@ select {
   gap: 8px;
 }
 
+.welcome-logo-heading {
+  margin: 0;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.welcome-hero-tagline {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.42;
+  color: #eaf2ff;
+  letter-spacing: 0.01em;
+}
+
+.welcome-top-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .welcome-free-land-banner {
-  margin-top: 8px;
+  margin-top: 0;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(255, 31, 163, 0.22), rgba(0, 245, 212, 0.18));
-  border: 1px solid rgba(255, 77, 166, 0.58);
+  background: linear-gradient(135deg, rgba(255, 45, 149, 0.22), rgba(0, 229, 255, 0.16));
+  border: 1px solid rgba(255, 45, 149, 0.56);
   color: #ffffff;
-  font-size: 13.5px;
+  font-size: 13px;
   letter-spacing: 0.02em;
-  box-shadow: 0 2px 14px rgba(255, 31, 163, 0.22);
+  box-shadow: 0 2px 14px rgba(255, 45, 149, 0.2);
+}
+
+.welcome-info-hint-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 10px;
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  color: #d7f7ff;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .welcome-step-title-row {
@@ -2552,11 +2614,81 @@ select {
 
 @media (max-width: 720px) {
   .welcome-overlay-card {
-    padding: 16px;
+    padding: 13px 13px;
+  }
+
+  .welcome-overlay-header {
+    margin-bottom: 8px;
+  }
+
+  .welcome-brand-block {
+    gap: 6px;
+  }
+
+  .welcome-logo-heading .brand-logo {
+    height: 32px !important;
+  }
+
+  .welcome-hero-tagline {
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .welcome-top-pills {
+    gap: 6px;
+  }
+
+  .welcome-free-land-banner {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+
+  .welcome-info-hint-pill {
+    font-size: 11.5px;
+    padding: 4px 9px;
   }
 
   .welcome-role-grid {
     grid-template-columns: 1fr;
+    gap: 7px;
+    margin-bottom: 8px;
+  }
+
+  .welcome-role-box {
+    padding: 9px 11px;
+  }
+
+  .welcome-role-title {
+    font-size: 13px;
+    margin-bottom: 3px;
+  }
+
+  .welcome-role-one-liner {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .welcome-walkthrough-stage {
+    margin: 4px 0 8px;
+    padding: 9px 11px;
+    gap: 6px;
+  }
+
+  .welcome-step-svg {
+    height: 76px;
+  }
+
+  .welcome-checkbox-row {
+    margin-bottom: 8px;
+  }
+
+  .welcome-actions-row {
+    gap: 6px;
+  }
+
+  .welcome-actions-row .btn {
+    padding: 7px 11px;
+    font-size: 12.5px;
   }
 }
 
@@ -3366,8 +3498,8 @@ select {
 
 .desktop-intro-headline {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
   font-size: 13px;
   line-height: 1.4;
@@ -3848,8 +3980,8 @@ select {
 
 .welcome-step-svg {
   width: 100%;
-  max-width: 280px;
-  height: 112px;
+  max-width: 260px;
+  height: 98px;
   display: block;
 }
 

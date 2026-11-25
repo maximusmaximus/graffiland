@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import BrandLogo from './BrandLogo.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const REASON_FILTERS = [
@@ -103,9 +104,9 @@ export default function LandArchiveModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 className="modal-title">
-            <XeroIcon emoji="🗄️" size={22} />
-            SPRAY.LAND Archive
+          <h2 className="modal-title" style={{ gap: 10 }}>
+            <BrandLogo variant="lockup" height={28} />
+            <span className="badge teal">Archive</span>
           </h2>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button

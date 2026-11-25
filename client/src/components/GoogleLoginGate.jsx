@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, setStoredToken } from '../utils/api.js';
+import BrandLogo from './BrandLogo.jsx';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function GoogleLoginGate({
@@ -83,10 +85,16 @@ export default function GoogleLoginGate({
   const card = (
     <div className="modal-card" style={{ maxWidth: 440 }}>
       <div className="modal-header">
-        <h2 className="modal-title">
-          <XeroIcon emoji="🔐" size={24} />
-          Sign in with Google
-        </h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <BrandLogo variant="lockup" height={28} />
+          <h2 className="modal-title" style={{ fontSize: 16 }}>
+            Sign in with Google
+            <InfoTip title="Gas-Free Account Wallet">
+              SPRAY.LAND uses Google Sign-In exclusively. When you publish 3D art in person, gas is
+              sponsored for you and your NFT is minted directly to your account wallet.
+            </InfoTip>
+          </h2>
+        </div>
         {onClose && (
           <button className="btn" onClick={onClose} aria-label="Close">
             <XeroIcon emoji="❌" size={16} />
@@ -95,8 +103,7 @@ export default function GoogleLoginGate({
       </div>
 
       <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
-        SPRAY.LAND uses Google Sign-In exclusively. When you publish a 3D sculpture, gas is
-        sponsored for you and the Robinhood Chain NFT is minted directly to your account wallet.
+        Sign in free to save your art, own your land, and keep everything in your account.
       </p>
 
       {error && (

@@ -48,6 +48,7 @@ import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import BrandLogo from './BrandLogo.jsx';
 import DesktopIntroBanner from './DesktopIntroBanner.jsx';
 import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
@@ -1991,8 +1992,7 @@ export default function DesktopHub({
     <div className="desktop-shell">
       <header className="desktop-nav">
         <div className="brand">
-          <XeroIcon emoji="🧊" size={26} />
-          <span>SPRAY.LAND</span>
+          <BrandLogo variant="lockup" height={34} />
           <span className="badge teal">Desktop Map Explorer</span>
         </div>
 

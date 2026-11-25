@@ -106,8 +106,12 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
+    assert.ok(view.getByTestId('brand-logo-lockup'));
+    assert.equal(/welcome/i.test(view.container.textContent || ''), false);
     assert.ok(view.getByText(/1\. Aim & Lock Your Starting Surface/i));
-    RTL.fireEvent.click(view.getByRole('button', { name: /Pro HUD/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Surface Scan & Anchor Details/i }));
+    assert.ok(view.getByText(/Proof of Location locks your real-world spot/i));
+    RTL.fireEvent.click(view.getByRole('button', { name: /^Pro HUD$/i }));
     assert.equal(quickToggled, 1);
 
     RTL.fireEvent.click(view.getByText(/Next Step/i));
@@ -168,10 +172,15 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
+    assert.ok(view.getByTestId('brand-logo-lockup'));
+    assert.ok(view.getByTestId('info-guide-tip-callout'));
     assert.ok(view.getByRole('tab', { name: /Desktop Map & 3D Land/i }));
     assert.ok(view.getByRole('tab', { name: /Mobile AR Studio/i }));
     assert.ok(view.getByTestId('info-guide-desktop'));
     assert.ok(view.getByText(/Draw, Shape & Mint 3D Land/i));
+    assert.ok(view.getByText(/mint up to 21 free starter plots/i));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Map Camera, Zoom & Search/i }));
+    assert.ok(view.getByText(/Fit Draft/i));
     assert.ok(view.getByText(/Proof of Location Threat Model/i));
 
     // Switch to Mobile AR Studio guide tab
@@ -385,7 +394,12 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     };
 
     renderBanner('human');
-    assert.ok(view.getByText(/A real-world 3D art map where humans draw land/i));
+    assert.ok(view.getByTestId('brand-logo-lockup'));
+    assert.ok(
+      view.getByText(
+        /Make art in 3D in the real world — make your own land and help develop others/i
+      )
+    );
     // Open clickable "i" tooltip on a feature chip
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: Desktop 3D Land Builder/i }));
     assert.ok(view.getByRole('tooltip'));
@@ -421,7 +435,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('FirstVisitWelcomeOverlay simplifies copy with MINT FREE LAND banner, hides tech terms in "i" tips & uses magenta Quick Start', async () => {
+  test('FirstVisitWelcomeOverlay shows SPRAY.LAND brand lockup with no Welcome, clear Human/AI copy, "i" info hint & magenta Quick Start', async () => {
     const { default: FirstVisitWelcomeOverlay } = await loadJsxModule(
       'client/src/components/FirstVisitWelcomeOverlay.jsx'
     );
@@ -443,19 +457,41 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    // Prominent MINT FREE LAND banner + clean simplified copy without visible tech jargon
+    // Official Voxel Spray Can lockup logo, NO "Welcome" wording, crisp tagline + "i" hint + Human/AI notes
+    assert.ok(view.getByTestId('brand-logo-lockup'));
     assert.ok(view.getByTestId('welcome-free-land-banner').textContent.includes('MINT FREE LAND by making art!'));
-    assert.ok(view.getByText(/Make 3D art on the real-world map/i));
+    assert.ok(
+      view.getByTestId('welcome-hero-tagline').textContent.includes(
+        'Make art in 3D in the real world — make your own land and help develop others.'
+      )
+    );
+    assert.ok(
+      view.getByTestId('welcome-info-hint').textContent.includes(
+        'icon can give you info about how something works'
+      )
+    );
+    assert.ok(view.getByText(/Make art on the land in person IRL, and invite others/i));
+    assert.ok(view.getByText(/Invite your agents to add art to the land/i));
     assert.ok(view.getByTestId('welcome-step-1'));
     assert.ok(view.getByText(/Claim Free 3D Land/i));
     assert.ok(view.container.querySelector('.welcome-step-svg'));
 
     const initialVisibleText = view.container.textContent || '';
-    for (const techTerm of ['isometric', '.GLB', 'voxel', 'MCP', 'EVM', '90% Seller', 'Explore the Map']) {
+    for (const forbidden of [
+      'Welcome',
+      'welcome',
+      'isometric',
+      '.GLB',
+      'voxel',
+      'MCP',
+      'EVM',
+      '90% Seller',
+      'Explore the Map'
+    ]) {
       assert.equal(
-        initialVisibleText.includes(techTerm),
+        initialVisibleText.includes(forbidden),
         false,
-        `Expected technical/legacy term "${techTerm}" to be hidden from main welcome banner`
+        `Expected term "${forbidden}" to be hidden from main intro card`
       );
     }
 
@@ -465,7 +501,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(quickStartBtn.className.includes('btn-magenta'));
 
     // Clicking the header "i" button reveals technical details & sale split
-    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Technical Details & Sale Split/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: How SPRAY\.LAND Works/i }));
     assert.ok(view.getByRole('tooltip'));
     assert.ok(view.getByRole('tooltip').textContent.includes('90% Seller'));
     assert.ok(view.getByRole('tooltip').textContent.includes('graffiland-mcp'));
@@ -478,24 +514,24 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Next Step \(3\/3\)/i }));
     assert.ok(view.getByTestId('welcome-step-3'));
-    assert.ok(view.getByText(/Share & Build Together/i));
+    assert.ok(view.getByText(/Invite & Develop Together/i));
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Back/i }));
     assert.ok(view.getByTestId('welcome-step-2'));
     assert.equal(exploreCalls.length, 0);
 
     assert.ok(view.getByText(/^For Humans$/i));
-    assert.ok(view.getByText(/^For AI$/i));
+    assert.ok(view.getByText(/^For AI Agents$/i));
 
-    // Clicking inside the card or opening a role "i" tooltip keeps the overlay open & shows tech details
+    // Clicking inside the card or opening a role "i" tooltip keeps the overlay open & shows extra details
     RTL.fireEvent.click(view.getByText(/^For Humans$/i));
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Humans Play/i }));
     assert.ok(view.getByRole('tooltip'));
-    assert.ok(view.getByText(/21 free gas-sponsored starter plots/i));
+    assert.ok(view.getByText(/21 free starter plots/i));
     assert.equal(exploreCalls.length, 0);
 
     // Starting a pointer press inside the card and releasing on the backdrop must NOT close it
-    const backdrop = view.getByRole('dialog', { name: /Welcome to SPRAY.LAND first-visit overview/i });
+    const backdrop = view.getByRole('dialog', { name: /SPRAY\.LAND first-visit overview/i });
     const cardEl = view.container.querySelector('.welcome-overlay-card');
     RTL.fireEvent.pointerDown(cardEl);
     RTL.fireEvent.click(backdrop);
@@ -516,7 +552,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
 
     // Re-check dontShowAgain -> action buttons pass true
     RTL.fireEvent.click(checkbox);
-    RTL.fireEvent.click(view.getByRole('button', { name: /Tech & Guide/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Guide & Help/i }));
     assert.equal(guideOpened, true);
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI/i }));
@@ -542,6 +578,56 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.click(mobileView.getByRole('button', { name: /Skip to Camera/i }));
     assert.equal(skippedCamera, true);
     cleanup();
+  });
+
+  test('BrandLogo and web favicon/OG metadata use official Voxel Spray Can brand kit per BRAND.md', async () => {
+    const { default: BrandLogo } = await loadJsxModule('client/src/components/BrandLogo.jsx');
+
+    // Lockup default
+    const lockupView = RTL.render(React.createElement(BrandLogo, { variant: 'lockup', height: 34 }));
+    const lockupImg = lockupView.getByTestId('brand-logo-lockup');
+    assert.equal(lockupImg.getAttribute('alt'), 'SPRAY.LAND');
+    assert.equal(lockupImg.getAttribute('data-brand-asset'), 'lockup');
+    assert.ok(String(lockupImg.getAttribute('src') || '').startsWith('data:image/svg+xml'));
+    cleanup();
+
+    // Mark <= 48px must automatically use simplified mark-small asset (per BRAND.md)
+    const smallMarkView = RTL.render(React.createElement(BrandLogo, { variant: 'mark', size: 32, decorative: true }));
+    const smallMarkImg = smallMarkView.getByTestId('brand-logo-mark');
+    assert.equal(smallMarkImg.getAttribute('data-brand-asset'), 'mark-small');
+    assert.equal(smallMarkImg.getAttribute('aria-hidden'), 'true');
+    cleanup();
+
+    // Mark > 48px uses full detail mark
+    const largeMarkView = RTL.render(React.createElement(BrandLogo, { variant: 'mark', size: 64 }));
+    const largeMarkImg = largeMarkView.getByTestId('brand-logo-mark');
+    assert.equal(largeMarkImg.getAttribute('data-brand-asset'), 'mark');
+    cleanup();
+
+    // Stacked & wordmark variants
+    const stackedView = RTL.render(React.createElement(BrandLogo, { variant: 'stacked', height: 88 }));
+    assert.equal(stackedView.getByTestId('brand-logo-stacked').getAttribute('data-brand-asset'), 'stacked');
+    cleanup();
+
+    // Official favicon & OG social assets wired in client/index.html and present in client/public/
+    const fs = await import('node:fs');
+    const indexHtml = fs.readFileSync(path.join(ROOT, 'client/index.html'), 'utf8');
+    assert.ok(indexHtml.includes('href="/favicon.svg"'));
+    assert.ok(indexHtml.includes('href="/apple-touch-icon.png"'));
+    assert.ok(indexHtml.includes('https://spray.land/og-image.png'));
+    assert.equal(indexHtml.includes('rx=\'22\''), false, 'Old green pixel SVG favicon should be removed');
+
+    for (const rel of [
+      'client/public/favicon.svg',
+      'client/public/favicon.ico',
+      'client/public/favicon-32.png',
+      'client/public/apple-touch-icon.png',
+      'client/public/icon-512.png',
+      'client/public/og-image.png'
+    ]) {
+      const stat = fs.statSync(path.join(ROOT, rel));
+      assert.ok(stat.size > 200, `Expected non-empty brand asset at ${rel}`);
+    }
   });
 
   test('DesktopLandBuilderPanel validates unique titles, compacts sliders, blocks pre-mint copy, shows post-mint copy tools & 21-free limit card without mobile callout buttons', async () => {
@@ -4055,6 +4141,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
+    assert.ok(view.getByTestId('brand-logo-lockup'));
+    assert.equal(/welcome/i.test(view.container.textContent || ''), false);
     assert.equal(view.getByTestId('direct-link-intro-text').textContent.trim(), DIRECT_LINK_INTRO_COPY);
 
     // Clicking inside the card must NOT dismiss

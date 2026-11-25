@@ -8,7 +8,9 @@ import {
   validateUsername
 } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
+import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
+import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function UsernameOnboardingModal({
@@ -143,18 +145,23 @@ export default function UsernameOnboardingModal({
     >
       <div className="modal-card username-onboarding-card">
         <div className="modal-header" style={{ marginBottom: 8 }}>
-          <h2 className="modal-title">
-            <XeroIcon emoji="✨" size={22} />
-            Claim Your Unique Username
-          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <BrandLogo variant="lockup" height={26} />
+            <h2 className="modal-title" style={{ fontSize: 17 }}>
+              Claim Your Unique Username
+              <InfoTip title="Public Profile Handle">
+                Your handle is unique across SPRAY.LAND, links your public profile page, and can be
+                updated anytime in Profile Settings.
+              </InfoTip>
+            </h2>
+          </div>
           <span className="badge teal" style={{ fontSize: 10.5 }}>
             Required
           </span>
         </div>
 
         <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-          Choose a unique handle for your public SPRAY.LAND profile. No one else can claim your
-          username, and you can change it anytime in your profile settings.
+          Pick a unique handle for your public profile.
         </p>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
