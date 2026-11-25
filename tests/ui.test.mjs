@@ -6513,4 +6513,325 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Land Management tab is hidden until user has paired on both Desktop and Mobile HUD', async () => {
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+
+    // 1) Mobile StudioHudTopBar hides Land Management pill when unpaired even if user owns lands
+    const mobileBase = {
+      user: { id: 'google:u-pair', name: 'Owner', username: 'owner1' },
+      mode: 'draw',
+      dockOpen: false,
+      location: { lat: 37.78, lng: -122.41 },
+      voxels: [],
+      quickSculpt: false,
+      hasOwnedLand: true,
+      ownedLandCount: 3,
+      cameraReady: true,
+      originStatus: { originBlocked: false, reason: '' },
+      sceneScan: { optimal: true },
+      nearbyCount: 1,
+      pairedCode: '',
+      mcpPairingsState: { mcpActive: false, pairings: [] },
+      onOpenLandManage: () => {},
+      onOpenAreaMap: () => {}
+    };
+
+    const mobileUnpaired = RTL.render(React.createElement(StudioHudTopBar, mobileBase));
+    assert.equal(mobileUnpaired.queryByLabelText('Land Management'), null);
+    cleanup();
+
+    // Paired via phone live-mirror code -> Land Management pill appears
+    const mobilePhonePaired = RTL.render(
+      React.createElement(StudioHudTopBar, { ...mobileBase, pairedCode: 'PAIR42' })
+    );
+    assert.ok(mobilePhonePaired.getByLabelText('Land Management'));
+    cleanup();
+
+    // Paired via MCP active -> Land Management pill appears
+    const mobileMcpPaired = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        ...mobileBase,
+        mcpPairingsState: { mcpActive: true, activePairing: { code: 'GLP-1234-5678-9012-3456' }, pairings: [] }
+      })
+    );
+    assert.ok(mobileMcpPaired.getByLabelText('Land Management'));
+    cleanup();
+
+    // 2) DesktopHub hides Land Management nav button until paired, and shows it once paired
+    const origFetch = globalThis.fetch;
+    localStorage.removeItem('graffiland_desktop_session_v1');
+    let mockMcpActive = false;
+    const ownerUser = {
+      id: 'google:owner-pair-1',
+      name: 'Pair Owner',
+      username: 'pairowner',
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+    const mockOwnedParcel = {
+      parcelId: 'GLAND-PAIR01',
+      customName: 'Paired Lot',
+      ownerUserId: ownerUser.id,
+      ownerAddress: ownerUser.walletAddress,
+      centerLat: 37.78,
+      centerLng: -122.415,
+      volume: {
+        centerLat: 37.78,
+        centerLng: -122.415,
+        widthMeters: 20,
+        depthMeters: 20,
+        heightMeters: 16,
+        rotationDeg: 0
+      }
+    };
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/mine')) {
+        return { ok: true, json: async () => ({ parcelCount: 1, parcels: [mockOwnedParcel] }) };
+      }
+      if (u.includes('/api/mcp/pairings')) {
+        return {
+          ok: true,
+          json: async () => ({
+            mcpActive: mockMcpActive,
+            activePairing: mockMcpActive ? { code: 'GLP-AAAA-BBBB-CCCC-DDDD', status: 'connected' } : null,
+            pairings: mockMcpActive ? [{ code: 'GLP-AAAA-BBBB-CCCC-DDDD', status: 'connected' }] : []
+          })
+        };
+      }
+      if (u.includes('/api/signatures/pending')) return { ok: true, json: async () => ({ requests: [] }) };
+      if (u.includes('/api/notifications')) return { ok: true, json: async () => ({ notifications: [], unreadCount: 0 }) };
+      if (u.includes('/api/sculptures')) return { ok: true, json: async () => ({ sculptures: [] }) };
+      if (u.includes('/api/parcels')) return { ok: true, json: async () => ({ parcels: [mockOwnedParcel] }) };
+      if (u.includes('/api/quests/nearby')) return { ok: true, json: async () => ({ quests: [] }) };
+      if (u.includes('/api/marketplace/listings')) return { ok: true, json: async () => ({ listings: [] }) };
+      if (u.includes('/api/agents/leaderboard')) {
+        return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      // Unpaired: owns 1 parcel, but Land Management nav tab must remain hidden
+      const unpairedView = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: ownerUser,
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+      await RTL.waitFor(() => {
+        assert.ok(unpairedView.getByTestId('nav-pair-phone-btn'));
+        assert.ok(unpairedView.getAllByText('Paired Lot').length > 0);
+      });
+      assert.equal(unpairedView.queryByTestId('nav-land-management-btn'), null);
+      cleanup();
+
+      // Paired (mcpActive: true): Land Management nav tab now appears
+      mockMcpActive = true;
+      const pairedView = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: ownerUser,
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+      await RTL.waitFor(() => {
+        const lmBtn = pairedView.getByTestId('nav-land-management-btn');
+        assert.ok(lmBtn.textContent.includes('Land Management (1)'));
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+      localStorage.removeItem('graffiland_desktop_session_v1');
+      cleanup();
+    }
+  });
+
+  test('Draft land undo (Ctrl+Z/Cmd+Z), delete unminted (Delete/Backspace), and duplicate copy/paste (Ctrl+C/Ctrl+V)', async () => {
+    const {
+      createPastedDraftFromTemplate,
+      pruneDraftIdsFromHistory
+    } = await loadJsxModule('client/src/utils/draftLandHistory.js');
+    const { footprintsOverlap, validateAndNormalizeLandVolume } = await import(
+      '../shared/landVolume.mjs'
+    );
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+
+    // 1) Pure helper checks: pasted duplicate preserves dimensions/rotation, never overlaps, and increments Copy name cleanly
+    const sourceDraft = {
+      id: 'draft-src-1',
+      centerLat: 37.775,
+      centerLng: -122.419,
+      widthMeters: 26,
+      depthMeters: 18,
+      heightMeters: 22,
+      zScale: 1.375,
+      rotationDeg: 35,
+      customName: 'Neon Plaza',
+      description: 'Corner terrace'
+    };
+    const copy1 = createPastedDraftFromTemplate(sourceDraft, {
+      existingDrafts: [sourceDraft],
+      existingParcels: [],
+      idFactory: () => 'draft-copy-1'
+    });
+    assert.equal(copy1.id, 'draft-copy-1');
+    assert.equal(copy1.widthMeters, 26);
+    assert.equal(copy1.depthMeters, 18);
+    assert.equal(copy1.heightMeters, 22);
+    assert.equal(copy1.rotationDeg, 35);
+    assert.equal(copy1.customName, 'Neon Plaza Copy');
+    const vSrc = validateAndNormalizeLandVolume({ ...sourceDraft, lat: sourceDraft.centerLat, lng: sourceDraft.centerLng }).volume;
+    const vCopy1 = validateAndNormalizeLandVolume({ ...copy1, lat: copy1.centerLat, lng: copy1.centerLng }).volume;
+    assert.equal(footprintsOverlap(vSrc, vCopy1), false);
+
+    const copy2 = createPastedDraftFromTemplate(sourceDraft, {
+      existingDrafts: [sourceDraft, copy1],
+      existingParcels: [],
+      idFactory: () => 'draft-copy-2'
+    });
+    assert.equal(copy2.customName, 'Neon Plaza Copy 2');
+    const vCopy2 = validateAndNormalizeLandVolume({ ...copy2, lat: copy2.centerLat, lng: copy2.centerLng }).volume;
+    assert.equal(footprintsOverlap(vSrc, vCopy2), false);
+    assert.equal(footprintsOverlap(vCopy1, vCopy2), false);
+
+    // Pruning minted draft IDs prevents undo from resurrecting an already-minted parcel
+    const pruned = pruneDraftIdsFromHistory(
+      [
+        { drafts: [sourceDraft], selectedDraftId: sourceDraft.id, label: 'Edit land' },
+        { drafts: [sourceDraft, copy1], selectedDraftId: copy1.id, label: 'Paste land' }
+      ],
+      [sourceDraft.id]
+    );
+    assert.equal(pruned.length, 2);
+    assert.equal(pruned[0].drafts.length, 0);
+    assert.equal(pruned[1].drafts.length, 1);
+    assert.equal(pruned[1].drafts[0].id, copy1.id);
+
+    // 2) Full DesktopHub keyboard + toolbar integration
+    const origFetch = globalThis.fetch;
+    localStorage.removeItem('graffiland_desktop_session_v1');
+    const ownerUser = {
+      id: 'google:draft-kbd-user',
+      name: 'Land Builder',
+      username: 'landbuilder',
+      walletAddress: '0x2222222222222222222222222222222222222222'
+    };
+    const existingMinted = {
+      parcelId: 'GLAND-MINTED1',
+      customName: 'Already Minted Lot',
+      ownerUserId: ownerUser.id,
+      ownerAddress: ownerUser.walletAddress,
+      centerLat: 37.79,
+      centerLng: -122.40,
+      volume: {
+        centerLat: 37.79,
+        centerLng: -122.40,
+        widthMeters: 20,
+        depthMeters: 20,
+        heightMeters: 16,
+        rotationDeg: 0
+      }
+    };
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/mine')) {
+        return { ok: true, json: async () => ({ parcelCount: 1, parcels: [existingMinted] }) };
+      }
+      if (u.includes('/api/mcp/pairings')) return { ok: true, json: async () => ({ mcpActive: false, pairings: [] }) };
+      if (u.includes('/api/signatures/pending')) return { ok: true, json: async () => ({ requests: [] }) };
+      if (u.includes('/api/notifications')) return { ok: true, json: async () => ({ notifications: [], unreadCount: 0 }) };
+      if (u.includes('/api/sculptures')) return { ok: true, json: async () => ({ sculptures: [] }) };
+      if (u.includes('/api/parcels')) return { ok: true, json: async () => ({ parcels: [existingMinted] }) };
+      if (u.includes('/api/quests/nearby')) return { ok: true, json: async () => ({ quests: [] }) };
+      if (u.includes('/api/marketplace/listings')) return { ok: true, json: async () => ({ listings: [] }) };
+      if (u.includes('/api/agents/leaderboard')) return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      if (u.includes('/api/lands/check-name')) return { ok: true, json: async () => ({ available: true }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: ownerUser,
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+
+      // Open Mint Land mode and add one unminted square
+      await RTL.waitFor(() => {
+        assert.ok(view.getAllByRole('button', { name: /Mint Land/i }).length > 0);
+      });
+      RTL.fireEvent.click(view.getAllByRole('button', { name: /Mint Land/i })[0]);
+      await RTL.waitFor(() => {
+        assert.ok(view.getByRole('button', { name: /\+ Add Square/i }));
+      });
+      RTL.fireEvent.click(view.getByRole('button', { name: /\+ Add Square/i }));
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(1\//));
+      });
+
+      // Rename the draft inside the input; pressing Delete inside the input MUST NOT delete the land
+      const nameInput = view.container.querySelector('#land-square-name-input');
+      assert.ok(nameInput);
+      RTL.fireEvent.change(nameInput, { target: { value: 'Solar Terrace' } });
+      RTL.fireEvent.keyDown(nameInput, { key: 'Delete' });
+      RTL.fireEvent.keyDown(nameInput, { key: 'Backspace' });
+      assert.ok(view.getByText(/Draft Plots \(1\//));
+
+      // Ctrl+C then Ctrl+V on window duplicates the selected land with non-overlapping coords & "Copy" title
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'c', ctrlKey: true });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Copied "Solar Terrace"/i));
+      });
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'v', ctrlKey: true });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(2\//));
+        assert.equal(view.container.querySelector('#land-square-name-input')?.value, 'Solar Terrace Copy');
+      });
+
+      // Pressing Delete removes the selected unminted duplicate
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'Delete' });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(1\//));
+      });
+
+      // Pressing Cmd+Z (metaKey + z) brings the deleted unminted land right back!
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'z', metaKey: true });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(2\//));
+        assert.equal(view.container.querySelector('#land-square-name-input')?.value, 'Solar Terrace Copy');
+      });
+
+      // Clicking the Undo toolbar button undoes the paste back to 1 draft
+      RTL.fireEvent.click(view.getByTestId('land-undo-btn'));
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(1\//));
+      });
+
+      // Pressing Backspace deletes the remaining unminted draft, and Ctrl+Z restores it even from 0 drafts
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'Backspace' });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(0\//));
+      });
+      assert.equal(view.getByTestId('land-undo-btn').disabled, false);
+      RTL.fireEvent.keyDown(globalThis.window, { key: 'z', ctrlKey: true });
+      await RTL.waitFor(() => {
+        assert.ok(view.getByText(/Draft Plots \(1\//));
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+      localStorage.removeItem('graffiland_desktop_session_v1');
+      cleanup();
+    }
+  });
 });

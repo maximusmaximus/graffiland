@@ -417,6 +417,8 @@ export default function MapView3D({
   onAddDraftRectangle = null,
   onSelectDraft = null,
   onUpdateDraft = null,
+  onDraftGestureStart = null,
+  onDraftGestureEnd = null,
   onAdd3DItemForParcel = null,
   onTitleParcel = null,
   onCopyParcelShareLink = null,
@@ -494,6 +496,8 @@ export default function MapView3D({
   const onSelectDraftRef = useRef(onSelectDraft);
   const onAddDraftRef = useRef(onAddDraftRectangle);
   const onUpdateDraftRef = useRef(onUpdateDraft);
+  const onDraftGestureStartRef = useRef(onDraftGestureStart);
+  const onDraftGestureEndRef = useRef(onDraftGestureEnd);
   const onAdd3DItemForParcelRef = useRef(onAdd3DItemForParcel);
   const onTitleParcelRef = useRef(onTitleParcel);
   const onCopyParcelShareLinkRef = useRef(onCopyParcelShareLink);
@@ -575,6 +579,12 @@ export default function MapView3D({
   useEffect(() => {
     onUpdateDraftRef.current = onUpdateDraft;
   }, [onUpdateDraft]);
+  useEffect(() => {
+    onDraftGestureStartRef.current = onDraftGestureStart;
+  }, [onDraftGestureStart]);
+  useEffect(() => {
+    onDraftGestureEndRef.current = onDraftGestureEnd;
+  }, [onDraftGestureEnd]);
   useEffect(() => {
     onAdd3DItemForParcelRef.current = onAdd3DItemForParcel;
   }, [onAdd3DItemForParcel]);
@@ -2119,6 +2129,14 @@ export default function MapView3D({
   function handleOverlayPointerDown(e) {
     if (e.button !== 0 || !mapRef.current || !mapHostRef.current) return;
     if (e.target.closest('.map3d-ui-stop, .maplibregl-ctrl')) return;
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    if (
+      activeEl &&
+      typeof activeEl.blur === 'function' &&
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(String(activeEl.tagName || '').toUpperCase())
+    ) {
+      activeEl.blur();
+    }
 
     const rect = mapHostRef.current.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -2173,6 +2191,7 @@ export default function MapView3D({
         startAngleRad,
         startDraft: { ...hit.draft }
       };
+      onDraftGestureStartRef.current?.(hit.draft.id, hit.type);
       drawWireframes();
       return;
     }
@@ -2542,6 +2561,7 @@ export default function MapView3D({
 
     if (gizmoDragRef.current) {
       gizmoDragRef.current = null;
+      onDraftGestureEndRef.current?.();
       if (
         mapRef.current &&
         !drawModeRef.current &&

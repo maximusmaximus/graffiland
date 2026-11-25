@@ -24,6 +24,18 @@ import {
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
 import {
+  cloneDrafts,
+  createPastedDraftFromTemplate,
+  DRAFT_EDIT_COALESCE_MS,
+  draftSnapshotsEqual,
+  extractLandCopyTemplate,
+  getDraftUpdateFieldGroup,
+  hasActiveTextSelection,
+  isEditableKeyboardTarget,
+  pruneDraftIdsFromHistory,
+  pushDraftHistoryEntry
+} from '../utils/draftLandHistory.js';
+import {
   groupNearestLandsWithSculptures,
   isLandOwnedByUser,
   resolveLandCoords
@@ -160,6 +172,23 @@ export default function DesktopHub({
   const [autoSwitchedHint, setAutoSwitchedHint] = useState(false);
   const [draftParcelsRaw, setDraftParcelsRaw] = useState([]);
   const [selectedDraftId, setSelectedDraftId] = useState('');
+  const draftParcelsRawRef = useRef(draftParcelsRaw);
+  draftParcelsRawRef.current = draftParcelsRaw;
+  const selectedDraftIdRef = useRef(selectedDraftId);
+  selectedDraftIdRef.current = selectedDraftId;
+  const [draftUndoStack, setDraftUndoStack] = useState([]);
+  const [draftRedoStack, setDraftRedoStack] = useState([]);
+  const draftUndoStackRef = useRef(draftUndoStack);
+  draftUndoStackRef.current = draftUndoStack;
+  const draftRedoStackRef = useRef(draftRedoStack);
+  draftRedoStackRef.current = draftRedoStack;
+  const [copiedLandTemplate, setCopiedLandTemplate] = useState(null);
+  const copiedLandTemplateRef = useRef(copiedLandTemplate);
+  copiedLandTemplateRef.current = copiedLandTemplate;
+  const pendingDraftGestureRef = useRef(null);
+  const lastDraftCoalesceRef = useRef({ draftId: '', fieldGroup: '', ts: 0 });
+  const [desktopPhonePaired, setDesktopPhonePaired] = useState(false);
+  const prevUserIdForPairRef = useRef(user?.id || '');
   const [mintBusy, setMintBusy] = useState(false);
   const [landStatus, setLandStatus] = useState('');
   const [recentlyMintedParcels, setRecentlyMintedParcels] = useState([]);
@@ -503,6 +532,14 @@ export default function DesktopHub({
     const timer = setInterval(refreshPairingAndApprovals, 12000);
     return () => clearInterval(timer);
   }, [user?.id, pairOpen, refreshPairingAndApprovals]);
+
+  useEffect(() => {
+    const nextUid = user?.id || '';
+    if (prevUserIdForPairRef.current && prevUserIdForPairRef.current !== nextUid) {
+      setDesktopPhonePaired(false);
+    }
+    prevUserIdForPairRef.current = nextUid;
+  }, [user?.id]);
 
   useEffect(() => {
     if (!navigator.geolocation) return undefined;
@@ -1152,38 +1189,108 @@ export default function DesktopHub({
     return (sculptures || []).filter((s) => s.parcelId === activeAddItemParcel.parcelId);
   }, [activeAddItemParcel, sculptures]);
 
-  const handleAddDraftRectangle = useCallback((rect) => {
-    const currentCount = draftCountRef.current;
-    if (currentCount >= LAND_VOLUME_LIMITS.maxSelectionBatch) {
-      setLandStatus({
-        text: `Selection batch limit reached (max ${LAND_VOLUME_LIMITS.maxSelectionBatch} squares).`,
-        isError: true
-      });
-      return;
-    }
-    const nextId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const heightMeters = Number(rect.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters);
-    const newDraft = {
-      id: nextId,
-      centerLat: Number(rect.lat),
-      centerLng: Number(rect.lng),
-      widthMeters: Number(rect.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters),
-      depthMeters: Number(rect.depthMeters || LAND_VOLUME_LIMITS.defaultDepthMeters),
-      heightMeters,
-      zScale: Number((heightMeters / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
-      rotationDeg: Number(rect.rotationDeg || 0),
-      customName: ''
-    };
-    setDraftParcelsRaw((prev) => [...prev, newDraft]);
-    setSelectedDraftId(nextId);
-    setSidebarTab('land');
-    setDrawMode(false);
-    setLandStatus('');
-    if (currentCount === 0 && viewModeRef.current === '2d') {
-      setViewMode('3d');
-      setAutoSwitchedHint(true);
+  const applyDraftState = useCallback((nextDrafts, nextSelectedId) => {
+    draftParcelsRawRef.current = nextDrafts;
+    draftCountRef.current = nextDrafts.length;
+    setDraftParcelsRaw(nextDrafts);
+    if (nextSelectedId !== undefined) {
+      selectedDraftIdRef.current = nextSelectedId;
+      setSelectedDraftId(nextSelectedId);
     }
   }, []);
+
+  const recordDraftUndoSnapshot = useCallback((label, explicitDrafts, explicitSelectedId) => {
+    const snapshotDrafts =
+      explicitDrafts !== undefined ? explicitDrafts : draftParcelsRawRef.current;
+    const snapshotSelected =
+      explicitSelectedId !== undefined ? explicitSelectedId : selectedDraftIdRef.current;
+    const nextPast = pushDraftHistoryEntry(draftUndoStackRef.current, {
+      drafts: snapshotDrafts,
+      selectedDraftId: snapshotSelected,
+      label
+    });
+    draftUndoStackRef.current = nextPast;
+    setDraftUndoStack(nextPast);
+    draftRedoStackRef.current = [];
+    setDraftRedoStack([]);
+  }, []);
+
+  const pruneMintedDraftsFromHistory = useCallback((mintedDraftIds) => {
+    const nextPast = pruneDraftIdsFromHistory(draftUndoStackRef.current, mintedDraftIds);
+    const nextFuture = pruneDraftIdsFromHistory(draftRedoStackRef.current, mintedDraftIds);
+    draftUndoStackRef.current = nextPast;
+    draftRedoStackRef.current = nextFuture;
+    setDraftUndoStack(nextPast);
+    setDraftRedoStack(nextFuture);
+  }, []);
+
+  const handleDraftGestureStart = useCallback((draftId, kind = 'edit') => {
+    const labelMap = {
+      body: 'Move land',
+      corner: 'Resize land',
+      edge: 'Resize land',
+      vbar: 'Rotate land',
+      height: 'Adjust land height',
+      scale: 'Scale land',
+      width: 'Resize land width',
+      depth: 'Resize land depth',
+      rotate: 'Rotate land'
+    };
+    pendingDraftGestureRef.current = {
+      draftId,
+      kind,
+      committed: false,
+      snapshot: {
+        drafts: cloneDrafts(draftParcelsRawRef.current),
+        selectedDraftId: selectedDraftIdRef.current,
+        label: labelMap[kind] || 'Edit land'
+      }
+    };
+    lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+  }, []);
+
+  const handleDraftGestureEnd = useCallback(() => {
+    pendingDraftGestureRef.current = null;
+  }, []);
+
+  const handleAddDraftRectangle = useCallback(
+    (rect) => {
+      const currentDrafts = draftParcelsRawRef.current;
+      const currentCount = currentDrafts.length;
+      if (currentCount >= LAND_VOLUME_LIMITS.maxSelectionBatch) {
+        setLandStatus({
+          text: `Selection batch limit reached (max ${LAND_VOLUME_LIMITS.maxSelectionBatch} squares).`,
+          isError: true
+        });
+        return;
+      }
+      recordDraftUndoSnapshot('Add land');
+      pendingDraftGestureRef.current = null;
+      lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+      const nextId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const heightMeters = Number(rect.heightMeters || LAND_VOLUME_LIMITS.defaultHeightMeters);
+      const newDraft = {
+        id: nextId,
+        centerLat: Number(rect.lat),
+        centerLng: Number(rect.lng),
+        widthMeters: Number(rect.widthMeters || LAND_VOLUME_LIMITS.defaultWidthMeters),
+        depthMeters: Number(rect.depthMeters || LAND_VOLUME_LIMITS.defaultDepthMeters),
+        heightMeters,
+        zScale: Number((heightMeters / LAND_VOLUME_LIMITS.defaultHeightMeters).toFixed(3)),
+        rotationDeg: Number(rect.rotationDeg || 0),
+        customName: ''
+      };
+      applyDraftState([...currentDrafts, newDraft], nextId);
+      setSidebarTab('land');
+      setDrawMode(false);
+      setLandStatus('');
+      if (currentCount === 0 && viewModeRef.current === '2d') {
+        setViewMode('3d');
+        setAutoSwitchedHint(true);
+      }
+    },
+    [applyDraftState, recordDraftUndoSnapshot]
+  );
 
   const handleAddDraftAtCenter = useCallback(() => {
     const existingVols = (parcels || []).map((p) => p?.volume || null).filter(Boolean);
@@ -1283,22 +1390,280 @@ export default function DesktopHub({
     handleAddDraftRectangle
   ]);
 
-  const handleUpdateDraft = useCallback((id, patch) => {
-    setDraftParcelsRaw((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
-    );
-  }, []);
+  const handleUpdateDraft = useCallback(
+    (id, patch, options = {}) => {
+      const currentDrafts = draftParcelsRawRef.current;
+      const nextDrafts = currentDrafts.map((item) =>
+        item.id === id ? { ...item, ...patch } : item
+      );
+      if (draftSnapshotsEqual(currentDrafts, nextDrafts)) return;
 
-  const handleRemoveDraft = useCallback((id) => {
-    setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== id));
-    setSelectedDraftId((cur) => (cur === id ? '' : cur));
-  }, []);
+      const gesture = pendingDraftGestureRef.current;
+      if (gesture && gesture.draftId === id) {
+        if (!gesture.committed) {
+          recordDraftUndoSnapshot(
+            gesture.snapshot.label,
+            gesture.snapshot.drafts,
+            gesture.snapshot.selectedDraftId
+          );
+          gesture.committed = true;
+        }
+      } else if (options?.discrete) {
+        recordDraftUndoSnapshot(options.label || 'Edit land');
+        lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+      } else {
+        const fieldGroup = getDraftUpdateFieldGroup(patch);
+        const now = Date.now();
+        const prevCoalesce = lastDraftCoalesceRef.current;
+        const canCoalesce =
+          prevCoalesce.draftId === id &&
+          prevCoalesce.fieldGroup === fieldGroup &&
+          now - prevCoalesce.ts <= DRAFT_EDIT_COALESCE_MS;
+        if (!canCoalesce) {
+          const autoLabel =
+            options?.label ||
+            (fieldGroup === 'title'
+              ? 'Rename land'
+              : fieldGroup === 'description'
+              ? 'Edit land description'
+              : 'Edit land');
+          recordDraftUndoSnapshot(autoLabel);
+        }
+        lastDraftCoalesceRef.current = { draftId: id, fieldGroup, ts: now };
+      }
+
+      applyDraftState(nextDrafts);
+    },
+    [applyDraftState, recordDraftUndoSnapshot]
+  );
+
+  const handleRemoveDraft = useCallback(
+    (id) => {
+      const currentDrafts = draftParcelsRawRef.current;
+      if (!currentDrafts.some((item) => item.id === id)) return false;
+      recordDraftUndoSnapshot('Delete land');
+      pendingDraftGestureRef.current = null;
+      lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+      const nextDrafts = currentDrafts.filter((item) => item.id !== id);
+      const nextSelected = selectedDraftIdRef.current === id ? '' : selectedDraftIdRef.current;
+      applyDraftState(nextDrafts, nextSelected);
+      setLandStatus({ text: '🗑️ Deleted unminted land — press Ctrl+Z / Cmd+Z to undo.' });
+      return true;
+    },
+    [applyDraftState, recordDraftUndoSnapshot]
+  );
 
   const handleClearDrafts = useCallback(() => {
-    setDraftParcelsRaw([]);
-    setSelectedDraftId('');
-    setLandStatus('');
-  }, []);
+    const currentDrafts = draftParcelsRawRef.current;
+    if (currentDrafts.length > 0) {
+      recordDraftUndoSnapshot('Clear draft lands');
+    }
+    pendingDraftGestureRef.current = null;
+    lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+    applyDraftState([], '');
+    setLandStatus(
+      currentDrafts.length > 0
+        ? { text: 'Cleared draft lands — press Ctrl+Z / Cmd+Z to undo.' }
+        : ''
+    );
+  }, [applyDraftState, recordDraftUndoSnapshot]);
+
+  const handleUndoDraftAction = useCallback(() => {
+    const past = draftUndoStackRef.current;
+    if (!past.length) return false;
+    const entry = past[past.length - 1];
+    const nextPast = past.slice(0, -1);
+    const nextFuture = pushDraftHistoryEntry(draftRedoStackRef.current, {
+      drafts: draftParcelsRawRef.current,
+      selectedDraftId: selectedDraftIdRef.current,
+      label: entry.label
+    });
+    draftUndoStackRef.current = nextPast;
+    draftRedoStackRef.current = nextFuture;
+    setDraftUndoStack(nextPast);
+    setDraftRedoStack(nextFuture);
+    pendingDraftGestureRef.current = null;
+    lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+    const restoredDrafts = cloneDrafts(entry.drafts);
+    applyDraftState(restoredDrafts, entry.selectedDraftId || '');
+    if (restoredDrafts.length > 0) {
+      setSidebarTab('land');
+    }
+    setLandStatus({ text: `↩ Undid: ${entry.label}` });
+    return true;
+  }, [applyDraftState]);
+
+  const handleRedoDraftAction = useCallback(() => {
+    const future = draftRedoStackRef.current;
+    if (!future.length) return false;
+    const entry = future[future.length - 1];
+    const nextFuture = future.slice(0, -1);
+    const nextPast = pushDraftHistoryEntry(draftUndoStackRef.current, {
+      drafts: draftParcelsRawRef.current,
+      selectedDraftId: selectedDraftIdRef.current,
+      label: entry.label
+    });
+    draftUndoStackRef.current = nextPast;
+    draftRedoStackRef.current = nextFuture;
+    setDraftUndoStack(nextPast);
+    setDraftRedoStack(nextFuture);
+    pendingDraftGestureRef.current = null;
+    lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+    const restoredDrafts = cloneDrafts(entry.drafts);
+    applyDraftState(restoredDrafts, entry.selectedDraftId || '');
+    if (restoredDrafts.length > 0) {
+      setSidebarTab('land');
+    }
+    setLandStatus({ text: `↪ Redid: ${entry.label}` });
+    return true;
+  }, [applyDraftState]);
+
+  const resolveSelectedLandForCopy = useCallback(() => {
+    const curSelected = selectedDraftIdRef.current;
+    const currentDrafts = draftParcelsRawRef.current;
+    if (curSelected) {
+      const matchedDraft = currentDrafts.find((d) => d.id === curSelected);
+      if (matchedDraft) return matchedDraft;
+      if (curSelected.startsWith('owned:')) {
+        const pid = curSelected.slice(6);
+        const owned =
+          ownedUserParcels.find((p) => p.parcelId === pid) ||
+          (parcels || []).find((p) => p.parcelId === pid);
+        if (owned) return owned;
+      }
+    }
+    if (sidebarTab === 'land' && currentDrafts.length > 0) {
+      return currentDrafts[0];
+    }
+    if (selectedLandParcelId) {
+      return (parcels || []).find((p) => p.parcelId === selectedLandParcelId) || null;
+    }
+    return null;
+  }, [ownedUserParcels, parcels, selectedLandParcelId, sidebarTab]);
+
+  const handleCopySelectedLand = useCallback(() => {
+    const target = resolveSelectedLandForCopy();
+    const template = extractLandCopyTemplate(target, LAND_VOLUME_LIMITS);
+    if (!template) return false;
+    copiedLandTemplateRef.current = template;
+    setCopiedLandTemplate(template);
+    const label = template.customName ? `"${template.customName}"` : 'selected land';
+    setLandStatus({
+      text: `📋 Copied ${label} (${Math.round(template.widthMeters)}×${Math.round(template.depthMeters)}×${Math.round(template.heightMeters)}m) — press Ctrl+V / Cmd+V to duplicate.`
+    });
+    return true;
+  }, [resolveSelectedLandForCopy]);
+
+  const handlePasteCopiedLand = useCallback(() => {
+    const template = copiedLandTemplateRef.current;
+    if (!template) return false;
+    const currentDrafts = draftParcelsRawRef.current;
+    if (currentDrafts.length >= LAND_VOLUME_LIMITS.maxSelectionBatch) {
+      setLandStatus({
+        text: `Selection batch limit reached (max ${LAND_VOLUME_LIMITS.maxSelectionBatch} squares).`,
+        isError: true
+      });
+      return false;
+    }
+    const pasted = createPastedDraftFromTemplate(template, {
+      existingParcels: parcels,
+      existingDrafts: draftParcelsRawRef.current,
+      limits: LAND_VOLUME_LIMITS
+    });
+    if (!pasted) return false;
+    recordDraftUndoSnapshot('Paste land');
+    pendingDraftGestureRef.current = null;
+    lastDraftCoalesceRef.current = { draftId: '', fieldGroup: '', ts: 0 };
+    applyDraftState([...currentDrafts, pasted], pasted.id);
+    setSidebarTab('land');
+    setDrawMode(false);
+    setLandStatus({
+      text: `📌 Pasted duplicate land (${Math.round(pasted.widthMeters)}×${Math.round(pasted.depthMeters)}×${Math.round(pasted.heightMeters)}m) — press Ctrl+Z / Cmd+Z to undo.`
+    });
+    return true;
+  }, [applyDraftState, parcels, recordDraftUndoSnapshot]);
+
+  const hasBlockingDesktopModal = Boolean(
+    selected ||
+      pairOpen ||
+      infoOpen ||
+      landManageOpen ||
+      titleModalTarget ||
+      loginOpen ||
+      visitedParcel ||
+      activeAddItemParcel ||
+      profileHandle ||
+      archiveOpen ||
+      adminOpen
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (hasBlockingDesktopModal) return;
+      if (isEditableKeyboardTarget(e.target)) return;
+
+      const key = String(e.key || '').toLowerCase();
+      const mod = Boolean(e.metaKey || e.ctrlKey);
+
+      // Ctrl+Z / Cmd+Z -> Undo last land action
+      if (mod && !e.altKey && !e.shiftKey && key === 'z') {
+        if (draftUndoStackRef.current.length > 0) {
+          e.preventDefault();
+          handleUndoDraftAction();
+        }
+        return;
+      }
+
+      // Ctrl+Shift+Z / Cmd+Shift+Z / Ctrl+Y / Cmd+Y -> Redo land action
+      if (mod && !e.altKey && ((e.shiftKey && key === 'z') || (!e.shiftKey && key === 'y'))) {
+        if (draftRedoStackRef.current.length > 0) {
+          e.preventDefault();
+          handleRedoDraftAction();
+        }
+        return;
+      }
+
+      // Delete / Backspace -> Delete selected unminted land (never deletes minted land)
+      if (!mod && !e.altKey && (e.key === 'Delete' || e.key === 'Backspace')) {
+        const selId = selectedDraftIdRef.current;
+        if (selId && draftParcelsRawRef.current.some((d) => d.id === selId)) {
+          e.preventDefault();
+          handleRemoveDraft(selId);
+        }
+        return;
+      }
+
+      // Ctrl+C / Cmd+C -> Copy selected land (when user has no text selection highlighted)
+      if (mod && !e.altKey && !e.shiftKey && key === 'c') {
+        if (hasActiveTextSelection()) return;
+        const target = resolveSelectedLandForCopy();
+        if (target) {
+          e.preventDefault();
+          handleCopySelectedLand();
+        }
+        return;
+      }
+
+      // Ctrl+V / Cmd+V -> Paste duplicated land
+      if (mod && !e.altKey && !e.shiftKey && key === 'v') {
+        if (copiedLandTemplateRef.current) {
+          e.preventDefault();
+          handlePasteCopiedLand();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    hasBlockingDesktopModal,
+    handleUndoDraftAction,
+    handleRedoDraftAction,
+    handleRemoveDraft,
+    resolveSelectedLandForCopy,
+    handleCopySelectedLand,
+    handlePasteCopiedLand
+  ]);
 
   const handleMintDraft = useCallback(async (draft) => {
     if (!draft) return;
@@ -1346,8 +1711,9 @@ export default function DesktopHub({
         mintedParcelRecord,
         ...prev.filter((p) => p.parcelId !== res.parcelId)
       ]);
-      setDraftParcelsRaw((prev) => prev.filter((item) => item.id !== draft.id));
-      setSelectedDraftId(`owned:${res.parcelId}`);
+      const remainingDrafts = draftParcelsRawRef.current.filter((item) => item.id !== draft.id);
+      applyDraftState(remainingDrafts, `owned:${res.parcelId}`);
+      pruneMintedDraftsFromHistory([draft.id]);
       setLandStatus({
         text: `Minted "${mintedParcelRecord.customName}" (${Math.round(draft.widthMeters)}×${Math.round(draft.depthMeters)}×${Math.round(draft.heightMeters)}m) — ${res.gasPaidBy === 'platform-relayer' ? 'Gas Sponsored' : 'Minted'}! Visit in person on Mobile AR and add art within 28 days to clear the timer and permanently own it.`
       });
@@ -1376,7 +1742,7 @@ export default function DesktopHub({
     } finally {
       setMintBusy(false);
     }
-  }, [user?.id, refreshData, refreshMyLands]);
+  }, [user?.id, refreshData, refreshMyLands, applyDraftState, pruneMintedDraftsFromHistory]);
 
   const handleMintAll = useCallback(async () => {
     const ready = draftParcels.filter(
@@ -1450,8 +1816,9 @@ export default function DesktopHub({
         const addedIds = new Set(mintedRecords.map((r) => r.parcelId));
         return [...mintedRecords, ...prev.filter((p) => !addedIds.has(p.parcelId))];
       });
-      setDraftParcelsRaw((prev) => prev.filter((item) => !mintedSet.has(item.id)));
-      setSelectedDraftId(`owned:${mintedIds[mintedIds.length - 1]}`);
+      const remainingDrafts = draftParcelsRawRef.current.filter((item) => !mintedSet.has(item.id));
+      applyDraftState(remainingDrafts, `owned:${mintedIds[mintedIds.length - 1]}`);
+      pruneMintedDraftsFromHistory(mintedSet);
       for (const rec of mintedRecords) {
         recordUserAction(user?.id, {
           type: 'mint_land',
@@ -1488,7 +1855,7 @@ export default function DesktopHub({
       });
     }
     setMintBusy(false);
-  }, [draftParcels, user?.id, refreshData, refreshMyLands]);
+  }, [draftParcels, user?.id, refreshData, refreshMyLands, applyDraftState, pruneMintedDraftsFromHistory]);
 
   const handleUpdateOwnedVolume = useCallback(async (parcelId, nextVolume) => {
     if (!parcelId || !user?.id) return;
@@ -1681,10 +2048,12 @@ export default function DesktopHub({
           >
             <XeroIcon emoji="🏗️" size={16} /> Mint Land
           </button>
-          {(myLands.parcelCount > 0 || (myLands.parcels && myLands.parcels.length > 0)) && (
+          {(mcpState.mcpActive || desktopPhonePaired) &&
+            (myLands.parcelCount > 0 || (myLands.parcels && myLands.parcels.length > 0)) && (
             <button
               type="button"
               className="btn"
+              data-testid="nav-land-management-btn"
               style={{ borderColor: 'rgba(255, 209, 102, 0.6)', color: 'var(--accent-gold)' }}
               onClick={() => {
                 setLandManageParcelId('');
@@ -1781,10 +2150,13 @@ export default function DesktopHub({
               onSelectSculpture={openSculpture}
               onAddDraftRectangle={handleAddDraftRectangle}
               onSelectDraft={(id) => {
+                selectedDraftIdRef.current = id;
                 setSelectedDraftId(id);
                 setSidebarTab('land');
               }}
               onUpdateDraft={handleUpdateDraft}
+              onDraftGestureStart={handleDraftGestureStart}
+              onDraftGestureEnd={handleDraftGestureEnd}
               onAdd3DItemForParcel={handleOpenAddLandItem}
               onTitleParcel={(p) => setTitleModalTarget({ mode: 'owned', parcel: p })}
               onCopyParcelShareLink={handleCopyParcelShareLink}
@@ -1966,10 +2338,27 @@ export default function DesktopHub({
                 drawMode={drawMode}
                 onToggleDrawMode={() => setDrawMode((cur) => !cur)}
                 onAddDraftAtCenter={handleAddDraftAtCenter}
-                onSelectDraft={(id) => setSelectedDraftId(id)}
+                onSelectDraft={(id) => {
+                  selectedDraftIdRef.current = id;
+                  setSelectedDraftId(id);
+                }}
                 onUpdateDraft={handleUpdateDraft}
                 onRemoveDraft={handleRemoveDraft}
                 onClearDrafts={handleClearDrafts}
+                onUndoDraft={handleUndoDraftAction}
+                onRedoDraft={handleRedoDraftAction}
+                canUndo={draftUndoStack.length > 0}
+                canRedo={draftRedoStack.length > 0}
+                undoLabel={
+                  draftUndoStack.length > 0
+                    ? draftUndoStack[draftUndoStack.length - 1].label
+                    : ''
+                }
+                hasCopiedDraft={Boolean(copiedLandTemplate)}
+                onCopySelectedLand={handleCopySelectedLand}
+                onPasteCopiedLand={handlePasteCopiedLand}
+                onDraftGestureStart={handleDraftGestureStart}
+                onDraftGestureEnd={handleDraftGestureEnd}
                 onMintDraft={handleMintDraft}
                 onMintAll={handleMintAll}
                 onUpdateOwnedVolume={handleUpdateOwnedVolume}
@@ -2534,7 +2923,10 @@ export default function DesktopHub({
               </button>
             </div>
 
-            <PairWorkbench3D inModal />
+            <PairWorkbench3D
+              inModal
+              onPhonePairedChange={(paired) => setDesktopPhonePaired(Boolean(paired))}
+            />
 
             {/* Structured Revealable AI Agent Pairing (MCP) Accordion */}
             <div className="pair-agent-accordion" data-testid="pair-agent-accordion">
@@ -2916,7 +3308,11 @@ export default function DesktopHub({
           busy={mintBusy}
           onSave={async ({ customName, description }) => {
             if (titleModalTarget.mode === 'draft') {
-              handleUpdateDraft(titleModalTarget.parcel.id, { customName, description });
+              handleUpdateDraft(
+                titleModalTarget.parcel.id,
+                { customName, description },
+                { discrete: true, label: 'Edit land title' }
+              );
             } else {
               await handleSaveOwnedTitle(titleModalTarget.parcel.parcelId, {
                 customName,

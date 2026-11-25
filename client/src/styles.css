@@ -2919,6 +2919,33 @@ select {
   flex-wrap: wrap;
 }
 
+.land-draft-history-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 5px 6px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.land-draft-history-bar .btn {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.land-draft-history-bar .land-delete-draft-btn {
+  margin-left: auto;
+  color: #ff8fa3;
+}
+
+.land-draft-history-bar .land-delete-draft-btn:hover:not(:disabled) {
+  background: rgba(255, 77, 109, 0.16);
+  border-color: rgba(255, 77, 109, 0.45);
+  color: #ffb3c1;
+}
+
 .land-builder-legend {
   display: flex;
   gap: 10px;
