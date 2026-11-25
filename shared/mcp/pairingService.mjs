@@ -10,6 +10,25 @@ import {
 import { McpServiceError, resolvePreferredOwnerWallet, resolveUserWalletAddresses } from './helpers.mjs';
 import { notifyMcpRepairNeeded } from '../notificationService.mjs';
 
+export const DEFAULT_MCP_PAIRING_TTL_HOURS = 24 * 30; // 30 days so pairing codes stay reliably connected
+export const MAX_MCP_PAIRING_TTL_HOURS = 24 * 90; // 90 days max
+export const MCP_SLIDING_RENEW_THRESHOLD_MS = 15 * 24 * 3600 * 1000; // Auto-extend when < 15 days left on active use
+
+function resolveMcpTtlHours(expiresHours) {
+  const n = Number(expiresHours);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MCP_PAIRING_TTL_HOURS;
+  return Math.min(MAX_MCP_PAIRING_TTL_HOURS, Math.max(1, n));
+}
+
+function computeSlidingExpiresAt(currentExpiresAt, nowMs = Date.now()) {
+  const curExpMs = Date.parse(String(currentExpiresAt || ''));
+  const targetMs = nowMs + DEFAULT_MCP_PAIRING_TTL_HOURS * 3600 * 1000;
+  if (!Number.isFinite(curExpMs) || curExpMs - nowMs < MCP_SLIDING_RENEW_THRESHOLD_MS) {
+    return new Date(targetMs).toISOString();
+  }
+  return currentExpiresAt;
+}
+
 export function formatPairingRow(row) {
   if (!row) return null;
   const expired = new Date(row.expires_at).getTime() < Date.now();
@@ -30,7 +49,10 @@ export function formatPairingRow(row) {
   };
 }
 
-export async function createMcpPairing(db, { user, expiresHours = 24, apiOrigin = '' }) {
+export async function createMcpPairing(
+  db,
+  { user, expiresHours = DEFAULT_MCP_PAIRING_TTL_HOURS, apiOrigin = '' }
+) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const ownerAddress = resolvePreferredOwnerWallet(user);
   if (!ownerAddress) {
@@ -38,9 +60,10 @@ export async function createMcpPairing(db, { user, expiresHours = 24, apiOrigin 
   }
   const code = generateRobustPairingCode();
   const challengeNonce = generateRandomNonceHex(16);
+  const ttlHours = resolveMcpTtlHours(expiresHours);
   const now = new Date();
   const createdAt = now.toISOString();
-  const expiresAt = new Date(now.getTime() + expiresHours * 3600 * 1000).toISOString();
+  const expiresAt = new Date(now.getTime() + ttlHours * 3600 * 1000).toISOString();
 
   await db.run(
     `INSERT INTO mcp_pairings (
@@ -163,7 +186,9 @@ export async function connectMcpPairing(
   }
 
   const cleanName = String(agentName || row.agent_name || 'paired-agent').trim().slice(0, 64);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const refreshedExpiresAt = computeSlidingExpiresAt(row.expires_at, nowMs);
 
   await db.run(
     `UPDATE mcp_pairings
@@ -172,9 +197,10 @@ export async function connectMcpPairing(
          agent_address = CASE WHEN ? != '' THEN ? ELSE agent_address END,
          key_connected = ?,
          connected_at = CASE WHEN connected_at = '' THEN ? ELSE connected_at END,
-         last_active_at = ?
+         last_active_at = ?,
+         expires_at = ?
      WHERE code = ?`,
-    [cleanName, cleanAgentAddress, cleanAgentAddress, keyConnected, now, now, norm]
+    [cleanName, cleanAgentAddress, cleanAgentAddress, keyConnected, now, now, refreshedExpiresAt, norm]
   );
 
   const updated = await db.get('SELECT * FROM mcp_pairings WHERE code = ?', [norm]);
@@ -262,10 +288,15 @@ export async function requireActiveMcpPairing(db, { pairingCode, callerUser = nu
     throw new McpServiceError('Paired owner account not found.', 404);
   }
 
-  await db.run('UPDATE mcp_pairings SET last_active_at = ? WHERE code = ?', [
-    new Date().toISOString(),
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const nextExpiresAt = computeSlidingExpiresAt(row.expires_at, nowMs);
+  await db.run('UPDATE mcp_pairings SET last_active_at = ?, expires_at = ? WHERE code = ?', [
+    nowIso,
+    nextExpiresAt,
     norm
   ]);
 
-  return { pairing: formatPairingRow(row), pairingRow: row, ownerUser };
+  const refreshedRow = { ...row, last_active_at: nowIso, expires_at: nextExpiresAt };
+  return { pairing: formatPairingRow(refreshedRow), pairingRow: refreshedRow, ownerUser };
 }

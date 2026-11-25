@@ -3194,4 +3194,120 @@ describe('GRAFFILAND Full-Stack Verification', () => {
       await new Promise((resolve) => rlApp.server.close(resolve));
     }
   });
+
+  test('WebSocket pairing supports ping/pong keepalive, preserves code across transient desktop reconnects, and reclaims preferredCode', async () => {
+    const desktop1 = new WebSocket(wsUrl);
+    await new Promise((r) => desktop1.once('open', r));
+    const d1Msgs = [];
+    desktop1.on('message', (d) => d1Msgs.push(JSON.parse(d.toString())));
+
+    desktop1.send(JSON.stringify({ type: 'create_pair' }));
+    await new Promise((r) => setTimeout(r, 60));
+    const created = d1Msgs.find((m) => m.type === 'pair_created');
+    assert.ok(created?.code && created.code.length === 6);
+
+    const mobile = new WebSocket(wsUrl);
+    await new Promise((r) => mobile.once('open', r));
+    const mMsgs = [];
+    mobile.on('message', (d) => mMsgs.push(JSON.parse(d.toString())));
+
+    mobile.send(JSON.stringify({ type: 'join_pair', code: created.code }));
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(mMsgs.some((m) => m.type === 'pair_connected' && m.code === created.code));
+
+    // Ping/pong keepalive stays strictly between client & server (never relayed to peer)
+    desktop1.send(JSON.stringify({ type: 'ping' }));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(d1Msgs.some((m) => m.type === 'pong'));
+    assert.equal(mMsgs.some((m) => m.type === 'ping'), false);
+
+    // Transient desktop disconnect notifies desktop_reconnecting (does NOT kill mobile pairing!)
+    desktop1.close();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(mMsgs.some((m) => m.type === 'desktop_reconnecting' && m.code === created.code));
+    assert.equal(mMsgs.some((m) => m.type === 'pair_ended'), false);
+
+    // Reconnecting desktop with preferredCode reclaims the EXACT same code & re-links live mobile
+    const desktop2 = new WebSocket(wsUrl);
+    await new Promise((r) => desktop2.once('open', r));
+    const d2Msgs = [];
+    desktop2.on('message', (d) => d2Msgs.push(JSON.parse(d.toString())));
+    desktop2.send(JSON.stringify({ type: 'create_pair', preferredCode: created.code }));
+    await new Promise((r) => setTimeout(r, 80));
+
+    assert.ok(
+      d2Msgs.some((m) => m.type === 'pair_created' && m.code === created.code && m.reclaimed === true)
+    );
+    assert.ok(
+      d2Msgs.some((m) => m.type === 'pair_connected' && m.code === created.code && m.reconnected === true)
+    );
+
+    // Relay still works seamlessly after reconnect
+    mobile.send(JSON.stringify({ type: 'voxels_sync', voxels: [{ x: 1, y: 2, z: 3, color: '#00f5d4' }] }));
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(d2Msgs.some((m) => m.type === 'voxels_sync' && m.voxels?.length === 1));
+
+    // Explicit end_pair ends the room cleanly
+    desktop2.send(JSON.stringify({ type: 'end_pair', code: created.code }));
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(mMsgs.some((m) => m.type === 'pair_ended'));
+
+    desktop2.close();
+    mobile.close();
+  });
+
+  test('MCP pairing defaults to 30-day TTL and extends expiration via sliding renewal on active use', async () => {
+    const auth = await apiJson('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({
+        devProfile: { email: 'long-ttl-owner@graffiland.local', name: 'Long TTL Owner' }
+      })
+    });
+    assert.equal(auth.status, 200);
+    const tok = auth.body.token;
+
+    // Default create (no explicit expiresHours) grants 30-day (720h) TTL so pairing codes don't drop daily
+    const created = await apiJson('/api/mcp/pairings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({})
+    });
+    assert.equal(created.status, 200);
+    const code = created.body.pairing.code;
+    const ttlHours = (Date.parse(created.body.pairing.expiresAt) - Date.now()) / (3600 * 1000);
+    assert.ok(ttlHours >= 29 * 24, `Expected ~30 day default pairing TTL, got ${ttlHours.toFixed(1)}h`);
+
+    // Explicit short TTL (24h) auto-extends to 30 days on active connect/MCP usage (sliding renewal)
+    const shortCreated = await apiJson('/api/mcp/pairings', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ expiresHours: 24 })
+    });
+    assert.equal(shortCreated.status, 200);
+    const shortCode = shortCreated.body.pairing.code;
+    const initialShortHours =
+      (Date.parse(shortCreated.body.pairing.expiresAt) - Date.now()) / (3600 * 1000);
+    assert.ok(initialShortHours <= 25);
+
+    const conn = await apiJson('/api/mcp/pairings/connect', {
+      method: 'POST',
+      body: JSON.stringify({ pairingCode: shortCode, agentName: 'PersistentAgent' })
+    });
+    assert.equal(conn.status, 200);
+    const renewedHours = (Date.parse(conn.body.pairing.expiresAt) - Date.now()) / (3600 * 1000);
+    assert.ok(
+      renewedHours >= 29 * 24,
+      `Expected active pairing connect to renew TTL to ~30 days, got ${renewedHours.toFixed(1)}h`
+    );
+
+    // Active MCP initialize call succeeds on the renewed pairing
+    const rpc = await apiJson('/api/mcp', {
+      method: 'POST',
+      headers: { 'X-Graffiland-Pairing-Code': shortCode },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'ttl-1', method: 'initialize', params: {} })
+    });
+    assert.equal(rpc.status, 200);
+    assert.equal(rpc.body?.result?.pairing?.code, shortCode);
+    assert.ok(code.startsWith('GLP-'));
+  });
 });

@@ -15,6 +15,7 @@ import {
 import { hasWebGLSupport, loadMapLibre } from '../../utils/loadMapLibre.js';
 import {
   computePrismScreenGeometry,
+  hitTestMintedParcelPrism,
   projectLngLatAltToScreen
 } from '../../utils/map3dProjection.js';
 import {
@@ -631,6 +632,7 @@ export default function MobileIsometricMap({
   const bearingOffsetRef = useRef(bearingOffset);
   const onSelectParcelRef = useRef(onSelectParcel);
   const onSelectSculptureRef = useRef(onSelectSculpture);
+  const latestLandHitTargetsRef = useRef([]);
 
   useEffect(() => {
     entriesRef.current = resolvedEntries;
@@ -713,6 +715,7 @@ export default function MobileIsometricMap({
           });
         }
         pendingLabels.push({
+          parcel: other.parcel,
           geom: otherGeom,
           outerColor: otherOuter,
           innerColor: otherInner,
@@ -761,6 +764,7 @@ export default function MobileIsometricMap({
 
         if (!showcaseModeRef.current) {
           pendingLabels.push({
+            parcel: primary.parcel,
             geom,
             outerColor,
             innerColor,
@@ -897,7 +901,9 @@ export default function MobileIsometricMap({
     }
 
     // Pass 3: Draw canvas land labels strictly ON TOP of wireframes without overlapping HUD or artwork callouts
+    const landHitTargets = [];
     for (const item of pendingLabels) {
+      const beforeCount = placedRects.length;
       drawFloatingLandLabel(ctx, item.geom, {
         ...item,
         stageWidth: w,
@@ -905,7 +911,15 @@ export default function MobileIsometricMap({
         reservedRects,
         placedRects
       });
+      const labelRect = placedRects.length > beforeCount ? placedRects[placedRects.length - 1] : null;
+      if (item.parcel) {
+        landHitTargets.push({ parcel: item.parcel, geom: item.geom, labelRect });
+      }
     }
+    if (showcaseModeRef.current && primary?.parcel && primaryGeom) {
+      landHitTargets.push({ parcel: primary.parcel, geom: primaryGeom, labelRect: null });
+    }
+    latestLandHitTargetsRef.current = landHitTargets;
 
     // Pass 4: Compute directional edge-arrow labels pointing to selectable neighboring lands
     const prismAvoidRects = [];
@@ -1400,6 +1414,41 @@ export default function MobileIsometricMap({
                 return;
               }
             }
+            // Check rendered canvas land labels first, then 3D parcel boundary/prism walls, then 2D floor layer
+            const selectMatchedParcel = (parcelObj) => {
+              if (!parcelObj) return false;
+              if (showcaseModeRef.current && onSelectLandRef.current) {
+                onSelectLandRef.current(parcelObj);
+                return true;
+              }
+              if (onSelectParcelRef.current) {
+                onSelectParcelRef.current(parcelObj);
+                return true;
+              }
+              return false;
+            };
+
+            const targets = latestLandHitTargetsRef.current || [];
+            for (let ti = targets.length - 1; ti >= 0; ti -= 1) {
+              const t = targets[ti];
+              const r = t.labelRect;
+              if (
+                r &&
+                e.point.x >= r.x - 4 &&
+                e.point.x <= r.x + r.w + 4 &&
+                e.point.y >= r.y - 4 &&
+                e.point.y <= r.y + r.h + 4
+              ) {
+                if (selectMatchedParcel(t.parcel)) return;
+              }
+            }
+            for (let ti = targets.length - 1; ti >= 0; ti -= 1) {
+              const t = targets[ti];
+              if (hitTestMintedParcelPrism(e.point.x, e.point.y, t.geom, 10)?.hit) {
+                if (selectMatchedParcel(t.parcel)) return;
+              }
+            }
+
             if (map.getLayer('mobile-iso-lands-floor-fill')) {
               const landHits = map.queryRenderedFeatures(e.point, {
                 layers: ['mobile-iso-lands-floor-fill']
@@ -1410,11 +1459,7 @@ export default function MobileIsometricMap({
                   (entry) => entry.parcel.parcelId === pid
                 );
                 if (matchEntry) {
-                  if (showcaseModeRef.current && onSelectLandRef.current) {
-                    onSelectLandRef.current(matchEntry.parcel);
-                  } else if (onSelectParcelRef.current) {
-                    onSelectParcelRef.current(matchEntry.parcel);
-                  }
+                  selectMatchedParcel(matchEntry.parcel);
                 }
               }
             }

@@ -29,6 +29,7 @@ import {
 } from './mcp/helpers.mjs';
 import { MCP_TOOLS } from './mcp/toolSchemas.mjs';
 import {
+  DEFAULT_MCP_PAIRING_TTL_HOURS,
   connectMcpPairing,
   createMcpPairing,
   disconnectMcpPairing,
@@ -70,6 +71,7 @@ import {
 } from './mcp/signatureService.mjs';
 
 export {
+  DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
   McpServiceError,
   addLandContributor,

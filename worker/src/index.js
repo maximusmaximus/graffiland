@@ -106,6 +106,7 @@ import {
   saveUserDraft
 } from '../../shared/draftService.mjs';
 import {
+  DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
   addLandContributor,
   connectMcpPairing,
@@ -880,13 +881,20 @@ export class PairCoordinator {
     const [client, server] = Object.values(pair);
     server.accept();
 
+    const PAIR_CODE_RE = /^[A-Z2-9]{6}$/;
+    const ROOM_PERSIST_TTL_MS = 30 * 60 * 1000;
     let meta = { role: null, code: null, mcpCode: null };
 
-    server.addEventListener('message', (event) => {
+    server.addEventListener('message', async (event) => {
       let msg;
       try {
         msg = JSON.parse(event.data);
       } catch {
+        return;
+      }
+
+      if (msg.type === 'ping') {
+        this.sendJson(server, { type: 'pong', ts: Date.now() });
         return;
       }
 
@@ -905,32 +913,129 @@ export class PairCoordinator {
         return;
       }
 
+      if (msg.type === 'end_pair') {
+        const targetCode = String(msg.code || meta.code || '').trim().toUpperCase();
+        const existing = targetCode ? this.rooms.get(targetCode) : null;
+        if (existing && (!existing.desktopWs || existing.desktopWs === server)) {
+          if (existing.mobileWs && existing.mobileWs.readyState === 1) {
+            this.sendJson(existing.mobileWs, {
+              type: 'pair_ended',
+              reason: 'Desktop started a new pairing session.'
+            });
+          }
+          this.rooms.delete(targetCode);
+          this.state.storage?.delete?.(`room:${targetCode}`).catch(() => {});
+          if (meta.code === targetCode) {
+            meta = { ...meta, role: null, code: null };
+          }
+        }
+        return;
+      }
+
       if (msg.type === 'create_pair') {
-        const code = this.generateCode();
-        this.rooms.set(code, { code, desktopWs: server, mobileWs: null });
+        const preferred = String(msg.preferredCode || '').trim().toUpperCase();
+        let code = '';
+        let reclaimed = false;
+        let room = null;
+
+        if (PAIR_CODE_RE.test(preferred)) {
+          const existing = this.rooms.get(preferred);
+          if (!existing) {
+            code = preferred;
+          } else if (
+            !existing.desktopWs ||
+            existing.desktopWs.readyState !== 1 ||
+            existing.desktopWs === server
+          ) {
+            code = preferred;
+            room = existing;
+            reclaimed = true;
+          }
+        }
+
+        if (!code) {
+          code = this.generateCode();
+        }
+
+        const now = Date.now();
+        if (room) {
+          room.desktopWs = server;
+          room.desktopDisconnectedAt = 0;
+          room.lastActiveAt = now;
+        } else {
+          room = {
+            code,
+            desktopWs: server,
+            mobileWs: null,
+            createdAt: now,
+            lastActiveAt: now,
+            desktopDisconnectedAt: 0
+          };
+          this.rooms.set(code, room);
+        }
+
         meta = { ...meta, role: 'desktop', code };
-        this.state.storage?.put?.(`room:${code}`, { code, createdAt: Date.now() }).catch(() => {});
-        this.sendJson(server, { type: 'pair_created', code });
+        this.state.storage
+          ?.put?.(`room:${code}`, { code, createdAt: now, expiresAt: now + ROOM_PERSIST_TTL_MS })
+          .catch(() => {});
+        this.sendJson(server, { type: 'pair_created', code, reclaimed });
+
+        if (room.mobileWs && room.mobileWs.readyState === 1) {
+          this.sendJson(server, { type: 'pair_connected', code, role: 'desktop', reconnected: true });
+          this.sendJson(room.mobileWs, {
+            type: 'pair_connected',
+            code,
+            role: 'mobile',
+            reconnected: true
+          });
+        }
         return;
       }
 
       if (msg.type === 'join_pair') {
         const code = String(msg.code || '').trim().toUpperCase();
-        const room = this.rooms.get(code);
+        let room = this.rooms.get(code);
+        if (!room && PAIR_CODE_RE.test(code)) {
+          const stored = await this.state.storage?.get?.(`room:${code}`).catch(() => null);
+          if (stored && Number(stored.expiresAt || 0) > Date.now()) {
+            room = {
+              code,
+              desktopWs: null,
+              mobileWs: null,
+              createdAt: Number(stored.createdAt || Date.now()),
+              lastActiveAt: Date.now(),
+              desktopDisconnectedAt: Date.now()
+            };
+            this.rooms.set(code, room);
+          }
+        }
         if (!room) {
           this.sendJson(server, { type: 'pair_error', error: 'Invalid or expired pairing code.' });
           return;
         }
+        const now = Date.now();
         room.mobileWs = server;
+        room.lastActiveAt = now;
         meta = { ...meta, role: 'mobile', code };
-        this.state.storage?.put?.(`room:${code}:connected`, { connectedAt: Date.now() }).catch(() => {});
-        this.sendJson(server, { type: 'pair_connected', code, role: 'mobile' });
-        this.sendJson(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
+        this.state.storage
+          ?.put?.(`room:${code}`, { code, createdAt: room.createdAt || now, expiresAt: now + ROOM_PERSIST_TTL_MS })
+          .catch(() => {});
+        const desktopOpen = Boolean(room.desktopWs && room.desktopWs.readyState === 1);
+        this.sendJson(server, {
+          type: 'pair_connected',
+          code,
+          role: 'mobile',
+          desktopPending: !desktopOpen
+        });
+        if (desktopOpen) {
+          this.sendJson(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
+        }
         return;
       }
 
       const room = meta.code ? this.rooms.get(meta.code) : null;
       if (!room) return;
+      room.lastActiveAt = Date.now();
       if (meta.role === 'mobile') {
         this.sendJson(room.desktopWs, msg);
       } else if (meta.role === 'desktop') {
@@ -944,10 +1049,22 @@ export class PairCoordinator {
       }
       if (!meta.code || !this.rooms.has(meta.code)) return;
       const room = this.rooms.get(meta.code);
-      if (meta.role === 'desktop') {
-        this.sendJson(room.mobileWs, { type: 'pair_ended', reason: 'Desktop closed pairing.' });
-        this.rooms.delete(meta.code);
-      } else if (meta.role === 'mobile') {
+      if (meta.role === 'desktop' && room.desktopWs === server) {
+        room.desktopWs = null;
+        room.desktopDisconnectedAt = Date.now();
+        if (room.mobileWs && room.mobileWs.readyState === 1) {
+          this.sendJson(room.mobileWs, { type: 'desktop_reconnecting', code: meta.code });
+        }
+        // Keep room code reserved in storage for 30 min so closing modal or network blips seamlessly reclaim it
+        const now = Date.now();
+        this.state.storage
+          ?.put?.(`room:${meta.code}`, {
+            code: meta.code,
+            createdAt: room.createdAt || now,
+            expiresAt: now + ROOM_PERSIST_TTL_MS
+          })
+          .catch(() => {});
+      } else if (meta.role === 'mobile' && room.mobileWs === server) {
         room.mobileWs = null;
         this.sendJson(room.desktopWs, { type: 'mobile_disconnected', code: meta.code });
       }
@@ -2062,7 +2179,7 @@ export default {
           return jsonResponse(
             await createMcpPairing(d1Adapter, {
               user,
-              expiresHours: Number(body?.expiresHours || 24),
+              expiresHours: Number(body?.expiresHours || DEFAULT_MCP_PAIRING_TTL_HOURS),
               apiOrigin: url.origin
             }),
             200,

@@ -29,9 +29,11 @@ import {
 } from '../utils/landMapHelpers.js';
 import {
   computePrismScreenGeometry,
+  hitTestMintedParcelPrism,
   pointInPolygon2D,
   projectLngLatAltToScreen
 } from '../utils/map3dProjection.js';
+export { hitTestMintedParcelPrism };
 import {
   drawFloatingCenterArrow,
   drawFloatingLandLabel,
@@ -414,6 +416,7 @@ export default function MapView3D({
   config = null,
   onViewportChange = null,
   onSelectSculpture = null,
+  onSelectParcel = null,
   onAddDraftRectangle = null,
   onSelectDraft = null,
   onUpdateDraft = null,
@@ -493,6 +496,7 @@ export default function MapView3D({
   const showBuildingsRef = useRef(showBuildings);
   const showTerrainRef = useRef(showTerrain);
   const onSelectSculptureRef = useRef(onSelectSculpture);
+  const onSelectParcelRef = useRef(onSelectParcel);
   const onSelectDraftRef = useRef(onSelectDraft);
   const onAddDraftRef = useRef(onAddDraftRectangle);
   const onUpdateDraftRef = useRef(onUpdateDraft);
@@ -518,6 +522,7 @@ export default function MapView3D({
   const hoverDrawPreviewRef = useRef(null);
   const holdDrawRef = useRef(null);
   const pendingSculptureClickRef = useRef(null);
+  const pendingParcelClickRef = useRef(null);
   const gizmoDragRef = useRef(null);
   const orbitDragRef = useRef(null);
   const shiftPanActiveRef = useRef(false);
@@ -570,6 +575,9 @@ export default function MapView3D({
   useEffect(() => {
     onSelectSculptureRef.current = onSelectSculpture;
   }, [onSelectSculpture]);
+  useEffect(() => {
+    onSelectParcelRef.current = onSelectParcel;
+  }, [onSelectParcel]);
   useEffect(() => {
     onSelectDraftRef.current = onSelectDraft;
   }, [onSelectDraft]);
@@ -1814,12 +1822,19 @@ export default function MapView3D({
       });
       btnRow.appendChild(shareBtn);
 
-      const badge = document.createElement('span');
-      badge.className = 'map3d-owned-plus-tag';
+      const badge = document.createElement('button');
+      badge.type = 'button';
+      badge.className = 'map3d-owned-plus-tag map3d-ui-stop';
       badge.dataset.testid = 'map3d-land-label';
       badge.dataset.parcelId = pid;
       badge.textContent = formatSimpleLandLabel(p);
-      badge.title = landName;
+      badge.setAttribute('aria-label', `Open detailed view for ${landName}`);
+      badge.title = `${landName} — click to open detailed view`;
+      badge.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      badge.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        onSelectParcelRef.current?.(p);
+      });
 
       wrap.append(btnRow, badge);
       wrap.style.display = 'none';
@@ -2084,6 +2099,57 @@ export default function MapView3D({
     }
   }
 
+  function hitTestMintedParcelAtScreenPt(px, py) {
+    const map = mapRef.current;
+    if (!map) return null;
+    let bestParcel = null;
+    let bestScore = Infinity;
+
+    for (const p of parcelsRef.current || []) {
+      const vol =
+        p?.volume ||
+        (p?.bounds ? buildDefaultVolumeFromBounds(p.bounds, p.parcelId, p.geohash) : null);
+      if (!vol) continue;
+      const geom = computePrismScreenGeometry(map, maplibregl, vol);
+      const res = hitTestMintedParcelPrism(px, py, geom, 10);
+      if (res?.hit) {
+        const score = (res.onBoundary ? 0 : 100) + res.centerDist;
+        if (score < bestScore) {
+          bestScore = score;
+          bestParcel = p;
+        }
+      }
+    }
+    if (bestParcel) return bestParcel;
+
+    // Fallback to MapLibre 2D/extruded parcel layers when zoomed far out
+    if (styleReadyRef.current) {
+      const queryLayers = ['parcels-fill', 'parcels-outline'].filter((lid) => {
+        try {
+          return Boolean(map.getLayer(lid));
+        } catch {
+          return false;
+        }
+      });
+      if (queryLayers.length > 0) {
+        try {
+          const hits = map.queryRenderedFeatures([px, py], { layers: queryLayers });
+          const pid = String(hits?.[0]?.properties?.parcelId || '').toUpperCase();
+          if (pid) {
+            return (
+              (parcelsRef.current || []).find(
+                (p) => String(p?.parcelId || '').toUpperCase() === pid
+              ) || null
+            );
+          }
+        } catch {
+          // ignore query errors while style loads
+        }
+      }
+    }
+    return null;
+  }
+
   function cancelPendingHoldDraw() {
     const h = holdDrawRef.current;
     if (!h) return;
@@ -2147,6 +2213,7 @@ export default function MapView3D({
     if (hit) {
       cancelPendingHoldDraw();
       pendingSculptureClickRef.current = null;
+      pendingParcelClickRef.current = null;
       const ll = mapRef.current.unproject([px, py]);
       if (!ll) return;
       if (selectedDraftIdRef.current !== hit.draft.id) {
@@ -2202,6 +2269,7 @@ export default function MapView3D({
     if (drawModeRef.current) {
       cancelPendingHoldDraw();
       pendingSculptureClickRef.current = null;
+      pendingParcelClickRef.current = null;
       dragStartRef.current = { x: px, y: py, lng: ll.lng, lat: ll.lat, fromHold: false };
       dragPreviewRef.current = null;
       return;
@@ -2212,8 +2280,13 @@ export default function MapView3D({
     if (scHit) {
       cancelPendingHoldDraw();
       pendingSculptureClickRef.current = { sculpture: scHit, x: px, y: py };
+      pendingParcelClickRef.current = null;
       return;
     }
+
+    // Check if user clicked a minted land's 3D boundary or interior (opens detailed view on clean click)
+    const parcelHit = hitTestMintedParcelAtScreenPt(px, py);
+    pendingParcelClickRef.current = parcelHit ? { parcel: parcelHit, x: px, y: py } : null;
 
     // Priority 3.5: When user has drawn a land, click-and-drag on canvas rotates & tilts map around that drawn land
     if (draftsRef.current.length > 0 && !drawModeRef.current && draftCanvasDragModeRef.current === 'orbit') {
@@ -2247,6 +2320,13 @@ export default function MapView3D({
         };
         return;
       }
+    }
+
+    // Clicking a minted land boundary/prism should open its detailed view cleanly without triggering hold-to-draw
+    if (parcelHit) {
+      cancelPendingHoldDraw();
+      pendingSculptureClickRef.current = null;
+      return;
     }
 
     // Priority 4: Hold down in 1 spot on the map (~380ms without dragging) -> start drawing a 3D cube!
@@ -2328,6 +2408,7 @@ export default function MapView3D({
       if (!orb.active && Math.hypot(dx, dy) < 4) return;
       if (!orb.active) {
         orb.active = true;
+        pendingParcelClickRef.current = null;
         userAdjustedRef.current = true;
         try {
           e.currentTarget.setPointerCapture?.(orb.pointerId);
@@ -2364,7 +2445,7 @@ export default function MapView3D({
       return;
     }
 
-    // Cancel pending 3D sculpture click if pointer dragged away
+    // Cancel pending 3D sculpture or minted land click if pointer dragged away
     if (pendingSculptureClickRef.current) {
       if (
         Math.hypot(
@@ -2373,6 +2454,16 @@ export default function MapView3D({
         ) >= 6
       ) {
         pendingSculptureClickRef.current = null;
+      }
+    }
+    if (pendingParcelClickRef.current) {
+      if (
+        Math.hypot(
+          px - pendingParcelClickRef.current.x,
+          py - pendingParcelClickRef.current.y
+        ) >= 7
+      ) {
+        pendingParcelClickRef.current = null;
       }
     }
 
@@ -2527,15 +2618,22 @@ export default function MapView3D({
         if (hoveredSc) {
           setGizmoCursor('pointer');
           setGizmoHint(`🧊 ${hoveredSc.title} · Click for 3D & metadata`);
-        } else if (
-          draftsRef.current.length > 0 &&
-          draftCanvasDragModeRef.current === 'orbit'
-        ) {
-          if (gizmoCursor !== 'grab') setGizmoCursor('grab');
-          if (gizmoHint && !gizmoHint.startsWith('🔄')) setGizmoHint('');
-        } else if (gizmoCursor === 'pointer' || gizmoCursor === 'grab') {
-          setGizmoCursor('');
-          setGizmoHint('');
+        } else {
+          const hoveredParcel = hitTestMintedParcelAtScreenPt(px, py);
+          if (hoveredParcel) {
+            const pName = resolveLandDisplayName(hoveredParcel, { defaultName: 'Virtual Land' });
+            setGizmoCursor('pointer');
+            setGizmoHint(`🗺️ ${pName} · Click for detailed view`);
+          } else if (
+            draftsRef.current.length > 0 &&
+            draftCanvasDragModeRef.current === 'orbit'
+          ) {
+            if (gizmoCursor !== 'grab') setGizmoCursor('grab');
+            if (gizmoHint && !gizmoHint.startsWith('🔄')) setGizmoHint('');
+          } else if (gizmoCursor === 'pointer' || gizmoCursor === 'grab') {
+            setGizmoCursor('');
+            setGizmoHint('');
+          }
         }
       }
     }
@@ -2555,7 +2653,17 @@ export default function MapView3D({
     }
 
     if (orbitDragRef.current) {
+      const wasActiveOrbit = Boolean(orbitDragRef.current.active);
       finishOrbitDrag(e.currentTarget);
+      if (!wasActiveOrbit && pendingParcelClickRef.current) {
+        const targetParcel = pendingParcelClickRef.current.parcel;
+        pendingParcelClickRef.current = null;
+        if (targetParcel) {
+          onSelectParcelRef.current?.(targetParcel);
+        }
+      } else {
+        pendingParcelClickRef.current = null;
+      }
       return;
     }
 
@@ -2579,8 +2687,20 @@ export default function MapView3D({
     if (pendingSculptureClickRef.current) {
       const targetSc = pendingSculptureClickRef.current.sculpture;
       pendingSculptureClickRef.current = null;
+      pendingParcelClickRef.current = null;
       if (targetSc) {
         onSelectSculptureRef.current?.(targetSc);
+      }
+      return;
+    }
+
+    // Complete direct click on a minted land's 3D boundary or prism -> always open its detailed view
+    if (pendingParcelClickRef.current) {
+      const targetParcel = pendingParcelClickRef.current.parcel;
+      pendingParcelClickRef.current = null;
+      cancelPendingHoldDraw();
+      if (targetParcel) {
+        onSelectParcelRef.current?.(targetParcel);
       }
       return;
     }

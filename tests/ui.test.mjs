@@ -6834,4 +6834,192 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Clicking minted land label or 3D boundary opens detailed PlotVisitView, and Pairing windows expose clickable codes & Copy icon buttons', async () => {
+    const { hitTestMintedParcelPrism } = await loadJsxModule('client/src/utils/map3dProjection.js');
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+    const { default: MobilePairApprovalDropdown } = await loadJsxModule(
+      'client/src/components/studio/MobilePairApprovalDropdown.jsx'
+    );
+
+    // 1) Pure 3D prism boundary + interior hit-test check
+    const sampleGeom = {
+      bottom: [
+        { x: 100, y: 200 },
+        { x: 200, y: 200 },
+        { x: 200, y: 300 },
+        { x: 100, y: 300 }
+      ],
+      top: [
+        { x: 100, y: 120 },
+        { x: 200, y: 120 },
+        { x: 200, y: 220 },
+        { x: 100, y: 220 }
+      ]
+    };
+    const boundaryHit = hitTestMintedParcelPrism(150, 122, sampleGeom, 10);
+    assert.ok(boundaryHit?.hit && boundaryHit.onBoundary);
+    const interiorHit = hitTestMintedParcelPrism(150, 250, sampleGeom, 10);
+    assert.ok(interiorHit?.hit);
+    const miss = hitTestMintedParcelPrism(40, 40, sampleGeom, 10);
+    assert.equal(miss, null);
+
+    // 2) DesktopHub: clicking a minted land label opens detailed PlotVisitView; Pairing modal copies MCP & Phone codes via code click or Copy icon button
+    const origFetch = globalThis.fetch;
+    const origClipboard = globalThis.navigator.clipboard;
+    const copiedTexts = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          copiedTexts.push(String(text));
+        }
+      }
+    });
+    localStorage.removeItem('graffiland_desktop_session_v1');
+    sessionStorage.setItem('graffiland_desktop_pair_code_v1', 'K9P4M2');
+
+    const ownerUser = {
+      id: 'google:label-click-owner',
+      name: 'Detail Owner',
+      username: 'detailowner',
+      walletAddress: '0x3333333333333333333333333333333333333333'
+    };
+    const mintedParcel = {
+      parcelId: 'GLAND-DET001',
+      customName: 'Sunset Courtyard',
+      description: 'Open rooftop sculpture plaza.',
+      ownerUserId: ownerUser.id,
+      ownerAddress: ownerUser.walletAddress,
+      centerLat: 37.78,
+      centerLng: -122.415,
+      volume: {
+        centerLat: 37.78,
+        centerLng: -122.415,
+        widthMeters: 22,
+        depthMeters: 20,
+        heightMeters: 16,
+        rotationDeg: 0
+      }
+    };
+    const mockMcpCode = 'GLP-7777-8888-9999-AAAA';
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/GLAND-DET001')) {
+        return { ok: true, json: async () => ({ parcel: mintedParcel, sculptures: [] }) };
+      }
+      if (u.includes('/api/lands/mine')) {
+        return { ok: true, json: async () => ({ parcelCount: 1, parcels: [mintedParcel] }) };
+      }
+      if (u.includes('/api/mcp/pairings')) {
+        return {
+          ok: true,
+          json: async () => ({
+            mcpActive: true,
+            activePairing: { code: mockMcpCode, status: 'connected' },
+            pairings: [{ code: mockMcpCode, status: 'connected' }]
+          })
+        };
+      }
+      if (u.includes('/api/signatures/pending')) return { ok: true, json: async () => ({ requests: [] }) };
+      if (u.includes('/api/notifications')) return { ok: true, json: async () => ({ notifications: [], unreadCount: 0 }) };
+      if (u.includes('/api/sculptures')) return { ok: true, json: async () => ({ sculptures: [] }) };
+      if (u.includes('/api/parcels')) return { ok: true, json: async () => ({ parcels: [mintedParcel] }) };
+      if (u.includes('/api/quests/nearby')) return { ok: true, json: async () => ({ quests: [] }) };
+      if (u.includes('/api/marketplace/listings')) return { ok: true, json: async () => ({ listings: [] }) };
+      if (u.includes('/api/agents/leaderboard')) {
+        return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(DesktopHub, {
+          config: {},
+          user: ownerUser,
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+
+      // Click the minted land label directly on the map -> opens detailed PlotVisitView!
+      await RTL.waitFor(() => {
+        const lbl = view.getByTestId('map3d-land-label');
+        assert.equal(lbl.tagName, 'BUTTON');
+      });
+      RTL.fireEvent.click(view.getByTestId('map3d-land-label'));
+      await RTL.waitFor(() => {
+        const detail = view.getByTestId('desktop-plot-visit-view');
+        assert.ok(detail.textContent.includes('Sunset Courtyard'));
+      });
+
+      // Close detailed view and open Pairing window -> click code & copy button for both Phone & MCP codes
+      const closeDetailBtn = view.getByRole('button', { name: /Close|Back/i });
+      RTL.fireEvent.click(closeDetailBtn);
+      RTL.fireEvent.click(view.getByTestId('nav-pair-phone-btn'));
+
+      await RTL.waitFor(() => {
+        assert.ok(view.getByTestId('pair-agent-code-value'));
+        assert.ok(view.getByTestId('pair-agent-code-copy-btn'));
+        assert.ok(view.getByTestId('pair-phone-code-value'));
+        assert.ok(view.getByTestId('pair-phone-code-copy-btn'));
+      });
+
+      // Click MCP pairing code directly -> copies exact GLP code
+      RTL.fireEvent.click(view.getByTestId('pair-agent-code-value'));
+      await RTL.waitFor(() => {
+        assert.ok(copiedTexts.includes(mockMcpCode));
+      });
+      // Click MCP Copy icon button -> copies exact GLP code
+      copiedTexts.length = 0;
+      RTL.fireEvent.click(view.getByTestId('pair-agent-code-copy-btn'));
+      await RTL.waitFor(() => {
+        assert.ok(copiedTexts.includes(mockMcpCode));
+        assert.ok(view.getByTestId('pair-agent-code-copy-btn').textContent.includes('Copied'));
+      });
+      // Click Phone Pair Code value directly -> copies exact 6-char code
+      copiedTexts.length = 0;
+      RTL.fireEvent.click(view.getByTestId('pair-phone-code-value'));
+      await RTL.waitFor(() => {
+        assert.ok(copiedTexts.includes('K9P4M2'));
+      });
+      cleanup();
+
+      // 3) Mobile Pairing Dropdown: both Desktop paired code & MCP code have clickable value + Copy icon button
+      const mobilePairView = RTL.render(
+        React.createElement(MobilePairApprovalDropdown, {
+          open: true,
+          activeTab: 'pair',
+          onSelectTab: () => {},
+          onClose: () => {},
+          user: ownerUser,
+          pairedCode: 'K9P4M2',
+          mcpPairingsState: {
+            mcpActive: true,
+            activePairing: { code: mockMcpCode, status: 'connected' },
+            pairings: [{ code: mockMcpCode, status: 'connected' }]
+          }
+        })
+      );
+      copiedTexts.length = 0;
+      RTL.fireEvent.click(mobilePairView.getByTestId('mobile-desktop-code-value'));
+      await RTL.waitFor(() => assert.ok(copiedTexts.includes('K9P4M2')));
+      copiedTexts.length = 0;
+      RTL.fireEvent.click(mobilePairView.getByTestId('mobile-mcp-code-copy-btn'));
+      await RTL.waitFor(() => assert.ok(copiedTexts.includes(mockMcpCode)));
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origClipboard !== undefined) {
+        Object.defineProperty(globalThis.navigator, 'clipboard', {
+          configurable: true,
+          value: origClipboard
+        });
+      }
+      localStorage.removeItem('graffiland_desktop_session_v1');
+      sessionStorage.removeItem('graffiland_desktop_pair_code_v1');
+      cleanup();
+    }
+  });
 });
