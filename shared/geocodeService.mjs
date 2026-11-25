@@ -170,7 +170,7 @@ export async function searchLocations({ query = '', lat = null, lng = null, limi
     safeFetchJson(arcgisUrl, { Accept: 'application/json' }),
     safeFetchJson(photonUrl, { Accept: 'application/json' }),
     safeFetchJson(nominatimUrl, {
-      'User-Agent': 'GRAFFILAND/1.0 (+https://maximusmaximus.github.io/graffiland)',
+      'User-Agent': 'SPRAY.LAND/1.0 (+https://spray.land)',
       Accept: 'application/json'
     })
   ]);

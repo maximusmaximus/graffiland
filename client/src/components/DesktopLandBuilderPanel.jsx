@@ -139,14 +139,14 @@ export function DesktopLandBuilderPanel({
     if (typeof window !== 'undefined' && window.location?.origin) {
       return window.location.origin;
     }
-    return publicUrl || 'https://maximusmaximus.github.io';
+    return publicUrl || 'https://spray.land';
   }, [publicUrl]);
 
   const pathname = useMemo(() => {
     if (typeof window !== 'undefined' && window.location?.pathname) {
       return window.location.pathname;
     }
-    return '/graffiland/';
+    return '/';
   }, []);
 
   const activeDraft = useMemo(

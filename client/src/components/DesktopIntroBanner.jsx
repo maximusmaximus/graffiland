@@ -41,7 +41,7 @@ export default function DesktopIntroBanner({
         publicUrl:
           typeof window !== 'undefined'
             ? window.location.origin
-            : 'https://maximusmaximus.github.io/graffiland'
+            : 'https://spray.land'
       }),
     [apiOrigin]
   );

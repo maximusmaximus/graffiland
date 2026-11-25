@@ -380,8 +380,8 @@ export default function AddLandItemModal({
 
   async function handleCopyShareLink() {
     const shareUrl = buildParcelShareUrl({
-      origin: typeof window !== 'undefined' ? window.location.origin : 'https://maximusmaximus.github.io',
-      pathname: typeof window !== 'undefined' ? window.location.pathname : '/graffiland/',
+      origin: typeof window !== 'undefined' ? window.location.origin : 'https://spray.land',
+      pathname: typeof window !== 'undefined' ? window.location.pathname : '/',
       parcelId: parcel.parcelId,
       customName: parcel.customName || '',
       compact: true

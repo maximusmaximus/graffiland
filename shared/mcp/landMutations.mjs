@@ -2140,7 +2140,7 @@ export async function applyUpdateParcel(db, { parcelCtx, ownerUser, ownerAddress
 
 export async function getPublicParcelDetail(
   db,
-  { parcelOrSlug = '', publicOrigin = 'https://maximusmaximus.github.io', publicPathname = '/graffiland/' } = {}
+  { parcelOrSlug = '', publicOrigin = 'https://spray.land', publicPathname = '/' } = {}
 ) {
   const raw = String(parcelOrSlug || '').trim();
   if (!raw) throw new McpServiceError('Parcel ID or slug is required.', 400);

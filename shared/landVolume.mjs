@@ -967,8 +967,8 @@ export function parseParcelParamFromLocation(search = '', pathname = '') {
  * slugged visit link (`?parcel=GLAND-...&slug=...`). Otherwise carries full draft 3D bounds.
  */
 export function buildParcelShareUrl({
-  origin = 'https://maximusmaximus.github.io',
-  pathname = '/graffiland/',
+  origin = 'https://spray.land',
+  pathname = '/',
   parcelId = '',
   lat = undefined,
   lng = undefined,
@@ -976,7 +976,7 @@ export function buildParcelShareUrl({
   customName = '',
   compact = false
 } = {}) {
-  const baseOrigin = String(origin || 'https://maximusmaximus.github.io').replace(/\/$/, '');
+  const baseOrigin = String(origin || 'https://spray.land').replace(/\/$/, '');
   const cleanPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
   const url = new URL(`${baseOrigin}${cleanPath}`);
   if (parcelId) url.searchParams.set('parcel', String(parcelId).toUpperCase());

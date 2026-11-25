@@ -1209,7 +1209,7 @@ export async function fetchModelBytesFromGateways({
         signal: controller?.signal,
         headers: {
           Accept: 'model/gltf-binary,model/gltf+json,application/octet-stream,*/*;q=0.8',
-          'User-Agent': 'Graffiland/1.0 (+https://maximusmaximus.github.io/graffiland)'
+          'User-Agent': 'SPRAY.LAND/1.0 (+https://spray.land)'
         }
       });
       if (!res || !res.ok) continue;
