@@ -97,6 +97,7 @@ export function computePrismCornerFadeAlphas(
     const next = (i + 1) % 4;
     edges.push({
       kind: 'bottom',
+      index: i,
       a: bottom[i],
       b: bottom[next],
       alphaA: columnAlphas[i],
@@ -106,6 +107,7 @@ export function computePrismCornerFadeAlphas(
     });
     edges.push({
       kind: 'top',
+      index: i,
       a: top[i],
       b: top[next],
       alphaA: columnAlphas[i],
@@ -115,6 +117,7 @@ export function computePrismCornerFadeAlphas(
     });
     edges.push({
       kind: 'vertical',
+      index: i,
       a: bottom[i],
       b: top[i],
       alphaA: columnAlphas[i],
@@ -125,9 +128,352 @@ export function computePrismCornerFadeAlphas(
   }
 
   // Painter's order: draw farthest (highest depthT) first so crisp front edges draw cleanly on top
-  edges.sort((e1, e2) => e2.depthT - e1.depthT);
+  const kindOrder = { bottom: 0, vertical: 1, top: 2 };
+  edges.sort((e1, e2) => {
+    const d = e2.depthT - e1.depthT;
+    if (Math.abs(d) > 1e-6) return d;
+    return (kindOrder[e1.kind] ?? 0) - (kindOrder[e2.kind] ?? 0);
+  });
 
   return { columnAlphas, columnDepthT, edges };
+}
+
+function polygonSignedArea2D(pts) {
+  if (!Array.isArray(pts) || pts.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    sum += Number(a.x) * Number(b.y) - Number(b.x) * Number(a.y);
+  }
+  return sum * 0.5;
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(1e-6, edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Classifies exact 3D exterior visibility vs interior/back-face occlusion for a screen-projected
+ * 4-corner upright prism viewed from above (top face front-facing, bottom face back-facing).
+ * Uses screen-space outward winding of each side wall relative to the top face, normalized by
+ * each wall's projected pixel area so it is invariant to zoom, height, and CW/CCW winding.
+ */
+export function computePrismVisibility(bottom, top) {
+  const defaultVisible = {
+    is3DProjected: false,
+    sideVisibility: [1, 1, 1, 1],
+    bottomEdgeVisibility: [1, 1, 1, 1],
+    bottomEdgeVisible: [true, true, true, true],
+    columnVisibility: [1, 1, 1, 1],
+    columnVisible: [true, true, true, true]
+  };
+  if (!Array.isArray(bottom) || bottom.length < 4 || !Array.isArray(top) || top.length < 4) {
+    return defaultVisible;
+  }
+
+  let maxVerticalPx = 0;
+  for (let i = 0; i < 4; i++) {
+    const d = Math.hypot(top[i].x - bottom[i].x, top[i].y - bottom[i].y);
+    if (d > maxVerticalPx) maxVerticalPx = d;
+  }
+  const topArea = polygonSignedArea2D(top.slice(0, 4));
+  // Flat 2D top-down view (negligible vertical extrusion on screen): no 3D overhang occlusion
+  if (maxVerticalPx < 3 || Math.abs(topArea) < 1) {
+    return defaultVisible;
+  }
+
+  const topSign = Math.sign(topArea);
+  const sideVisibility = [];
+  const bottomEdgeVisible = [];
+
+  for (let i = 0; i < 4; i++) {
+    const next = (i + 1) % 4;
+    // Outward-oriented side quad consistent with the top face reverses shared edge top[i]->top[next]
+    const sideArea = polygonSignedArea2D([top[next], top[i], bottom[i], bottom[next]]);
+    const edgeLen = Math.hypot(top[next].x - top[i].x, top[next].y - top[i].y);
+    const vertLen =
+      0.5 *
+      (Math.hypot(top[i].x - bottom[i].x, top[i].y - bottom[i].y) +
+        Math.hypot(top[next].x - bottom[next].x, top[next].y - bottom[next].y));
+    const sideNorm = (sideArea * topSign) / Math.max(1, edgeLen * vertLen);
+    const vis = Number(smoothstep(-0.08, 0.12, sideNorm).toFixed(4));
+    sideVisibility.push(vis);
+    bottomEdgeVisible.push(vis >= 0.45);
+  }
+
+  const columnVisibility = [];
+  const columnVisible = [];
+  for (let i = 0; i < 4; i++) {
+    const prev = (i + 3) % 4;
+    const colVis = Number(Math.max(sideVisibility[prev], sideVisibility[i]).toFixed(4));
+    columnVisibility.push(colVis);
+    columnVisible.push(colVis >= 0.45);
+  }
+
+  return {
+    is3DProjected: true,
+    sideVisibility,
+    bottomEdgeVisibility: [...sideVisibility],
+    bottomEdgeVisible,
+    columnVisibility,
+    columnVisible
+  };
+}
+
+/**
+ * Computes depth-faded, occlusion-aware visual styles and strict back-to-front painter ordering
+ * for all interactive 3D land prism gizmo handles (bottom edge bars, bottom corner balls,
+ * vertical rotation bars, top rim bars, and top corner balls).
+ *
+ * Ensures bottom bars & bottom corners (especially occluded back-bottom bars passing behind/inside
+ * the translucent cube volume) fade softly beneath the crisp top rim so they never appear on top.
+ */
+export function computeGizmoDepthProfile(bottom, top, { activeHandle = '' } = {}) {
+  const fade = computePrismCornerFadeAlphas(bottom, top, {
+    nearAlpha: DEFAULT_BOUNDARY_NEAR_ALPHA,
+    farAlpha: DEFAULT_BOUNDARY_FAR_ALPHA
+  });
+  const visibility = computePrismVisibility(bottom, top);
+  const activeKey = String(activeHandle || '');
+  const isHeightGroupActive = activeKey === 'height' || activeKey.startsWith('top-bar-');
+
+  const bottomBars = [];
+  const topBars = [];
+  const verticalBars = [];
+  const bottomCorners = [];
+  const topCorners = [];
+
+  for (let i = 0; i < 4; i++) {
+    const next = (i + 1) % 4;
+    const edgeDepthT = (fade.columnDepthT[i] + fade.columnDepthT[next]) * 0.5;
+    const edgeVis = visibility.bottomEdgeVisibility[i];
+    const isBottomOccluded = visibility.is3DProjected && edgeVis < 0.45;
+    const isBottomActive = activeKey === `edge-${i}`;
+
+    if (isBottomActive) {
+      bottomBars.push({
+        index: i,
+        next,
+        depthT: edgeDepthT,
+        visibility: edgeVis,
+        isOccluded: isBottomOccluded,
+        isActive: true,
+        alpha: 1,
+        width: 6.2,
+        haloAlpha: 0.9,
+        coreAlpha: 1,
+        coreWidth: 1.6,
+        glowBlur: 16
+      });
+    } else if (visibility.is3DProjected) {
+      const depthFactor = 1 - 0.18 * edgeDepthT;
+      const alpha = Number(((0.2 + 0.4 * edgeVis) * depthFactor).toFixed(4));
+      bottomBars.push({
+        index: i,
+        next,
+        depthT: edgeDepthT,
+        visibility: edgeVis,
+        isOccluded: isBottomOccluded,
+        isActive: false,
+        alpha,
+        width: Number((2.6 + 1.0 * edgeVis).toFixed(3)),
+        haloAlpha: Number((0.06 + 0.36 * edgeVis * edgeVis).toFixed(4)),
+        coreAlpha: Number((0.08 + 0.38 * edgeVis).toFixed(4)),
+        coreWidth: Number((0.9 + 0.3 * edgeVis).toFixed(3)),
+        glowBlur: Number((1.5 + 3.5 * edgeVis).toFixed(2))
+      });
+    } else {
+      bottomBars.push({
+        index: i,
+        next,
+        depthT: edgeDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: false,
+        alpha: 0.88,
+        width: 4.4,
+        haloAlpha: 0.82,
+        coreAlpha: 0.88,
+        coreWidth: 1.4,
+        glowBlur: 9
+      });
+    }
+
+    if (isHeightGroupActive) {
+      topBars.push({
+        index: i,
+        next,
+        depthT: edgeDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: true,
+        alpha: 1,
+        width: 6,
+        haloAlpha: 0.92,
+        coreAlpha: 1,
+        coreWidth: 1.7,
+        glowBlur: 16
+      });
+    } else {
+      const alpha = Number((1 - 0.16 * edgeDepthT).toFixed(4));
+      topBars.push({
+        index: i,
+        next,
+        depthT: edgeDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: false,
+        alpha,
+        width: Number((4.6 - 0.35 * edgeDepthT).toFixed(3)),
+        haloAlpha: Number((0.88 * alpha).toFixed(4)),
+        coreAlpha: Number((0.96 * alpha).toFixed(4)),
+        coreWidth: 1.6,
+        glowBlur: Number((10.5 * alpha).toFixed(2))
+      });
+    }
+
+    const colDepthT = fade.columnDepthT[i];
+    const colVis = visibility.columnVisibility[i];
+    const isColOccluded = visibility.is3DProjected && colVis < 0.45;
+    const isVertActive = activeKey === `vbar-${i}`;
+
+    if (isVertActive) {
+      verticalBars.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: colVis,
+        isOccluded: isColOccluded,
+        isActive: true,
+        alpha: 1,
+        width: 5.8,
+        haloAlpha: 0.9,
+        coreAlpha: 1,
+        glowBlur: 18
+      });
+    } else if (visibility.is3DProjected) {
+      const depthFactor = 1 - 0.14 * colDepthT;
+      const alpha = Number(((0.36 + 0.62 * colVis) * depthFactor).toFixed(4));
+      verticalBars.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: colVis,
+        isOccluded: isColOccluded,
+        isActive: false,
+        alpha,
+        width: Number((3.1 + 1.1 * colVis).toFixed(3)),
+        haloAlpha: Number((0.16 + 0.68 * colVis * colVis).toFixed(4)),
+        coreAlpha: Number((0.28 + 0.68 * colVis).toFixed(4)),
+        glowBlur: Number((3 + 6 * colVis).toFixed(2))
+      });
+    } else {
+      verticalBars.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: false,
+        alpha: 0.72,
+        width: 3.8,
+        haloAlpha: 0.5,
+        coreAlpha: 0.72,
+        glowBlur: 5
+      });
+    }
+
+    const isCornerActive = activeKey === `corner-${i}`;
+    if (isCornerActive) {
+      bottomCorners.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: colVis,
+        isOccluded: isColOccluded,
+        isActive: true,
+        alpha: 1,
+        radius: 7.4,
+        haloAlpha: 0.92,
+        glintAlpha: 1,
+        glowBlur: 18
+      });
+      topCorners.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: true,
+        alpha: 1,
+        radius: 7.8,
+        haloAlpha: 0.94,
+        glintAlpha: 1,
+        glowBlur: 18
+      });
+    } else {
+      if (visibility.is3DProjected) {
+        const depthFactor = 1 - 0.16 * colDepthT;
+        const bAlpha = Number(((0.24 + 0.44 * colVis) * depthFactor).toFixed(4));
+        bottomCorners.push({
+          index: i,
+          depthT: colDepthT,
+          visibility: colVis,
+          isOccluded: isColOccluded,
+          isActive: false,
+          alpha: bAlpha,
+          radius: Number((3.8 + 1.0 * colVis).toFixed(3)),
+          haloAlpha: Number((0.08 + 0.42 * colVis * colVis).toFixed(4)),
+          glintAlpha: Number((0.14 + 0.48 * colVis).toFixed(4)),
+          glowBlur: Number((2 + 5 * colVis).toFixed(2))
+        });
+      } else {
+        bottomCorners.push({
+          index: i,
+          depthT: colDepthT,
+          visibility: 1,
+          isOccluded: false,
+          isActive: false,
+          alpha: 0.9,
+          radius: 5.5,
+          haloAlpha: 0.85,
+          glintAlpha: 0.92,
+          glowBlur: 10
+        });
+      }
+      const tAlpha = Number((1 - 0.14 * colDepthT).toFixed(4));
+      topCorners.push({
+        index: i,
+        depthT: colDepthT,
+        visibility: 1,
+        isOccluded: false,
+        isActive: false,
+        alpha: tAlpha,
+        radius: Number((5.8 - 0.4 * colDepthT).toFixed(3)),
+        haloAlpha: Number((0.92 * tAlpha).toFixed(4)),
+        glintAlpha: Number((0.96 * tAlpha).toFixed(4)),
+        glowBlur: Number((12 * tAlpha).toFixed(2))
+      });
+    }
+  }
+
+  const sortBackToFront = (a, b) => {
+    if (a.visibility !== b.visibility) return a.visibility - b.visibility;
+    return b.depthT - a.depthT;
+  };
+  bottomBars.sort(sortBackToFront);
+  bottomCorners.sort(sortBackToFront);
+  verticalBars.sort(sortBackToFront);
+  topBars.sort((a, b) => b.depthT - a.depthT);
+  topCorners.sort((a, b) => b.depthT - a.depthT);
+
+  return {
+    fade,
+    visibility,
+    isHeightGroupActive,
+    bottomBars,
+    bottomCorners,
+    verticalBars,
+    topBars,
+    topCorners
+  };
 }
 
 function makeEdgeStroke(ctx, a, b, baseColor, alphaA, alphaB) {
@@ -158,71 +504,116 @@ export function drawDepthFadedPrismEdges(
     darkHalo = true,
     nearAlpha = DEFAULT_BOUNDARY_NEAR_ALPHA,
     farAlpha = DEFAULT_BOUNDARY_FAR_ALPHA,
-    includeBottomEdges = true
+    includeBottomEdges = true,
+    fadeOccludedBottom = true
   }
 ) {
   if (!ctx || !geom?.bottom || !geom?.top) return null;
   const fade = computePrismCornerFadeAlphas(geom.bottom, geom.top, { nearAlpha, farAlpha });
-  const edges = includeBottomEdges
+  const visibility = fadeOccludedBottom ? computePrismVisibility(geom.bottom, geom.top) : null;
+  const rawEdges = includeBottomEdges
     ? fade.edges
     : fade.edges.filter((edge) => edge.kind !== 'bottom');
 
-  const drawPass = ({
-    color,
-    width,
-    blur,
-    alphaScale = 1,
-    alphaExponent = 1,
-    scaleWidthByDepth = false
-  }) => {
-    ctx.save();
-    if (dashed) ctx.setLineDash([5, 4]);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    for (const edge of edges) {
-      const aA = Math.pow(edge.alphaA, alphaExponent) * alphaScale;
-      const aB = Math.pow(edge.alphaB, alphaExponent) * alphaScale;
-      const avg = Math.pow(edge.avgAlpha, alphaExponent);
-      const depthWeight = 0.72 + 0.28 * edge.avgAlpha;
-      ctx.strokeStyle = makeEdgeStroke(ctx, edge.a, edge.b, color, aA, aB);
-      ctx.lineWidth = scaleWidthByDepth ? Math.max(0.8, width * depthWeight) : width;
-      ctx.shadowColor = blur > 0 ? colorWithAlpha(outerColor, avg) : 'transparent';
-      ctx.shadowBlur = blur > 0 ? blur * avg : 0;
-      ctx.beginPath();
-      ctx.moveTo(edge.a.x, edge.a.y);
-      ctx.lineTo(edge.b.x, edge.b.y);
-      ctx.stroke();
+  const styledEdges = rawEdges.map((edge) => {
+    let alphaMul = 1;
+    let tier = 2; // 0 = occluded bottom/back, 1 = visible bottom/vertical, 2 = top rim
+    if (visibility?.is3DProjected) {
+      if (edge.kind === 'bottom') {
+        const vis = visibility.bottomEdgeVisibility[edge.index] ?? 1;
+        alphaMul = 0.34 + 0.42 * vis;
+        tier = vis < 0.45 ? 0 : 1;
+      } else if (edge.kind === 'vertical') {
+        const vis = visibility.columnVisibility[edge.index] ?? 1;
+        alphaMul = 0.5 + 0.5 * vis;
+        tier = vis < 0.45 ? 0.5 : 1.5;
+      } else {
+        alphaMul = 1;
+        tier = 2;
+      }
     }
-    ctx.restore();
-  };
+    return {
+      ...edge,
+      effAlphaA: edge.alphaA * alphaMul,
+      effAlphaB: edge.alphaB * alphaMul,
+      effAvgAlpha: edge.avgAlpha * alphaMul,
+      tier
+    };
+  });
 
-  if (darkHalo && !dashed) {
+  // Draw occluded floor & back lines first, visible floor/walls next, and top rim strictly last
+  styledEdges.sort((e1, e2) => {
+    if (e1.tier !== e2.tier) return e1.tier - e2.tier;
+    return e2.depthT - e1.depthT;
+  });
+
+  const strokeTierPasses = (tierEdges) => {
+    if (!tierEdges.length) return;
+    const drawPass = ({
+      color,
+      width,
+      blur,
+      alphaScale = 1,
+      alphaExponent = 1,
+      scaleWidthByDepth = false
+    }) => {
+      ctx.save();
+      if (dashed) ctx.setLineDash([5, 4]);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      for (const edge of tierEdges) {
+        const aA = Math.pow(edge.effAlphaA, alphaExponent) * alphaScale;
+        const aB = Math.pow(edge.effAlphaB, alphaExponent) * alphaScale;
+        const avg = Math.pow(edge.effAvgAlpha, alphaExponent);
+        const depthWeight = 0.72 + 0.28 * edge.effAvgAlpha;
+        ctx.strokeStyle = makeEdgeStroke(ctx, edge.a, edge.b, color, aA, aB);
+        ctx.lineWidth = scaleWidthByDepth ? Math.max(0.8, width * depthWeight) : width;
+        ctx.shadowColor = blur > 0 ? colorWithAlpha(outerColor, avg) : 'transparent';
+        ctx.shadowBlur = blur > 0 ? blur * avg : 0;
+        ctx.beginPath();
+        ctx.moveTo(edge.a.x, edge.a.y);
+        ctx.lineTo(edge.b.x, edge.b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    if (darkHalo && !dashed) {
+      drawPass({
+        color: 'rgba(4, 10, 20, 0.72)',
+        width: lineWidth + 2.8,
+        blur: 2,
+        alphaScale: 1,
+        alphaExponent: 2.1,
+        scaleWidthByDepth: true
+      });
+    }
     drawPass({
-      color: 'rgba(4, 10, 20, 0.72)',
-      width: lineWidth + 2.8,
-      blur: 2,
+      color: outerColor,
+      width: lineWidth + 1.1,
+      blur: glowBlur,
       alphaScale: 1,
-      alphaExponent: 2.1,
+      alphaExponent: 1.15,
       scaleWidthByDepth: true
     });
-  }
-  drawPass({
-    color: outerColor,
-    width: lineWidth + 1.1,
-    blur: glowBlur,
-    alphaScale: 1,
-    alphaExponent: 1.15,
-    scaleWidthByDepth: true
-  });
-  drawPass({
-    color: innerColor,
-    width: Math.max(1, lineWidth - 0.5),
-    blur: 0,
-    alphaScale: 0.94,
-    alphaExponent: 1.25,
-    scaleWidthByDepth: true
-  });
+    drawPass({
+      color: innerColor,
+      width: Math.max(1, lineWidth - 0.5),
+      blur: 0,
+      alphaScale: 0.94,
+      alphaExponent: 1.25,
+      scaleWidthByDepth: true
+    });
+  };
+
+  // Group into back/bottom, front/vertical, and top tiers so top rim cleanly masks occluded floor lines
+  const backTier = styledEdges.filter((e) => e.tier < 1);
+  const midTier = styledEdges.filter((e) => e.tier >= 1 && e.tier < 2);
+  const topTier = styledEdges.filter((e) => e.tier >= 2);
+  strokeTierPasses(backTier);
+  strokeTierPasses(midTier);
+  strokeTierPasses(topTier);
 
   return fade;
 }

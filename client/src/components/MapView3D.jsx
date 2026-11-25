@@ -47,7 +47,11 @@ import {
   getMapLibreStyleForTheme,
   useMapTheme
 } from '../utils/mapTheme.js';
-import { drawDepthFadedPrismEdges } from '../utils/prismDepthFade.js';
+import {
+  colorWithAlpha,
+  computeGizmoDepthProfile,
+  drawDepthFadedPrismEdges
+} from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -169,146 +173,196 @@ function drawGlowingPrism(
   });
 
   if (showGizmo) {
-    const isHeightGroupActive =
-      activeHandle === 'height' || String(activeHandle || '').startsWith('top-bar-');
+    const gizmoProfile = computeGizmoDepthProfile(bottom, top, { activeHandle });
+    const { isHeightGroupActive } = gizmoProfile;
 
-    // 1) Bottom Side Segment Bars (stretch footprint in/out) & Top Rim Bars (pull up/down for height)
-    for (let i = 0; i < 4; i++) {
-      const next = (i + 1) % 4;
-      const isBottomEdgeActive = activeHandle === `edge-${i}`;
-      const isTopBarActive = isHeightGroupActive;
-      const drawEdgeBar = (pA, pB, thick, barColor, glowActive) => {
-        const s1 = lerpPt(pA, pB, 0.3);
-        const s2 = lerpPt(pA, pB, 0.7);
-        ctx.save();
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = 'rgba(4, 10, 20, 0.9)';
-        ctx.lineWidth = thick + 3;
-        ctx.beginPath();
-        ctx.moveTo(s1.x, s1.y);
-        ctx.lineTo(s2.x, s2.y);
-        ctx.stroke();
-
-        ctx.strokeStyle = barColor;
-        ctx.shadowColor = barColor;
-        ctx.shadowBlur = glowActive ? 16 : 9;
-        ctx.lineWidth = thick;
-        ctx.beginPath();
-        ctx.moveTo(s1.x, s1.y);
-        ctx.lineTo(s2.x, s2.y);
-        ctx.stroke();
-
-        ctx.strokeStyle = '#ffffff';
-        ctx.shadowBlur = 0;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.moveTo(s1.x, s1.y);
-        ctx.lineTo(s2.x, s2.y);
-        ctx.stroke();
-        ctx.restore();
-      };
-      drawEdgeBar(
-        bottom[i],
-        bottom[next],
-        isBottomEdgeActive ? 6.5 : 5,
-        isBottomEdgeActive ? '#ffd166' : '#00f5d4',
-        isBottomEdgeActive
-      );
-      drawEdgeBar(
-        top[i],
-        top[next],
-        isTopBarActive ? 6 : 4.2,
-        isTopBarActive ? '#ffd166' : '#38f8dc',
-        isTopBarActive
-      );
-    }
-
-    // 2) Vertical Rotation Bars (hold & move any vertical corner bar to rotate the box)
-    for (let i = 0; i < 4; i++) {
-      const isVertActive = activeHandle === `vbar-${i}`;
-      const v1 = lerpPt(bottom[i], top[i], 0.22);
-      const v2 = lerpPt(bottom[i], top[i], 0.78);
-      const vColor = isVertActive ? '#ffd166' : '#ffb703';
+    const drawEdgeBar = (pA, pB, style, barColor) => {
+      const s1 = lerpPt(pA, pB, 0.3);
+      const s2 = lerpPt(pA, pB, 0.7);
       ctx.save();
       ctx.lineCap = 'round';
-      ctx.strokeStyle = 'rgba(4, 10, 20, 0.88)';
-      ctx.lineWidth = isVertActive ? 9.5 : 7;
+      if (style.haloAlpha > 0.04) {
+        ctx.strokeStyle = `rgba(4, 10, 20, ${style.haloAlpha.toFixed(3)})`;
+        ctx.lineWidth = style.width + (style.isOccluded && !style.isActive ? 1.4 : 2.8);
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = colorWithAlpha(barColor, style.alpha);
+      ctx.shadowColor = style.glowBlur > 0 ? colorWithAlpha(barColor, style.alpha) : 'transparent';
+      ctx.shadowBlur = style.glowBlur;
+      ctx.lineWidth = style.width;
       ctx.beginPath();
-      ctx.moveTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
+      ctx.moveTo(s1.x, s1.y);
+      ctx.lineTo(s2.x, s2.y);
       ctx.stroke();
 
-      ctx.strokeStyle = vColor;
-      ctx.shadowColor = vColor;
-      ctx.shadowBlur = isVertActive ? 18 : 9;
-      ctx.lineWidth = isVertActive ? 5.8 : 4.2;
-      ctx.beginPath();
-      ctx.moveTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.stroke();
-
-      ctx.strokeStyle = '#fff8dc';
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 3) Glowing Corner Balls on all 4 base & 4 top corners for easy scaling
-    const drawCornerBall = (pt, isActive, baseR) => {
-      const r = isActive ? baseR + 2.4 : baseR;
-      const rimColor = isActive ? '#ffd166' : outerColor;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, r + 1.6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(4, 10, 20, 0.92)';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = rimColor;
-      ctx.shadowColor = rimColor;
-      ctx.shadowBlur = isActive ? 18 : 12;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(pt.x - r * 0.2, pt.y - r * 0.2, Math.max(2, r * 0.48), 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowBlur = 0;
-      ctx.fill();
+      if (style.coreAlpha > 0.04) {
+        ctx.strokeStyle = colorWithAlpha('#ffffff', style.coreAlpha);
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = style.coreWidth;
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.stroke();
+      }
       ctx.restore();
     };
 
-    for (let i = 0; i < 4; i++) {
-      const isCornerActive = activeHandle === `corner-${i}`;
-      drawCornerBall(bottom[i], isCornerActive, 6.5);
-      drawCornerBall(top[i], isCornerActive, 5.5);
+    const drawVerticalBar = (pBot, pTop, style) => {
+      const v1 = lerpPt(pBot, pTop, 0.22);
+      const v2 = lerpPt(pBot, pTop, 0.78);
+      const vColor = style.isActive ? '#ffd166' : '#ffb703';
+      ctx.save();
+      ctx.lineCap = 'round';
+      if (style.haloAlpha > 0.04) {
+        ctx.strokeStyle = `rgba(4, 10, 20, ${style.haloAlpha.toFixed(3)})`;
+        ctx.lineWidth = style.width + (style.isOccluded && !style.isActive ? 1.6 : 2.8);
+        ctx.beginPath();
+        ctx.moveTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = colorWithAlpha(vColor, style.alpha);
+      ctx.shadowColor = style.glowBlur > 0 ? colorWithAlpha(vColor, style.alpha) : 'transparent';
+      ctx.shadowBlur = style.glowBlur;
+      ctx.lineWidth = style.width;
+      ctx.beginPath();
+      ctx.moveTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.stroke();
+
+      if (style.coreAlpha > 0.04) {
+        ctx.strokeStyle = colorWithAlpha('#fff8dc', style.coreAlpha);
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = style.isOccluded && !style.isActive ? 1.0 : 1.4;
+        ctx.beginPath();
+        ctx.moveTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    const drawCornerBall = (pt, style) => {
+      const r = style.radius;
+      const rimColor = style.isActive ? '#ffd166' : outerColor;
+      ctx.save();
+      if (style.haloAlpha > 0.04) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + (style.isOccluded && !style.isActive ? 0.9 : 1.6), 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(4, 10, 20, ${style.haloAlpha.toFixed(3)})`;
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = colorWithAlpha(rimColor, style.alpha);
+      ctx.shadowColor = style.glowBlur > 0 ? colorWithAlpha(rimColor, style.alpha) : 'transparent';
+      ctx.shadowBlur = style.glowBlur;
+      ctx.fill();
+
+      if (style.glintAlpha > 0.04) {
+        ctx.beginPath();
+        ctx.arc(pt.x - r * 0.2, pt.y - r * 0.2, Math.max(1.4, r * 0.45), 0, Math.PI * 2);
+        ctx.fillStyle = colorWithAlpha('#ffffff', style.glintAlpha);
+        ctx.shadowBlur = 0;
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    // Pass 1: Occluded bottom bars & bottom corners (behind/underneath the 3D volume) drawn FIRST & faded
+    for (const bar of gizmoProfile.bottomBars) {
+      if (bar.isActive || !bar.isOccluded) continue;
+      drawEdgeBar(bottom[bar.index], bottom[bar.next], bar, '#00f5d4');
+    }
+    for (const corner of gizmoProfile.bottomCorners) {
+      if (corner.isActive || !corner.isOccluded) continue;
+      drawCornerBall(bottom[corner.index], corner);
     }
 
-    // 4) Pronounced Center Z-Axis Up/Down Elevator Handle (vertical stem + glowing ↕ orb)
+    // Pass 2: Occluded back vertical rotation bars softly behind the top face
+    for (const vbar of gizmoProfile.verticalBars) {
+      if (vbar.isActive || !vbar.isOccluded) continue;
+      drawVerticalBar(bottom[vbar.index], top[vbar.index], vbar);
+    }
+
+    // Pass 3: Interior dashed vertical center guide inside the prism
     if (topCenter?.visible) {
-      const isHActive = isHeightGroupActive;
       const baseCenter = {
         x: (bottom[0].x + bottom[1].x + bottom[2].x + bottom[3].x) / 4,
         y: (bottom[0].y + bottom[1].y + bottom[2].y + bottom[3].y) / 4
       };
-      const liftY = topCenter.y - HEIGHT_HANDLE_LIFT_PX;
-      const hColor = isHActive ? '#ffd166' : '#00f5d4';
-
       ctx.save();
-      // Dashed vertical center guide from floor center to roof center
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = isHActive ? 'rgba(255, 209, 102, 0.72)' : 'rgba(0, 245, 212, 0.52)';
-      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = isHeightGroupActive
+        ? 'rgba(255, 209, 102, 0.72)'
+        : 'rgba(0, 245, 212, 0.42)';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(baseCenter.x, baseCenter.y);
       ctx.lineTo(topCenter.x, topCenter.y);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.restore();
+    }
 
+    // Pass 4: Visible exterior front-bottom bars & corners (softly grounded beneath the top rim)
+    for (const bar of gizmoProfile.bottomBars) {
+      if (bar.isActive || bar.isOccluded) continue;
+      drawEdgeBar(bottom[bar.index], bottom[bar.next], bar, '#00f5d4');
+    }
+    for (const corner of gizmoProfile.bottomCorners) {
+      if (corner.isActive || corner.isOccluded) continue;
+      drawCornerBall(bottom[corner.index], corner);
+    }
+
+    // Pass 5: Visible exterior vertical rotation bars
+    for (const vbar of gizmoProfile.verticalBars) {
+      if (vbar.isActive || vbar.isOccluded) continue;
+      drawVerticalBar(bottom[vbar.index], top[vbar.index], vbar);
+    }
+
+    // Pass 6: Top rim bars (boldest & brightest cyan bars, strictly ON TOP of floor/wall bars)
+    for (const bar of gizmoProfile.topBars) {
+      drawEdgeBar(
+        top[bar.index],
+        top[bar.next],
+        bar,
+        bar.isActive ? '#ffd166' : '#38f8dc'
+      );
+    }
+
+    // Pass 7: Top corner balls (strictly ON TOP of top rim bars)
+    for (const corner of gizmoProfile.topCorners) {
+      drawCornerBall(top[corner.index], corner);
+    }
+
+    // Pass 8: Actively hovered/dragged bottom or vertical handle promoted to crisp gold highlight
+    for (const bar of gizmoProfile.bottomBars) {
+      if (!bar.isActive) continue;
+      drawEdgeBar(bottom[bar.index], bottom[bar.next], bar, '#ffd166');
+    }
+    for (const vbar of gizmoProfile.verticalBars) {
+      if (!vbar.isActive) continue;
+      drawVerticalBar(bottom[vbar.index], top[vbar.index], vbar);
+    }
+    for (const corner of gizmoProfile.bottomCorners) {
+      if (!corner.isActive) continue;
+      drawCornerBall(bottom[corner.index], corner);
+    }
+
+    // Pass 9: Pronounced Center Z-Axis Up/Down Elevator Handle (strictly LAST on top of everything)
+    if (topCenter?.visible) {
+      const isHActive = isHeightGroupActive;
+      const liftY = topCenter.y - HEIGHT_HANDLE_LIFT_PX;
+      const hColor = isHActive ? '#ffd166' : '#00f5d4';
+
+      ctx.save();
       // Base anchor dot on top face center
       ctx.beginPath();
       ctx.arc(topCenter.x, topCenter.y, 4.2, 0, Math.PI * 2);
@@ -2005,11 +2059,10 @@ export default function MapView3D({
       const geom = computePrismScreenGeometry(map, maplibregl, d);
       if (!geom) continue;
 
-      // 1) Corner Balls (bottom & top corners) -> scale width & depth
+      // 1) Top Corner Balls -> scale width & depth (always checked ahead of floor handles)
       for (let i = 0; i < 4; i++) {
-        const dBot = Math.hypot(px - geom.bottom[i].x, py - geom.bottom[i].y);
         const dTop = Math.hypot(px - geom.top[i].x, py - geom.top[i].y);
-        if (dBot <= 13 || dTop <= 12) {
+        if (dTop <= 12) {
           return {
             type: 'corner',
             index: i,
@@ -2054,6 +2107,21 @@ export default function MapView3D({
             handleKey: `top-bar-${i}`,
             cursor: 'ns-resize',
             hint: `Pull top bar up / down to raise or lower height (${Math.round(d.heightMeters)}m)`
+          };
+        }
+      }
+
+      // 2c) Bottom Corner Balls -> scale width & depth (after top rim & elevator handle)
+      for (let i = 0; i < 4; i++) {
+        const dBot = Math.hypot(px - geom.bottom[i].x, py - geom.bottom[i].y);
+        if (dBot <= 13) {
+          return {
+            type: 'corner',
+            index: i,
+            draft: d,
+            handleKey: `corner-${i}`,
+            cursor: i % 2 === 0 ? 'nwse-resize' : 'nesw-resize',
+            hint: 'Drag corner ball to scale'
           };
         }
       }
