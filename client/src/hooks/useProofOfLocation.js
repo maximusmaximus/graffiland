@@ -74,6 +74,8 @@ export function useProofOfLocation({
   const hasEverStartedCameraRef = useRef(false);
   const refreshCameraRef = useRef(null);
   const ensureCameraLiveRef = useRef(null);
+  const refreshLocationNowRef = useRef(null);
+  const lastManualGpsRefreshAtRef = useRef(0);
 
   useEffect(() => {
     onLocationUpdateRef.current = onLocationUpdate;
@@ -143,6 +145,42 @@ export function useProofOfLocation({
   useEffect(() => {
     locationRef.current = location;
   }, [location]);
+
+  const refreshLocationNow = useCallback(({ notifyNearby = false, force = false } = {}) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation?.getCurrentPosition) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - lastManualGpsRefreshAtRef.current < 4000) {
+      return;
+    }
+    lastManualGpsRefreshAtRef.current = now;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (unmountedRef.current) return;
+        polRef.current.recordGps(pos);
+        const loc = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          altitude: pos.coords.altitude,
+          altitudeAccuracy: pos.coords.altitudeAccuracy,
+          heading: pos.coords.heading,
+          speed: pos.coords.speed,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+        const refined = polRef.current.getRefinedLocation(loc) || loc;
+        setLocation(refined);
+        locationRef.current = refined;
+        if (notifyNearby) {
+          onLocationUpdateRef.current?.(loc, refined);
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
+    );
+  }, []);
+  refreshLocationNowRef.current = refreshLocationNow;
 
   const enterFullscreen = useCallback(() => {
     const el = document.documentElement;
@@ -805,13 +843,17 @@ export function useProofOfLocation({
         return;
       }
       if (document.visibilityState === 'visible') {
-        if (wasHiddenRef.current || needsRefreshOnVisibleRef.current) {
+        const returningFromHidden = wasHiddenRef.current;
+        if (returningFromHidden || needsRefreshOnVisibleRef.current) {
           wasHiddenRef.current = false;
           watchdogRestartCountRef.current = 0;
           cameraRetryAttemptRef.current = 0;
           refreshCameraRef.current?.({ reason: 'visibility_visible', force: true });
         } else {
           ensureCameraLiveRef.current?.({ reason: 'visibility_check' });
+        }
+        if (returningFromHidden) {
+          refreshLocationNowRef.current?.({ notifyNearby: false });
         }
         notifyMappingViewReturnedRef.current?.();
       }
@@ -822,6 +864,7 @@ export function useProofOfLocation({
         watchdogRestartCountRef.current = 0;
         cameraRetryAttemptRef.current = 0;
         refreshCameraRef.current?.({ reason: 'pageshow', force: true });
+        refreshLocationNowRef.current?.({ notifyNearby: false });
       } else {
         ensureCameraLiveRef.current?.({ reason: 'pageshow_check' });
       }
@@ -847,30 +890,7 @@ export function useProofOfLocation({
         reason: reconnectingAfterDrop ? 'network_reconnected' : 'network_online',
         force: true
       });
-      if (navigator.geolocation?.getCurrentPosition) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            if (unmountedRef.current) return;
-            polRef.current.recordGps(pos);
-            const loc = {
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              altitude: pos.coords.altitude,
-              altitudeAccuracy: pos.coords.altitudeAccuracy,
-              heading: pos.coords.heading,
-              speed: pos.coords.speed,
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-            };
-            const refined = polRef.current.getRefinedLocation(loc) || loc;
-            setLocation(refined);
-            locationRef.current = refined;
-            onLocationUpdateRef.current?.(loc, refined);
-          },
-          () => {},
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
-        );
-      }
+      refreshLocationNowRef.current?.({ notifyNearby: true, force: true });
       onNetworkReconnectRef.current?.();
     };
 
@@ -1288,6 +1308,7 @@ export function useProofOfLocation({
     recenterAim,
     location,
     setLocation,
+    refreshLocationNow,
     polStats,
     sceneScan,
     setSceneScan,

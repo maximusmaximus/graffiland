@@ -38,7 +38,9 @@ export function useDrafts({
   ensureToolUsable,
   captureSculptureSnapshot,
   setSensorBanner,
-  showTemporaryHint
+  showTemporaryHint,
+  drawActivity = null,
+  markDrawActivity = null
 }) {
   const [activeDraftId, setActiveDraftId] = useState(initialDraft.activeDraftId || '');
   const [draftsOpen, setDraftsOpen] = useState(false);
@@ -134,6 +136,8 @@ export function useDrafts({
       reachMeters,
       surfaceAnchor,
       voxels,
+      lastDrawAt: drawActivity?.lastDrawAt ?? null,
+      drawLocation: drawActivity?.drawLocation ?? null,
       updatedAt: new Date().toISOString()
     };
     draftSnapshotRef.current = snap;
@@ -151,6 +155,8 @@ export function useDrafts({
     cluePrompt,
     color,
     description,
+    drawActivity?.drawLocation,
+    drawActivity?.lastDrawAt,
     material,
     reachMeters,
     surfaceAnchor,
@@ -201,6 +207,7 @@ export function useDrafts({
           setTitle(d.title || '');
           setDescription(d.description || '');
           setSurfaceAnchor(d.surfaceAnchor || null);
+          markDrawActivity?.({ forceState: true });
           setDraftStatusText(`Loaded cloud draft (${d.voxelCount} blocks)`);
         })
         .catch(() => {});
@@ -209,7 +216,7 @@ export function useDrafts({
     return () => {
       cancelled = true;
     };
-  }, [refreshCloudDrafts, setDescription, setSurfaceAnchor, setTitle, setVoxels, user?.id]);
+  }, [markDrawActivity, refreshCloudDrafts, setDescription, setSurfaceAnchor, setTitle, setVoxels, user?.id]);
 
   useEffect(() => {
     if (!user?.id) return undefined;
@@ -251,6 +258,7 @@ export function useDrafts({
       if (sess.updatedAt && lastAppliedAgentTsRef.current === sess.updatedAt) return;
       lastAppliedAgentTsRef.current = sess.updatedAt || String(Date.now());
       setVoxels(sess.draftVoxels);
+      markDrawActivity?.({ forceState: true });
       if (sess.draftTitle) {
         setTitle((prev) => (prev.trim() ? prev : sess.draftTitle));
       }
@@ -261,7 +269,7 @@ export function useDrafts({
         `Agent staged ${sess.draftVoxels.length} voxels (${sess.agentName || 'AI Agent'}) — inspect in AR & publish on your phone.`
       );
     },
-    [setDescription, setSensorBanner, setTitle, setVoxels]
+    [markDrawActivity, setDescription, setSensorBanner, setTitle, setVoxels]
   );
 
   const openAgentHandoff = useCallback(async () => {
@@ -394,6 +402,8 @@ export function useDrafts({
           reachMeters,
           surfaceAnchor,
           voxels: currentVoxels,
+          lastDrawAt: drawActivity?.lastDrawAt ?? null,
+          drawLocation: drawActivity?.drawLocation ?? null,
           updatedAt: new Date().toISOString()
         });
         setDraftStatusText(`Saved on device (${currentVoxels.length} blocks)`);
@@ -420,6 +430,8 @@ export function useDrafts({
       cluePrompt,
       color,
       description,
+      drawActivity?.drawLocation,
+      drawActivity?.lastDrawAt,
       material,
       persistCloudDraft,
       reachMeters,
@@ -460,6 +472,7 @@ export function useDrafts({
       setCluePrompt('');
       setClueAnswer('');
       setSurfaceAnchor(full.surfaceAnchor || null);
+      markDrawActivity?.({ forceState: true });
       setMode('draw');
       modeRef.current = 'draw';
       setDraftsOpen(false);
@@ -467,6 +480,7 @@ export function useDrafts({
       showTemporaryHint(`Resumed draft: ${full.title || 'Untitled'}`);
     },
     [
+      markDrawActivity,
       modeRef,
       resetArtTransformState,
       setClueAnswer,
@@ -532,6 +546,15 @@ export function useDrafts({
     stopBrushPainting
   ]);
 
+  const discardActiveCanvasDraft = useCallback(() => {
+    draftSnapshotRef.current = null;
+    clearLocalDraft();
+    setActiveDraftId('');
+    activeDraftIdRef.current = '';
+    lastCloudSyncSigRef.current = '';
+    setDraftStatusText('');
+  }, []);
+
   const markDraftPublished = useCallback((publishedDraftId) => {
     clearLocalDraft();
     setActiveDraftId('');
@@ -558,6 +581,7 @@ export function useDrafts({
     handleLoadDraft,
     handleDeleteCloudDraft,
     handleStartNewDraft,
+    discardActiveCanvasDraft,
     markDraftPublished,
     agentOpen,
     setAgentOpen,
