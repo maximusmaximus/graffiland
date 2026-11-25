@@ -7,6 +7,10 @@ export const HUMAN_MAX_DRAW_SPAN_METERS = 76.2; // Exact 250 ft (250 * 0.3048 m)
 export const HUMAN_MAX_DRAW_HALF_SPAN_METERS = HUMAN_MAX_DRAW_SPAN_METERS / 2; // 38.1 m
 export const AR_MAX_VISIBLE_DISTANCE_FEET = 300; // AR camera strictly hides lands & sculptures >= 300 ft away
 export const AR_MAX_VISIBLE_DISTANCE_METERS = 91.44; // Exact 300 ft (300 * 0.3048 m)
+export const STALE_DRAW_ERASE_DISTANCE_FEET = 20; // Auto-erase idle in-view drawing after moving > 20 ft
+export const STALE_DRAW_ERASE_DISTANCE_METERS = 6.096; // Exact 20 ft (20 * 0.3048 m)
+export const STALE_DRAW_ERASE_IDLE_MINUTES = 5; // Minutes without drawing/painting more before auto-erase
+export const STALE_DRAW_ERASE_IDLE_MS = STALE_DRAW_ERASE_IDLE_MINUTES * 60 * 1000; // 300,000 ms
 
 export const GRAFFITI_PALETTE = [
   '#00f5d4',

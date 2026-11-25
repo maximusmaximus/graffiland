@@ -449,6 +449,16 @@ export class ProofOfLocationTracker {
 
     for (let i = 0; i < recent.length; i++) {
       const s = recent[i];
+      // Discard stale GPS samples (>60s older than the latest fix) so returning after a break
+      // at a new location is never pulled back toward an older stationary cluster.
+      if (
+        i < recent.length - 1 &&
+        Number.isFinite(latest.t) &&
+        Number.isFinite(s.t) &&
+        latest.t - s.t > 60000
+      ) {
+        continue;
+      }
       // Discard older stationary samples once the user has walked to a new spot
       // so walking closer to a land sharpens live AR distance immediately.
       const distFromLatestM = Math.hypot(

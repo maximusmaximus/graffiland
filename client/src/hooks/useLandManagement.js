@@ -17,7 +17,8 @@ export function useLandManagement({
   setMode,
   setTool,
   captureSculptureSnapshot,
-  showTemporaryHint
+  showTemporaryHint,
+  markDrawActivity = null
 }) {
   const [myLands, setMyLands] = useState({ parcelCount: 0, sculptureCount: 0, parcels: [] });
   const [landManageOpen, setLandManageOpen] = useState(false);
@@ -53,13 +54,14 @@ export function useLandManagement({
         parcelId: sc.parcelId
       });
       setVoxels(sc.voxels.map((v) => ({ ...v })));
+      markDrawActivity?.({ forceState: true });
       setMapOpen(false);
       setMapSelectedSculpture(null);
       setMode('draw');
       setTool('brush');
       showTemporaryHint(`Editing "${sc.title}" on ${sc.parcelId} — draw/erase blocks then tap Save Edit.`);
     },
-    [setMapOpen, setMapSelectedSculpture, setMode, setTool, setVoxels, showTemporaryHint]
+    [markDrawActivity, setMapOpen, setMapSelectedSculpture, setMode, setTool, setVoxels, showTemporaryHint]
   );
 
   const handleSaveCanvasModification = useCallback(async () => {

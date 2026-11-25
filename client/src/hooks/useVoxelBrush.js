@@ -5,7 +5,10 @@ import {
   AREA_HALF_SPAN_METERS,
   AREA_LIMIT_BLOCKS,
   HUMAN_MAX_DRAW_SPAN_FEET,
-  HUMAN_MAX_DRAW_SPAN_METERS
+  HUMAN_MAX_DRAW_SPAN_METERS,
+  STALE_DRAW_ERASE_DISTANCE_FEET,
+  STALE_DRAW_ERASE_IDLE_MINUTES,
+  STALE_DRAW_ERASE_IDLE_MS
 } from '../../../shared/constants.mjs';
 import {
   computeAdjacentCandidateSlots,
@@ -29,6 +32,11 @@ import {
   testTransformedVoxelsAgainstPlacedItems,
   testVoxelAgainstPlacedItems
 } from '../utils/arItemCollision.js';
+import {
+  evaluateStaleDrawErase,
+  normalizeDrawLocation,
+  resolveInitialDrawActivity
+} from '../utils/staleDrawGuard.js';
 
 export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
@@ -125,7 +133,10 @@ export function useVoxelBrush({
   openAgentHandoffRef,
   openPublishSheetRef,
   onFirstBrushUse = null,
-  editingSculptureIdRef = null
+  editingSculptureIdRef = null,
+  refreshLocationNow = null,
+  isPublishingRef = null,
+  onAutoEraseStaleDrawing = null
 }) {
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
 
@@ -177,6 +188,7 @@ export function useVoxelBrush({
     originVisible: true,
     reason: ''
   });
+  const [drawActivity, setDrawActivity] = useState(() => resolveInitialDrawActivity(initialDraft));
 
   const draftMeshMapRef = useRef(new Map());
   const draftUnitGeoRef = useRef(null);
@@ -187,6 +199,12 @@ export function useVoxelBrush({
   const activeKeyToolRef = useRef('brush');
   const originStatusRef = useRef(originStatus);
   const voxelsRef = useRef(voxels);
+  const lastDrawAtRef = useRef(drawActivity.lastDrawAt);
+  const drawLocationRef = useRef(drawActivity.drawLocation);
+  const refreshLocationNowRef = useRef(refreshLocationNow);
+  refreshLocationNowRef.current = refreshLocationNow;
+  const onAutoEraseStaleDrawingRef = useRef(onAutoEraseStaleDrawing);
+  onAutoEraseStaleDrawingRef.current = onAutoEraseStaleDrawing;
   const modeRef = useRef(mode);
   const toolRef = useRef(tool);
   const blockSizeRef = useRef(blockSize);
@@ -253,6 +271,47 @@ export function useVoxelBrush({
   useEffect(() => {
     occlusionEnabledRef.current = occlusionEnabled;
   }, [occlusionEnabled]);
+
+  const markDrawActivity = useCallback(
+    ({ locationOverride = null, nowMs = Date.now(), preserveTimestamp = false, forceState = false } = {}) => {
+      const nextTs =
+        preserveTimestamp && lastDrawAtRef.current
+          ? lastDrawAtRef.current
+          : Number.isFinite(Number(nowMs))
+            ? Number(nowMs)
+            : Date.now();
+      const nextLoc =
+        normalizeDrawLocation(locationOverride || locationRef?.current) ||
+        drawLocationRef.current ||
+        null;
+      lastDrawAtRef.current = nextTs;
+      drawLocationRef.current = nextLoc;
+      setDrawActivity((prev) => {
+        const locChanged =
+          Boolean(prev.drawLocation) !== Boolean(nextLoc) ||
+          (prev.drawLocation &&
+            nextLoc &&
+            (Math.abs(prev.drawLocation.lat - nextLoc.lat) > 1e-6 ||
+              Math.abs(prev.drawLocation.lng - nextLoc.lng) > 1e-6));
+        const tsDelta = prev.lastDrawAt ? Math.abs(nextTs - prev.lastDrawAt) : Infinity;
+        if (!forceState && !locChanged && tsDelta < 1000) {
+          return prev;
+        }
+        return { lastDrawAt: nextTs, drawLocation: nextLoc };
+      });
+    },
+    [locationRef]
+  );
+
+  const clearDrawActivity = useCallback(() => {
+    lastDrawAtRef.current = null;
+    drawLocationRef.current = null;
+    setDrawActivity((prev) =>
+      prev.lastDrawAt === null && prev.drawLocation === null
+        ? prev
+        : { lastDrawAt: null, drawLocation: null }
+    );
+  }, []);
 
   const hasVoxels = voxels.length > 0;
   const toolAvailability = useMemo(() => {
@@ -886,6 +945,17 @@ export function useVoxelBrush({
           });
         }
 
+        if (nextList || additions.length > 0) {
+          const drawnAt = Date.now();
+          const drawnLoc = normalizeDrawLocation(locationRef?.current);
+          lastDrawAtRef.current = drawnAt;
+          if (drawnLoc) {
+            drawLocationRef.current = drawnLoc;
+          }
+          queueMicrotask(() => {
+            markDrawActivity({ nowMs: drawnAt, locationOverride: drawnLoc });
+          });
+        }
         if (nextList) {
           return additions.length > 0 ? [...nextList, ...additions] : nextList;
         }
@@ -907,22 +977,41 @@ export function useVoxelBrush({
       config?.policy?.humanMaxDrawSpanMeters,
       config?.policy?.maxVoxels,
       getActivePlacedItemColliders,
+      locationRef,
+      markDrawActivity,
       notifyBlockedByPlacedItem,
       setSensorBanner
     ]
   );
 
-  const eraseTargetVoxel = useCallback((target) => {
-    if (!target || target.action !== 'erase' || !target.voxel) return false;
-    const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
-    const now = performance.now();
-    if (lastErasedKeyRef.current.key === killKey && now - lastErasedKeyRef.current.ts < 85) {
-      return false;
-    }
-    lastErasedKeyRef.current = { key: killKey, ts: now };
-    setVoxels((prev) => prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey));
-    return true;
-  }, []);
+  const eraseTargetVoxel = useCallback(
+    (target) => {
+      if (!target || target.action !== 'erase' || !target.voxel) return false;
+      const killKey = voxelKey(target.voxel.x, target.voxel.y, target.voxel.z);
+      const now = performance.now();
+      if (lastErasedKeyRef.current.key === killKey && now - lastErasedKeyRef.current.ts < 85) {
+        return false;
+      }
+      lastErasedKeyRef.current = { key: killKey, ts: now };
+      setVoxels((prev) => {
+        const next = prev.filter((v) => voxelKey(v.x, v.y, v.z) !== killKey);
+        if (next.length !== prev.length && next.length > 0) {
+          const editedAt = Date.now();
+          const editedLoc = normalizeDrawLocation(locationRef?.current);
+          lastDrawAtRef.current = editedAt;
+          if (editedLoc) {
+            drawLocationRef.current = editedLoc;
+          }
+          queueMicrotask(() => {
+            markDrawActivity({ nowMs: editedAt, locationOverride: editedLoc });
+          });
+        }
+        return next;
+      });
+      return true;
+    },
+    [locationRef, markDrawActivity]
+  );
 
   const applyVoxelAction = useCallback(
     (target) => {
@@ -1176,6 +1265,7 @@ export function useVoxelBrush({
           );
         } else if (!footprint.exceedsLimit) {
           setVoxels(baked);
+          markDrawActivity({ forceState: true });
         } else {
           showTemporaryHint(
             `Max drawing size is ${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft`
@@ -1198,6 +1288,7 @@ export function useVoxelBrush({
       config?.policy?.areaHalfSpanMeters,
       config?.policy?.humanMaxDrawSpanMeters,
       getActivePlacedItemColliders,
+      markDrawActivity,
       resetArtTransformState,
       showTemporaryHint
     ]
@@ -1240,11 +1331,162 @@ export function useVoxelBrush({
       clearedBackupRef.current = null;
       setHasClearedBackup(false);
       setVoxels(restored);
+      markDrawActivity({ forceState: true });
       showTemporaryHint('Cleared canvas restored');
       return;
     }
     setVoxels((p) => p.slice(0, -1));
-  }, [ensureToolUsable, showTemporaryHint]);
+  }, [ensureToolUsable, markDrawActivity, showTemporaryHint]);
+
+  const eraseStaleDrawingView = useCallback(
+    (check) => {
+      const hadVisibleContent =
+        (voxelsRef.current?.length || 0) > 0 || Boolean(surfaceAnchorRef.current);
+      stopBrushPainting();
+      clearedBackupRef.current = null;
+      setHasClearedBackup(false);
+      lastErasedKeyRef.current = { key: '', ts: 0 };
+      resetArtTransformState();
+      voxelsRef.current = [];
+      rebuildDraftMesh([]);
+      setVoxels([]);
+      surfaceAnchorRef.current = null;
+      setSurfaceAnchor(null);
+      clearDrawActivity();
+      if (toolRef.current === 'erase' || toolRef.current === 'stack') {
+        setTool('brush');
+        toolRef.current = 'brush';
+      }
+      if (modeRef.current === 'transform' || modeRef.current === 'publish') {
+        setMode('draw');
+        modeRef.current = 'draw';
+      }
+      onAutoEraseStaleDrawingRef.current?.(check);
+      if (hadVisibleContent) {
+        showTemporaryHint(
+          `Moved over ${STALE_DRAW_ERASE_DISTANCE_FEET}ft with no drawing for ${STALE_DRAW_ERASE_IDLE_MINUTES} min — view cleared.`
+        );
+      }
+    },
+    [clearDrawActivity, rebuildDraftMesh, resetArtTransformState, showTemporaryHint, stopBrushPainting]
+  );
+
+  const checkStaleDrawErase = useCallback(
+    ({ nowMs = Date.now(), locationOverride = null, nudgeGpsIfIdle = false } = {}) => {
+      const hasDrawnContent = Boolean(
+        (voxelsRef.current?.length || 0) > 0 ||
+          surfaceAnchorRef.current ||
+          clearedBackupRef.current?.length
+      );
+      const currentLoc = locationOverride || locationRef?.current || location;
+      const check = evaluateStaleDrawErase({
+        hasDrawnContent,
+        isActivelyDrawing: Boolean(paintingRef.current),
+        isPublishing: Boolean(isPublishingRef?.current),
+        lastDrawAt: lastDrawAtRef.current,
+        drawLocation: drawLocationRef.current,
+        currentLocation: currentLoc,
+        nowMs
+      });
+      if (check.shouldErase) {
+        eraseStaleDrawingView(check);
+        return check;
+      }
+      if (
+        nudgeGpsIfIdle &&
+        hasDrawnContent &&
+        !paintingRef.current &&
+        !isPublishingRef?.current &&
+        lastDrawAtRef.current &&
+        nowMs - lastDrawAtRef.current >= STALE_DRAW_ERASE_IDLE_MS
+      ) {
+        refreshLocationNowRef.current?.({ notifyNearby: false });
+      }
+      return check;
+    },
+    [eraseStaleDrawingView, isPublishingRef, location, locationRef]
+  );
+
+  const hasAnyDrawnContent = voxels.length > 0 || Boolean(surfaceAnchor) || hasClearedBackup;
+
+  // Keep draw activity anchored to the first valid GPS fix and cleared when canvas is emptied
+  useEffect(() => {
+    if (!hasAnyDrawnContent) {
+      clearDrawActivity();
+      return;
+    }
+    const normLoc = normalizeDrawLocation(location);
+    if (!lastDrawAtRef.current) {
+      markDrawActivity({ locationOverride: normLoc, forceState: true });
+      return;
+    }
+    if (!drawLocationRef.current && normLoc) {
+      markDrawActivity({ locationOverride: normLoc, preserveTimestamp: true, forceState: true });
+    }
+  }, [clearDrawActivity, hasAnyDrawnContent, location, markDrawActivity]);
+
+  // Evaluate immediately on GPS movement or draw-state changes
+  useEffect(() => {
+    if (!hasAnyDrawnContent) return;
+    checkStaleDrawErase();
+  }, [
+    checkStaleDrawErase,
+    drawActivity.drawLocation,
+    drawActivity.lastDrawAt,
+    hasAnyDrawnContent,
+    location
+  ]);
+
+  // Schedule exact 5-minute idle check, periodic fallback, and foreground/resume re-checks
+  useEffect(() => {
+    if (!hasAnyDrawnContent) return undefined;
+    let exactTimer = null;
+    const scheduleExact = () => {
+      const latestTs = lastDrawAtRef.current || drawActivity.lastDrawAt || Date.now();
+      const remainingMs = Math.max(250, STALE_DRAW_ERASE_IDLE_MS - (Date.now() - latestTs) + 50);
+      exactTimer = setTimeout(() => {
+        const res = checkStaleDrawErase({ nudgeGpsIfIdle: true });
+        if (!res?.shouldErase && lastDrawAtRef.current) {
+          const left = STALE_DRAW_ERASE_IDLE_MS - (Date.now() - lastDrawAtRef.current);
+          if (left > 0 && left <= 2000) {
+            exactTimer = setTimeout(() => {
+              checkStaleDrawErase({ nudgeGpsIfIdle: true });
+            }, left + 50);
+          }
+        }
+      }, remainingMs);
+    };
+    scheduleExact();
+
+    const pollTimer = setInterval(() => {
+      checkStaleDrawErase({ nudgeGpsIfIdle: true });
+    }, 15000);
+
+    const onResumeCheck = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      checkStaleDrawErase({ nudgeGpsIfIdle: true });
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onResumeCheck);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pageshow', onResumeCheck);
+      window.addEventListener('focus', onResumeCheck);
+    }
+
+    return () => {
+      clearTimeout(exactTimer);
+      clearInterval(pollTimer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onResumeCheck);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pageshow', onResumeCheck);
+        window.removeEventListener('focus', onResumeCheck);
+      }
+    };
+  }, [checkStaleDrawErase, drawActivity.lastDrawAt, hasAnyDrawnContent]);
 
   const assertOriginUnblockedForPaint = useCallback(() => {
     if (!occlusionEnabledRef.current) {
@@ -1712,6 +1954,9 @@ export function useVoxelBrush({
           sharpnessScore: 1,
           locked: true
         });
+        if (!lastDrawAtRef.current) {
+          markDrawActivity({ preserveTimestamp: true, forceState: true });
+        }
         showTemporaryHint(`Start locked to sculpture face (${depthM.toFixed(1)}m)`);
         return;
       }
@@ -1767,9 +2012,12 @@ export function useVoxelBrush({
         sharpnessScore: Number(sharpness.toFixed(2)),
         locked: true
       });
+      if (!lastDrawAtRef.current) {
+        markDrawActivity({ preserveTimestamp: true, forceState: true });
+      }
       showTemporaryHint(`Start surface set: ${label} (${depthM.toFixed(1)}m)`);
     },
-    [cameraRef, canvasHostRef, draftGroupRef, polRef, showTemporaryHint]
+    [cameraRef, canvasHostRef, draftGroupRef, markDrawActivity, polRef, showTemporaryHint]
   );
 
   const seedVoxelAtAnchor = useCallback(() => {
@@ -2123,6 +2371,9 @@ export function useVoxelBrush({
     toggleTransformLock,
     clearCanvas,
     handleUndo,
+    drawActivity,
+    markDrawActivity,
+    checkStaleDrawErase,
     assertOriginUnblockedForPaint,
     getDockHoldHandlers,
     selectKeyTool,

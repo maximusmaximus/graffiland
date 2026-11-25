@@ -170,6 +170,8 @@ export default function MobileStudio({
   const [clueAnswer, setClueAnswer] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const isPublishingRef = useRef(false);
+  isPublishingRef.current = publishing;
   const [publishError, setPublishError] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
   const [activeQuest, setActiveQuest] = useState(null);
@@ -244,6 +246,7 @@ export default function MobileStudio({
   const arTargetedIdRef = useRef('');
   const setArTargetedSculptureBridgeRef = useRef(null);
   const onTapArLandBridgeRef = useRef(null);
+  const onAutoEraseStaleDrawingBridgeRef = useRef(null);
   const isInteractingWithLandRef = useRef(false);
 
   const brush = useVoxelBrush({
@@ -280,7 +283,10 @@ export default function MobileStudio({
     openAgentHandoffRef: openAgentCaller,
     openPublishSheetRef: openPublishCaller,
     onFirstBrushUse: maybeShowSprayBrushGuide,
-    editingSculptureIdRef
+    editingSculptureIdRef,
+    refreshLocationNow: pol.refreshLocationNow,
+    isPublishingRef,
+    onAutoEraseStaleDrawing: (info) => onAutoEraseStaleDrawingBridgeRef.current?.(info)
   });
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
@@ -712,7 +718,9 @@ export default function MobileStudio({
     ensureToolUsable: brush.ensureToolUsable,
     captureSculptureSnapshot,
     setSensorBanner: pol.setSensorBanner,
-    showTemporaryHint
+    showTemporaryHint,
+    drawActivity: brush.drawActivity,
+    markDrawActivity: brush.markDrawActivity
   });
   openAgentHandoffRef.current = drafts.openAgentHandoff;
   openDraftsSheetRef.current = drafts.openDraftsSheet;
@@ -729,8 +737,19 @@ export default function MobileStudio({
     setMode: brush.setMode,
     setTool: brush.setTool,
     captureSculptureSnapshot,
-    showTemporaryHint
+    showTemporaryHint,
+    markDrawActivity: brush.markDrawActivity
   });
+
+  onAutoEraseStaleDrawingBridgeRef.current = () => {
+    drafts.discardActiveCanvasDraft();
+    setTitle('');
+    setDescription('');
+    setCluePrompt('');
+    setClueAnswer('');
+    setSelectedPlinthSlot(null);
+    lands.setEditingSculpture(null);
+  };
 
   useEffect(() => {
     const ids = (lands.myLands?.parcels || []).map((p) => p.parcelId).filter(Boolean);
