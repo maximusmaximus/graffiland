@@ -187,8 +187,8 @@ export default function InfoTermsModal({
             data-testid="info-mint-guide"
           >
             <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-              Pick the easiest way for where you are right now — all human mints are{' '}
-              <strong>gas-free</strong>:
+              <strong>MINT FREE LAND by making art!</strong> Pick the easiest way for where you are
+              right now — all human mints are <strong>gas-free</strong>:
             </div>
 
             <div
@@ -452,6 +452,11 @@ export default function InfoTermsModal({
                 </div>
               </div>
             )}
+
+            <div className="welcome-split-pill mono" style={{ marginBottom: 0 }}>
+              Sale Split: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
+              <strong>3% AI Agent</strong> · <strong>2% Human Artists</strong>
+            </div>
 
             <div
               className="card info-simple-card"

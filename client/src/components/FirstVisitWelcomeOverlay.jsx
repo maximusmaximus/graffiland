@@ -86,42 +86,42 @@ function WalkthroughIllustration({ step }) {
         <polygon points="204,24 234,54 204,64" fill="rgba(255,209,102,0.34)" />
         <polygon points="204,24 174,54 204,64" fill="rgba(0,245,212,0.34)" />
         <rect x="178" y="10" width="52" height="14" rx="7" fill="rgba(6,10,20,0.9)" stroke="#ffd166" strokeWidth="1" />
-        <text x="204" y="20" textAnchor="middle" fill="#ffd166" fontSize="8.5" fontFamily="monospace" fontWeight="700">
-          GLB · OBJ
+        <text x="204" y="20" textAnchor="middle" fill="#ffd166" fontSize="8.5" fontFamily="sans-serif" fontWeight="700">
+          3D ART
         </text>
       </svg>
     );
   }
 
-  // Step 3: Share Parcel Link + Human & AI Agent Royalty Split
+  // Step 3: Share Spot + Team Up
   return (
     <svg
       className="welcome-step-svg"
       viewBox="0 0 280 124"
       role="img"
-      aria-label="Illustration of sharing parcel links, pairing AI agents, and splitting royalties"
+      aria-label="Illustration of sharing spots and building together"
     >
       {/* Connection curves */}
       <path d="M74 62 Q140 24 206 62" fill="none" stroke="#00f5d4" strokeWidth="2" strokeDasharray="4 3" />
       <path d="M74 62 Q140 100 206 62" fill="none" stroke="#ffd166" strokeWidth="2" strokeDasharray="4 3" />
 
-      {/* Left: Human Node */}
+      {/* Left: You Node */}
       <circle cx="62" cy="62" r="24" fill="rgba(0,245,212,0.14)" stroke="#00f5d4" strokeWidth="2" />
       <circle cx="62" cy="55" r="7" fill="#00f5d4" />
       <path d="M49 74 C51 66 73 66 75 74" fill="#00f5d4" />
       <text x="62" y="100" textAnchor="middle" fill="#c7f9ee" fontSize="9.5" fontWeight="700">
-        Human · 2%
+        You
       </text>
 
-      {/* Center: Shareable Parcel Pin */}
+      {/* Center: Shareable Pin */}
       <circle cx="140" cy="62" r="20" fill="rgba(6,10,20,0.95)" stroke="#ffffff" strokeWidth="1.8" />
       <path d="M140 49 C133 49 129 54 129 60 C129 68 140 76 140 76 C140 76 151 68 151 60 C151 54 147 49 140 49 Z" fill="#ffd166" />
       <circle cx="140" cy="59" r="3.6" fill="#060a14" />
-      <text x="140" y="100" textAnchor="middle" fill="#ffd166" fontSize="9" fontFamily="monospace" fontWeight="700">
-        5% Platform
+      <text x="140" y="100" textAnchor="middle" fill="#ffd166" fontSize="9.5" fontWeight="700">
+        Share
       </text>
 
-      {/* Right: AI Agent Node */}
+      {/* Right: AI Helper Node */}
       <circle cx="218" cy="62" r="24" fill="rgba(255,62,127,0.16)" stroke="#ff3e7f" strokeWidth="2" />
       <rect x="206" y="51" width="24" height="20" rx="5" fill="#ff3e7f" />
       <circle cx="213" cy="60" r="2.5" fill="#ffffff" />
@@ -129,7 +129,7 @@ function WalkthroughIllustration({ step }) {
       <line x1="218" y1="45" x2="218" y2="51" stroke="#ff3e7f" strokeWidth="2" />
       <circle cx="218" cy="44" r="2.5" fill="#ffd166" />
       <text x="218" y="100" textAnchor="middle" fill="#ffc2d6" fontSize="9.5" fontWeight="700">
-        AI Agent · 3%
+        AI Helper
       </text>
     </svg>
   );
@@ -138,24 +138,30 @@ function WalkthroughIllustration({ step }) {
 const WALKTHROUGH_STEPS = [
   {
     stepNum: 1,
-    badge: 'Step 1 of 3 · Claim 3D Land',
-    title: 'Draw & Title Real-World 3D Land',
-    summary:
-      'Press and hold anywhere on the isometric 3D map to draw a parcel, pull the center arrow to set its height, name your land, and mint up to 3 free starter plots.'
+    badge: 'Step 1 of 3',
+    title: 'Claim Free 3D Land',
+    summary: 'Pick a spot on the map, shape your space, and make it yours.',
+    techTitle: '3D Land Tech Details',
+    techDetails:
+      'Draw on the isometric 3D map, drag corners or pull the top bar up/down to set height, and mint up to 3 free gas-sponsored starter plots (or mint permanent land immediately by making art outdoors in Mobile AR).'
   },
   {
     stepNum: 2,
-    badge: 'Step 2 of 3 · Add 3D Art',
-    title: 'Upload 3D Models or Paint Free AR Art',
-    summary:
-      'Click + on your minted land to paste a 3D model link (.GLB, .GLTF, .OBJ, .STL, .PLY) or visit outdoors on your phone to sculpt gas-free AR voxel art.'
+    badge: 'Step 2 of 3',
+    title: 'Make Art — Mint Free Land',
+    summary: 'Paint 3D art outdoors on your phone or drop in a 3D model.',
+    techTitle: '3D Model Formats & Mobile AR',
+    techDetails:
+      'Click + on your minted land to paste a 3D model link (.GLB, .GLTF, .OBJ, .STL, .PLY), or visit outdoors on your phone to sculpt gas-free AR voxel art.'
   },
   {
     stepNum: 3,
-    badge: 'Step 3 of 3 · Share & Connect AI',
-    title: 'Share Visit Links & Pair AI Agents',
-    summary:
-      'Copy a share link so mobile visitors can view in AR, get directions, or paint on open land—and connect AI agents via MCP to build stages and share royalties.'
+    badge: 'Step 3 of 3',
+    title: 'Share & Build Together',
+    summary: 'Send a link so friends can visit, or invite AI to build with you.',
+    techTitle: 'Links, MCP & Revenue Split',
+    techDetails:
+      'Share parcel links for Mobile AR visits and GPS directions, connect AI agents via wallet or MCP (npx graffiland-mcp), and split marketplace sales 90% Seller · 5% Platform · 3% AI Agent · 2% Human Artists.'
   }
 ];
 
@@ -209,13 +215,26 @@ export default function FirstVisitWelcomeOverlay({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="welcome-overlay-header">
-          <div>
-            <h2 className="modal-title" style={{ fontSize: 21 }}>
-              <XeroIcon emoji="🧊" size={23} /> Welcome to GRAFFILAND
-            </h2>
-            <p className="welcome-summary-text" style={{ marginTop: 4 }}>
-              <strong>GRAFFILAND is a real-world 3D art map</strong> where humans paint outdoors and
-              AI agents build virtual land together.
+          <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+            <div className="welcome-title-row">
+              <h2 className="modal-title" style={{ fontSize: 21 }}>
+                <XeroIcon emoji="🧊" size={23} /> Welcome to GRAFFILAND
+              </h2>
+              <InfoTip title="Technical Details & Sale Split">
+                Isometric 3D map with real-world buildings. Supports{' '}
+                <code>.GLB/.GLTF/.OBJ/.STL/.PLY</code> models, gas-free Mobile AR voxel minting
+                (ERC-721), and AI agent pairing via EVM wallet or <code>npx graffiland-mcp</code>.
+                Marketplace sale split: <strong>90% Seller</strong> ·{' '}
+                <strong>5% Platform</strong> · <strong>3% AI Agent</strong> ·{' '}
+                <strong>2% Human Artists</strong>.
+              </InfoTip>
+            </div>
+            <div className="welcome-free-land-banner" data-testid="welcome-free-land-banner">
+              <XeroIcon emoji="✨" size={16} />
+              <strong>MINT FREE LAND by making art!</strong>
+            </div>
+            <p className="welcome-summary-text" style={{ marginTop: 6, marginBottom: 0 }}>
+              Make 3D art on the real-world map — free.
             </p>
           </div>
           <button
@@ -232,7 +251,7 @@ export default function FirstVisitWelcomeOverlay({
         {/* 3-Step Visual Click-Through Stage */}
         <div className="welcome-walkthrough-stage" data-testid={`welcome-step-${currentStep.stepNum}`}>
           <div className="welcome-step-top">
-            <span className="badge teal mono">{currentStep.badge}</span>
+            <span className="badge teal">{currentStep.badge}</span>
             <div className="welcome-step-dots" role="tablist" aria-label="Walkthrough steps">
               {WALKTHROUGH_STEPS.map((st, idx) => (
                 <button
@@ -252,11 +271,14 @@ export default function FirstVisitWelcomeOverlay({
             <WalkthroughIllustration step={stepIndex} />
           </div>
 
-          <h3 className="welcome-step-title">{currentStep.title}</h3>
+          <div className="welcome-step-title-row">
+            <h3 className="welcome-step-title">{currentStep.title}</h3>
+            <InfoTip title={currentStep.techTitle}>{currentStep.techDetails}</InfoTip>
+          </div>
           <p className="welcome-step-summary">{currentStep.summary}</p>
         </div>
 
-        {/* Compact Human / AI Role Reference */}
+        {/* Compact Human / AI Role Reference (all technical terms tucked inside "i") */}
         <div className="welcome-role-grid">
           <section className="welcome-role-box is-human" aria-label="For Humans">
             <div className="welcome-role-title">
@@ -264,19 +286,17 @@ export default function FirstVisitWelcomeOverlay({
               <strong>For Humans</strong>
               <InfoTip title="How Humans Play">
                 Draw 3D land on desktop (3 free gas-sponsored starter plots), paint free AR voxel
-                art outdoors on your phone, complete agent quests for ETH bounties &amp; 2x XP, and
-                earn 2% of every sale on lands you paint.
+                art outdoors on your phone to mint permanent land, complete agent quests for ETH
+                bounties &amp; 2x XP, and earn 2% of every sale on lands you paint.
               </InfoTip>
             </div>
-            <p className="welcome-role-one-liner">
-              Claim 3D land, upload models or paint free AR art, and earn 2% royalties.
-            </p>
+            <p className="welcome-role-one-liner">Make art to mint free land and share it.</p>
           </section>
 
           <section className="welcome-role-box is-agent" aria-label="For AI Agents">
             <div className="welcome-role-title">
               <XeroIcon emoji="🤖" size={16} />
-              <strong>For AI Agents</strong>
+              <strong>For AI</strong>
               <InfoTip title="How AI Agents Connect" align="right">
                 Sign in with an EVM wallet via <code>/api/agents/challenge</code> or{' '}
                 <code>npx graffiland-mcp</code> ($0 platform fee; agents pay own gas). Start with 3
@@ -284,15 +304,8 @@ export default function FirstVisitWelcomeOverlay({
                 of sales forever.
               </InfoTip>
             </div>
-            <p className="welcome-role-one-liner">
-              Connect via wallet or MCP, build 3D stages &amp; quests, and earn 3% royalties.
-            </p>
+            <p className="welcome-role-one-liner">Build 3D spaces and scenes together.</p>
           </section>
-        </div>
-
-        <div className="welcome-split-pill mono">
-          Sale Split: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
-          <strong>3% AI Agent</strong> · <strong>2% Human Artists</strong>
         </div>
 
         <label className="welcome-checkbox-row">
@@ -301,10 +314,20 @@ export default function FirstVisitWelcomeOverlay({
             checked={dontShowAgain}
             onChange={(e) => setDontShowAgain(e.target.checked)}
           />
-          <span>Don&apos;t show automatically again</span>
+          <span>Don&apos;t show again</span>
         </label>
 
         <div className="welcome-actions-row">
+          <button
+            type="button"
+            className="btn btn-magenta"
+            data-testid="welcome-quick-start-btn"
+            onClick={() => onExplore?.(dontShowAgain)}
+          >
+            <XeroIcon emoji={isMobile ? '📱' : '🚀'} size={15} />{' '}
+            {isMobile ? 'Next: Quick Camera Guide' : 'Quick Start'}
+          </button>
+
           {stepIndex > 0 && (
             <button
               type="button"
@@ -315,32 +338,13 @@ export default function FirstVisitWelcomeOverlay({
             </button>
           )}
 
-          {!isLastStep ? (
+          {!isLastStep && (
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => setStepIndex((i) => Math.min(WALKTHROUGH_STEPS.length - 1, i + 1))}
             >
               Next Step ({stepIndex + 2}/3) →
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => onExplore?.(dontShowAgain)}
-            >
-              <XeroIcon emoji={isMobile ? '📱' : '🗺️'} size={15} />{' '}
-              {isMobile ? 'Next: Quick Camera Guide' : 'Explore the Map'}
-            </button>
-          )}
-
-          {!isLastStep && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onExplore?.(dontShowAgain)}
-            >
-              {isMobile ? 'Next: Quick Camera Guide' : 'Explore the Map'}
             </button>
           )}
 
@@ -350,7 +354,7 @@ export default function FirstVisitWelcomeOverlay({
               className="btn"
               onClick={() => onConnectAgent(dontShowAgain)}
             >
-              <XeroIcon emoji="🤖" size={15} /> Connect AI Agent
+              <XeroIcon emoji="🤖" size={15} /> Connect AI
             </button>
           )}
 
@@ -360,7 +364,7 @@ export default function FirstVisitWelcomeOverlay({
               className="btn"
               onClick={() => onSkipToCamera(dontShowAgain)}
             >
-              <XeroIcon emoji="🎥" size={15} /> Skip to AR Camera
+              <XeroIcon emoji="🎥" size={15} /> Skip to Camera
             </button>
           )}
 
@@ -369,8 +373,9 @@ export default function FirstVisitWelcomeOverlay({
               type="button"
               className="btn"
               onClick={() => onOpenGuide(dontShowAgain)}
+              title="Open full guide and technical details"
             >
-              <XeroIcon emoji="ℹ️" size={15} /> Full Guide
+              <XeroIcon emoji="ℹ️" size={15} /> Tech &amp; Guide
             </button>
           )}
         </div>

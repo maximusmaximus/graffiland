@@ -421,7 +421,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('FirstVisitWelcomeOverlay explains product in one sentence with Human/Agent cards & clickable "i" tooltips', async () => {
+  test('FirstVisitWelcomeOverlay simplifies copy with MINT FREE LAND banner, hides tech terms in "i" tips & uses magenta Quick Start', async () => {
     const { default: FirstVisitWelcomeOverlay } = await loadJsxModule(
       'client/src/components/FirstVisitWelcomeOverlay.jsx'
     );
@@ -443,29 +443,51 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       })
     );
 
-    assert.ok(view.getByText(/GRAFFILAND is a real-world 3D art map/i));
+    // Prominent MINT FREE LAND banner + clean simplified copy without visible tech jargon
+    assert.ok(view.getByTestId('welcome-free-land-banner').textContent.includes('MINT FREE LAND by making art!'));
+    assert.ok(view.getByText(/Make 3D art on the real-world map/i));
     assert.ok(view.getByTestId('welcome-step-1'));
-    assert.ok(view.getByText(/Draw & Title Real-World 3D Land/i));
+    assert.ok(view.getByText(/Claim Free 3D Land/i));
     assert.ok(view.container.querySelector('.welcome-step-svg'));
+
+    const initialVisibleText = view.container.textContent || '';
+    for (const techTerm of ['isometric', '.GLB', 'voxel', 'MCP', 'EVM', '90% Seller', 'Explore the Map']) {
+      assert.equal(
+        initialVisibleText.includes(techTerm),
+        false,
+        `Expected technical/legacy term "${techTerm}" to be hidden from main welcome banner`
+      );
+    }
+
+    // Magenta Quick Start button replaces Explore the Map
+    const quickStartBtn = view.getByTestId('welcome-quick-start-btn');
+    assert.ok(quickStartBtn.textContent.includes('Quick Start'));
+    assert.ok(quickStartBtn.className.includes('btn-magenta'));
+
+    // Clicking the header "i" button reveals technical details & sale split
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: Technical Details & Sale Split/i }));
+    assert.ok(view.getByRole('tooltip'));
+    assert.ok(view.getByRole('tooltip').textContent.includes('90% Seller'));
+    assert.ok(view.getByRole('tooltip').textContent.includes('graffiland-mcp'));
+    assert.equal(exploreCalls.length, 0);
 
     // Click through all 3 illustrated walkthrough steps and verify Back works
     RTL.fireEvent.click(view.getByRole('button', { name: /Next Step \(2\/3\)/i }));
     assert.ok(view.getByTestId('welcome-step-2'));
-    assert.ok(view.getByText(/Upload 3D Models or Paint Free AR Art/i));
+    assert.ok(view.getByText(/Make Art — Mint Free Land/i));
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Next Step \(3\/3\)/i }));
     assert.ok(view.getByTestId('welcome-step-3'));
-    assert.ok(view.getByText(/Share Visit Links & Pair AI Agents/i));
+    assert.ok(view.getByText(/Share & Build Together/i));
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Back/i }));
     assert.ok(view.getByTestId('welcome-step-2'));
     assert.equal(exploreCalls.length, 0);
 
     assert.ok(view.getByText(/^For Humans$/i));
-    assert.ok(view.getByText(/^For AI Agents$/i));
-    assert.ok(view.getByText(/90% Seller/i));
+    assert.ok(view.getByText(/^For AI$/i));
 
-    // Clicking inside the card or opening an "i" tooltip must keep the overlay open
+    // Clicking inside the card or opening a role "i" tooltip keeps the overlay open & shows tech details
     RTL.fireEvent.click(view.getByText(/^For Humans$/i));
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Humans Play/i }));
     assert.ok(view.getByRole('tooltip'));
@@ -494,13 +516,13 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
 
     // Re-check dontShowAgain -> action buttons pass true
     RTL.fireEvent.click(checkbox);
-    RTL.fireEvent.click(view.getByRole('button', { name: /Full Guide/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Tech & Guide/i }));
     assert.equal(guideOpened, true);
 
-    RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI Agent/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI/i }));
     assert.equal(agentConnected, true);
 
-    RTL.fireEvent.click(view.getByRole('button', { name: /Explore the Map/i }));
+    RTL.fireEvent.click(view.getByRole('button', { name: /Quick Start/i }));
     assert.equal(exploreCalls.length, 3);
     assert.equal(exploreCalls[2], true);
     cleanup();
@@ -515,8 +537,9 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         }
       })
     );
-    assert.ok(mobileView.getByRole('button', { name: /Next: Quick Camera Guide/i }));
-    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Skip to AR Camera/i }));
+    const mobileQuickBtn = mobileView.getByRole('button', { name: /Next: Quick Camera Guide/i });
+    assert.ok(mobileQuickBtn.className.includes('btn-magenta'));
+    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Skip to Camera/i }));
     assert.equal(skippedCamera, true);
     cleanup();
   });
@@ -5407,7 +5430,7 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('DesktopHub renders Sculptures and Land tabs in the Around You panel so desktop users can switch between sculptures and lands', async () => {
+  test('DesktopHub renders Land-default folder tabs with emoji icons (no Around You) and zooms map to sculpture land on selection', async () => {
     const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
 
     const origFetch = globalThis.fetch;
@@ -5522,47 +5545,75 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
         })
       );
 
-      // 1) Header renders Sculptures and Land tabs; defaults to Sculptures around you
-      const sculpturesTab = view.getByTestId('desktop-nearby-tab-sculptures');
+      // 1) Folder tabs put Land FIRST as default, Sculptures SECOND, with emoji icons and NO "Around You" text
+      const tablist = view.getByTestId('desktop-nearby-category-tabs');
+      const tabButtons = tablist.querySelectorAll('[role="tab"]');
+      assert.equal(tabButtons.length, 2);
+      assert.equal(tabButtons[0].getAttribute('data-testid'), 'desktop-nearby-tab-land');
+      assert.equal(tabButtons[1].getAttribute('data-testid'), 'desktop-nearby-tab-sculptures');
+      assert.ok(tabButtons[0].querySelector('.xero-icon'), 'Land folder tab must render an emoji icon');
+      assert.ok(tabButtons[1].querySelector('.xero-icon'), 'Sculptures folder tab must render an emoji icon');
+
       const landTab = view.getByTestId('desktop-nearby-tab-land');
-      assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
-      assert.equal(landTab.getAttribute('aria-selected'), 'false');
-
-      await RTL.waitFor(() => {
-        const list = view.getByTestId('desktop-nearby-sculptures-list');
-        assert.ok(list.textContent.includes('Neon Archway'));
-        assert.ok(list.textContent.includes('Sky Totem'));
-      });
-
-      // 2) Clicking the Land tab switches to Lands around you with counts, Owned badge & land details
-      RTL.fireEvent.click(landTab);
+      const sculpturesTab = view.getByTestId('desktop-nearby-tab-sculptures');
       assert.equal(landTab.getAttribute('aria-selected'), 'true');
       assert.equal(sculpturesTab.getAttribute('aria-selected'), 'false');
+      assert.equal(
+        view.container.querySelector('.desktop-nearby-header').textContent.includes('Around You'),
+        false,
+        'Header must NOT display "Around You"'
+      );
 
-      const landsList = view.getByTestId('desktop-nearby-lands-list');
-      assert.ok(landsList.textContent.includes('Civic Plaza'));
-      assert.ok(landsList.textContent.includes('Sunset Strip'));
-      assert.ok(landsList.textContent.includes('Owned'));
+      // 2) Land list loads by default with counts, Owned badge & land details
+      await RTL.waitFor(() => {
+        const landsList = view.getByTestId('desktop-nearby-lands-list');
+        assert.ok(landsList.textContent.includes('Civic Plaza'));
+        assert.ok(landsList.textContent.includes('Sunset Strip'));
+        assert.ok(landsList.textContent.includes('Owned'));
+      });
 
       // 3) Clicking a Land item highlights it and updates MapView3D selected parcel
       const landCards = view.getAllByTestId('desktop-land-item');
       assert.equal(landCards.length, 2);
-      RTL.fireEvent.click(landCards[1]);
-      assert.equal(landCards[1].getAttribute('data-selected'), 'true');
-      assert.equal(landCards[0].getAttribute('data-selected'), 'false');
+      RTL.fireEvent.click(landCards[0]);
+      assert.equal(landCards[0].getAttribute('data-selected'), 'true');
+      assert.equal(landCards[1].getAttribute('data-selected'), 'false');
       assert.equal(
         view.container.querySelector('.map3d-stage')?.getAttribute('data-selected-parcel-id'),
-        'GLAND-DESK02'
+        'GLAND-DESK01'
       );
 
-      // 4) Switching to Quests then clicking the Sculptures header tab returns cleanly to Sculptures list
+      // 4) Switching to Quests then clicking the Sculptures folder tab returns cleanly to Sculptures list
       RTL.fireEvent.click(view.getByRole('button', { name: /Quests \(0\)/i }));
       assert.equal(view.queryByTestId('desktop-nearby-lands-list'), null);
       RTL.fireEvent.click(sculpturesTab);
       assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
-      assert.ok(view.getByTestId('desktop-nearby-sculptures-list').textContent.includes('Neon Archway'));
+      assert.equal(landTab.getAttribute('aria-selected'), 'false');
+      const scList = view.getByTestId('desktop-nearby-sculptures-list');
+      assert.ok(scList.textContent.includes('Neon Archway'));
+      assert.ok(scList.textContent.includes('Sky Totem'));
 
-      // 5) Nav pairing button says "Pairing" (no QR subtitle), opens with MCP section already expanded, and Last Viewed does NOT appear in nav or sidebar
+      // 5) Selecting a sculpture ("Sky Totem" on GLAND-DESK02) zooms the map into that sculpture's land,
+      //    and closing the sculpture modal keeps the map focused & selected on that property
+      const skyTotemBtn = Array.from(scList.querySelectorAll('button')).find((b) =>
+        b.textContent.includes('Sky Totem')
+      );
+      assert.ok(skyTotemBtn);
+      RTL.fireEvent.click(skyTotemBtn);
+      const mapStage = view.container.querySelector('.map3d-stage');
+      assert.equal(mapStage?.getAttribute('data-selected-parcel-id'), 'GLAND-DESK02');
+      assert.equal(mapStage?.getAttribute('data-focus-parcel-id'), 'GLAND-DESK02');
+      assert.equal(Number(mapStage?.getAttribute('data-focus-lat')), 37.781);
+      assert.equal(Number(mapStage?.getAttribute('data-focus-lng')), -122.416);
+      assert.ok(Number(mapStage?.getAttribute('data-focus-zoom')) >= 18);
+
+      // Close sculpture modal -> map stays zoomed/selected on GLAND-DESK02
+      const closeScBtn = view.getByRole('button', { name: /Close sculpture/i });
+      RTL.fireEvent.click(closeScBtn);
+      assert.equal(mapStage?.getAttribute('data-selected-parcel-id'), 'GLAND-DESK02');
+      assert.equal(mapStage?.getAttribute('data-focus-parcel-id'), 'GLAND-DESK02');
+
+      // 6) Nav pairing button says "Pairing" (no QR subtitle), opens with MCP section already expanded, and Last Viewed does NOT appear in nav or sidebar
       const pairBtn = view.getByTestId('nav-pair-phone-btn');
       const pairBtnText = pairBtn.textContent.trim();
       assert.equal(pairBtnText, 'Pairing');
@@ -5572,11 +5623,6 @@ describe('GRAFFILAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(view.getByTestId('pair-agent-reveal-toggle').getAttribute('aria-expanded'), 'true');
       assert.ok(view.getByTestId('pair-agent-structured-steps'));
       RTL.fireEvent.click(view.getByRole('button', { name: /Close pairing modal/i }));
-      const firstSculptureBtn = view
-        .getByTestId('desktop-nearby-sculptures-list')
-        .querySelector('button');
-      assert.ok(firstSculptureBtn);
-      RTL.fireEvent.click(firstSculptureBtn);
       assert.equal(view.container.querySelector('.desktop-nav').textContent.includes('Last Viewed'), false);
       assert.equal(
         view.container.querySelector('.desktop-nearby-panel').textContent.includes('Last Viewed'),
