@@ -18,6 +18,24 @@ export function setStoredToken(token) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+export function sanitizeApiErrorMessage(rawMessage, status = 0) {
+  const msg = String(rawMessage || '').trim();
+  if (!msg) return `Request failed (${status || 'error'})`;
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes('429') &&
+    (lower.includes('rate limit') ||
+      lower.includes('too many requests') ||
+      lower.includes('exceeded maximum retry limit'))
+  ) {
+    return 'Robinhood Chain RPC is temporarily rate-limited (429). Please wait 30–60 seconds and try again.';
+  }
+  if (msg.includes('code=SERVER_ERROR') || msg.includes('"responseBody"')) {
+    return 'Blockchain RPC is temporarily unavailable. Please wait a moment and try again.';
+  }
+  return msg.length > 260 ? `${msg.slice(0, 257)}…` : msg;
+}
+
 async function request(url, options = {}) {
   const token = getStoredToken();
   const headers = {
@@ -29,7 +47,7 @@ async function request(url, options = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     /** @type {any} */
-    const err = new Error(data.error || `Request failed (${res.status})`);
+    const err = new Error(sanitizeApiErrorMessage(data.error, res.status));
     err.status = res.status;
     err.data = data;
     throw err;

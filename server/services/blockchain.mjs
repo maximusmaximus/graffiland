@@ -1,6 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ethers } from 'ethers';
+import {
+  createLowNoiseJsonRpcProvider,
+  extractTokenIdFromLogs,
+  fetchReceiptFromBlockscoutExplorer,
+  sendMintTxResilient,
+  waitForTxReceiptResilient
+} from '../../shared/chainRpc.mjs';
 import { CONFIG, ROOT_DIR } from '../config.mjs';
 import { getDb } from '../db.mjs';
 
@@ -73,26 +80,37 @@ export async function mintOnRobinhoodChain({
       args: [metadataUri, parcelBytes32, proofHash, latE6, lngE6]
     };
     if (status.liveReady && agentTxHash && /^0x[0-9a-fA-F]{64}$/.test(agentTxHash)) {
-      const provider = new ethers.JsonRpcProvider(status.network.rpcUrl, status.network.chainId);
-      const receipt = await provider.getTransactionReceipt(agentTxHash);
+      const iface = new ethers.Interface(loadContractAbi());
+      let receipt = null;
+      let tokenId = '0';
+      let receiptFrom = '';
+      try {
+        const provider = createLowNoiseJsonRpcProvider(status.network.rpcUrl, status.network.chainId);
+        receipt = await provider.getTransactionReceipt(agentTxHash);
+        if (receipt) {
+          receiptFrom = String(receipt.from || '');
+          tokenId = extractTokenIdFromLogs(receipt.logs || [], iface);
+        }
+      } catch {
+        receipt = null;
+      }
+      if (!receipt && status.network.explorerUrl) {
+        const expReceipt = await fetchReceiptFromBlockscoutExplorer({
+          explorerUrl: status.network.explorerUrl,
+          txHash: agentTxHash,
+          contractInterface: iface
+        });
+        if (expReceipt?.confirmed && !expReceipt.reverted) {
+          receipt = { status: 1, hash: expReceipt.hash || agentTxHash };
+          receiptFrom = String(expReceipt.from || '');
+          tokenId = expReceipt.tokenId || '0';
+        }
+      }
       if (!receipt || receipt.status !== 1) {
         throw new Error(`Agent self-paid gas tx ${agentTxHash} was not confirmed on chain.`);
       }
-      if (String(receipt.from || '').toLowerCase() !== String(recipientAddress || '').toLowerCase()) {
+      if (receiptFrom && receiptFrom.toLowerCase() !== String(recipientAddress || '').toLowerCase()) {
         throw new Error(`Agent self-paid gas tx ${agentTxHash} was not sent from agent wallet ${recipientAddress}.`);
-      }
-      let tokenId = '0';
-      const iface = new ethers.Interface(loadContractAbi());
-      for (const log of receipt.logs) {
-        try {
-          const parsed = iface.parseLog(log);
-          if (parsed && parsed.name === 'SculptureMinted') {
-            tokenId = parsed.args.tokenId.toString();
-            break;
-          }
-        } catch {
-          // non-matching log
-        }
       }
       return {
         simulated: false,
@@ -138,51 +156,29 @@ export async function mintOnRobinhoodChain({
   }
 
   if (status.liveReady) {
-    const provider = new ethers.JsonRpcProvider(
-      status.network.rpcUrl,
-      status.network.chainId
-    );
-    const relayer = new ethers.Wallet(CONFIG.robinhoodRelayerPrivateKey, provider);
-    const contract = new ethers.Contract(
-      CONFIG.robinhoodContractAddress,
-      loadContractAbi(),
-      relayer
-    );
-
-    const tx = await contract.mintSculpture(
-      recipientAddress,
-      metadataUri,
-      parcelBytes32,
-      proofHash,
-      latE6,
-      lngE6
-    );
-    const receipt = await tx.wait();
-
-    let tokenId = '0';
-    for (const log of receipt.logs) {
-      try {
-        const parsed = contract.interface.parseLog(log);
-        if (parsed && parsed.name === 'SculptureMinted') {
-          tokenId = parsed.args.tokenId.toString();
-          break;
-        }
-      } catch {
-        // non-matching log
-      }
-    }
+    const minted = await sendMintTxResilient({
+      rpcUrl: status.network.rpcUrl,
+      chainId: status.network.chainId,
+      networkName: status.network.name,
+      explorerUrl: status.network.explorerUrl,
+      privateKey: CONFIG.robinhoodRelayerPrivateKey,
+      contractAddress: CONFIG.robinhoodContractAddress,
+      abi: loadContractAbi(),
+      args: [recipientAddress, metadataUri, parcelBytes32, proofHash, latE6, lngE6]
+    });
 
     return {
       simulated: false,
       chainId: status.network.chainId,
       chainName: status.network.name,
       contractAddress: status.contractAddress,
-      tokenId,
-      txHash: receipt.hash,
-      explorerTxUrl: `${status.network.explorerUrl}/tx/${receipt.hash}`,
+      tokenId: minted.tokenId,
+      txHash: minted.txHash,
+      explorerTxUrl: `${status.network.explorerUrl}/tx/${minted.txHash}`,
       royaltyBps: CONFIG.resaleFeeBps,
       royaltyReceiver: status.royaltyReceiver,
-      gasSponsoredBy: relayer.address
+      gasSponsoredBy: minted.relayerAddress || status.relayerAddress,
+      ...(minted.receiptPending ? { receiptPending: true } : {})
     };
   }
 
@@ -212,7 +208,7 @@ export async function emitMetadataUpdateOnChain({ tokenId, metadataUri }) {
   const status = getChainStatus();
   if (status.liveReady && tokenId && /^\d+$/.test(String(tokenId))) {
     try {
-      const provider = new ethers.JsonRpcProvider(
+      const provider = createLowNoiseJsonRpcProvider(
         status.network.rpcUrl,
         status.network.chainId
       );
@@ -223,11 +219,17 @@ export async function emitMetadataUpdateOnChain({ tokenId, metadataUri }) {
         relayer
       );
       const tx = await contract.updateTokenURI(BigInt(tokenId), metadataUri);
-      const receipt = await tx.wait();
+      const receipt = await waitForTxReceiptResilient({
+        provider,
+        txHash: tx.hash,
+        explorerUrl: status.network.explorerUrl,
+        contractInterface: contract.interface,
+        maxWaitMs: 8000
+      });
       return {
         simulated: false,
         erc4906Emitted: true,
-        txHash: receipt.hash
+        txHash: receipt.hash || tx.hash
       };
     } catch {
       // Older deployed contract instances without updateTokenURI still serve dynamic /api/tokens/{id}.json
