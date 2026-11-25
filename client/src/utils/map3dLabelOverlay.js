@@ -340,16 +340,21 @@ export function computeSideArtworkCallouts({
         ? pt.y
         : viewportHeight * 0.52 + (idx - (visible.length - 1) / 2) * 14;
 
-    const subtitle =
+    const isPendingPreview = Boolean(sc.isPendingPreview);
+    const baseSub =
       sc.modelType === 'custom-3d'
         ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D`
         : `${Number(sc.voxelCount || sc.voxels?.length || 0)} blocks`;
-    const sculptureUrl =
-      buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
+    const subtitle = isPendingPreview ? `Preview · Needs Approval` : baseSub;
+    const sculptureUrl = isPendingPreview
+      ? ''
+      : buildSculptureShareUrl(sc.id) || `?sculpture=${encodeURIComponent(String(sc.id))}`;
 
     return {
       sculpture: sc,
       sculptureId: String(sc.id),
+      isPendingPreview,
+      pendingRequestId: sc.pendingRequestId || '',
       title: String(sc.title || '3D Artwork'),
       subtitle,
       sculptureUrl,
@@ -443,7 +448,7 @@ export function computeSideArtworkCallouts({
  */
 export function drawArtworkCalloutLeader(ctx, callout) {
   if (!ctx || !callout) return;
-  const { fromX, fromY, elbowX, elbowY, targetX, targetY, isSelected } = callout;
+  const { fromX, fromY, elbowX, elbowY, targetX, targetY, isSelected, isPendingPreview } = callout;
   if (
     !Number.isFinite(fromX) ||
     !Number.isFinite(fromY) ||
@@ -453,15 +458,16 @@ export function drawArtworkCalloutLeader(ctx, callout) {
     return;
   }
 
-  const color = isSelected ? '#ffd166' : '#00f5d4';
-  const dotColor = isSelected ? '#ffffff' : '#eafffc';
+  const color = isPendingPreview ? '#ffd166' : isSelected ? '#ffd166' : '#00f5d4';
+  const dotColor = isPendingPreview ? '#fff3c4' : isSelected ? '#ffffff' : '#eafffc';
 
   ctx.save();
   // Dark halo for sharp readability over bright basemap tiles
   ctx.strokeStyle = 'rgba(4, 10, 20, 0.82)';
-  ctx.lineWidth = isSelected ? 3.4 : 2.6;
+  ctx.lineWidth = isSelected || isPendingPreview ? 3.4 : 2.6;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
+  if (isPendingPreview) ctx.setLineDash([5, 4]);
   ctx.beginPath();
   ctx.moveTo(fromX, fromY);
   ctx.lineTo(elbowX, elbowY);
@@ -470,14 +476,15 @@ export function drawArtworkCalloutLeader(ctx, callout) {
 
   // Glowing thin pointer stroke
   ctx.strokeStyle = color;
-  ctx.lineWidth = isSelected ? 1.8 : 1.2;
+  ctx.lineWidth = isSelected || isPendingPreview ? 1.8 : 1.2;
   ctx.shadowColor = color;
-  ctx.shadowBlur = isSelected ? 10 : 6;
+  ctx.shadowBlur = isSelected || isPendingPreview ? 10 : 6;
   ctx.beginPath();
   ctx.moveTo(fromX, fromY);
   ctx.lineTo(elbowX, elbowY);
   ctx.lineTo(targetX, targetY);
   ctx.stroke();
+  ctx.setLineDash([]);
 
   // Crisp arrowhead pointing at the artwork center
   const dx = targetX - elbowX;

@@ -448,9 +448,22 @@ export default function MapView({
 
     for (const sc of renderedSculptures) {
       if (!Number.isFinite(Number(sc.lat)) || !Number.isFinite(Number(sc.lng))) continue;
-      const chainLinks = getSculptureChainLinks(sc, config);
+      const isPendingPreview = Boolean(sc.isPendingPreview);
+      const chainLinks = isPendingPreview ? null : getSculptureChainLinks(sc, config);
       const txShort = sc.chain?.txHash ? `${sc.chain.txHash.slice(0, 10)}...` : 'n/a';
-      const marker = L.marker([Number(sc.lat), Number(sc.lng)], { icon: customIcon });
+      const iconForMarker = isPendingPreview
+        ? L.divIcon({
+            className: 'graffiland-map-preview-pin',
+            html: `<span class="map2d-preview-marker-pill" data-testid="map2d-preview-label" data-pending-preview="true"><span class="map-preview-pill">Preview</span><span>${escapeHtml(
+              String(sc.title || 'Pending Artwork').slice(0, 18)
+            )}</span></span>`,
+            iconSize: null
+          })
+        : customIcon;
+      const marker = L.marker([Number(sc.lat), Number(sc.lng)], {
+        icon: iconForMarker,
+        zIndexOffset: isPendingPreview ? 650 : 300
+      });
       marker.on('click', () => onSelectSculpture?.(sc));
       const parentParcel = sc.parcelId ? parcelMap.get(sc.parcelId) : null;
       const scLandName = resolveLandDisplayName(
@@ -463,7 +476,9 @@ export default function MapView({
         { defaultName: 'Virtual Land' }
       );
       marker.bindTooltip(
-        `${sc.title} · ${scLandName} · ${chainLinks.isSimulated ? 'Pre-chain' : `Tx ${txShort}`}`
+        isPendingPreview
+          ? `Preview (Needs Approval) · ${sc.title} · ${scLandName}`
+          : `${sc.title} · ${scLandName} · ${chainLinks.isSimulated ? 'Pre-chain' : `Tx ${txShort}`}`
       );
       marker.addTo(layer);
     }

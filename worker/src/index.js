@@ -123,6 +123,7 @@ import {
   getMyLandsWorkspace,
   getPublicParcelDetail,
   getSignatureRequest,
+  getSignatureRequestPreviewModel,
   handleMcpJsonRpc,
   inspectParcelFitForModel,
   isUserLandOwner,
@@ -2642,6 +2643,33 @@ export default {
         return jsonResponse(
           { error: safeErr.message || 'Signature action failed', ...(safeErr?.extra || {}) },
           safeErr?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const sigPreviewMatch = pathname.match(/^\/api\/signatures\/requests\/([^/]+)\/preview-model$/);
+    if (sigPreviewMatch && request.method === 'GET') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await getSignatureRequestPreviewModel(d1Adapter, {
+          requestId: decodeURIComponent(sigPreviewMatch[1]),
+          user
+        });
+        return new Response(out.bytes, {
+          status: 200,
+          headers: {
+            'Content-Type': out.mimeType || 'model/gltf-binary',
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'private, max-age=300',
+            ...corsHeaders(request)
+          }
+        });
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Preview model unavailable' },
+          err?.statusCode || 400,
           request
         );
       }

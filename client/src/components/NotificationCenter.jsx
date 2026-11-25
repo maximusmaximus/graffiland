@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../utils/api';
+import { isPendingSculptureAction } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 
@@ -72,12 +73,19 @@ export default function NotificationCenter({
   user = null,
   variant = 'desktop',
   refreshSignal = 0,
+  pendingApprovals = null,
+  onApprovalResolved = null,
   onAction = null,
   onOpenSettingsExternal = null
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('inbox');
   const [notifications, setNotifications] = useState([]);
+  const [fetchedPending, setFetchedPending] = useState([]);
+  const [resolvedRequestIds, setResolvedRequestIds] = useState(() => new Set());
+  const [approvalBusyId, setApprovalBusyId] = useState('');
+  const [approvalErrors, setApprovalErrors] = useState({});
+  const [approvalNotice, setApprovalNotice] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
   const [mintStatus, setMintStatus] = useState(null);
@@ -110,16 +118,37 @@ export default function NotificationCenter({
   const openRef = useRef(false);
   const initializedRef = useRef(false);
 
+  const livePendingList = useMemo(() => {
+    const source = Array.isArray(pendingApprovals) ? pendingApprovals : fetchedPending;
+    return (source || []).filter(
+      (r) => r && r.id && r.status === 'pending' && !resolvedRequestIds.has(r.id)
+    );
+  }, [pendingApprovals, fetchedPending, resolvedRequestIds]);
+
+  const pendingById = useMemo(() => {
+    const map = new Map();
+    for (const req of livePendingList) {
+      map.set(req.id, req);
+    }
+    return map;
+  }, [livePendingList]);
+
   const closePopover = useCallback(() => {
     openRef.current = false;
     setOpen(false);
     if (viewedWhileOpenIdsRef.current.size > 0) {
       const dismissedIds = new Set(viewedWhileOpenIdsRef.current);
       viewedWhileOpenIdsRef.current.clear();
-      setNotifications((prev) => prev.filter((n) => !dismissedIds.has(n.id)));
+      setNotifications((prev) =>
+        prev.filter((n) => {
+          const pendingReqId = n.actionType === 'open_land_approval' ? n.meta?.requestId : '';
+          if (pendingReqId && pendingById.has(pendingReqId)) return true;
+          return !dismissedIds.has(n.id);
+        })
+      );
       setUnreadCount(0);
     }
-  }, []);
+  }, [pendingById]);
 
   const fireBrowserNotification = useCallback((title, body, tag = '') => {
     try {
@@ -139,20 +168,55 @@ export default function NotificationCenter({
     async ({ silent = false } = {}) => {
       if (!user) {
         setNotifications([]);
+        setFetchedPending([]);
+        setResolvedRequestIds(new Set());
         setUnreadCount(0);
         setMintStatus(null);
         return;
       }
       if (!silent) setLoading(true);
       try {
-        const res = await api.getNotifications(40);
+        const [res, sigRes] = await Promise.all([
+          api.getNotifications(40),
+          typeof api.listPendingSignatures === 'function'
+            ? api.listPendingSignatures().catch(() => null)
+            : Promise.resolve(null)
+        ]);
         const list = Array.isArray(res?.notifications) ? res.notifications : [];
         const prefs = res?.preferences ? { ...DEFAULT_PREFS, ...res.preferences } : DEFAULT_PREFS;
-        // Seen/read notifications are automatically dismissed and stay hidden; keep items seen
-        // during the current open session visible until the user closes or acts on them.
-        const visibleList = list.filter(
-          (n) => !n.read || (openRef.current && viewedWhileOpenIdsRef.current.has(n.id))
+        const freshPending = Array.isArray(sigRes?.requests)
+          ? sigRes.requests.filter((r) => r && r.id && r.status === 'pending')
+          : [];
+        if (sigRes && Array.isArray(sigRes.requests)) {
+          setFetchedPending(freshPending);
+          const freshIds = new Set(freshPending.map((r) => r.id));
+          setResolvedRequestIds((prev) => {
+            if (prev.size === 0) return prev;
+            const next = new Set();
+            for (const id of prev) {
+              if (freshIds.has(id)) next.add(id);
+            }
+            return next;
+          });
+        }
+        const activePendingIds = new Set(
+          (Array.isArray(pendingApprovals) ? pendingApprovals : freshPending)
+            .filter((r) => r && r.id && r.status === 'pending')
+            .map((r) => r.id)
         );
+        // Seen/read notifications are automatically dismissed and stay hidden; keep items seen
+        // during the current open session AND any still-pending approval alerts visible until resolved.
+        const visibleList = list.filter((n) => {
+          const isStillPendingApproval =
+            n.actionType === 'open_land_approval' &&
+            n.meta?.requestId &&
+            activePendingIds.has(n.meta.requestId);
+          return (
+            !n.read ||
+            isStillPendingApproval ||
+            (openRef.current && viewedWhileOpenIdsRef.current.has(n.id))
+          );
+        });
         const unseenCount = visibleList.filter(
           (n) => !n.read && !viewedWhileOpenIdsRef.current.has(n.id)
         ).length;
@@ -177,7 +241,7 @@ export default function NotificationCenter({
         if (!silent) setLoading(false);
       }
     },
-    [user, fireBrowserNotification]
+    [user, pendingApprovals, fireBrowserNotification]
   );
 
   const userId = user?.id || '';
@@ -254,13 +318,129 @@ export default function NotificationCenter({
 
   const handleNotificationAction = async (item, overrideAction = null) => {
     const effective = overrideAction ? { ...item, ...overrideAction } : item;
-    if (item?.id) {
+    if (item?.id && !item.isSyntheticPending) {
       viewedWhileOpenIdsRef.current.add(item.id);
       api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
     }
     if (onAction) {
       closePopover();
       onAction(effective);
+    }
+  };
+
+  const handleInlineApprove = async (e, reqObj, item, options = {}) => {
+    e.stopPropagation();
+    const requestId = reqObj?.id || item?.meta?.requestId || '';
+    if (!requestId || approvalBusyId) return;
+    const autoFitScale = Boolean(options?.autoFitScale);
+    setApprovalBusyId(requestId);
+    setApprovalNotice('');
+    setApprovalErrors((prev) => {
+      if (!prev[requestId]) return prev;
+      const next = { ...prev };
+      delete next[requestId];
+      return next;
+    });
+    try {
+      let extSig = '';
+      if (
+        !autoFitScale &&
+        reqObj?.canonicalMessage &&
+        reqObj?.ownerAddress &&
+        user?.walletAddress &&
+        user.walletAddress.toLowerCase() !== reqObj.ownerAddress.toLowerCase() &&
+        typeof window !== 'undefined' &&
+        window.ethereum
+      ) {
+        extSig = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [reqObj.canonicalMessage, reqObj.ownerAddress]
+        });
+      }
+      const signPayload = {
+        ...(extSig ? { signature: extSig } : {}),
+        ...(autoFitScale ? { autoFitScale: true } : {})
+      };
+      const signRes = await api.mobileSignRequest(requestId, signPayload);
+      setResolvedRequestIds((prev) => new Set([...prev, requestId]));
+      setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
+      setNotifications((prev) =>
+        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId)
+      );
+      if (item?.id && !item.isSyntheticPending) {
+        api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
+      }
+      const title =
+        reqObj?.summaryTitle ||
+        String(item?.title || 'Land Transaction').replace(/^✍️\s*Approval needed:\s*/i, '');
+      const fitSuffix = signRes?.autoFittedScale ? ` (auto-fitted to ${signRes.autoFittedScale}×)` : '';
+      const msg = `Approved & minted "${title}"${fitSuffix}!`;
+      setApprovalNotice(msg);
+      notifySettingsSaved(msg);
+      onApprovalResolved?.({
+        type: 'approved',
+        requestId,
+        parcelId: reqObj?.parcelId || item?.parcelId || '',
+        result: signRes
+      });
+    } catch (err) {
+      const errMsg = err?.message || 'Could not approve transaction.';
+      const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);
+      setApprovalErrors((prev) => ({
+        ...prev,
+        [requestId]: {
+          message: errMsg,
+          code: String(err?.data?.code || ''),
+          maxSafeScale: Number.isFinite(maxSafe) && maxSafe > 0 ? maxSafe : null
+        }
+      }));
+      notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 6500 });
+    } finally {
+      setApprovalBusyId('');
+    }
+  };
+
+  const handleInlineReject = async (e, reqObj, item) => {
+    e.stopPropagation();
+    const requestId = reqObj?.id || item?.meta?.requestId || '';
+    if (!requestId || approvalBusyId) return;
+    setApprovalBusyId(requestId);
+    setApprovalNotice('');
+    setApprovalErrors((prev) => {
+      if (!prev[requestId]) return prev;
+      const next = { ...prev };
+      delete next[requestId];
+      return next;
+    });
+    try {
+      await api.rejectSignatureRequest(requestId);
+      setResolvedRequestIds((prev) => new Set([...prev, requestId]));
+      setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
+      setNotifications((prev) =>
+        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId)
+      );
+      if (item?.id && !item.isSyntheticPending) {
+        api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
+      }
+      const title =
+        reqObj?.summaryTitle ||
+        String(item?.title || 'Land Transaction').replace(/^✍️\s*Approval needed:\s*/i, '');
+      const msg = `Rejected "${title}".`;
+      setApprovalNotice(msg);
+      notifySettingsSaved(msg);
+      onApprovalResolved?.({
+        type: 'rejected',
+        requestId,
+        parcelId: reqObj?.parcelId || item?.parcelId || ''
+      });
+    } catch (err) {
+      const errMsg = err?.message || 'Could not reject transaction.';
+      setApprovalErrors((prev) => ({
+        ...prev,
+        [requestId]: { message: errMsg, code: '', maxSafeScale: null }
+      }));
+    } finally {
+      setApprovalBusyId('');
     }
   };
 
@@ -347,6 +527,48 @@ export default function NotificationCenter({
 
   const isMobile = variant === 'mobile';
 
+  // Combine persisted notifications with any live pending approvals whose notification was already read/dismissed
+  const existingReqIdsInNotifs = new Set(
+    notifications
+      .filter((n) => n.actionType === 'open_land_approval' && n.meta?.requestId)
+      .map((n) => n.meta.requestId)
+  );
+  const syntheticPendingNotifs = livePendingList
+    .filter((req) => !existingReqIdsInNotifs.has(req.id))
+    .map((req) => {
+      const hasPreview = isPendingSculptureAction(req.action);
+      const landTitle = req.landDisplayName || req.parcelName || 'your land';
+      return {
+        id: `pending-notif:${req.id}`,
+        isSyntheticPending: true,
+        read: false,
+        category: 'land_activity',
+        severity: 'action',
+        title: `✍️ Approval needed: ${req.summaryTitle || 'Land Transaction'}`,
+        message: hasPreview
+          ? `${req.agentName || 'Your paired agent'} requested "${req.summaryTitle || req.action}" on "${landTitle}". Preview on the map or approve right here.`
+          : `${req.agentName || 'Your paired agent'} requested "${req.summaryTitle || req.action}" on "${landTitle}".`,
+        parcelId: req.parcelId || '',
+        sculptureId: req.sculptureId || '',
+        actionType: 'open_land_approval',
+        actionLabel: hasPreview ? 'Preview on Land' : 'Review on Land',
+        createdAt: req.createdAt,
+        meta: {
+          requestId: req.id,
+          action: req.action,
+          agentName: req.agentName || '',
+          landTitle,
+          hasSculpturePreview: hasPreview
+        }
+      };
+    });
+
+  const displayNotifications = [...syntheticPendingNotifs, ...notifications].filter((item) => {
+    const reqId = item.actionType === 'open_land_approval' ? item.meta?.requestId : '';
+    return !(reqId && resolvedRequestIds.has(reqId));
+  });
+  const badgeCount = open ? 0 : unreadCount + syntheticPendingNotifs.length;
+
   return (
     <div
       ref={containerRef}
@@ -355,17 +577,17 @@ export default function NotificationCenter({
       <button
         type="button"
         className={`notif-bell-btn ${isMobile ? 'hud-pill notif-bell-mobile' : 'btn-ghost'} ${
-          unreadCount > 0 ? 'has-unread' : ''
+          badgeCount > 0 ? 'has-unread' : ''
         }`}
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-label={`Notifications${badgeCount > 0 ? ` (${badgeCount} unread)` : ''}`}
         aria-expanded={open}
         title="Notifications & alert settings"
         onClick={handleToggleOpen}
       >
         <span aria-hidden="true">🔔</span>
-        {unreadCount > 0 && (
+        {badgeCount > 0 && (
           <span className="notif-count-badge" data-testid="notif-unread-badge">
-            {unreadCount > 99 ? '99+' : unreadCount}
+            {badgeCount > 99 ? '99+' : badgeCount}
           </span>
         )}
       </button>
@@ -379,7 +601,7 @@ export default function NotificationCenter({
           <div className="notif-header">
             <div className="notif-header-title">
               <strong>🔔 Notifications</strong>
-              {unreadCount > 0 && <span className="notif-pill-unread">{unreadCount} new</span>}
+              {badgeCount > 0 && <span className="notif-pill-unread">{badgeCount} new</span>}
             </div>
             <div className="notif-header-actions">
               <div className="notif-tabs" role="tablist">
@@ -469,8 +691,8 @@ export default function NotificationCenter({
                 <span className="notif-toolbar-meta">
                   {loading
                     ? 'Refreshing...'
-                    : notifications.length > 0
-                    ? `${notifications.length} alert${notifications.length === 1 ? '' : 's'} · auto-dismisses once seen`
+                    : displayNotifications.length > 0
+                    ? `${displayNotifications.length} alert${displayNotifications.length === 1 ? '' : 's'}`
                     : 'No unread alerts'}
                 </span>
                 <div className="notif-toolbar-btns">
@@ -486,7 +708,18 @@ export default function NotificationCenter({
                 </div>
               </div>
 
-              {notifications.length === 0 ? (
+              {approvalNotice && (
+                <div
+                  className="settings-inline-saved notif-settings-saved-pill"
+                  data-testid="notif-approval-status"
+                  role="status"
+                  style={{ margin: '0 12px 8px' }}
+                >
+                  ✅ {approvalNotice}
+                </div>
+              )}
+
+              {displayNotifications.length === 0 ? (
                 <div className="notif-empty">
                   <div className="notif-empty-icon">✨</div>
                   <strong>You’re all caught up!</strong>
@@ -497,7 +730,7 @@ export default function NotificationCenter({
                 </div>
               ) : (
                 <div className="notif-list">
-                  {notifications.map((item) => {
+                  {displayNotifications.map((item) => {
                     const artHref =
                       item.meta?.sculptureUrl ||
                       (item.sculptureId ? `?sculpture=${encodeURIComponent(item.sculptureId)}` : '');
@@ -505,6 +738,31 @@ export default function NotificationCenter({
                       item.meta?.parcelUrl ||
                       (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
                     const isApprovalLink = item.actionType === 'open_land_approval';
+                    const requestId = isApprovalLink ? String(item.meta?.requestId || '') : '';
+                    const liveReq = requestId ? pendingById.get(requestId) || null : null;
+                    const effectiveReq =
+                      liveReq ||
+                      (requestId
+                        ? {
+                            id: requestId,
+                            parcelId: item.parcelId || '',
+                            action: item.meta?.action || '',
+                            summaryTitle: String(item.title || '').replace(
+                              /^✍️\s*Approval needed:\s*/i,
+                              ''
+                            )
+                          }
+                        : null);
+                    const hasSculpturePreview = Boolean(
+                      isApprovalLink &&
+                        (item.meta?.hasSculpturePreview ||
+                          isPendingSculptureAction(effectiveReq?.action || ''))
+                    );
+                    const isBusyApproval = Boolean(requestId && approvalBusyId === requestId);
+                    const itemApprovalErr = requestId ? approvalErrors?.[requestId] || null : null;
+                    const canAutoFit =
+                      itemApprovalErr?.code === 'exceeds_land_bounds' &&
+                      Number(itemApprovalErr?.maxSafeScale) >= 0.001;
                     const isRepairAlert = Boolean(item.meta?.needsRepair);
                     const isArtLink =
                       !isApprovalLink &&
@@ -516,6 +774,7 @@ export default function NotificationCenter({
                         className={`notif-item severity-${item.severity || 'info'} ${
                           item.read ? 'is-read' : 'is-unread'
                         }`}
+                        data-request-id={requestId || undefined}
                         onClick={() => handleNotificationAction(item)}
                       >
                         <div className="notif-item-icon" aria-hidden="true">
@@ -527,15 +786,103 @@ export default function NotificationCenter({
                         </div>
                         <div className="notif-item-content">
                           <div className="notif-item-top">
-                            <strong className="notif-item-title">{item.title}</strong>
+                            <strong className="notif-item-title">
+                              {hasSculpturePreview && (
+                                <span
+                                  className="map-preview-pill"
+                                  style={{ marginRight: 5, verticalAlign: 'middle' }}
+                                >
+                                  Preview
+                                </span>
+                              )}
+                              {item.title}
+                            </strong>
                             <span className="notif-item-time">
                               {formatRelativeTime(item.createdAt)}
                             </span>
                           </div>
                           <p className="notif-item-msg">{item.message}</p>
-                          {(item.actionLabel || isArtLink) && (
+                          {itemApprovalErr?.message && (
+                            <div
+                              className="approval-inline-error"
+                              data-testid="notif-approval-error"
+                              role="alert"
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ marginBottom: 6 }}
+                            >
+                              <div className="approval-inline-error-msg">
+                                ⚠️ {itemApprovalErr.message}
+                              </div>
+                              {canAutoFit && effectiveReq && (
+                                <button
+                                  type="button"
+                                  className="btn btn-xs btn-primary"
+                                  data-testid="notif-autofit-approve-btn"
+                                  disabled={Boolean(approvalBusyId)}
+                                  onClick={(e) =>
+                                    handleInlineApprove(e, effectiveReq, item, {
+                                      autoFitScale: true
+                                    })
+                                  }
+                                >
+                                  {isBusyApproval
+                                    ? 'Fitting…'
+                                    : `📐 Auto-Fit (${itemApprovalErr.maxSafeScale}×) & Approve`}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {(item.actionLabel || isArtLink || Boolean(effectiveReq)) && (
                             <div className="notif-item-actions">
-                              {isArtLink ? (
+                              {isApprovalLink && effectiveReq ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-xs btn-primary notif-inline-approve-btn"
+                                    data-testid="notif-inline-approve-btn"
+                                    disabled={Boolean(approvalBusyId)}
+                                    onClick={(e) => handleInlineApprove(e, effectiveReq, item)}
+                                  >
+                                    {isBusyApproval ? 'Approving…' : '✅ Approve'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-xs btn-danger notif-inline-reject-btn"
+                                    data-testid="notif-inline-reject-btn"
+                                    disabled={Boolean(approvalBusyId)}
+                                    onClick={(e) => handleInlineReject(e, effectiveReq, item)}
+                                  >
+                                    {isBusyApproval ? '…' : '✕ Reject'}
+                                  </button>
+                                  {hasSculpturePreview && (
+                                    <button
+                                      type="button"
+                                      className="btn-xs notif-action-btn"
+                                      data-testid="notif-preview-btn"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleNotificationAction(item, {
+                                          actionType: 'preview_pending_sculpture',
+                                          pendingRequest: liveReq || effectiveReq
+                                        });
+                                      }}
+                                    >
+                                      👁️ Preview
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="notif-secondary-link notif-secondary-btn"
+                                    data-testid="notif-approve-land-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleNotificationAction(item);
+                                    }}
+                                  >
+                                    Open Land →
+                                  </button>
+                                </>
+                              ) : isArtLink ? (
                                 <a
                                   href={artHref}
                                   className="btn-xs notif-action-btn notif-action-link"
@@ -588,15 +935,17 @@ export default function NotificationCenter({
                             </div>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          className="notif-dismiss-btn"
-                          aria-label="Dismiss notification"
-                          title="Dismiss"
-                          onClick={(e) => handleDelete(e, item.id)}
-                        >
-                          ×
-                        </button>
+                        {!item.isSyntheticPending && (
+                          <button
+                            type="button"
+                            className="notif-dismiss-btn"
+                            aria-label="Dismiss notification"
+                            title="Dismiss"
+                            onClick={(e) => handleDelete(e, item.id)}
+                          >
+                            ×
+                          </button>
+                        )}
                       </div>
                     );
                   })}

@@ -1595,17 +1595,29 @@ export default function MapView3D({
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
         const isSelected = sc.id === selectedSculptureId;
-        const iconEmoji = isSelected ? '📍' : '🧊';
+        const isPendingPreview = Boolean(sc.isPendingPreview);
+        const iconEmoji = isPendingPreview ? '⏳' : isSelected ? '📍' : '🧊';
         const iconSize = isSelected ? 20 : 17;
         const emojiEntry = xeroemoji.get(iconEmoji);
         const el = document.createElement('button');
         el.type = 'button';
-        el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''}`;
+        el.className = `map3d-sculpture-marker map3d-ui-stop ${isSelected ? 'is-selected' : ''} ${
+          isPendingPreview ? 'is-pending-preview' : ''
+        }`.trim();
         el.dataset.sculptureId = sc.id;
-        el.dataset.testid = 'map3d-artwork-label';
-        el.setAttribute('aria-label', `View 3D artwork: ${sc.title || sc.id}`);
+        el.dataset.testid = isPendingPreview ? 'map3d-preview-label' : 'map3d-artwork-label';
+        if (isPendingPreview) {
+          el.dataset.pendingPreview = 'true';
+          if (sc.pendingRequestId) el.dataset.requestId = sc.pendingRequestId;
+        }
+        el.setAttribute(
+          'aria-label',
+          isPendingPreview
+            ? `Preview pending sculpture: ${sc.title || sc.id} (needs approval)`
+            : `View 3D artwork: ${sc.title || sc.id}`
+        );
 
-        const chainLinks = getSculptureChainLinks(sc, config);
+        const chainLinks = isPendingPreview ? null : getSculptureChainLinks(sc, config);
         if (chainLinks?.txUrl) {
           el.dataset.txUrl = chainLinks.txUrl;
         }
@@ -1625,7 +1637,9 @@ export default function MapView3D({
           sc.modelType === 'custom-3d'
             ? `${String(sc.customModel?.format || '3D').toUpperCase()} 3D Model`
             : `${sc.voxelCount || sc.voxels?.length || 0} blocks`;
-        el.title = `View "${sc.title || '3D Artwork'}" in 3D (${landLabel} · ${assetMeta})`;
+        el.title = isPendingPreview
+          ? `Preview (Pending Approval) — "${sc.title || '3D Artwork'}" on ${landLabel} (${assetMeta}). Click to inspect & approve.`
+          : `View "${sc.title || '3D Artwork'}" in 3D (${landLabel} · ${assetMeta})`;
 
         const iconWrap = document.createElement('span');
         iconWrap.className = 'map3d-sculpture-icon';
@@ -1644,6 +1658,13 @@ export default function MapView3D({
           iconWrap.textContent = iconEmoji;
         }
         el.appendChild(iconWrap);
+        if (isPendingPreview) {
+          const previewPill = document.createElement('span');
+          previewPill.className = 'map-preview-pill';
+          previewPill.dataset.testid = 'map-preview-badge';
+          previewPill.textContent = 'Preview';
+          el.appendChild(previewPill);
+        }
         if (sc.title) {
           const labelSpan = document.createElement('span');
           labelSpan.className = 'map3d-sculpture-label';

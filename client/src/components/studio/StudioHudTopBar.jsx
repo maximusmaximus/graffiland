@@ -92,7 +92,9 @@ export default function StudioHudTopBar({
   onExitArLand = null,
   arExitLabel = 'Back to Draw',
   notifRefreshSignal = 0,
-  onNotificationAction = null
+  onNotificationAction = null,
+  onApprovalResolved = null,
+  onPreviewPending = null
 }) {
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
@@ -209,6 +211,8 @@ export default function StudioHudTopBar({
             user={user}
             variant="mobile"
             refreshSignal={notifRefreshSignal}
+            pendingApprovals={pendingSignatures}
+            onApprovalResolved={onApprovalResolved}
             onAction={onNotificationAction}
           />
           <button
@@ -354,6 +358,7 @@ export default function StudioHudTopBar({
           pendingSigErrors={pendingSigErrors}
           onMobileSignPending={onMobileSignPending}
           onMobileRejectPending={onMobileRejectPending}
+          onPreviewPending={onPreviewPending}
           onRefreshSignatures={onRefreshSignatures}
         />
       </div>

@@ -8,6 +8,7 @@ import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
+import { isPendingSculptureAction } from '../../utils/pendingApprovalPreview.js';
 import InfoTip from '../InfoTip.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import DesktopQrScanner from './DesktopQrScanner.jsx';
@@ -90,6 +91,7 @@ export default function MobilePairApprovalDropdown({
   pendingSigErrors = {},
   onMobileSignPending,
   onMobileRejectPending,
+  onPreviewPending = null,
   onRefreshSignatures
 }) {
   const panelRef = useRef(null);
@@ -408,6 +410,19 @@ export default function MobilePairApprovalDropdown({
                       >
                         {busy ? 'Working…' : '✕ No, Reject'}
                       </button>
+                      {onPreviewPending && isPendingSculptureAction(item.action) && (
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          data-testid="mobile-approval-preview-btn"
+                          onClick={() => {
+                            onClose?.();
+                            onPreviewPending(item);
+                          }}
+                        >
+                          👁️ Preview
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="btn btn-xs btn-ghost"

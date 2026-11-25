@@ -490,16 +490,22 @@ export async function notifyPendingLandApproval(db, { userSub, request }) {
   );
   const agentLabel = String(request.agentName || 'Your paired agent').trim();
   const parcelUrl = request.parcelId ? `?parcel=${encodeURIComponent(request.parcelId)}` : '';
+  const hasSculpturePreview =
+    request.action === 'create_sculpture' ||
+    request.action === 'publish_sculpture' ||
+    request.action === 'update_sculpture';
   return createNotification(db, {
     userSub: cleanSub,
     category: 'land_activity',
     severity: 'action',
     title: `✍️ Approval needed: ${request.summaryTitle || 'Land Transaction'}`,
-    message: `${agentLabel} requested "${request.summaryTitle || request.action}" on "${landTitle}". Open the land view to approve or reject.`,
+    message: hasSculpturePreview
+      ? `${agentLabel} requested "${request.summaryTitle || request.action}" on "${landTitle}". Preview on the map or approve right here.`
+      : `${agentLabel} requested "${request.summaryTitle || request.action}" on "${landTitle}". Approve right here or review on the land page.`,
     parcelId: request.parcelId || '',
     sculptureId: request.sculptureId || '',
     actionType: 'open_land_approval',
-    actionLabel: 'Review & Approve',
+    actionLabel: hasSculpturePreview ? 'Preview on Land' : 'Review & Approve',
     meta: {
       requestId: request.id,
       pairingCode: request.pairingCode || '',
@@ -507,6 +513,7 @@ export async function notifyPendingLandApproval(db, { userSub, request }) {
       agentName: agentLabel,
       landTitle,
       parcelUrl,
+      hasSculpturePreview,
       expiresAt: request.expiresAt || ''
     },
     dedupeKey: `sigreq:${request.id}`,
