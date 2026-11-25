@@ -211,3 +211,60 @@ export function pointInPolygon2D(px, py, pts) {
   }
   return inside;
 }
+
+function distPtToSegment2D(px, py, a, b) {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq < 1e-6) return Math.hypot(px - a.x, py - a.y);
+  const t = Math.max(0, Math.min(1, ((px - a.x) * vx + (py - a.y) * vy) / lenSq));
+  return Math.hypot(px - (a.x + t * vx), py - (a.y + t * vy));
+}
+
+/**
+ * Hit-tests a screen point against a projected 3D minted land prism (all 12 wireframe
+ * boundary edges + bottom floor + top roof + 4 side walls).
+ */
+export function hitTestMintedParcelPrism(px, py, geom, edgeTolerancePx = 10) {
+  if (!geom || !Array.isArray(geom.bottom) || !Array.isArray(geom.top)) {
+    return null;
+  }
+  if (geom.bottom.length < 4 || geom.top.length < 4) return null;
+
+  let minEdgeDist = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const next = (i + 1) % 4;
+    const dBot = distPtToSegment2D(px, py, geom.bottom[i], geom.bottom[next]);
+    const dTop = distPtToSegment2D(px, py, geom.top[i], geom.top[next]);
+    const dVert = distPtToSegment2D(px, py, geom.bottom[i], geom.top[i]);
+    if (dBot < minEdgeDist) minEdgeDist = dBot;
+    if (dTop < minEdgeDist) minEdgeDist = dTop;
+    if (dVert < minEdgeDist) minEdgeDist = dVert;
+  }
+
+  let inside = pointInPolygon2D(px, py, geom.bottom) || pointInPolygon2D(px, py, geom.top);
+  if (!inside) {
+    for (let i = 0; i < 4; i++) {
+      const next = (i + 1) % 4;
+      const sideQuad = [geom.bottom[i], geom.bottom[next], geom.top[next], geom.top[i]];
+      if (pointInPolygon2D(px, py, sideQuad)) {
+        inside = true;
+        break;
+      }
+    }
+  }
+
+  if (!inside && minEdgeDist > edgeTolerancePx) return null;
+  const cx =
+    (geom.bottom[0].x + geom.bottom[1].x + geom.bottom[2].x + geom.bottom[3].x +
+      geom.top[0].x + geom.top[1].x + geom.top[2].x + geom.top[3].x) / 8;
+  const cy =
+    (geom.bottom[0].y + geom.bottom[1].y + geom.bottom[2].y + geom.bottom[3].y +
+      geom.top[0].y + geom.top[1].y + geom.top[2].y + geom.top[3].y) / 8;
+  return {
+    hit: true,
+    onBoundary: minEdgeDist <= edgeTolerancePx,
+    edgeDist: minEdgeDist,
+    centerDist: Math.hypot(px - cx, py - cy)
+  };
+}

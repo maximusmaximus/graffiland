@@ -2408,4 +2408,127 @@ describe('GRAFFILAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(errors, []);
     await ctx.close();
   });
+
+  test('Clicking minted land label or boundary opens detailed view, and Pairing preserves code across reopen with one-click copy', async () => {
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: {
+          email: 'detail-click-owner@graffiland.local',
+          name: 'Detail Click Owner',
+          username: 'detail_clicker'
+        }
+      })
+    }).then((r) => r.json());
+    assert.ok(ownerAuth?.token);
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`
+      },
+      body: JSON.stringify({ username: 'detail_clicker', bio: 'E2E detail view tester' })
+    });
+
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await ctx.addInitScript((token) => {
+      globalThis.localStorage.setItem('graffiland_jwt', token);
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+      globalThis.__copiedClipLog = [];
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text) => {
+            globalThis.__copiedClipLog.push(String(text));
+          }
+        }
+      });
+    }, ownerAuth.token);
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.desktop-nav');
+
+    // Open Mint Land and mint a fresh plot as our dedicated owner
+    await page.locator('.desktop-nav').getByRole('button', { name: /Mint Land/i }).click();
+    await page.getByRole('button', { name: /\+ Add Square/i }).click();
+    await page.waitForSelector('#land-square-name-input');
+    await page.locator('#land-square-name-input').fill('Detail Click Plaza');
+    await page.waitForSelector('[data-testid="land-title-validation"]:has-text("available")', { timeout: 5000 });
+    await page.getByRole('button', { name: /Mint This Land/i }).click();
+    await page.waitForSelector('text=/Minted "Detail Click Plaza"/i');
+
+    // 1) Click the minted land label directly on the map -> opens detailed view (PlotVisitView)!
+    const landLabel = page.locator('[data-testid="map3d-land-label"]', { hasText: 'Detail Click Plaza' }).first();
+    await landLabel.waitFor({ state: 'visible', timeout: 10000 });
+    await landLabel.click();
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    assert.ok(
+      (await page.getByTestId('desktop-plot-visit-view').textContent()).includes('Detail Click Plaza')
+    );
+
+    // Close detailed view
+    await page.getByTestId('desktop-plot-visit-view').getByRole('button', { name: /Close|Back/i }).first().click();
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { state: 'detached' });
+
+    // 2) Click directly on the minted land's 3D boundary / prism right below its floating label -> opens detailed view!
+    const labelBox = await landLabel.boundingBox();
+    assert.ok(labelBox, 'Expected minted land label bounding box on map');
+    // Leader line points straight down from label to the roof center of the 3D land prism
+    await page.mouse.click(labelBox.x + labelBox.width / 2, labelBox.y + labelBox.height + 28);
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    await page.getByTestId('desktop-plot-visit-view').getByRole('button', { name: /Close|Back/i }).first().click();
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { state: 'detached' });
+
+    // 3) Open Pairing window -> Phone pair code persists across modal close/reopen, and both Phone & MCP codes copy on click or copy icon!
+    await page.getByTestId('nav-pair-phone-btn').click();
+    await page.waitForSelector('[data-testid="pair-phone-code-value"]');
+    await page.waitForFunction(() => {
+      const el = globalThis.document.querySelector('[data-testid="pair-phone-code-value"]');
+      return Boolean(el && /^[A-Z2-9]{6}/.test((el.textContent || '').trim()));
+    });
+    const firstPhoneCode = (
+      await page.getByTestId('pair-phone-code-value').textContent()
+    )
+      .replace(/[^A-Z2-9]/g, '')
+      .slice(0, 6);
+    assert.equal(firstPhoneCode.length, 6);
+
+    // Click phone code itself -> copies exact code
+    await page.getByTestId('pair-phone-code-value').click();
+    const afterPhoneCopy = await page.evaluate(() => globalThis.__copiedClipLog.slice());
+    assert.ok(afterPhoneCopy.includes(firstPhoneCode));
+
+    // Close and reopen Pairing modal -> SAME phone code is reclaimed (does NOT drop/rotate!)
+    await page.getByRole('button', { name: /Close pairing modal/i }).click();
+    await page.waitForSelector('[data-testid="pair-phone-modal"]', { state: 'detached' });
+    await page.getByTestId('nav-pair-phone-btn').click();
+    await page.waitForSelector('[data-testid="pair-phone-code-value"]');
+    await page.waitForFunction((expected) => {
+      const el = globalThis.document.querySelector('[data-testid="pair-phone-code-value"]');
+      return Boolean(el && (el.textContent || '').includes(expected));
+    }, firstPhoneCode);
+
+    // Generate MCP code -> click MCP Copy icon button & MCP code box -> copies exact GLP code!
+    await page.getByTestId('pair-agent-generate-copy-btn').click();
+    await page.waitForFunction(() => {
+      const el = globalThis.document.querySelector('[data-testid="pair-agent-code-value"]');
+      return Boolean(el && (el.textContent || '').includes('GLP-'));
+    });
+    const mcpCode = (await page.getByTestId('pair-agent-code-value').textContent()).trim();
+    assert.ok(mcpCode.startsWith('GLP-'));
+
+    await page.evaluate(() => {
+      globalThis.__copiedClipLog = [];
+    });
+    await page.getByTestId('pair-agent-code-copy-btn').click();
+    const afterMcpCopy = await page.evaluate(() => globalThis.__copiedClipLog.slice());
+    assert.ok(afterMcpCopy.includes(mcpCode), `Expected MCP code ${mcpCode} copied, got ${JSON.stringify(afterMcpCopy)}`);
+
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
 });

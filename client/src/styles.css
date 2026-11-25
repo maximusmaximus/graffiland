@@ -3591,16 +3591,28 @@ select {
 }
 
 .map3d-owned-plus-tag {
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: 5px;
-  background: rgba(6, 10, 20, 0.9);
-  border: 1px solid rgba(255, 183, 3, 0.55);
+  background: rgba(6, 10, 20, 0.92);
+  border: 1px solid rgba(255, 183, 3, 0.6);
   color: #fff3c4;
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 700;
   white-space: nowrap;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease, transform 0.12s ease;
+}
+
+.map3d-owned-plus-tag:hover,
+.map3d-owned-plus-tag:focus-visible {
+  background: rgba(16, 24, 44, 0.98);
+  border-color: #ffd166;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.45);
+  transform: translateY(-1px);
+  outline: none;
 }
 
 .land-owned-pill-group {
@@ -8060,6 +8072,10 @@ select {
 
 .pair-code-value {
   width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   text-align: center;
   font-size: 24px;
   font-weight: 800;
@@ -8069,6 +8085,25 @@ select {
   background: rgba(0, 245, 212, 0.08);
   border-radius: 10px;
   border: 1px solid rgba(0, 245, 212, 0.28);
+}
+
+.pair-code-value.is-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pair-code-value.is-clickable:hover:not(:disabled),
+.pair-code-value.is-clickable:focus-visible:not(:disabled) {
+  background: rgba(0, 245, 212, 0.16);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(0, 245, 212, 0.26);
+  outline: none;
+}
+
+.pair-code-inline-icon {
+  font-size: 15px;
+  letter-spacing: 0;
+  opacity: 0.88;
 }
 
 .pair-code-actions {
@@ -8231,7 +8266,16 @@ select {
   line-height: 1.4;
 }
 
+.pair-agent-code-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
 .pair-agent-code-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
   padding: 6px 8px;
   border-radius: 8px;
   background: rgba(0, 245, 212, 0.08);
@@ -8239,6 +8283,54 @@ select {
   font-size: 11.5px;
   color: var(--accent);
   overflow-wrap: anywhere;
+}
+
+.pair-agent-code-box.is-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pair-agent-code-box.is-clickable:hover:not(:disabled),
+.pair-agent-code-box.is-clickable:focus-visible:not(:disabled) {
+  background: rgba(0, 245, 212, 0.16);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.pair-agent-code-copy-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.pair-code-copy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border: 1px solid rgba(0, 245, 212, 0.35);
+}
+
+.mobile-mcp-code-btn {
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mobile-mcp-code-btn:hover,
+.mobile-mcp-code-btn:focus-visible {
+  text-decoration: underline;
+  outline: none;
 }
 
 /* Floating 3D Land Labels Strictly Above Wireframe Canvas */

@@ -196,6 +196,9 @@ export default function DesktopHub({
   const [notifRefreshSignal, setNotifRefreshSignal] = useState(0);
   const [agentPairExpanded, setAgentPairExpanded] = useState(true);
   const [agentPairPromptPreview, setAgentPairPromptPreview] = useState('');
+  const [copiedMcpCode, setCopiedMcpCode] = useState(false);
+  const copiedMcpCodeTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(copiedMcpCodeTimerRef.current), []);
   const draftCountRef = useRef(0);
   draftCountRef.current = draftParcelsRaw.length;
   const [copiedId, setCopiedId] = useState('');
@@ -2148,6 +2151,7 @@ export default function DesktopHub({
               onViewportChange={handleViewportChange}
               config={config}
               onSelectSculpture={openSculpture}
+              onSelectParcel={openLandShowcase}
               onAddDraftRectangle={handleAddDraftRectangle}
               onSelectDraft={(id) => {
                 selectedDraftIdRef.current = id;
@@ -3014,9 +3018,58 @@ export default function DesktopHub({
                           <div className="pair-agent-step-num">STEP 1</div>
                           <strong>Generate Pairing Code</strong>
                           <p>Creates a personal <code>GLP-…</code> pairing code linked to your wallet.</p>
-                          <div className="pair-agent-code-box mono">
-                            {mcpState.activePairing?.code || mcpState.pairings?.[0]?.code || 'Not generated yet'}
-                          </div>
+                          {(() => {
+                            const displayMcpCode =
+                              mcpState.activePairing?.code || mcpState.pairings?.[0]?.code || '';
+                            const handleCopyMcpCode = async () => {
+                              if (!displayMcpCode) return;
+                              await copyToClipboard(displayMcpCode);
+                              setCopiedMcpCode(true);
+                              setMcpNotice(`Copied pairing code ${displayMcpCode}.`);
+                              clearTimeout(copiedMcpCodeTimerRef.current);
+                              copiedMcpCodeTimerRef.current = window.setTimeout(
+                                () => setCopiedMcpCode(false),
+                                1800
+                              );
+                            };
+                            return (
+                              <div className="pair-agent-code-row">
+                                <button
+                                  type="button"
+                                  className={`pair-agent-code-box mono ${
+                                    displayMcpCode ? 'is-clickable' : ''
+                                  }`}
+                                  data-testid="pair-agent-code-value"
+                                  disabled={!displayMcpCode}
+                                  onClick={handleCopyMcpCode}
+                                  title={
+                                    displayMcpCode
+                                      ? 'Click to copy pairing code'
+                                      : 'Generate a pairing code in Step 2'
+                                  }
+                                  aria-label={
+                                    displayMcpCode
+                                      ? `Copy pairing code ${displayMcpCode}`
+                                      : 'Pairing code not generated yet'
+                                  }
+                                >
+                                  <span>{displayMcpCode || 'Not generated yet'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-xs btn-outline pair-agent-code-copy-btn"
+                                  data-testid="pair-agent-code-copy-btn"
+                                  disabled={!displayMcpCode}
+                                  onClick={handleCopyMcpCode}
+                                  title="Copy pairing code"
+                                  aria-label="Copy pairing code"
+                                >
+                                  <XeroIcon emoji={copiedMcpCode ? '✅' : '📋'} size={13} />
+                                  <span>{copiedMcpCode ? 'Copied' : 'Copy'}</span>
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         <div className="pair-agent-step-card">

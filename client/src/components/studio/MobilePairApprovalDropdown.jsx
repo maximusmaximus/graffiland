@@ -500,16 +500,42 @@ export default function MobilePairApprovalDropdown({
 
               {pairedCode ? (
                 <div className="mobile-pair-connected-row">
-                  <span className="badge teal">
-                    <XeroIcon emoji="✅" size={12} /> Paired to {pairedCode}
-                  </span>
                   <button
                     type="button"
-                    className="btn btn-xs btn-danger"
-                    onClick={onDisconnectDesktopPair}
+                    className="badge teal pair-code-copy-pill"
+                    data-testid="mobile-desktop-code-value"
+                    title="Tap to copy Desktop pair code"
+                    aria-label={`Copy Desktop pair code ${pairedCode}`}
+                    onClick={async () => {
+                      const ok = await copyToClipboard(pairedCode);
+                      flashCopy(ok ? `✅ Copied ${pairedCode}` : 'Copy failed.');
+                    }}
                   >
-                    Disconnect
+                    <XeroIcon emoji="✅" size={12} /> Paired to {pairedCode}{' '}
+                    <span aria-hidden="true">📋</span>
                   </button>
+                  <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      data-testid="mobile-desktop-code-copy-btn"
+                      aria-label="Copy Desktop pair code"
+                      title="Copy Desktop pair code"
+                      onClick={async () => {
+                        const ok = await copyToClipboard(pairedCode);
+                        flashCopy(ok ? `✅ Copied ${pairedCode}` : 'Copy failed.');
+                      }}
+                    >
+                      <XeroIcon emoji="📋" size={12} /> Copy
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger"
+                      onClick={onDisconnectDesktopPair}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -581,18 +607,31 @@ export default function MobilePairApprovalDropdown({
 
               {activeMcpCode && (
                 <div className="mobile-mcp-code-row">
-                  <code className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
-                    {activeMcpCode}
-                  </code>
+                  <button
+                    type="button"
+                    className="mobile-mcp-code-btn mono"
+                    data-testid="mobile-mcp-code-value"
+                    title="Tap to copy pairing code"
+                    aria-label={`Copy pairing code ${activeMcpCode}`}
+                    onClick={async () => {
+                      const ok = await copyToClipboard(activeMcpCode);
+                      flashCopy(ok ? `✅ Copied ${activeMcpCode}` : 'Copy failed.');
+                    }}
+                  >
+                    <span>{activeMcpCode}</span>
+                  </button>
                   <button
                     type="button"
                     className="btn btn-xs btn-outline"
+                    data-testid="mobile-mcp-code-copy-btn"
+                    aria-label="Copy pairing code"
+                    title="Copy pairing code"
                     onClick={async () => {
                       const ok = await copyToClipboard(activeMcpCode);
-                      flashCopy(ok ? `Copied ${activeMcpCode}` : 'Copy failed.');
+                      flashCopy(ok ? `✅ Copied ${activeMcpCode}` : 'Copy failed.');
                     }}
                   >
-                    Copy Code
+                    <XeroIcon emoji="📋" size={12} /> Copy
                   </button>
                 </div>
               )}

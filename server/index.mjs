@@ -130,6 +130,7 @@ import {
   saveUserDraft
 } from '../shared/draftService.mjs';
 import {
+  DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
   addLandContributor,
   connectMcpPairing,
@@ -1430,7 +1431,7 @@ export function createAppServer(serverOptions = {}) {
     handleChatRoute((req) =>
       createMcpPairing(chatDb, {
         user: req.user,
-        expiresHours: Number(req.body?.expiresHours || 24),
+        expiresHours: Number(req.body?.expiresHours || DEFAULT_MCP_PAIRING_TTL_HOURS),
         apiOrigin: `${req.protocol}://${req.get('host')}`
       })
     )
@@ -2317,6 +2318,17 @@ export function createAppServer(serverOptions = {}) {
     }
   }
 
+  const PAIR_CODE_RE = /^[A-Z2-9]{6}$/;
+  const DESKTOP_RECONNECT_GRACE_MS = 120_000;
+  const IDLE_PAIR_ROOM_TTL_MS = 30 * 60 * 1000;
+
+  function clearRoomCleanupTimer(room) {
+    if (room?.cleanupTimer) {
+      clearTimeout(room.cleanupTimer);
+      room.cleanupTimer = null;
+    }
+  }
+
   wss.on('connection', (ws) => {
     ws.meta = { role: null, code: null, mcpCode: null };
 
@@ -2325,6 +2337,11 @@ export function createAppServer(serverOptions = {}) {
       try {
         msg = JSON.parse(rawMsg.toString('utf8'));
       } catch {
+        return;
+      }
+
+      if (msg.type === 'ping') {
+        safeSend(ws, { type: 'pong', ts: Date.now() });
         return;
       }
 
@@ -2342,16 +2359,71 @@ export function createAppServer(serverOptions = {}) {
         return;
       }
 
+      if (msg.type === 'end_pair') {
+        const targetCode = String(msg.code || ws.meta?.code || '').trim().toUpperCase();
+        const existing = targetCode ? pairRooms.get(targetCode) : null;
+        if (existing && (!existing.desktopWs || existing.desktopWs === ws)) {
+          clearRoomCleanupTimer(existing);
+          if (existing.mobileWs && existing.mobileWs.readyState === 1) {
+            safeSend(existing.mobileWs, {
+              type: 'pair_ended',
+              reason: 'Desktop started a new pairing session.'
+            });
+          }
+          pairRooms.delete(targetCode);
+          if (ws.meta.code === targetCode) {
+            ws.meta = { ...ws.meta, role: null, code: null };
+          }
+        }
+        return;
+      }
+
       if (msg.type === 'create_pair') {
-        const code = generatePairCode();
-        pairRooms.set(code, {
-          code,
-          desktopWs: ws,
-          mobileWs: null,
-          createdAt: Date.now()
-        });
-        ws.meta = { role: 'desktop', code };
-        safeSend(ws, { type: 'pair_created', code });
+        const preferred = String(msg.preferredCode || '').trim().toUpperCase();
+        let code = '';
+        let reclaimed = false;
+        let room = null;
+
+        if (PAIR_CODE_RE.test(preferred)) {
+          const existing = pairRooms.get(preferred);
+          if (!existing) {
+            code = preferred;
+          } else if (!existing.desktopWs || existing.desktopWs.readyState !== 1 || existing.desktopWs === ws) {
+            code = preferred;
+            room = existing;
+            reclaimed = true;
+          }
+        }
+
+        if (!code) {
+          code = generatePairCode();
+        }
+
+        if (room) {
+          clearRoomCleanupTimer(room);
+          room.desktopWs = ws;
+          room.desktopDisconnectedAt = 0;
+          room.lastActiveAt = Date.now();
+        } else {
+          room = {
+            code,
+            desktopWs: ws,
+            mobileWs: null,
+            createdAt: Date.now(),
+            lastActiveAt: Date.now(),
+            desktopDisconnectedAt: 0,
+            cleanupTimer: null
+          };
+          pairRooms.set(code, room);
+        }
+
+        ws.meta = { ...ws.meta, role: 'desktop', code };
+        safeSend(ws, { type: 'pair_created', code, reclaimed });
+
+        if (room.mobileWs && room.mobileWs.readyState === 1) {
+          safeSend(ws, { type: 'pair_connected', code, role: 'desktop', reconnected: true });
+          safeSend(room.mobileWs, { type: 'pair_connected', code, role: 'mobile', reconnected: true });
+        }
         return;
       }
 
@@ -2362,16 +2434,22 @@ export function createAppServer(serverOptions = {}) {
           safeSend(ws, { type: 'pair_error', error: 'Invalid or expired pairing code.' });
           return;
         }
+        clearRoomCleanupTimer(room);
         room.mobileWs = ws;
-        ws.meta = { role: 'mobile', code };
-        safeSend(ws, { type: 'pair_connected', code, role: 'mobile' });
-        safeSend(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
+        room.lastActiveAt = Date.now();
+        ws.meta = { ...ws.meta, role: 'mobile', code };
+        const desktopOpen = Boolean(room.desktopWs && room.desktopWs.readyState === 1);
+        safeSend(ws, { type: 'pair_connected', code, role: 'mobile', desktopPending: !desktopOpen });
+        if (desktopOpen) {
+          safeSend(room.desktopWs, { type: 'pair_connected', code, role: 'desktop' });
+        }
         return;
       }
 
       const code = ws.meta?.code;
       const room = code ? pairRooms.get(code) : null;
       if (!room) return;
+      room.lastActiveAt = Date.now();
 
       if (ws.meta.role === 'mobile') {
         // Relay live gyro, brush cursor, voxel ops, and mode state to paired desktop
@@ -2389,10 +2467,26 @@ export function createAppServer(serverOptions = {}) {
       const code = ws.meta?.code;
       if (!code || !pairRooms.has(code)) return;
       const room = pairRooms.get(code);
-      if (ws.meta.role === 'desktop') {
-        safeSend(room.mobileWs, { type: 'pair_ended', reason: 'Desktop closed pairing session.' });
-        pairRooms.delete(code);
-      } else if (ws.meta.role === 'mobile') {
+      if (ws.meta.role === 'desktop' && room.desktopWs === ws) {
+        room.desktopWs = null;
+        room.desktopDisconnectedAt = Date.now();
+        clearRoomCleanupTimer(room);
+        const hasMobile = Boolean(room.mobileWs && room.mobileWs.readyState === 1);
+        if (hasMobile) {
+          safeSend(room.mobileWs, { type: 'desktop_reconnecting', code });
+        }
+        const ttlMs = hasMobile ? DESKTOP_RECONNECT_GRACE_MS : IDLE_PAIR_ROOM_TTL_MS;
+        const timer = setTimeout(() => {
+          const cur = pairRooms.get(code);
+          if (!cur || (cur.desktopWs && cur.desktopWs.readyState === 1)) return;
+          if (cur.mobileWs && cur.mobileWs.readyState === 1) {
+            safeSend(cur.mobileWs, { type: 'pair_ended', reason: 'Desktop pairing timed out.' });
+          }
+          pairRooms.delete(code);
+        }, ttlMs);
+        timer.unref?.();
+        room.cleanupTimer = timer;
+      } else if (ws.meta.role === 'mobile' && room.mobileWs === ws) {
         room.mobileWs = null;
         safeSend(room.desktopWs, { type: 'mobile_disconnected', code });
       }

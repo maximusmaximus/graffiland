@@ -31,6 +31,7 @@ export function usePairing({
   const activePairCodeRef = useRef('');
   const hadDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef(null);
+  const pairPingTimerRef = useRef(null);
   const reconnectAttemptRef = useRef(0);
   const unmountedRef = useRef(false);
 
@@ -167,6 +168,7 @@ export function usePairing({
     let closed = false;
     let ws = null;
     let retryTimer = null;
+    let pingTimer = null;
 
     const openMcpSocket = () => {
       if (closed) return;
@@ -177,11 +179,22 @@ export function usePairing({
         nextWs.onopen = () => {
           if (closed || ws !== nextWs) return;
           nextWs.send(JSON.stringify({ type: 'subscribe_mcp', pairingCode: activeCode }));
+          clearInterval(pingTimer);
+          pingTimer = setInterval(() => {
+            if (!closed && ws === nextWs && nextWs.readyState === 1) {
+              try {
+                nextWs.send(JSON.stringify({ type: 'ping' }));
+              } catch {
+                // ignore
+              }
+            }
+          }, 20000);
         };
         nextWs.onmessage = (ev) => {
           if (closed || ws !== nextWs) return;
           try {
             const msg = JSON.parse(ev.data);
+            if (msg.type === 'pong') return;
             if (msg.type === 'signature_request') {
               refreshPendingSignatures();
               showHintRef.current?.(
@@ -194,6 +207,8 @@ export function usePairing({
         };
         nextWs.onclose = () => {
           if (closed || ws !== nextWs) return;
+          clearInterval(pingTimer);
+          pingTimer = null;
           ws = null;
           if (
             typeof navigator !== 'undefined' &&
@@ -219,6 +234,7 @@ export function usePairing({
     openMcpSocket();
     if (typeof window !== 'undefined') {
       window.addEventListener('online', onReconnectEvent);
+      window.addEventListener('pageshow', onReconnectEvent);
     }
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onReconnectEvent);
@@ -226,8 +242,10 @@ export function usePairing({
     return () => {
       closed = true;
       clearTimeout(retryTimer);
+      clearInterval(pingTimer);
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', onReconnectEvent);
+        window.removeEventListener('pageshow', onReconnectEvent);
       }
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onReconnectEvent);
@@ -275,6 +293,8 @@ export function usePairing({
       setPairError('');
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+      clearInterval(pairPingTimerRef.current);
+      pairPingTimerRef.current = null;
       activePairCodeRef.current = clean;
 
       const prevWs = wsRef.current;
@@ -296,12 +316,23 @@ export function usePairing({
       ws.onopen = () => {
         if (wsRef.current !== ws || unmountedRef.current) return;
         ws.send(JSON.stringify({ type: 'join_pair', code: clean }));
+        clearInterval(pairPingTimerRef.current);
+        pairPingTimerRef.current = setInterval(() => {
+          if (wsRef.current === ws && !unmountedRef.current && ws.readyState === 1) {
+            try {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            } catch {
+              // ignore
+            }
+          }
+        }, 20000);
       };
 
       ws.onmessage = (ev) => {
         if (wsRef.current !== ws || unmountedRef.current) return;
         try {
           const msg = JSON.parse(ev.data);
+          if (msg.type === 'pong' || msg.type === 'desktop_reconnecting') return;
           if (msg.type === 'pair_connected') {
             reconnectAttemptRef.current = 0;
             const status = isReconnect || hadDisconnectRef.current ? 'reconnected' : 'connected';
@@ -360,6 +391,8 @@ export function usePairing({
 
       ws.onclose = () => {
         if (wsRef.current !== ws || unmountedRef.current) return;
+        clearInterval(pairPingTimerRef.current);
+        pairPingTimerRef.current = null;
         wsRef.current = null;
         setPairedCode('');
         hadDisconnectRef.current = true;
@@ -370,7 +403,7 @@ export function usePairing({
           unexpected: Boolean(activePairCodeRef.current === clean)
         });
         if (activePairCodeRef.current === clean) {
-          const delays = [1500, 3000, 6000, 10000];
+          const delays = [1500, 3000, 5000, 10000, 15000, 20000];
           const delay = delays[reconnectAttemptRef.current];
           if (
             delay != null &&
@@ -424,6 +457,7 @@ export function usePairing({
 
     if (typeof window !== 'undefined') {
       window.addEventListener('online', tryAutoReconnect);
+      window.addEventListener('pageshow', tryAutoReconnect);
     }
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', tryAutoReconnect);
@@ -432,8 +466,10 @@ export function usePairing({
     return () => {
       unmountedRef.current = true;
       clearTimeout(reconnectTimerRef.current);
+      clearInterval(pairPingTimerRef.current);
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', tryAutoReconnect);
+        window.removeEventListener('pageshow', tryAutoReconnect);
       }
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', tryAutoReconnect);
@@ -510,6 +546,8 @@ export function usePairing({
   const disconnectDesktopPair = useCallback(() => {
     clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = null;
+    clearInterval(pairPingTimerRef.current);
+    pairPingTimerRef.current = null;
     const prevCode = activePairCodeRef.current;
     activePairCodeRef.current = '';
     hadDisconnectRef.current = true;

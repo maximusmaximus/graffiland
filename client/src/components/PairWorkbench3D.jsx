@@ -11,6 +11,9 @@ import SculptureViewer3D from './SculptureViewer3D.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const PAIR_VOXELS_STORAGE_KEY = 'graffiland_last_pair_voxels_v1';
+const DESKTOP_PAIR_CODE_SESSION_KEY = 'graffiland_desktop_pair_code_v1';
+const WS_PING_INTERVAL_MS = 20000;
+const MOBILE_DISCONNECT_GRACE_MS = 12000;
 
 function loadSavedPairVoxels() {
   try {
@@ -23,12 +26,41 @@ function loadSavedPairVoxels() {
   }
 }
 
+function loadSavedDesktopPairCode() {
+  try {
+    const raw = sessionStorage.getItem(DESKTOP_PAIR_CODE_SESSION_KEY) || '';
+    const clean = raw.trim().toUpperCase();
+    return /^[A-Z2-9]{6}$/.test(clean) ? clean : '';
+  } catch {
+    return '';
+  }
+}
+
+function saveDesktopPairCode(code) {
+  try {
+    if (code && /^[A-Z2-9]{6}$/.test(code)) {
+      sessionStorage.setItem(DESKTOP_PAIR_CODE_SESSION_KEY, code);
+    } else {
+      sessionStorage.removeItem(DESKTOP_PAIR_CODE_SESSION_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export default function PairWorkbench3D({ inModal = false, onPhonePairedChange = null }) {
   const wsRef = useRef(null);
   const noticeTimerRef = useRef(null);
+  const pingTimerRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
+  const disconnectGraceTimerRef = useRef(null);
+  const unmountedRef = useRef(false);
   const onPhonePairedChangeRef = useRef(onPhonePairedChange);
   onPhonePairedChangeRef.current = onPhonePairedChange;
-  const [pairCode, setPairCode] = useState('');
+  const [pairCode, setPairCode] = useState(() => loadSavedDesktopPairCode());
+  const pairCodeRef = useRef(pairCode);
+  pairCodeRef.current = pairCode;
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [mobileConnected, setMobileConnected] = useState(false);
   const [needsPhoneRepair, setNeedsPhoneRepair] = useState(false);
@@ -48,31 +80,105 @@ export default function PairWorkbench3D({ inModal = false, onPhonePairedChange =
   });
   const [pairNotice, setPairNotice] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
+  const copiedTimerRef = useRef(null);
   const [showRemoteControls, setShowRemoteControls] = useState(false);
   const mobileLaunchUrl = useMemo(() => getMobileLaunchUrl(pairCode), [pairCode]);
 
-  const startSession = useCallback(() => {
-    if (wsRef.current) wsRef.current.close();
+  const handleCopyPairCode = useCallback(async () => {
+    if (!pairCode) return;
+    await copyToClipboard(pairCode);
+    setCopiedCode(true);
+    clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = window.setTimeout(() => setCopiedCode(false), 1800);
+  }, [pairCode]);
+
+  const startSession = useCallback(({ forceNew = false } = {}) => {
+    clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    clearInterval(pingTimerRef.current);
+    pingTimerRef.current = null;
+    clearTimeout(disconnectGraceTimerRef.current);
+    disconnectGraceTimerRef.current = null;
+
+    if (forceNew) {
+      reconnectAttemptRef.current = 0;
+      const oldCode = pairCodeRef.current;
+      if (wsRef.current?.readyState === 1 && oldCode) {
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'end_pair', code: oldCode }));
+        } catch {
+          // ignore
+        }
+      }
+      saveDesktopPairCode('');
+      pairCodeRef.current = '';
+      setPairCode('');
+      setQrDataUrl('');
+      setMobileConnected(false);
+      setNeedsPhoneRepair(false);
+      phoneWasConnectedRef.current = false;
+    }
+
+    const prevWs = wsRef.current;
+    if (prevWs) {
+      prevWs.onopen = null;
+      prevWs.onmessage = null;
+      prevWs.onclose = null;
+      prevWs.onerror = null;
+      try {
+        prevWs.close();
+      } catch {
+        // ignore
+      }
+    }
+
+    const preferredCode = forceNew ? '' : pairCodeRef.current || loadSavedDesktopPairCode();
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'create_pair' }));
+      if (wsRef.current !== ws || unmountedRef.current) return;
+      reconnectAttemptRef.current = 0;
+      ws.send(
+        JSON.stringify(
+          preferredCode
+            ? { type: 'create_pair', preferredCode }
+            : { type: 'create_pair' }
+        )
+      );
+      clearInterval(pingTimerRef.current);
+      pingTimerRef.current = window.setInterval(() => {
+        if (wsRef.current === ws && ws.readyState === 1) {
+          try {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          } catch {
+            // ignore
+          }
+        }
+      }, WS_PING_INTERVAL_MS);
     };
 
     ws.onmessage = async (ev) => {
+      if (wsRef.current !== ws || unmountedRef.current) return;
       try {
         const msg = JSON.parse(ev.data);
+        if (msg.type === 'pong') return;
         if (msg.type === 'pair_created') {
+          pairCodeRef.current = msg.code;
           setPairCode(msg.code);
+          saveDesktopPairCode(msg.code);
           const url = getMobileLaunchUrl(msg.code);
           const qr = await QRCode.toDataURL(url, {
             width: 220,
             margin: 1,
             color: { dark: '#00f5d4', light: '#0b101b' }
           });
-          setQrDataUrl(qr);
+          if (!unmountedRef.current) {
+            setQrDataUrl(qr);
+          }
         } else if (msg.type === 'pair_connected') {
+          clearTimeout(disconnectGraceTimerRef.current);
+          disconnectGraceTimerRef.current = null;
           phoneWasConnectedRef.current = true;
           setMobileConnected(true);
           setNeedsPhoneRepair(false);
@@ -81,13 +187,20 @@ export default function PairWorkbench3D({ inModal = false, onPhonePairedChange =
         } else if (msg.type === 'mobile_disconnected') {
           setMobileConnected(false);
           setLiveCursor(null);
-          onPhonePairedChangeRef.current?.(false);
           if (phoneWasConnectedRef.current) {
-            setNeedsPhoneRepair(true);
-            notifySettingsSaved(
-              '🔗 Phone disconnected — scan the QR code or enter the Pair Code on your phone to re-pair.',
-              { tone: 'warning', durationMs: 6000 }
-            );
+            // Brief grace window so automatic mobile reconnects don't flash false disconnect alerts
+            clearTimeout(disconnectGraceTimerRef.current);
+            disconnectGraceTimerRef.current = window.setTimeout(() => {
+              if (unmountedRef.current) return;
+              setNeedsPhoneRepair(true);
+              onPhonePairedChangeRef.current?.(false);
+              notifySettingsSaved(
+                '🔗 Phone disconnected — scan the QR code or enter the Pair Code on your phone to re-pair.',
+                { tone: 'warning', durationMs: 6000 }
+              );
+            }, MOBILE_DISCONNECT_GRACE_MS);
+          } else {
+            onPhonePairedChangeRef.current?.(false);
           }
         } else if (msg.type === 'voxels_sync') {
           const incoming = Array.isArray(msg.voxels) ? msg.voxels : [];
@@ -113,13 +226,67 @@ export default function PairWorkbench3D({ inModal = false, onPhonePairedChange =
         // ignore
       }
     };
+
+    ws.onclose = () => {
+      if (wsRef.current !== ws || unmountedRef.current) return;
+      clearInterval(pingTimerRef.current);
+      pingTimerRef.current = null;
+      wsRef.current = null;
+      const delays = [1500, 3000, 5000, 10000, 15000];
+      const delay = delays[Math.min(reconnectAttemptRef.current, delays.length - 1)];
+      if (
+        (typeof navigator === 'undefined' || navigator.onLine !== false) &&
+        (typeof document === 'undefined' || document.visibilityState !== 'hidden')
+      ) {
+        reconnectAttemptRef.current += 1;
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          if (!unmountedRef.current) {
+            startSession({ forceNew: false });
+          }
+        }, delay);
+      }
+    };
   }, []);
 
   useEffect(() => {
-    startSession();
+    unmountedRef.current = false;
+    startSession({ forceNew: false });
+
+    const tryReconnect = () => {
+      if (unmountedRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      const state = wsRef.current?.readyState;
+      if (state === 0 || state === 1) return;
+      reconnectAttemptRef.current = 0;
+      startSession({ forceNew: false });
+    };
+
+    window.addEventListener('online', tryReconnect);
+    document.addEventListener('visibilitychange', tryReconnect);
     return () => {
+      unmountedRef.current = true;
       clearTimeout(noticeTimerRef.current);
-      wsRef.current?.close();
+      clearTimeout(copiedTimerRef.current);
+      clearTimeout(reconnectTimerRef.current);
+      clearTimeout(disconnectGraceTimerRef.current);
+      clearInterval(pingTimerRef.current);
+      window.removeEventListener('online', tryReconnect);
+      document.removeEventListener('visibilitychange', tryReconnect);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
     };
   }, [startSession]);
 
@@ -227,7 +394,7 @@ export default function PairWorkbench3D({ inModal = false, onPhonePairedChange =
               className="btn btn-xs btn-primary"
               onClick={() => {
                 setNeedsPhoneRepair(false);
-                startSession();
+                startSession({ forceNew: true });
               }}
             >
               🔄 Fresh Code
@@ -253,22 +420,38 @@ export default function PairWorkbench3D({ inModal = false, onPhonePairedChange =
           )}
           <div className="pair-code-block">
             <span className="pair-code-label">PAIR CODE</span>
-            <div className="pair-code-value mono">{pairCode || '......'}</div>
+            <button
+              type="button"
+              className="pair-code-value mono is-clickable"
+              data-testid="pair-phone-code-value"
+              disabled={!pairCode}
+              onClick={handleCopyPairCode}
+              title={pairCode ? 'Click to copy Pair Code' : 'Generating Pair Code…'}
+              aria-label={pairCode ? `Copy Pair Code ${pairCode}` : 'Pair code loading'}
+            >
+              <span>{pairCode || '......'}</span>
+              {pairCode && (
+                <span className="pair-code-inline-icon" aria-hidden="true">
+                  {copiedCode ? '✓' : '📋'}
+                </span>
+              )}
+            </button>
             <div className="pair-code-actions">
               <button
                 type="button"
                 className="btn btn-xs btn-outline"
+                data-testid="pair-phone-code-copy-btn"
                 disabled={!pairCode}
-                onClick={async () => {
-                  if (!pairCode) return;
-                  await copyToClipboard(pairCode);
-                  setCopiedCode(true);
-                  window.setTimeout(() => setCopiedCode(false), 1600);
-                }}
+                onClick={handleCopyPairCode}
+                aria-label="Copy Pair Code"
               >
                 {copiedCode ? '✓ Copied' : '📋 Copy Code'}
               </button>
-              <button type="button" className="btn btn-xs btn-ghost" onClick={startSession}>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                onClick={() => startSession({ forceNew: true })}
+              >
                 🔄 New
               </button>
               <a
