@@ -491,7 +491,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.click(view.getByText(/^For Humans$/i));
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Humans Play/i }));
     assert.ok(view.getByRole('tooltip'));
-    assert.ok(view.getByText(/3 free gas-sponsored starter plots/i));
+    assert.ok(view.getByText(/21 free gas-sponsored starter plots/i));
     assert.equal(exploreCalls.length, 0);
 
     // Starting a pointer press inside the card and releasing on the backdrop must NOT close it
@@ -544,7 +544,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     cleanup();
   });
 
-  test('DesktopLandBuilderPanel validates unique titles, compacts sliders, blocks pre-mint copy, shows post-mint copy tools & 3-free limit card', async () => {
+  test('DesktopLandBuilderPanel validates unique titles, compacts sliders, blocks pre-mint copy, shows post-mint copy tools & 21-free limit card without mobile callout buttons', async () => {
     const { DesktopLandBuilderPanel } = await loadJsxModule(
       'client/src/components/DesktopLandBuilderPanel.jsx'
     );
@@ -595,7 +595,6 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
 
     const updates = [];
     const minted = [];
-    let pairOpened = 0;
     const view = RTL.render(
       React.createElement(DesktopLandBuilderPanel, {
         draftParcels: [p1, p2],
@@ -611,12 +610,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         onClearDrafts: () => {},
         onMintDraft: (draft) => minted.push(draft.parcelId),
         onMintAll: () => {},
-        onOpenPairMobile: () => {
-          pairOpened += 1;
-        },
         mintLimitError: {
-          usedSlots: 3,
-          maxSlots: 3,
+          usedSlots: 21,
+          maxSlots: 21,
           unbuiltParcels: [{ parcelId: 'GLAND-9Q8YYK9P', displayName: 'Minted Terrace' }]
         },
         checkLandNameFn: async (name) => ({
@@ -633,15 +629,18 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     const limitsCard = view.getByTestId('land-limits-card');
     assert.ok(limitsCard.textContent.includes('5,000 m²'));
     assert.ok(limitsCard.textContent.includes('500,000 m³'));
-    assert.ok(limitsCard.textContent.includes('3 free human claims'));
+    assert.ok(limitsCard.textContent.includes('21 free human claims'));
     assert.equal(view.queryByRole('button', { name: /Copy Parcel Link/i }), null);
     assert.equal(view.queryByRole('button', { name: /🏷️ Title/i }), null);
 
-    // 2) 3-free limit notification card renders with unbuilt land + Pair Phone QR button + mobile link
-    assert.ok(view.getByTestId('mint-limit-notification'));
-    assert.ok(/^https?:\/\//.test(view.getByTestId('mint-limit-mobile-link').getAttribute('href') || ''));
-    RTL.fireEvent.click(view.getByTestId('mint-limit-pair-mobile-btn'));
-    assert.equal(pairOpened, 1);
+    // 2) 21-free limit notification card renders with unbuilt land + "Want to claim land right now?" copy WITHOUT buttons
+    const limitNotif = view.getByTestId('mint-limit-notification');
+    assert.ok(limitNotif.textContent.includes('21/21'));
+    assert.ok(limitNotif.textContent.includes('Want to claim land right now?'));
+    assert.equal(view.queryByTestId('mint-limit-pair-mobile-btn'), null);
+    assert.equal(view.queryByTestId('mint-limit-mobile-link'), null);
+    assert.equal(view.queryByRole('button', { name: /Pair Phone via QR/i }), null);
+    assert.equal(view.queryByRole('link', { name: /Open Mobile Studio/i }), null);
 
     // 3) Sliders start collapsed under Description and expand on demand
     assert.equal(view.queryByTestId('land-sliders-body'), null);

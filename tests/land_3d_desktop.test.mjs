@@ -450,7 +450,7 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(found.volume.rotationDeg, 90);
   });
 
-  test('Requires unique human land titles, enforces 3 free starter claims (4th -> 429 + notification), and manages notification APIs', async () => {
+  test('Requires unique human land titles, enforces 21 free starter claims (22nd -> 429 + notification), and manages notification APIs', async () => {
     // Missing title rejected (400)
     const missingTitleRes = await fetch(`${baseUrl}/api/lands/claim`, {
       method: 'POST',
@@ -499,10 +499,19 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
     assert.equal(availCheck.ok, true);
     assert.equal(availCheck.available, true);
 
-    for (const [lat, lng, customName] of [
-      [37.791, -122.411, 'Harbor Sculpture Deck'],
-      [37.796, -122.406, 'Skyline Mosaic Roof']
-    ]) {
+    const maxStarterClaims = LAND_VOLUME_LIMITS.starterFreeHumanClaims;
+    assert.equal(maxStarterClaims, 21);
+
+    // 1 starter land ("Civic 3D Prism") was already claimed above; claim remaining 20 to reach 21/21
+    for (let idx = 2; idx <= maxStarterClaims; idx += 1) {
+      const lat = Number((37.791 + (idx - 2) * 0.004).toFixed(5));
+      const lng = Number((-122.411 + (idx - 2) * 0.004).toFixed(5));
+      const customName =
+        idx === 2
+          ? 'Harbor Sculpture Deck'
+          : idx === 3
+          ? 'Skyline Mosaic Roof'
+          : `Starter Desktop Plot ${idx}`;
       const okRes = await fetch(`${baseUrl}/api/lands/claim`, {
         method: 'POST',
         headers: {
@@ -516,30 +525,32 @@ describe('3D Land Minting, Volume Editing, Overlap Checks & Location Search API'
           volume: { centerLat: lat, centerLng: lng, widthMeters: 12, depthMeters: 12 }
         })
       });
-      assert.equal(okRes.status, 201);
+      assert.equal(okRes.status, 201, `Expected free starter claim #${idx} to succeed`);
     }
 
-    // 4th free Desktop claim -> 429 with structured guidance + unbuilt parcels + mobile IRL option + persisted notification
-    const fourthRes = await fetch(`${baseUrl}/api/lands/claim`, {
+    // 22nd free Desktop claim -> 429 with structured guidance + unbuilt parcels + mobile IRL option + persisted notification
+    const overLimitRes = await fetch(`${baseUrl}/api/lands/claim`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${humanToken}`
       },
       body: JSON.stringify({
-        lat: 37.801,
-        lng: -122.401,
-        customName: 'Fourth Plot Denied',
-        volume: { centerLat: 37.801, centerLng: -122.401, widthMeters: 12, depthMeters: 12 }
+        lat: 37.885,
+        lng: -122.315,
+        customName: 'Over Limit Plot Denied',
+        volume: { centerLat: 37.885, centerLng: -122.315, widthMeters: 12, depthMeters: 12 }
       })
     });
-    const fourthBody = await fourthRes.json();
-    assert.equal(fourthRes.status, 429);
-    assert.equal(fourthBody.code, 'STARTER_FREE_LAND_LIMIT_REACHED');
-    assert.equal(fourthBody.usedSlots, 3);
-    assert.equal(fourthBody.maxSlots, 3);
-    assert.equal(fourthBody.canClaimInPersonMobile, true);
-    assert.ok(Array.isArray(fourthBody.unbuiltParcels) && fourthBody.unbuiltParcels.length === 3);
+    const overLimitBody = await overLimitRes.json();
+    assert.equal(overLimitRes.status, 429);
+    assert.equal(overLimitBody.code, 'STARTER_FREE_LAND_LIMIT_REACHED');
+    assert.equal(overLimitBody.usedSlots, 21);
+    assert.equal(overLimitBody.maxSlots, 21);
+    assert.equal(overLimitBody.canClaimInPersonMobile, true);
+    assert.ok(
+      Array.isArray(overLimitBody.unbuiltParcels) && overLimitBody.unbuiltParcels.length === 21
+    );
 
     // Notifications inbox contains the mint_limit_reached alert & live mintStatus
     const notifRes = await fetch(`${baseUrl}/api/notifications`, {

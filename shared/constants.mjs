@@ -133,7 +133,7 @@ export const LAND_VOLUME_LIMITS = {
   maxFootprintAreaSqM: 5000,
   maxVolumeCubicM: 500000,
   maxSelectionBatch: 12,
-  starterFreeHumanClaims: 3
+  starterFreeHumanClaims: 21
 };
 
 export const POLICY = {

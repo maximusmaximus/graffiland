@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { isAddress } from 'ethers';
 import {
   IN_PERSON_HUMAN_INTERACTIONS,
+  LAND_VOLUME_LIMITS,
   NON_QUALIFYING_INTERACTIONS,
   STEWARD_DEFAULTS
 } from '../../../shared/constants.mjs';
@@ -224,7 +225,10 @@ export default function InfoTermsModal({
             >
               <div className="info-simple-title">
                 <XeroIcon emoji="🗺️" size={16} />
-                <strong>2. Draw a 3D Box on the Map First (Desktop · 3 Free Starter Slots)</strong>
+                <strong>
+                  2. Draw a 3D Box on the Map First (Desktop ·{' '}
+                  {LAND_VOLUME_LIMITS.starterFreeHumanClaims} Free Starter Slots)
+                </strong>
               </div>
               <p>
                 Use <strong>Draw Land</strong> on the Desktop 3D Map to outline and mint a plot
@@ -265,7 +269,8 @@ export default function InfoTermsModal({
                 <strong>3. Unlock More Slots Anytime</strong>
               </div>
               <p>
-                Used all 3 free starter map slots? Visit one of your empty plots in person on
+                Used all {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter map slots? Visit
+                one of your empty plots in person on
                 Mobile AR and publish art on it to free up a slot — or walk to any dormant AI
                 agent plot and add {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks to awaken it and
                 earn contributor royalties.
@@ -331,7 +336,8 @@ export default function InfoTermsModal({
                       scale, drag <strong>side bars</strong> to stretch edges, hold &amp; drag{' '}
                       <strong>vertical corner bars</strong> to rotate, or drag the{' '}
                       <strong>center</strong> to move. Limits: 4–120m sides, max 5,000 m² area,
-                      4–250m height, max 500,000 m³ volume, 3 free human starter claims. Plots
+                      4–250m height, max 500,000 m³ volume,{' '}
+                      {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free human starter claims. Plots
                       drawn on the map first start with a 28-day timer until a human visits in
                       person on Mobile AR and adds art to fully mint &amp; permanently own them
                       (land minted directly from manual Mobile AR art has no timer).

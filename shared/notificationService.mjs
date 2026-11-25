@@ -17,7 +17,7 @@ export const NOTIFICATION_CATEGORIES = [
   {
     key: 'mint_limit_reached',
     label: 'Free mint limit guidance',
-    description: 'Actionable steps when your 3 starter Desktop land slots are full, plus Mobile IRL options.'
+    description: `Actionable steps when your ${LAND_VOLUME_LIMITS.starterFreeHumanClaims} starter Desktop land slots are full, plus Mobile IRL options.`
   },
   {
     key: 'land_expiring',
@@ -899,7 +899,7 @@ export async function notifyAfterSculpturePublished(
 }
 
 /**
- * Emits an actionable notification when a human hits the 3 free Desktop unbuilt land cap.
+ * Emits an actionable notification when a human hits the free Desktop unbuilt land cap.
  */
 export async function notifyFreeLimitReached(
   db,

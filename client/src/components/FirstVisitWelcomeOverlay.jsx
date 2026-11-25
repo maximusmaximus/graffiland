@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -142,8 +143,7 @@ const WALKTHROUGH_STEPS = [
     title: 'Claim Free 3D Land',
     summary: 'Pick a spot on the map, shape your space, and make it yours.',
     techTitle: '3D Land Tech Details',
-    techDetails:
-      'Draw on the isometric 3D map, drag corners or pull the top bar up/down to set height, and mint up to 3 free gas-sponsored starter plots (or mint permanent land immediately by making art outdoors in Mobile AR).'
+    techDetails: `Draw on the isometric 3D map, drag corners or pull the top bar up/down to set height, and mint up to ${LAND_VOLUME_LIMITS.starterFreeHumanClaims} free gas-sponsored starter plots (or mint permanent land immediately by making art outdoors in Mobile AR).`
   },
   {
     stepNum: 2,
@@ -285,7 +285,8 @@ export default function FirstVisitWelcomeOverlay({
               <XeroIcon emoji="🧑" size={16} />
               <strong>For Humans</strong>
               <InfoTip title="How Humans Play">
-                Draw 3D land on desktop (3 free gas-sponsored starter plots), paint free AR voxel
+                Draw 3D land on desktop ({LAND_VOLUME_LIMITS.starterFreeHumanClaims} free
+                gas-sponsored starter plots), paint free AR voxel
                 art outdoors on your phone to mint permanent land, complete agent quests for ETH
                 bounties &amp; 2x XP, and earn 2% of every sale on lands you paint.
               </InfoTip>
