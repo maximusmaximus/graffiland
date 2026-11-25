@@ -294,6 +294,55 @@ function decodeBase64ToArrayBuffer(rawBase64) {
   return null;
 }
 
+// Bounded session ArrayBuffer cache + in-flight deduplication so switching between
+// 3D maps, plot showcase, detail viewer, and Mobile AR never re-downloads the same GLB.
+const MODEL_BUFFER_CACHE_MAX_ENTRIES = 16;
+const MODEL_BUFFER_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const modelBufferCache = new Map();
+const modelBufferInFlight = new Map();
+let modelBufferCacheBytes = 0;
+
+function readCachedModelBuffer(cacheKey) {
+  const hit = modelBufferCache.get(cacheKey);
+  if (!hit) return null;
+  // Refresh LRU order
+  modelBufferCache.delete(cacheKey);
+  modelBufferCache.set(cacheKey, hit);
+  // Return a fresh copy so GLTF/Draco worker transfers cannot detach the cached buffer
+  return {
+    arrayBuffer: hit.arrayBuffer.slice(0),
+    resolvedUrl: hit.resolvedUrl
+  };
+}
+
+function writeCachedModelBuffer(cacheKey, arrayBuffer, resolvedUrl) {
+  if (!cacheKey || !arrayBuffer || arrayBuffer.byteLength <= 0) return;
+  if (arrayBuffer.byteLength > MODEL_BUFFER_CACHE_MAX_BYTES / 2) return;
+  if (modelBufferCache.has(cacheKey)) {
+    modelBufferCacheBytes -= modelBufferCache.get(cacheKey).arrayBuffer.byteLength;
+    modelBufferCache.delete(cacheKey);
+  }
+  while (
+    modelBufferCache.size >= MODEL_BUFFER_CACHE_MAX_ENTRIES ||
+    modelBufferCacheBytes + arrayBuffer.byteLength > MODEL_BUFFER_CACHE_MAX_BYTES
+  ) {
+    const oldestKey = modelBufferCache.keys().next().value;
+    if (!oldestKey) break;
+    const oldest = modelBufferCache.get(oldestKey);
+    modelBufferCacheBytes = Math.max(0, modelBufferCacheBytes - (oldest?.arrayBuffer?.byteLength || 0));
+    modelBufferCache.delete(oldestKey);
+  }
+  const stored = arrayBuffer.slice(0);
+  modelBufferCache.set(cacheKey, { arrayBuffer: stored, resolvedUrl });
+  modelBufferCacheBytes += stored.byteLength;
+}
+
+export function clearCustomModelBufferCache() {
+  modelBufferCache.clear();
+  modelBufferInFlight.clear();
+  modelBufferCacheBytes = 0;
+}
+
 async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
   const cm = sculpture?.customModel || {};
 
@@ -326,34 +375,74 @@ async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
     candidates.push({ url: `https://dweb.link/ipfs/${cid}`, auth: false });
   }
 
-  let lastErr = null;
-  for (const candidate of candidates) {
-    try {
-      const headers = {};
-      if (candidate.auth) {
-        const token = getStoredToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      }
-      const res = await fetch(candidate.url, {
-        mode: 'cors',
-        ...(Object.keys(headers).length > 0 ? { headers } : {})
-      });
-      if (!res.ok) {
-        lastErr = new Error(`Model fetch failed (${res.status}) for ${candidate.url}`);
-        continue;
-      }
-      const buf = await res.arrayBuffer();
-      if (!buf || buf.byteLength === 0) {
-        lastErr = new Error(`Empty model response from ${candidate.url}`);
-        continue;
-      }
-      return { arrayBuffer: buf, resolvedUrl: candidate.url };
-    } catch (err) {
-      lastErr = err;
+  const cacheKey = [
+    sculpture?.id || '',
+    sculpture?.currentRev || 1,
+    cid,
+    primaryUrl || proxyUrl
+  ].join('|');
+
+  if (cacheKey) {
+    const cached = readCachedModelBuffer(cacheKey);
+    if (cached) return cached;
+    const pending = modelBufferInFlight.get(cacheKey);
+    if (pending) {
+      const resolved = await pending;
+      return {
+        arrayBuffer: resolved.arrayBuffer.slice(0),
+        resolvedUrl: resolved.resolvedUrl
+      };
     }
   }
 
-  throw lastErr || new Error('Could not download 3D model asset.');
+  const runFetch = (async () => {
+    let lastErr = null;
+    for (const candidate of candidates) {
+      try {
+        const headers = {};
+        if (candidate.auth) {
+          const token = getStoredToken();
+          if (token) headers.Authorization = `Bearer ${token}`;
+        }
+        const res = await fetch(candidate.url, {
+          mode: 'cors',
+          ...(Object.keys(headers).length > 0 ? { headers } : {})
+        });
+        if (!res.ok) {
+          lastErr = new Error(`Model fetch failed (${res.status}) for ${candidate.url}`);
+          continue;
+        }
+        const buf = await res.arrayBuffer();
+        if (!buf || buf.byteLength === 0) {
+          lastErr = new Error(`Empty model response from ${candidate.url}`);
+          continue;
+        }
+        if (cacheKey) {
+          writeCachedModelBuffer(cacheKey, buf, candidate.url);
+        }
+        return { arrayBuffer: buf, resolvedUrl: candidate.url };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    throw lastErr || new Error('Could not download 3D model asset.');
+  })();
+
+  if (cacheKey) {
+    modelBufferInFlight.set(cacheKey, runFetch);
+  }
+  try {
+    const out = await runFetch;
+    return {
+      arrayBuffer: out.arrayBuffer.slice(0),
+      resolvedUrl: out.resolvedUrl
+    };
+  } finally {
+    if (cacheKey) {
+      modelBufferInFlight.delete(cacheKey);
+    }
+  }
 }
 
 export async function loadCustomModelObject(

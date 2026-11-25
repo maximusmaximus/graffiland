@@ -4,6 +4,7 @@ import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import {
   computeArLandPrismLocalGeometry,
+  computeArSculptureVerticalY,
   findNearbyCameraLands
 } from '../utils/arLandHelpers.js';
 import {
@@ -58,9 +59,12 @@ export function useARPreview({
   isArViewOnly = false
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
-  const arTargetedIdRef = useRef('');
+  const arSculptureEntriesRef = useRef(new Map());
+  const arPrismNodesRef = useRef([]);
   const arSelectedLandIdRef = useRef('');
+  const arTargetedIdRef = useRef('');
   const orbHeadingCorrectionRadRef = useRef(0);
+  const [arModelLoadedTick, setArModelLoadedTick] = useState(0);
 
   const [nearbySculptures, setNearbySculptures] = useState([]);
   const [nearbyParcels, setNearbyParcels] = useState([]);
@@ -375,20 +379,70 @@ export function useARPreview({
     };
   }, [arSelectedLandId]);
 
-  // Build nearby sculptures + glowing interactive 3D land volume prisms in BOTH draw and preview modes
+  // Clean up cached AR sculpture meshes & land prisms strictly on hook unmount
+  useEffect(() => {
+    const entries = arSculptureEntriesRef.current;
+    const prisms = arPrismNodesRef;
+    return () => {
+      for (const entry of entries.values()) {
+        entry.cancelled = true;
+        if (entry.sub) {
+          entry.sub.parent?.remove?.(entry.sub);
+          disposeObject3D(entry.sub);
+        }
+      }
+      entries.clear();
+      for (const node of prisms.current) {
+        node.parent?.remove?.(node);
+        disposeObject3D(node);
+      }
+      prisms.current = [];
+    };
+  }, []);
+
+  // Build nearby sculptures + glowing interactive 3D land volume prisms in BOTH draw and preview modes.
+  // Sculptures are cached & repositioned in place across GPS ticks so custom 3D GLB downloads are
+  // NEVER cancelled or re-fetched every time watchPosition fires!
   useEffect(() => {
     const group = nearbyGroupRef.current;
     if (!group) return undefined;
-    disposeObject3D(group);
-    while (group.children.length > 0) group.remove(group.children[0]);
+    const entries = arSculptureEntriesRef.current;
 
-    if ((mode !== 'draw' && mode !== 'preview') || !location) return undefined;
+    const clearAllPrisms = () => {
+      for (const node of arPrismNodesRef.current) {
+        if (node.parent) node.parent.remove(node);
+        disposeObject3D(node);
+      }
+      arPrismNodesRef.current = [];
+    };
+
+    const clearAllEntries = () => {
+      for (const entry of entries.values()) {
+        entry.cancelled = true;
+        if (entry.sub?.parent) entry.sub.parent.remove(entry.sub);
+        if (entry.sub) disposeObject3D(entry.sub);
+      }
+      entries.clear();
+    };
+
+    if ((mode !== 'draw' && mode !== 'preview') || !location) {
+      clearAllPrisms();
+      clearAllEntries();
+      while (group.children.length > 0) {
+        const stray = group.children[0];
+        group.remove(stray);
+        disposeObject3D(stray);
+      }
+      return undefined;
+    }
+
+    // Always refresh lightweight land prism wireframes cheaply for the latest GPS position
+    clearAllPrisms();
 
     const viewerElev =
       location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
         ? location.altitude
         : null;
-    let cancelled = false;
 
     const cleanFocusedLandId = String(focusedLandId || '').trim();
     const landsToRender = cleanFocusedLandId
@@ -422,257 +476,314 @@ export function useARPreview({
     })();
 
     const parcelRenderedBoxes = new Map();
+    const nextSculptureIds = new Set();
     let selectedCustomPending = 0;
 
     for (const sc of sculpturesPool) {
+      if (!sc?.id) continue;
+      const scId = String(sc.id);
+      nextSculptureIds.add(scId);
+
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const isOnSelectedLand = Boolean(arSelectedLandId && sc?.parcelId === arSelectedLandId);
       const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
       const dist = Math.hypot(offset.east, offset.north);
       const sharpness = computeProximitySharpness(dist);
-      const isCustom3d = sc.modelType === 'custom-3d' && sc.customModel?.format;
-      const sub = new THREE.Group();
-      if (!isCustom3d) {
-        // Keep selected land and close-range sculptures at full 100% voxel resolution;
-        // distant massive clouds upgrade automatically as the user walks closer.
-        const useCoarseLod =
-          !isOnSelectedLand &&
-          Array.isArray(sc.voxels) &&
-          sc.voxels.length > 350 &&
-          sharpness.simplifyVoxelLod;
-        const voxelMeshGroup = buildVoxelGroup(sc.voxels || [], { simplifyLod: useCoarseLod });
-        const scRot = extractSculptureRotation(sc);
+      const isCustom3d = Boolean(sc.modelType === 'custom-3d' && sc.customModel?.format);
+      const useCoarseLod =
+        !isCustom3d &&
+        !isOnSelectedLand &&
+        Array.isArray(sc.voxels) &&
+        sc.voxels.length > 350 &&
+        sharpness.simplifyVoxelLod;
+
+      const scRot = extractSculptureRotation(sc);
+      const scScale = extractSculptureScale(sc);
+      const cm = sc.customModel || {};
+      const voxels = Array.isArray(sc.voxels) ? sc.voxels : [];
+      const sig = [
+        scId,
+        sc.currentRev || 1,
+        isCustom3d ? 'custom-3d' : 'voxel',
+        cm.format || '',
+        cm.downloadUrl || cm.proxyUrl || sc.modelGlbUrl || '',
+        cm.ipfsCid || '',
+        scScale,
+        cm.rotationY ?? 0,
+        scRot.pitch,
+        scRot.roll,
+        voxels.length,
+        voxels[0]?.color || '',
+        useCoarseLod ? 'coarse' : 'full',
+        mode === 'draw' ? 'draw' : 'preview'
+      ].join('|');
+
+      let entry = entries.get(scId);
+      if (entry && entry.sig !== sig) {
+        entry.cancelled = true;
+        if (entry.sub?.parent) entry.sub.parent.remove(entry.sub);
+        if (entry.sub) disposeObject3D(entry.sub);
+        entries.delete(scId);
+        entry = null;
+      }
+
+      if (!entry) {
+        const sub = new THREE.Group();
         const pitchRad = tiltToRadians(scRot.pitch);
         const rollRad = tiltToRadians(scRot.roll);
-        // Horizontally center voxel clouds on their own anchor (matching 3D Map, GeoJSON, and 3D Viewer)
-        // so legacy off-origin AR sculptures ALWAYS render dead-center inside their land volume!
-        const rawVoxelBounds = new THREE.Box3().setFromObject(voxelMeshGroup);
-        if (!rawVoxelBounds.isEmpty()) {
-          const rawCenter = new THREE.Vector3();
-          const rawSize = new THREE.Vector3();
-          rawVoxelBounds.getCenter(rawCenter);
-          rawVoxelBounds.getSize(rawSize);
-          if (pitchRad !== 0 || rollRad !== 0) {
-            const tiltWrap = new THREE.Group();
-            tiltWrap.rotation.order = 'YXZ';
-            voxelMeshGroup.position.set(-rawCenter.x, -rawCenter.y, -rawCenter.z);
-            tiltWrap.add(voxelMeshGroup);
-            tiltWrap.rotation.set(pitchRad, 0, rollRad);
-            const rotDims = computeRotatedBoxDimensions({
-              width: rawSize.x,
-              height: rawSize.y,
-              depth: rawSize.z,
-              yaw: 0,
-              pitch: scRot.pitch,
-              roll: scRot.roll,
-              scale: 1
-            });
-            tiltWrap.position.y = rawVoxelBounds.min.y + rotDims.effH / 2;
-            sub.add(tiltWrap);
-          } else {
-            voxelMeshGroup.position.set(-rawCenter.x, 0, -rawCenter.z);
-            sub.add(voxelMeshGroup);
-          }
-        } else {
-          sub.add(voxelMeshGroup);
-        }
-      }
-      sub.traverse((obj) => {
-        if (obj.isMesh) {
-          obj.userData.sculpture = sc;
-          if (parentLand) obj.userData.parcel = parentLand;
-        }
-      });
 
-      const bounds = new THREE.Box3().setFromObject(sub);
-      const boxCenter = new THREE.Vector3();
-      const boxSize = new THREE.Vector3();
-      if (!bounds.isEmpty()) {
-        bounds.getCenter(boxCenter);
-        bounds.getSize(boxSize);
-      } else {
-        boxCenter.set(0, 0.75, 0);
-        boxSize.set(1.4, 1.5, 1.4);
-      }
-      const hitProxy = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.max(1.0, boxSize.x + 0.55),
-          Math.max(1.0, boxSize.y + 0.55),
-          Math.max(1.0, boxSize.z + 0.55)
-        ),
-        new THREE.MeshBasicMaterial({ visible: false })
-      );
-      hitProxy.position.copy(boxCenter);
-      hitProxy.userData.sculpture = sc;
-      hitProxy.userData.isHitProxy = true;
-      if (parentLand) hitProxy.userData.parcel = parentLand;
-      sub.add(hitProxy);
-
-      if (isCustom3d) {
-        if (isOnSelectedLand) {
-          selectedCustomPending += 1;
-        }
-        loadCustomModelObject(sc, resolveApiUrl)
-          .then((loaded) => {
-            if (cancelled || !loaded) return;
-            loaded.object3d.traverse((obj) => {
-              if (obj.isMesh || obj.isPoints || obj.isLine) {
-                obj.userData.sculpture = sc;
-                if (parentLand) obj.userData.parcel = parentLand;
-              }
-            });
-            const scRot = extractSculptureRotation(sc);
-            const pitchRad = tiltToRadians(scRot.pitch);
-            const rollRad = tiltToRadians(scRot.roll);
-            const loadedCenter = new THREE.Vector3();
-            const loadedSize = new THREE.Vector3();
-            loaded.bounds.getCenter(loadedCenter);
-            loaded.bounds.getSize(loadedSize);
+        if (!isCustom3d) {
+          const voxelMeshGroup = buildVoxelGroup(voxels, { simplifyLod: useCoarseLod });
+          // Horizontally center voxel clouds on their own anchor (matching 3D Map, GeoJSON, and 3D Viewer)
+          // so legacy off-origin AR sculptures ALWAYS render dead-center inside their land volume!
+          const rawVoxelBounds = new THREE.Box3().setFromObject(voxelMeshGroup);
+          if (!rawVoxelBounds.isEmpty()) {
+            const rawCenter = new THREE.Vector3();
+            const rawSize = new THREE.Vector3();
+            rawVoxelBounds.getCenter(rawCenter);
+            rawVoxelBounds.getSize(rawSize);
             if (pitchRad !== 0 || rollRad !== 0) {
               const tiltWrap = new THREE.Group();
               tiltWrap.rotation.order = 'YXZ';
-              loaded.object3d.position.set(-loadedCenter.x, -loadedCenter.y, -loadedCenter.z);
-              tiltWrap.add(loaded.object3d);
+              voxelMeshGroup.position.set(-rawCenter.x, -rawCenter.y, -rawCenter.z);
+              tiltWrap.add(voxelMeshGroup);
               tiltWrap.rotation.set(pitchRad, 0, rollRad);
               const rotDims = computeRotatedBoxDimensions({
-                width: loadedSize.x,
-                height: loadedSize.y,
-                depth: loadedSize.z,
+                width: rawSize.x,
+                height: rawSize.y,
+                depth: rawSize.z,
                 yaw: 0,
                 pitch: scRot.pitch,
                 roll: scRot.roll,
                 scale: 1
               });
-              tiltWrap.position.y = loaded.bounds.min.y + rotDims.effH / 2;
+              tiltWrap.position.y = rawVoxelBounds.min.y + rotDims.effH / 2;
               sub.add(tiltWrap);
-              hitProxy.geometry.dispose();
-              hitProxy.geometry = new THREE.BoxGeometry(
-                Math.max(1.0, rotDims.effW + 0.55),
-                Math.max(1.0, rotDims.effH + 0.55),
-                Math.max(1.0, rotDims.effD + 0.55)
-              );
-              hitProxy.position.set(0, loaded.bounds.min.y + rotDims.effH / 2, 0);
             } else {
-              sub.add(loaded.object3d);
-              hitProxy.geometry.dispose();
-              hitProxy.geometry = new THREE.BoxGeometry(
-                Math.max(1.0, loadedSize.x + 0.55),
-                Math.max(1.0, loadedSize.y + 0.55),
-                Math.max(1.0, loadedSize.z + 0.55)
-              );
-              hitProxy.position.copy(loadedCenter);
+              voxelMeshGroup.position.set(-rawCenter.x, 0, -rawCenter.z);
+              sub.add(voxelMeshGroup);
             }
-            applyProximitySharpnessToObject3D(sub, computeProximitySharpness(dist), 8);
-          })
-          .catch(() => {})
-          .finally(() => {
-            if (cancelled || !isOnSelectedLand) return;
-            selectedCustomPending = Math.max(0, selectedCustomPending - 1);
-            if (
-              selectedCustomPending === 0 &&
-              selectedLandApiDoneRef.current.parcelId === arSelectedLandId &&
-              selectedLandApiDoneRef.current.done
-            ) {
-              setSelectedLandLoadState((prev) =>
-                prev.parcelId === arSelectedLandId ? { ...prev, status: 'ready' } : prev
+          } else {
+            sub.add(voxelMeshGroup);
+          }
+        }
+
+        const bounds = new THREE.Box3().setFromObject(sub);
+        const boxCenter = new THREE.Vector3();
+        const boxSize = new THREE.Vector3();
+        if (!bounds.isEmpty()) {
+          bounds.getCenter(boxCenter);
+          bounds.getSize(boxSize);
+        } else {
+          boxCenter.set(0, 0.75, 0);
+          boxSize.set(1.4, 1.5, 1.4);
+        }
+        const hitProxy = new THREE.Mesh(
+          new THREE.BoxGeometry(
+            Math.max(1.0, boxSize.x + 0.55),
+            Math.max(1.0, boxSize.y + 0.55),
+            Math.max(1.0, boxSize.z + 0.55)
+          ),
+          new THREE.MeshBasicMaterial({ visible: false })
+        );
+        hitProxy.position.copy(boxCenter);
+        hitProxy.userData.sculpture = sc;
+        hitProxy.userData.isHitProxy = true;
+        if (parentLand) hitProxy.userData.parcel = parentLand;
+        sub.add(hitProxy);
+
+        const baseY = isCustom3d ? -0.02 : (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
+        const catcher = new THREE.Mesh(
+          new THREE.CircleGeometry(1.6, 24),
+          new THREE.ShadowMaterial({ opacity: 0.36 })
+        );
+        catcher.rotation.x = -Math.PI / 2;
+        catcher.position.y = baseY;
+        catcher.receiveShadow = sharpness.enableShadows;
+        sub.add(catcher);
+
+        const baseGlowRingMat = new THREE.MeshBasicMaterial({
+          color: 0x00f5d4,
+          transparent: true,
+          opacity: mode === 'draw' ? 0.42 : 0.65,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        const baseGlowRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.95, 1.32, 48),
+          baseGlowRingMat
+        );
+        baseGlowRing.rotation.x = -Math.PI / 2;
+        baseGlowRing.position.y = baseY + 0.018;
+        baseGlowRing.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
+        sub.add(baseGlowRing);
+
+        const baseHaloMat = new THREE.MeshBasicMaterial({
+          color: 0x00f5d4,
+          transparent: true,
+          opacity: mode === 'draw' ? 0.12 : 0.18,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        const baseGlowHalo = new THREE.Mesh(
+          new THREE.CircleGeometry(1.12, 36),
+          baseHaloMat
+        );
+        baseGlowHalo.rotation.x = -Math.PI / 2;
+        baseGlowHalo.position.y = baseY + 0.01;
+        baseGlowHalo.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
+        sub.add(baseGlowHalo);
+
+        if (!isCustom3d && scScale !== 1) {
+          sub.scale.setScalar(scScale);
+        }
+
+        sub.userData = {
+          sculptureId: scId,
+          parcelId: sc.parcelId || '',
+          sculpture: sc,
+          parcel: parentLand,
+          distanceMeters: dist,
+          _lastSharpness: sharpness.sharpness,
+          baseRingMat: baseGlowRingMat,
+          baseHaloMat,
+          baseGlowRing
+        };
+
+        entry = {
+          id: scId,
+          sig,
+          isCustom3d,
+          sub,
+          hitProxy,
+          loaded: !isCustom3d,
+          cancelled: false
+        };
+        entries.set(scId, entry);
+
+        if (isCustom3d) {
+          const capturedEntry = entry;
+          loadCustomModelObject(sc, resolveApiUrl)
+            .then((loaded) => {
+              if (capturedEntry.cancelled || !loaded) {
+                if (loaded?.object3d) disposeObject3D(loaded.object3d);
+                return;
+              }
+              const latestParcel = capturedEntry.sub.userData?.parcel || parentLand;
+              const latestSc = capturedEntry.sub.userData?.sculpture || sc;
+              loaded.object3d.traverse((obj) => {
+                if (obj.isMesh || obj.isPoints || obj.isLine) {
+                  obj.userData.sculpture = latestSc;
+                  if (latestParcel) obj.userData.parcel = latestParcel;
+                }
+              });
+              const loadedCenter = new THREE.Vector3();
+              const loadedSize = new THREE.Vector3();
+              loaded.bounds.getCenter(loadedCenter);
+              loaded.bounds.getSize(loadedSize);
+              if (pitchRad !== 0 || rollRad !== 0) {
+                const tiltWrap = new THREE.Group();
+                tiltWrap.rotation.order = 'YXZ';
+                loaded.object3d.position.set(-loadedCenter.x, -loadedCenter.y, -loadedCenter.z);
+                tiltWrap.add(loaded.object3d);
+                tiltWrap.rotation.set(pitchRad, 0, rollRad);
+                const rotDims = computeRotatedBoxDimensions({
+                  width: loadedSize.x,
+                  height: loadedSize.y,
+                  depth: loadedSize.z,
+                  yaw: 0,
+                  pitch: scRot.pitch,
+                  roll: scRot.roll,
+                  scale: 1
+                });
+                tiltWrap.position.y = loaded.bounds.min.y + rotDims.effH / 2;
+                capturedEntry.sub.add(tiltWrap);
+                capturedEntry.hitProxy.geometry.dispose();
+                capturedEntry.hitProxy.geometry = new THREE.BoxGeometry(
+                  Math.max(1.0, rotDims.effW + 0.55),
+                  Math.max(1.0, rotDims.effH + 0.55),
+                  Math.max(1.0, rotDims.effD + 0.55)
+                );
+                capturedEntry.hitProxy.position.set(0, loaded.bounds.min.y + rotDims.effH / 2, 0);
+              } else {
+                capturedEntry.sub.add(loaded.object3d);
+                capturedEntry.hitProxy.geometry.dispose();
+                capturedEntry.hitProxy.geometry = new THREE.BoxGeometry(
+                  Math.max(1.0, loadedSize.x + 0.55),
+                  Math.max(1.0, loadedSize.y + 0.55),
+                  Math.max(1.0, loadedSize.z + 0.55)
+                );
+                capturedEntry.hitProxy.position.copy(loadedCenter);
+              }
+              capturedEntry.loaded = true;
+              const latestDist = capturedEntry.sub.userData?.distanceMeters ?? dist;
+              applyProximitySharpnessToObject3D(
+                capturedEntry.sub,
+                computeProximitySharpness(latestDist),
+                8
               );
-            }
-          });
+              setArModelLoadedTick((n) => n + 1);
+            })
+            .catch(() => {
+              if (!capturedEntry.cancelled) {
+                capturedEntry.loaded = true;
+                setArModelLoadedTick((n) => n + 1);
+              }
+            });
+        }
       }
+
+      const sub = entry.sub;
+      if (isCustom3d && !entry.loaded && isOnSelectedLand) {
+        selectedCustomPending += 1;
+      }
+
+      // Keep metadata, orientation, and GPS-relative world position synced in place (zero mesh teardown!)
+      sub.userData.sculpture = sc;
+      sub.userData.parcel = parentLand;
+      sub.userData.parcelId = sc.parcelId || '';
+      sub.userData.distanceMeters = dist;
+      sub.traverse((obj) => {
+        if (obj.isMesh || obj.isPoints || obj.isLine) {
+          obj.userData.sculpture = sc;
+          if (parentLand) obj.userData.parcel = parentLand;
+        }
+      });
 
       const clampFactor = dist > 55 ? 55 / dist : 1;
-
-      const scElev =
-        sc.elevation?.anchorAltitudeMeters ??
-        (sc.altitude !== null && sc.altitude !== undefined ? sc.altitude : null);
-      let deltaY = 0;
-      if (viewerElev !== null && scElev !== null) {
-        deltaY = Math.max(-35, Math.min(65, scElev - viewerElev));
-      } else if (sc.elevation?.heightAboveGroundMeters) {
-        deltaY = Math.max(-10, Math.min(65, sc.elevation.heightAboveGroundMeters));
-      }
-
-      const baseY = (sc.elevation?.sculptureVerticalMinM ?? 0) - 0.12;
-      const catcher = new THREE.Mesh(
-        new THREE.CircleGeometry(1.6, 24),
-        new THREE.ShadowMaterial({ opacity: 0.36 })
-      );
-      catcher.rotation.x = -Math.PI / 2;
-      catcher.position.y = baseY;
-      catcher.receiveShadow = sharpness.enableShadows;
-      sub.add(catcher);
-
-      const baseGlowRingMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5d4,
-        transparent: true,
-        opacity: mode === 'draw' ? 0.42 : 0.65,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const baseGlowRing = new THREE.Mesh(
-        new THREE.RingGeometry(0.95, 1.32, 48),
-        baseGlowRingMat
-      );
-      baseGlowRing.rotation.x = -Math.PI / 2;
-      baseGlowRing.position.y = baseY + 0.018;
-      baseGlowRing.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
-      sub.add(baseGlowRing);
-
-      const baseHaloMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5d4,
-        transparent: true,
-        opacity: mode === 'draw' ? 0.12 : 0.18,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const baseGlowHalo = new THREE.Mesh(
-        new THREE.CircleGeometry(1.12, 36),
-        baseHaloMat
-      );
-      baseGlowHalo.rotation.x = -Math.PI / 2;
-      baseGlowHalo.position.y = baseY + 0.01;
-      baseGlowHalo.userData = { sculpture: sc, parcel: parentLand, clickableBase: true };
-      sub.add(baseGlowHalo);
-
-      sub.userData = {
-        sculptureId: sc.id,
-        parcelId: sc.parcelId || '',
-        sculpture: sc,
-        parcel: parentLand,
-        distanceMeters: dist,
-        _lastSharpness: sharpness.sharpness,
-        baseRingMat: baseGlowRingMat,
-        baseHaloMat,
-        baseGlowRing
-      };
-
       const ax = Number(sc.anchorOffset?.dx || 0);
-      const ay = Number(sc.anchorOffset?.dy || 0);
       const az = Number(sc.anchorOffset?.dz || 0);
       const parentRotDeg = Number(parentLand?.volume?.rotationDeg || 0);
       const worldOff = parcelLocalMetersToWorldMeters(ax, az, parentRotDeg);
       const worldYawRad = parcelLocalYawToWorldYawRad(sc.anchorOffset?.yaw || 0, parentRotDeg);
-      if (Number.isFinite(worldYawRad) && worldYawRad !== 0) {
-        sub.rotation.y = worldYawRad;
-      }
-      if (!isCustom3d) {
-        const scScale = extractSculptureScale(sc);
-        if (scScale !== 1) {
-          sub.scale.setScalar(scScale);
-        }
-      }
+      sub.rotation.y = Number.isFinite(worldYawRad) ? worldYawRad : 0;
+
+      const verticalY = computeArSculptureVerticalY({
+        sculpture: sc,
+        viewerAltitude: viewerElev,
+        parentLand,
+        groundY: -1.15
+      });
+
       sub.position.set(
         offset.east * clampFactor + worldOff.east,
-        deltaY + ay,
+        verticalY,
         -offset.north * clampFactor + worldOff.south
       );
-      applyProximitySharpnessToObject3D(sub, sharpness, 8);
-      group.add(sub);
+
+      if (Math.abs(sharpness.sharpness - (sub.userData._lastSharpness ?? -1)) >= 0.03) {
+        sub.userData._lastSharpness = sharpness.sharpness;
+        applyProximitySharpnessToObject3D(sub, sharpness, 8);
+      }
+
+      if (sub.parent !== group) {
+        group.add(sub);
+      }
 
       // Record rendered local 3D bounds per parcel (artwork meshes only, excluding shadow/halo rings)
-      // so AR land prisms always wrap symmetrically around the actual rendered sculpture voxels in X, Y, and Z.
+      // so AR land prisms always wrap symmetrically around the actual rendered sculpture in X, Y, and Z.
       if (sc.parcelId) {
         sub.updateMatrixWorld(true);
         const scBox = new THREE.Box3();
@@ -709,6 +820,16 @@ export function useARPreview({
       }
     }
 
+    // Dispose any cached sculptures that left the active nearby/focused pool
+    for (const [cachedId, cachedEntry] of entries.entries()) {
+      if (!nextSculptureIds.has(cachedId)) {
+        cachedEntry.cancelled = true;
+        if (cachedEntry.sub?.parent) cachedEntry.sub.parent.remove(cachedEntry.sub);
+        if (cachedEntry.sub) disposeObject3D(cachedEntry.sub);
+        entries.delete(cachedId);
+      }
+    }
+
     if (
       arSelectedLandId &&
       selectedCustomPending === 0 &&
@@ -723,6 +844,7 @@ export function useARPreview({
     }
 
     // Render interactive 3D Holographic Virtual Land Volume Prisms for visible/focused land(s)
+    const nextPrisms = [];
     for (const land of landsToRender) {
       const prism = computeArLandPrismLocalGeometry({
         location,
@@ -830,11 +952,11 @@ export function useARPreview({
         wallMat
       };
       group.add(landGroup);
+      nextPrisms.push(landGroup);
     }
+    arPrismNodesRef.current = nextPrisms;
 
-    return () => {
-      cancelled = true;
-    };
+    return undefined;
   }, [
     mode,
     location,
@@ -843,7 +965,8 @@ export function useARPreview({
     arSelectedLandId,
     focusedLandId,
     selectedLandSnapshot,
-    nearbyGroupRef
+    nearbyGroupRef,
+    arModelLoadedTick
   ]);
 
   // Live ORB visual landmark relocalization loop (skipped in clean AR View to prevent frame lag)

@@ -501,7 +501,7 @@ export default function LandIsometricPreview({
     return () => {
       cancelled = true;
     };
-  }, [hydratedPreviewSculptures]);
+  }, [hydratedPreviewSculptures, hydrationVersion]);
 
   useEffect(() => {
     parcelRef.current = parcel;
@@ -1039,19 +1039,65 @@ export default function LandIsometricPreview({
           setLiveZoom(initFit.zoom);
         }
 
+        let tileErrCount = 0;
+        let contextLostTimer = null;
+
+        const applyOsmFallback = () => {
+          if (fallbackAppliedRef.current) return;
+          fallbackAppliedRef.current = true;
+          styleReadyRef.current = false;
+          try {
+            map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
+          } catch {
+            setWebglAvailable(false);
+          }
+        };
+
+        const styleTimeout = setTimeout(() => {
+          if (!cancelled && !styleReadyRef.current && !fallbackAppliedRef.current) {
+            applyOsmFallback();
+          }
+        }, 8000);
+
+        const glCanvas = map.getCanvas?.();
+        const onContextLost = (ev) => {
+          ev.preventDefault();
+          clearTimeout(contextLostTimer);
+          contextLostTimer = setTimeout(() => {
+            if (!cancelled) setWebglAvailable(false);
+          }, 2600);
+        };
+        const onContextRestored = () => {
+          clearTimeout(contextLostTimer);
+          contextLostTimer = null;
+          try {
+            map.triggerRepaint?.();
+            drawWireframes();
+          } catch {
+            // ignore
+          }
+        };
+        glCanvas?.addEventListener?.('webglcontextlost', onContextLost, false);
+        glCanvas?.addEventListener?.('webglcontextrestored', onContextRestored, false);
+        map.__graffilandCleanup = () => {
+          clearTimeout(styleTimeout);
+          clearTimeout(contextLostTimer);
+          glCanvas?.removeEventListener?.('webglcontextlost', onContextLost);
+          glCanvas?.removeEventListener?.('webglcontextrestored', onContextRestored);
+        };
+
         map.on('style.load', () => {
+          clearTimeout(styleTimeout);
           ensureLayers(map);
           setMapReady(true);
         });
 
-        map.on('error', () => {
-          if (!fallbackAppliedRef.current && !styleReadyRef.current) {
-            fallbackAppliedRef.current = true;
-            try {
-              map.setStyle(getFallbackMapLibreStyleForTheme(mapThemeRef.current));
-            } catch {
-              // ignore
-            }
+        map.on('error', (ev) => {
+          if (ev?.sourceId === 'openmaptiles') {
+            tileErrCount += 1;
+          }
+          if (!fallbackAppliedRef.current && (!styleReadyRef.current || tileErrCount >= 3)) {
+            applyOsmFallback();
           }
         });
 
@@ -1114,6 +1160,7 @@ export default function LandIsometricPreview({
       setMapReady(false);
       if (mapRef.current) {
         try {
+          mapRef.current.__graffilandCleanup?.();
           mapRef.current.remove();
         } catch {
           // ignore cleanup errors

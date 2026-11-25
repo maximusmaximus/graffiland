@@ -260,7 +260,10 @@ export function computeIsometricCameraFit(
   );
 
   const rawIsoZoom = Math.log2(metersPerPxAtZ0 / Math.max(0.006, targetMetersPerPx));
-  const clampedIsoZoom = Math.max(14.0, Math.min(21.4, rawIsoZoom));
+  // Keep small 2-8m lands framed with visible surrounding streets & buildings on mobile screens
+  // instead of over-zooming into an empty tile pocket at z21+. Users can still pinch-zoom closer.
+  const maxAutoIsoZoom = vw <= 520 ? 19.6 : 20.4;
+  const clampedIsoZoom = Math.max(14.0, Math.min(maxAutoIsoZoom, rawIsoZoom));
   const zoom = isContext
     ? Math.max(12.2, Math.min(16.8, clampedIsoZoom - 2.35))
     : clampedIsoZoom;

@@ -1,18 +1,42 @@
 let cachedPromise = null;
+let cachedWebGLSupport = null;
+
+/**
+ * Resets cached WebGL capability probe (intended for test harnesses).
+ */
+export function resetWebGLSupportCache() {
+  cachedWebGLSupport = null;
+}
 
 /**
  * Checks whether the current browser runtime supports WebGL rendering
  * (returns false cleanly in jsdom / headless environments without WebGL).
+ * Caches the result and immediately releases the probe context via WEBGL_lose_context
+ * so mobile browsers never exhaust their active WebGL context cap.
  */
 export function hasWebGLSupport() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return false;
   if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '')) return false;
+  if (cachedWebGLSupport !== null) return cachedWebGLSupport;
   try {
     const canvas = document.createElement('canvas');
-    if (typeof canvas.getContext !== 'function') return false;
+    if (typeof canvas.getContext !== 'function') {
+      cachedWebGLSupport = false;
+      return false;
+    }
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-    return Boolean(gl);
+    const supported = Boolean(gl);
+    if (gl && typeof gl.getExtension === 'function') {
+      try {
+        gl.getExtension('WEBGL_lose_context')?.loseContext?.();
+      } catch {
+        // ignore if extension is unavailable
+      }
+    }
+    cachedWebGLSupport = supported;
+    return supported;
   } catch {
+    cachedWebGLSupport = false;
     return false;
   }
 }

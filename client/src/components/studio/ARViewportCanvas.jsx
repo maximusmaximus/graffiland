@@ -69,6 +69,7 @@ function ARViewportCanvasInner({
   isInteractingWithLandRef = null,
   isArViewOnly = false,
   isArViewOnlyRef = null,
+  renderPaused = false,
   mode,
   modeRef,
   toolRef,
@@ -106,6 +107,8 @@ function ARViewportCanvasInner({
 }) {
   const [contextLost, setContextLost] = useState(false);
   const isTransformMode = mode === 'transform';
+  const renderPausedRef = useRef(Boolean(renderPaused));
+  renderPausedRef.current = Boolean(renderPaused);
   const sceneScanOptimalRef = useRef(Boolean(sceneScanOptimal));
   sceneScanOptimalRef.current = Boolean(sceneScanOptimal);
   const hasCapturedEnvRef = useRef(false);
@@ -170,7 +173,7 @@ function ARViewportCanvasInner({
       68,
       Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight),
       0.05,
-      120
+      260
     );
     camera.position.set(0, 0.4, 2.2);
 
@@ -402,6 +405,15 @@ function ARViewportCanvasInner({
       const now = performance.now();
       const dtMs = Math.max(4, Math.min(80, now - lastFrameAt));
       lastFrameAt = now;
+
+      // Pause heavy GPU rendering & video-to-texture uploads while fullscreen map/modals cover AR view
+      // so mobile browsers have full GPU headroom for MapLibre 3D maps & Three.js sculpture layers.
+      if (
+        renderPausedRef.current ||
+        (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+      ) {
+        return;
+      }
 
       if (rawOrientationRef.current) {
         const { alpha, beta, gamma } = rawOrientationRef.current;

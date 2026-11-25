@@ -348,3 +348,81 @@ export function computeArLandPrismLocalGeometry({
     topY
   };
 }
+
+/**
+ * Computes safe vertical placement (`y` in local AR Three.js camera space) for a nearby
+ * or land-anchored sculpture so GPS WGS84-vs-EGM96 altitude mismatches (commonly -25m to -35m
+ * between Android, iOS, and terrain DEMs) NEVER bury land sculptures underground.
+ *
+ * - Custom 3D models (`.glb`/`.gltf`/`.obj`/`.stl`/`.ply`) have their bottom normalized to local `y = 0`,
+ *   so they sit squarely on the land floor (`groundY + parcelBaseAlt + anchorOffset.dy`).
+ * - Voxel sculptures preserve their sculpted eye-relative height while clamping away datum-skewed
+ *   negative altitudes so they always remain visible inside their land volume.
+ *
+ * @param {{
+ *   sculpture: any,
+ *   viewerAltitude?: number | null,
+ *   parentLand?: any,
+ *   groundY?: number
+ * }} options
+ * @returns {number}
+ */
+export function computeArSculptureVerticalY({
+  sculpture,
+  viewerAltitude = null,
+  parentLand = null,
+  groundY = -1.15
+} = {}) {
+  const sc = sculpture || {};
+  const isCustom3d = Boolean(sc.modelType === 'custom-3d' && sc.customModel?.format);
+  const ay = Number.isFinite(Number(sc.anchorOffset?.dy)) ? Number(sc.anchorOffset.dy) : 0;
+  const landBaseAlt = Math.max(0, Number(parentLand?.volume?.baseAltitudeM || 0));
+  const floorY = Number(groundY) + landBaseAlt;
+
+  // Custom 3D models are normalized with bottom at y=0, so anchor them directly on the land floor
+  if (isCustom3d) {
+    return Number((floorY + Math.max(0, ay)).toFixed(3));
+  }
+
+  const viewerElev =
+    viewerAltitude !== null && viewerAltitude !== undefined && Number.isFinite(Number(viewerAltitude))
+      ? Number(viewerAltitude)
+      : null;
+  const rawScElev =
+    sc.elevation?.anchorAltitudeMeters ??
+    (sc.altitude !== null && sc.altitude !== undefined ? sc.altitude : null);
+  const scElev =
+    rawScElev !== null && rawScElev !== undefined && Number.isFinite(Number(rawScElev))
+      ? Number(rawScElev)
+      : null;
+
+  let deltaY = landBaseAlt;
+  if (viewerElev !== null && scElev !== null) {
+    const diff = scElev - viewerElev;
+    // Ignore large cross-device WGS84/EGM96 geoid jumps (>12m) that would bury/launch sculptures
+    if (Math.abs(diff) <= 12) {
+      deltaY = Math.max(-2.5, Math.min(12, diff)) + landBaseAlt;
+    }
+  } else {
+    const rawHeightAboveGround = sc.elevation?.heightAboveGroundMeters;
+    const hag =
+      rawHeightAboveGround !== null &&
+      rawHeightAboveGround !== undefined &&
+      Number.isFinite(Number(rawHeightAboveGround))
+        ? Number(rawHeightAboveGround)
+        : null;
+    // Negative heightAboveGroundMeters (e.g. -30m in CA) is a WGS84 vs EGM96 datum artifact; ignore it
+    if (hag !== null && hag >= 0.25 && hag <= 45) {
+      deltaY = Math.max(landBaseAlt, hag);
+    }
+  }
+
+  let finalY = deltaY + ay;
+  // Never allow a voxel sculpture's lowest voxel to sink far below the land floor
+  const minVoxelY = Number(sc.elevation?.sculptureVerticalMinM);
+  if (Number.isFinite(minVoxelY) && minVoxelY + finalY < floorY - 0.35) {
+    finalY = floorY - minVoxelY;
+  }
+
+  return Number(finalY.toFixed(3));
+}

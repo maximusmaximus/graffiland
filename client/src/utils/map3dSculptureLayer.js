@@ -258,8 +258,69 @@ export function createSculptureThreeLayer({
   let camera = null;
   let envRT = null;
   let pmremGenerator = null;
+  let envAttempted = false;
   let maxAnisotropy = 8;
   let disposed = false;
+
+  function ensureStudioEnvironment(gl) {
+    if (envAttempted || disposed || !renderer || !scene || !gl) return;
+    envAttempted = true;
+    if (typeof gl.isContextLost === 'function' && gl.isContextLost()) return;
+    // Save WebGL state before PMREM runs offscreen passes so MapLibre's cached GL state stays intact
+    const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    const prevViewport = gl.getParameter(gl.VIEWPORT);
+    const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+    const prevActiveTex = gl.getParameter(gl.ACTIVE_TEXTURE);
+    const prevVao =
+      typeof gl.VERTEX_ARRAY_BINDING === 'number'
+        ? gl.getParameter(gl.VERTEX_ARRAY_BINDING)
+        : null;
+    try {
+      pmremGenerator = new THREE.PMREMGenerator(renderer);
+      const roomEnv = new RoomEnvironment();
+      envRT = pmremGenerator.fromScene(roomEnv, 0.04);
+      roomEnv.dispose();
+      scene.environment = envRT.texture;
+    } catch {
+      // Multi-directional studio lights remain active if PMREM / half-float RT is unavailable on mobile GPU
+      if (envRT) {
+        try {
+          envRT.dispose();
+        } catch {
+          // ignore
+        }
+        envRT = null;
+      }
+      if (pmremGenerator) {
+        try {
+          pmremGenerator.dispose();
+        } catch {
+          // ignore
+        }
+        pmremGenerator = null;
+      }
+    } finally {
+      try {
+        renderer.setRenderTarget(null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);
+        if (prevViewport && prevViewport.length === 4) {
+          gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+        }
+        if (typeof gl.bindVertexArray === 'function') {
+          gl.bindVertexArray(prevVao || null);
+        }
+        if (prevProgram !== undefined) {
+          gl.useProgram(prevProgram);
+        }
+        if (typeof prevActiveTex === 'number') {
+          gl.activeTexture(prevActiveTex);
+        }
+        renderer.resetState();
+      } catch {
+        // ignore GL restore failure during context teardown
+      }
+    }
+  }
 
   /** @type {Map<string, any>} */
   const entries = new Map();
@@ -563,6 +624,7 @@ export function createSculptureThreeLayer({
     onAdd(map, gl) {
       mapInstance = map;
       disposed = false;
+      envAttempted = false;
 
       scene = new THREE.Scene();
       camera = new THREE.Camera();
@@ -593,25 +655,8 @@ export function createSculptureThreeLayer({
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.08;
         maxAnisotropy = Math.min(16, Math.max(1, renderer.capabilities?.getMaxAnisotropy?.() || 8));
-
-        // Build crisp PBR environment map while strictly restoring MapLibre's GL FBO & viewport state
-        try {
-          const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-          const prevViewport = gl.getParameter(gl.VIEWPORT);
-          pmremGenerator = new THREE.PMREMGenerator(renderer);
-          const roomEnv = new RoomEnvironment();
-          envRT = pmremGenerator.fromScene(roomEnv, 0.04);
-          roomEnv.dispose();
-          scene.environment = envRT.texture;
-          renderer.setRenderTarget(null);
-          gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);
-          if (prevViewport && prevViewport.length === 4) {
-            gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-          }
-          renderer.resetState();
-        } catch {
-          // Multi-directional studio lights remain active if PMREM is unavailable
-        }
+        // Defer PMREMGenerator initialization to the first render() frame so we never
+        // mutate MapLibre's WebGL2 state outside MapLibre's custom-layer render guard.
       } catch {
         renderer = null;
       }
@@ -621,12 +666,17 @@ export function createSculptureThreeLayer({
       }
     },
 
-    render(_gl, options) {
+    render(gl, options) {
       if (disposed || !renderer || !scene || !camera || !maplibregl?.MercatorCoordinate) return;
       if (entries.size === 0) return;
+      if (typeof gl?.isContextLost === 'function' && gl.isContextLost()) return;
 
       const rawMatrix = extractMapMatrixArray(options);
       if (!rawMatrix) return;
+
+      if (!envAttempted) {
+        ensureStudioEnvironment(gl);
+      }
 
       mapMatrix.fromArray(rawMatrix);
       renderer.resetState();
@@ -654,10 +704,17 @@ export function createSculptureThreeLayer({
         renderer.render(scene, camera);
         entry.container.visible = false;
       }
+
+      // Leave WebGL2 VAO unbound & reset Three's GL state cache so MapLibre's subsequent layers stay pristine
+      if (typeof gl?.bindVertexArray === 'function') {
+        gl.bindVertexArray(null);
+      }
+      renderer.resetState();
     },
 
     onRemove() {
       disposed = true;
+      envAttempted = false;
       for (const scId of Array.from(entries.keys())) {
         removeEntry(scId);
       }
