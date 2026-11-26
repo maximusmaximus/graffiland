@@ -22,6 +22,7 @@ import {
 } from '../userDisplay.mjs';
 import { notifyAfterSculpturePublished } from '../notificationService.mjs';
 import { reapAndArchiveExpiredLands } from '../landArchiveService.mjs';
+import { getLandViewCountsMap } from '../landViewService.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -85,6 +86,7 @@ export async function listLandsWithCurations(db) {
   const userRows = await db
     .all('SELECT id, username, avatar_image, user_number FROM users')
     .catch(() => []);
+  const viewCountsMap = await getLandViewCountsMap(db);
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
@@ -275,6 +277,9 @@ export async function listLandsWithCurations(db) {
           : true,
         frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements)
       },
+      pageViews: viewCountsMap.get(parcelId)?.pageViews || 0,
+      inPersonViews: viewCountsMap.get(parcelId)?.inPersonViews || 0,
+      createdAt: sc?.first_at || st?.created_at || lp?.updated_at || '',
       latestAt: sc?.latest_at || lp?.updated_at || st?.updated_at || ''
     });
   }
@@ -592,6 +597,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
   const volumeRows = await db.all('SELECT * FROM land_volumes').catch(() => []);
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
+  const viewCountsMap = await getLandViewCountsMap(db);
 
   const parcels = [];
   for (const pid of ownedParcelSet) {
@@ -720,6 +726,9 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       eligibleVisitors,
       sculptureCount: visibleCount,
       hiddenSculptureCount: onLand.length - visibleCount,
+      pageViews: viewCountsMap.get(pid)?.pageViews || 0,
+      inPersonViews: viewCountsMap.get(pid)?.inPersonViews || 0,
+      createdAt: onLand[onLand.length - 1]?.created_at || st?.created_at || lp?.updated_at || '',
       sculptures: onLand.map((r) =>
         serializeSculptureRow(r, {
           includeVoxels: true,

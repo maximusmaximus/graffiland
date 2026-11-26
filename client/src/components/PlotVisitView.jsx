@@ -36,6 +36,13 @@ function formatDistance(meters, unitSystem = 'metric') {
   return formatDistanceMeters(meters, unitSystem);
 }
 
+function formatCompactViewCount(value) {
+  const n = Math.max(0, Math.floor(Number(value) || 0));
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(n);
+}
+
 function formatApprovalExpiresIn(iso) {
   if (!iso) return '';
   const ts = Date.parse(String(iso));
@@ -67,13 +74,15 @@ function getApprovalActionEmoji(action = '') {
  * - When logged in, surfaces contextual owner/contributor management controls for the
  *   selected land or artwork right inside the expanded drawer.
  */
+const EMPTY_ARRAY = [];
+
 export default function PlotVisitView({
   variant = 'mobile', // 'mobile' | 'desktop'
   parcel,
-  sculptures = [],
-  allParcels = [],
+  sculptures = EMPTY_ARRAY,
+  allParcels = EMPTY_ARRAY,
   user = null,
-  ownedParcelIds = [],
+  ownedParcelIds = EMPTY_ARRAY,
   config = null,
   userLocation = null,
   loading = false,
@@ -132,6 +141,9 @@ export default function PlotVisitView({
   const [localParcel, setLocalParcel] = useState(parcel);
   const [localSculptures, setLocalSculptures] = useState(sculptures);
   const [fetchedNeighbors, setFetchedNeighbors] = useState([]);
+  const [liveViewCounts, setLiveViewCounts] = useState(null);
+  const recordedPageViewsRef = useRef(new Set());
+  const recordedInPersonViewsRef = useRef(new Set());
 
   // Inline land management states
   const [editingLand, setEditingLand] = useState(false);
@@ -1083,10 +1095,84 @@ export default function PlotVisitView({
 
   const isDesktop = variant === 'desktop';
 
+  // Record a deduplicated Land Page view on mount / parcel switch
+  useEffect(() => {
+    const pid = activeParcel?.parcelId;
+    if (!pid || loading) return undefined;
+    if (recordedPageViewsRef.current.has(pid)) return undefined;
+    recordedPageViewsRef.current.add(pid);
+    let cancelled = false;
+    api
+      .recordLandView(pid, { viewType: 'page' })
+      .then((res) => {
+        if (cancelled || !res?.ok) return;
+        setLiveViewCounts({
+          parcelId: pid,
+          pageViews: Math.max(0, Number(res.pageViews || 0)),
+          inPersonViews: Math.max(0, Number(res.inPersonViews || 0))
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeParcel?.parcelId, loading]);
+
+  // Also record an In-Person view when a mobile user opens this land page while physically standing at the property
+  useEffect(() => {
+    const pid = activeParcel?.parcelId;
+    if (isDesktop || !isNearProperty || !pid || loading) return undefined;
+    const uLat = Number(userLocation?.lat);
+    const uLng = Number(userLocation?.lng);
+    if (!Number.isFinite(uLat) || !Number.isFinite(uLng)) return undefined;
+    if (recordedInPersonViewsRef.current.has(pid)) return undefined;
+    recordedInPersonViewsRef.current.add(pid);
+    let cancelled = false;
+    api
+      .recordLandView(pid, { viewType: 'in_person', lat: uLat, lng: uLng })
+      .then((res) => {
+        if (cancelled || !res?.ok) return;
+        setLiveViewCounts({
+          parcelId: pid,
+          pageViews: Math.max(0, Number(res.pageViews || 0)),
+          inPersonViews: Math.max(0, Number(res.inPersonViews || 0))
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeParcel?.parcelId, isDesktop, isNearProperty, loading, userLocation?.lat, userLocation?.lng]);
+
+  const hasMatchingLiveViews = Boolean(
+    liveViewCounts && activeParcel?.parcelId && liveViewCounts.parcelId === activeParcel.parcelId
+  );
+  const pageViewsCount = hasMatchingLiveViews
+    ? liveViewCounts.pageViews
+    : Math.max(0, Number(activeParcel?.pageViews || 0));
+  const inPersonViewsCount = hasMatchingLiveViews
+    ? liveViewCounts.inPersonViews
+    : Math.max(0, Number(activeParcel?.inPersonViews || 0));
+  const landCreatedDate = formatShortDate(
+    activeParcel?.createdAt ||
+      visibleSculptures[0]?.createdAt ||
+      activeSculptures[0]?.createdAt ||
+      activeParcel?.latestAt ||
+      ''
+  );
+
   const renderLandInfoTip = () => (
     <span className="mobile-parcel-directions-info" data-testid="parcel-directions-info">
-      <InfoTip title="Land Info" mode="popover" align="right">
+      <InfoTip title="Land Details" mode="popover" align="left">
         <div className="plot-info-popover-content" data-testid="plot-info-popover-content">
+          <div className="plot-info-row mono" data-testid="plot-info-in-person-views">
+            <span>🚶 In-Person Views</span>
+            <strong>{inPersonViewsCount}</strong>
+          </div>
+          <div className="plot-info-row mono" data-testid="plot-info-page-views">
+            <span>👁️ Page Views</span>
+            <strong>{pageViewsCount}</strong>
+          </div>
           {hasCenter && (
             <div className="plot-info-row mono" data-testid="plot-info-coords">
               <span>📍 Location</span>
@@ -1107,6 +1193,24 @@ export default function PlotVisitView({
               {visibleSculptures.length} artwork{visibleSculptures.length === 1 ? '' : 's'}
             </strong>
           </div>
+          {Number(activeParcel?.humanContributorCount || 0) > 0 && (
+            <div className="plot-info-row mono">
+              <span>👥 Artists</span>
+              <strong>{Number(activeParcel.humanContributorCount)}</strong>
+            </div>
+          )}
+          {landExpiration.state !== 'permanent' && (
+            <div className="plot-info-row mono" data-testid="plot-info-expiration">
+              <span>{landExpiration.state === 'expired' ? '⏱️ Status' : '⏳ Timer'}</span>
+              <strong>{landExpiration.badgeText}</strong>
+            </div>
+          )}
+          {activeParcel?.parcelId && (
+            <div className="plot-info-row mono">
+              <span>🏷️ Parcel</span>
+              <strong>{activeParcel.parcelId}</strong>
+            </div>
+          )}
           <div className="plot-info-note">
             {isDesktop
               ? isFrozen
@@ -1137,20 +1241,40 @@ export default function PlotVisitView({
       data-plot-parcel-id={activeParcel?.parcelId || ''}
       data-selected-target={selectedTarget}
     >
-      {/* Top Bar: strictly Land Name, Status, Share, and Close Window */}
+      {/* Top Bar: Land Name, Status Tag, In-Person & Page Views Counter, Share, and Close */}
       <header className="mobile-parcel-header plot-visit-header" data-testid="plot-visit-header">
         <div className="plot-visit-header-main">
           <h1 className="mobile-parcel-title">
             {loading ? 'Loading Land…' : landDisplayName}
           </h1>
           {activeParcel && (
-            <span
-              className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}
-              data-testid="plot-status-badge"
-              style={{ fontSize: 10, flexShrink: 0 }}
-            >
-              {isFrozen ? '❄️ Frozen' : '✅ Open'}
-            </span>
+            <div className="plot-visit-title-tags">
+              <span
+                className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}
+                data-testid="plot-status-badge"
+                style={{ fontSize: 10, flexShrink: 0 }}
+              >
+                {isFrozen ? '❄️ Frozen' : '✅ Open'}
+              </span>
+              <span
+                className="plot-views-counter mono"
+                data-testid="plot-views-counter"
+                aria-label={`${inPersonViewsCount} in-person views, ${pageViewsCount} page views`}
+                title={`${inPersonViewsCount} in-person views · ${pageViewsCount} page views`}
+              >
+                <span className="plot-views-item is-irl" data-testid="plot-in-person-views">
+                  <XeroIcon emoji="🚶" size={11} />
+                  <strong>{formatCompactViewCount(inPersonViewsCount)}</strong>
+                  <span>IRL</span>
+                </span>
+                <span className="plot-views-dot" aria-hidden="true">·</span>
+                <span className="plot-views-item is-page" data-testid="plot-page-views">
+                  <XeroIcon emoji="👁️" size={11} />
+                  <strong>{formatCompactViewCount(pageViewsCount)}</strong>
+                  <span>views</span>
+                </span>
+              </span>
+            </div>
           )}
         </div>
 
@@ -1677,16 +1801,9 @@ export default function PlotVisitView({
                               </span>
                             )}
                           </div>
-                          <div className="plot-detail-meta-chips">
-                            <span className="mobile-sc-chip">
-                              <XeroIcon
-                                emoji={selectedArtwork.modelType === 'custom-3d' ? '📦' : '🧱'}
-                                size={10}
-                              />{' '}
-                              {formatSculptureAssetMeta(selectedArtwork)}
-                            </span>
+                          <div className="plot-author-meta-row" data-testid="plot-artwork-meta-row">
                             {(selectedArtwork.creatorUsername || selectedArtwork.creatorName) && (
-                              <span className="mobile-sc-chip">
+                              <span className="plot-author-static">
                                 <UserHandleBadge
                                   user={{
                                     id: selectedArtwork.creatorSub,
@@ -1709,21 +1826,47 @@ export default function PlotVisitView({
                                 />
                               </span>
                             )}
-                            {Number.isFinite(Number(selectedArtwork.polScore)) &&
-                              Number(selectedArtwork.polScore) > 0 && (
-                                <span className="mobile-sc-chip">
-                                  <XeroIcon emoji="🛡️" size={10} /> PoL{' '}
-                                  {Math.round(Number(selectedArtwork.polScore))}
-                                </span>
-                              )}
-                            {selectedArtwork.currentRev && (
-                              <span className="mobile-sc-chip">v{selectedArtwork.currentRev}</span>
-                            )}
                             {formatShortDate(selectedArtwork.createdAt) && (
-                              <span className="mobile-sc-chip">
-                                📅 {formatShortDate(selectedArtwork.createdAt)}
-                              </span>
+                              <>
+                                {(selectedArtwork.creatorUsername || selectedArtwork.creatorName) && (
+                                  <span className="plot-author-sep" aria-hidden="true">·</span>
+                                )}
+                                <span className="plot-author-date mono">
+                                  {formatShortDate(selectedArtwork.createdAt)}
+                                </span>
+                              </>
                             )}
+                            <span data-testid="plot-artwork-info-tip">
+                              <InfoTip title="Artwork Details" mode="popover" align="left">
+                                <div className="plot-info-popover-content">
+                                  <div className="plot-info-row mono">
+                                    <span>
+                                      {selectedArtwork.modelType === 'custom-3d' ? '📦 Model' : '🧱 Geometry'}
+                                    </span>
+                                    <strong>{formatSculptureAssetMeta(selectedArtwork)}</strong>
+                                  </div>
+                                  {Number.isFinite(Number(selectedArtwork.polScore)) &&
+                                    Number(selectedArtwork.polScore) > 0 && (
+                                      <div className="plot-info-row mono">
+                                        <span>🛡️ Proof of Location</span>
+                                        <strong>{Math.round(Number(selectedArtwork.polScore))}</strong>
+                                      </div>
+                                    )}
+                                  {selectedArtwork.currentRev && (
+                                    <div className="plot-info-row mono">
+                                      <span>🔖 Revision</span>
+                                      <strong>v{selectedArtwork.currentRev}</strong>
+                                    </div>
+                                  )}
+                                  {formatShortDate(selectedArtwork.createdAt) && (
+                                    <div className="plot-info-row mono">
+                                      <span>📅 Created</span>
+                                      <strong>{formatShortDate(selectedArtwork.createdAt)}</strong>
+                                    </div>
+                                  )}
+                                </div>
+                              </InfoTip>
+                            </span>
                           </div>
                         </div>
                         <button
@@ -2089,11 +2232,11 @@ export default function PlotVisitView({
                         <p className="mobile-parcel-desc">{activeParcel.description}</p>
                       )}
 
-                      <div className="plot-detail-meta-chips">
+                      <div className="plot-author-meta-row" data-testid="plot-author-meta-row">
                         {onOpenProfile && stewardHandle ? (
                           <button
                             type="button"
-                            className="mobile-sc-chip is-clickable"
+                            className="plot-author-link-btn"
                             onClick={() => onOpenProfile(stewardHandle)}
                           >
                             <UserHandleBadge
@@ -2111,7 +2254,7 @@ export default function PlotVisitView({
                             />
                           </button>
                         ) : (
-                          <span className="mobile-sc-chip">
+                          <span className="plot-author-static">
                             <UserHandleBadge
                               user={{
                                 id: activeParcel.ownerSub || activeParcel.stewardSub,
@@ -2127,16 +2270,20 @@ export default function PlotVisitView({
                             />
                           </span>
                         )}
-                        {landExpiration.state !== 'permanent' && (
-                          <span className="mobile-sc-chip">
-                            {landExpiration.state === 'expired' ? '⏱️' : '⏳'}{' '}
-                            {landExpiration.badgeText}
-                          </span>
+                        {landCreatedDate && (
+                          <>
+                            <span className="plot-author-sep" aria-hidden="true">·</span>
+                            <span className="plot-author-date mono" data-testid="plot-land-date">
+                              {landCreatedDate}
+                            </span>
+                          </>
                         )}
+                        {renderLandInfoTip()}
                         {!user && onRequestLogin && (
                           <button
                             type="button"
                             className="btn btn-xs btn-outline"
+                            style={{ marginLeft: 'auto' }}
                             data-testid="plot-signin-btn"
                             onClick={onRequestLogin}
                             title="Sign in to manage your land or artworks"
@@ -2154,7 +2301,6 @@ export default function PlotVisitView({
                               <span className="badge teal" data-testid="parcel-proximity-near">
                                 📍 You are at this property ({formatDistance(distanceMeters, unitSystem)} away)
                               </span>
-                              {renderLandInfoTip()}
                             </div>
                           )}
 
@@ -2213,7 +2359,6 @@ export default function PlotVisitView({
                                     <XeroIcon emoji="🧭" size={14} /> Navigate
                                   </a>
                                 )}
-                                {renderLandInfoTip()}
                               </div>
                             )}
                           </div>
@@ -2248,7 +2393,6 @@ export default function PlotVisitView({
                           >
                             🔗 Copy Share Link
                           </button>
-                          {renderLandInfoTip()}
                         </div>
                       )}
 

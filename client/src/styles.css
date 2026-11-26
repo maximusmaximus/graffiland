@@ -4172,9 +4172,99 @@ select {
 .plot-visit-header-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 5px 8px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.plot-visit-title-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.plot-views-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: #cbd5e1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.plot-views-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.plot-views-item strong {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.plot-views-item.is-irl strong {
+  color: #7efce8;
+}
+
+.plot-views-dot {
+  opacity: 0.45;
+}
+
+.plot-author-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  min-height: 26px;
+}
+
+.plot-author-link-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.plot-author-link-btn:hover {
+  color: #7efce8;
+}
+
+.plot-author-static {
+  display: inline-flex;
+  align-items: center;
+  color: #e2e8f0;
+}
+
+.plot-author-sep {
+  color: rgba(148, 163, 184, 0.55);
+  font-size: 12px;
+}
+
+.plot-author-date {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.plot-author-meta-row .mobile-parcel-directions-info {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
 }
 
 .plot-visit-header-actions {

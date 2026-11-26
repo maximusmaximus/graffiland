@@ -459,14 +459,13 @@ export default function ARLandInspectorPanel({
                 <span className="ar-land-info-val">{resolvedDimsLabel}</span>
               </div>
             )}
-            {land.centerLat !== null && land.centerLng !== null && (
-              <div className="ar-land-info-cell is-right">
-                <span className="ar-land-info-key">GPS</span>
-                <span className="ar-land-info-val mono">
-                  {Number(land.centerLat).toFixed(4)}, {Number(land.centerLng).toFixed(4)}
-                </span>
-              </div>
-            )}
+            <div className="ar-land-info-cell is-right">
+              <span className="ar-land-info-key">Views</span>
+              <span className="ar-land-info-val mono" data-testid="ar-land-views-readout">
+                🚶 {Math.max(0, Number(land.inPersonViews || 0))} IRL · 👁️{' '}
+                {Math.max(0, Number(land.pageViews || 0))}
+              </span>
+            </div>
           </div>
         </div>
       </div>

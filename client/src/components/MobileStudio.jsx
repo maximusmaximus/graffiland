@@ -1229,6 +1229,41 @@ export default function MobileStudio({
     }
   };
 
+  const arRecordedInPersonViewsRef = useRef(new Set());
+  const activeArLandForViews = ar.activeArLand;
+  const setArNearbyParcelsForViews = ar.setNearbyParcels;
+  const setArMapParcelsForViews = ar.setMapParcels;
+  useEffect(() => {
+    const pid = activeArLandForViews?.parcelId;
+    if (!pid || activeArLandForViews?.outOfArRange) return;
+    const uLat = Number(pol.location?.lat);
+    const uLng = Number(pol.location?.lng);
+    if (!Number.isFinite(uLat) || !Number.isFinite(uLng)) return;
+    if (arRecordedInPersonViewsRef.current.has(pid)) return;
+    arRecordedInPersonViewsRef.current.add(pid);
+    api
+      .recordLandView(pid, { viewType: 'in_person', lat: uLat, lng: uLng })
+      .then((res) => {
+        if (!res?.ok) return;
+        const patch = (list) =>
+          (list || []).map((p) =>
+            p?.parcelId === pid
+              ? { ...p, pageViews: res.pageViews, inPersonViews: res.inPersonViews }
+              : p
+          );
+        setArNearbyParcelsForViews?.(patch);
+        setArMapParcelsForViews?.(patch);
+      })
+      .catch(() => {});
+  }, [
+    activeArLandForViews?.outOfArRange,
+    activeArLandForViews?.parcelId,
+    pol.location?.lat,
+    pol.location?.lng,
+    setArMapParcelsForViews,
+    setArNearbyParcelsForViews
+  ]);
+
   const handleToggleQuickSculpt = useCallback(() => {
     setQuickSculpt((prev) => {
       const next = !prev;

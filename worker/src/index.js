@@ -142,6 +142,7 @@ import {
   updateLandSettings,
   upsertAnchorAndRevision
 } from '../../shared/mcpService.mjs';
+import { buildViewerDedupKey, recordLandView } from '../../shared/landViewService.mjs';
 import {
   b64ToModelBytes,
   CUSTOM_MODEL_MAX_BYTES,
@@ -2348,6 +2349,34 @@ export default {
       }
     }
 
+    const landViewMatch = pathname.match(/^\/api\/lands\/([^/]+)\/view$/);
+    if (landViewMatch && request.method === 'POST') {
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const body = await request.json().catch(() => ({}));
+        const viewerKey = buildViewerDedupKey({
+          userId: caller?.id || '',
+          sessionId: String(body.sessionId || ''),
+          ip: String(request.headers.get('cf-connecting-ip') || ''),
+          userAgent: String(request.headers.get('user-agent') || '')
+        });
+        const out = await recordLandView(d1Adapter, {
+          parcelId: decodeURIComponent(landViewMatch[1]),
+          viewType: body.viewType === 'in_person' ? 'in_person' : 'page',
+          viewerKey,
+          lat: body.lat,
+          lng: body.lng
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not record land view' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
     const landSettingsMatch = pathname.match(/^\/api\/lands\/([^/]+)\/settings$/);
     if (landSettingsMatch && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
@@ -3102,6 +3131,13 @@ export default {
             )
             .run();
         }
+
+        await recordLandView(d1Adapter, {
+          parcelId: locationBundle.parcelId,
+          viewType: 'in_person',
+          viewerKey: buildViewerDedupKey({ userId: user.id }),
+          verifiedInPerson: true
+        }).catch(() => null);
 
         if (fittedVol) {
           await env.DB.prepare(

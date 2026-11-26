@@ -174,6 +174,7 @@ import {
   validate3dModelUrl,
   validateAnchorOffset
 } from '../shared/model3d.mjs';
+import { buildViewerDedupKey, recordLandView } from '../shared/landViewService.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -1619,6 +1620,27 @@ export function createAppServer(serverOptions = {}) {
   );
 
   app.post(
+    '/api/lands/:parcelId/view',
+    handleChatRoute((req) => {
+      const caller = getAuthUserFromRequest(req);
+      const body = req.body || {};
+      const viewerKey = buildViewerDedupKey({
+        userId: caller?.id || '',
+        sessionId: String(body.sessionId || ''),
+        ip: String(req.headers['x-forwarded-for'] || req.ip || ''),
+        userAgent: String(req.headers['user-agent'] || '')
+      });
+      return recordLandView(chatDb, {
+        parcelId: req.params.parcelId,
+        viewType: body.viewType === 'in_person' ? 'in_person' : 'page',
+        viewerKey,
+        lat: body.lat,
+        lng: body.lng
+      });
+    })
+  );
+
+  app.post(
     '/api/lands/:parcelId/settings',
     requireAuth,
     handleChatRoute((req) =>
@@ -2164,6 +2186,13 @@ export function createAppServer(serverOptions = {}) {
           now
         );
       }
+
+      await recordLandView(chatDb, {
+        parcelId: locationBundle.parcelId,
+        viewType: 'in_person',
+        viewerKey: buildViewerDedupKey({ userId: req.user.id }),
+        verifiedInPerson: true
+      }).catch(() => null);
 
       if (fittedVol) {
         db.prepare(`

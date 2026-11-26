@@ -3932,10 +3932,11 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         })
       );
 
-      // Top bar contains ONLY land name, status badge, share button, and close button (NO coords, NO dimensions, NO Sign In)
+      // Top bar contains land name, status badge, views counter (non-button), share button, and close button
       const header = plotView.getByTestId('plot-visit-header');
       assert.ok(header.textContent.includes('Squiggle Bro Land'));
       assert.ok(header.contains(plotView.getByTestId('plot-status-badge')));
+      assert.ok(header.contains(plotView.getByTestId('plot-views-counter')));
       assert.ok(header.contains(plotView.getByTestId('plot-share-btn')));
       assert.ok(header.contains(plotView.getByTestId('plot-close-btn')));
       assert.equal(header.querySelectorAll('button').length, 2, 'Top bar should only have Share and Close buttons');
@@ -3953,7 +3954,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       // Refresh GPS button is removed
       assert.equal(plotView.queryByRole('button', { name: /Refresh GPS/i }), null);
 
-      // Directions row contains distance tag on the LEFT of Navigate button + Info icon on right
+      // Directions row contains distance tag on the LEFT of Navigate button
       const dirRow = plotView.getByTestId('parcel-directions-row');
       const navLink = dirRow.querySelector('a');
       assert.ok(navLink?.textContent.includes('Navigate'));
@@ -3966,8 +3967,10 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       );
       assert.ok(distBadge.textContent.includes('away'));
 
+      // Extra metadata "i" icon lives cleanly beside the author name & date
+      const authorMetaRow = plotView.getByTestId('plot-author-meta-row');
       const infoWrap = plotView.getByTestId('parcel-directions-info');
-      assert.ok(dirRow.contains(infoWrap));
+      assert.ok(authorMetaRow.contains(infoWrap));
       // Location, dimensions & unlock hint are NOT shown raw until the "i" icon is clicked
       assert.equal(plotView.queryByText(/Walk near this property to unlock View in AR/i), null);
       assert.equal(plotView.queryByTestId('plot-info-coords'), null);
@@ -3977,6 +3980,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       RTL.fireEvent.click(infoBtn);
       assert.ok(plotView.getByTestId('plot-info-coords').textContent.includes('39.7302, -121.8407'));
       assert.ok(plotView.getByTestId('plot-info-dimensions').textContent.includes('ft'));
+      assert.ok(plotView.getByTestId('plot-info-in-person-views'));
+      assert.ok(plotView.getByTestId('plot-info-page-views'));
       assert.ok(plotView.getByText(/Walk near this property to unlock View in AR/i));
       cleanup();
 
