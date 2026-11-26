@@ -2581,4 +2581,215 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(errors, []);
     await ctx.close();
   });
+
+  test('Mobile Land Chat opens full-screen and stays keyboard-responsive (composer, live typing, feed & upward emoji picker never blocked)', async () => {
+    const ownerAuth = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devProfile: {
+          email: 'mobile-chat-ux@graffiland.local',
+          name: 'Mobile Chat UX',
+          username: 'bigdog_chat'
+        }
+      })
+    }).then((r) => r.json());
+    assert.ok(ownerAuth?.token);
+
+    await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`
+      },
+      body: JSON.stringify({ username: 'bigdog_chat', bio: 'Mobile chat UX verifier' })
+    });
+
+    const chatLat = 37.7755;
+    const chatLng = -122.4182;
+    const claimRes = await fetch(`${baseUrl}/api/lands/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ownerAuth.token}`
+      },
+      body: JSON.stringify({
+        lat: chatLat,
+        lng: chatLng,
+        customName: 'I SCREAMED Land',
+        volume: {
+          centerLat: chatLat,
+          centerLng: chatLng,
+          widthMeters: 16,
+          depthMeters: 16,
+          heightMeters: 12,
+          rotationDeg: 0
+        }
+      })
+    }).then((r) => r.json());
+    assert.ok(claimRes?.parcelId);
+
+    const mobCtx = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      geolocation: { latitude: chatLat, longitude: chatLng, accuracy: 4 },
+      permissions: ['geolocation', 'camera'],
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36'
+    });
+    await mobCtx.addInitScript((token) => {
+      globalThis.localStorage.setItem('graffiland_jwt', token);
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+      globalThis.localStorage.setItem('graffiland_tutorial_seen_v1', '1');
+      globalThis.localStorage.setItem('graffiland_spray_brush_guide_seen_v1', '1');
+    }, ownerAuth.token);
+
+    const page = await mobCtx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.goto(`${baseUrl}/?studio=1`, { waitUntil: 'networkidle' });
+
+    // Dismiss any first-run modal if present
+    for (let i = 0; i < 3; i += 1) {
+      const backdrop = page.locator('.modal-backdrop').first();
+      if (!(await backdrop.isVisible().catch(() => false))) break;
+      const closeBtn = backdrop
+        .locator(
+          '[data-testid="first-visit-quick-start-btn"], [data-testid="first-visit-close-btn"], button:has-text("Skip"), button[aria-label*="Close"]'
+        )
+        .first();
+      if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click();
+      } else {
+        await page.keyboard.press('Escape');
+      }
+      await page.waitForTimeout(250);
+    }
+
+    // Open nearby land inspector -> Land Chat
+    await page.waitForSelector('[data-testid="ar-nearby-land-pill"]', { timeout: 15000 });
+    await page.getByTestId('ar-nearby-land-pill').click();
+    await page.waitForSelector('[data-testid="ar-land-chat-btn"]', { timeout: 10000 });
+    await page.getByTestId('ar-land-chat-btn').click();
+
+    await page.waitForSelector('[data-testid="sculpture-chat-backdrop"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="chat-composer-input"]', { timeout: 15000 });
+
+    // 1) Verify full-screen edge-to-edge coverage on mobile (390x844)
+    const fullScreenMetrics = await page.evaluate(() => {
+      const bd = globalThis.document.querySelector('[data-testid="sculpture-chat-backdrop"]');
+      const card = globalThis.document.querySelector('[data-testid="sculpture-chat-drawer"]');
+      const input = globalThis.document.querySelector('[data-testid="chat-composer-input"]');
+      const composer = globalThis.document.querySelector('[data-testid="chat-composer-form"]');
+      return {
+        fullscreenAttr: bd?.getAttribute('data-fullscreen'),
+        keyboardAttr: bd?.getAttribute('data-keyboard-open'),
+        bdRect: bd?.getBoundingClientRect().toJSON(),
+        cardRect: card?.getBoundingClientRect().toJSON(),
+        composerRect: composer?.getBoundingClientRect().toJSON(),
+        inputFontSizePx: parseFloat(globalThis.getComputedStyle(input).fontSize || '0'),
+        scrollWidth: globalThis.document.documentElement.scrollWidth
+      };
+    });
+    assert.equal(fullScreenMetrics.fullscreenAttr, 'true');
+    assert.equal(fullScreenMetrics.keyboardAttr, 'false');
+    assert.equal(Math.round(fullScreenMetrics.cardRect.width), 390);
+    assert.equal(Math.round(fullScreenMetrics.cardRect.height), 844);
+    assert.equal(Math.round(fullScreenMetrics.cardRect.top), 0);
+    assert.ok(fullScreenMetrics.composerRect.bottom <= 845);
+    assert.ok(
+      fullScreenMetrics.inputFontSizePx >= 16,
+      `Mobile chat input font-size must be >=16px to prevent iOS zoom (got ${fullScreenMetrics.inputFontSizePx}px)`
+    );
+    assert.ok(fullScreenMetrics.scrollWidth <= 390);
+
+    // 2) Focus input & simulate virtual keyboard shrinking visible viewport to 390x380
+    const inputLoc = page.getByTestId('chat-composer-input');
+    await inputLoc.click();
+    await page.setViewportSize({ width: 390, height: 380 });
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="sculpture-chat-backdrop"]')
+          ?.getAttribute('data-keyboard-open') === 'true',
+      null,
+      { timeout: 5000 }
+    );
+
+    // Type message with emoji shortcode query to also verify upward emoji picker stays above keyboard
+    await inputLoc.type('Seeing this clearly! :fir', { delay: 10 });
+    await page.waitForSelector('.emoji-picker-popover', { timeout: 5000 });
+
+    const kbMetrics = await page.evaluate(() => {
+      const bd = globalThis.document.querySelector('[data-testid="sculpture-chat-backdrop"]');
+      const header = globalThis.document.querySelector('.chat-board-header');
+      const feed = globalThis.document.querySelector('[data-testid="chat-board-feed"]');
+      const composer = globalThis.document.querySelector('[data-testid="chat-composer-form"]');
+      const input = globalThis.document.querySelector('[data-testid="chat-composer-input"]');
+      const sendBtn = globalThis.document.querySelector('[data-testid="chat-composer-send"]');
+      const emojiPop = globalThis.document.querySelector('.emoji-picker-popover');
+      return {
+        vh: globalThis.innerHeight,
+        vw: globalThis.innerWidth,
+        scrollWidth: globalThis.document.documentElement.scrollWidth,
+        bdRect: bd?.getBoundingClientRect().toJSON(),
+        headerRect: header?.getBoundingClientRect().toJSON(),
+        feedRect: feed?.getBoundingClientRect().toJSON(),
+        composerRect: composer?.getBoundingClientRect().toJSON(),
+        inputRect: input?.getBoundingClientRect().toJSON(),
+        sendRect: sendBtn?.getBoundingClientRect().toJSON(),
+        emojiRect: emojiPop?.getBoundingClientRect().toJSON()
+      };
+    });
+
+    assert.ok(kbMetrics.bdRect.height <= 381, `Backdrop must fit above keyboard (${kbMetrics.bdRect.height}px)`);
+    assert.ok(
+      kbMetrics.inputRect.top >= kbMetrics.headerRect.bottom && kbMetrics.inputRect.bottom <= 381,
+      `Typing input must be fully visible above keyboard (top=${kbMetrics.inputRect.top}, bottom=${kbMetrics.inputRect.bottom})`
+    );
+    assert.ok(
+      kbMetrics.sendRect.right <= 391 && kbMetrics.sendRect.bottom <= 381,
+      `Send button must stay fully on-screen above keyboard (right=${kbMetrics.sendRect.right}, bottom=${kbMetrics.sendRect.bottom})`
+    );
+    assert.ok(
+      kbMetrics.feedRect.height >= 40 && kbMetrics.feedRect.bottom <= kbMetrics.composerRect.top + 2,
+      `Chat message feed must remain visible above composer (feedHeight=${kbMetrics.feedRect.height})`
+    );
+    assert.ok(
+      kbMetrics.emojiRect && kbMetrics.emojiRect.bottom <= kbMetrics.inputRect.top + 4 && kbMetrics.emojiRect.top >= 0,
+      `Emoji suggestions must open UPWARD above composer (popover bottom=${kbMetrics.emojiRect?.bottom}, input top=${kbMetrics.inputRect.top})`
+    );
+    assert.ok(kbMetrics.scrollWidth <= 390);
+
+    // Pick emoji suggestion & send message while keyboard is still open -> verify bubble renders cleanly!
+    await page.locator('.emoji-picker-option').first().click();
+    await page.getByTestId('chat-composer-send').click();
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="chat-board-feed"]')
+          ?.textContent?.includes('Seeing this clearly!'),
+      null,
+      { timeout: 10000 }
+    );
+
+    // 3) Dismiss virtual keyboard -> full 844px height restores cleanly
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="sculpture-chat-backdrop"]')
+          ?.getAttribute('data-keyboard-open') === 'false',
+      null,
+      { timeout: 5000 }
+    );
+    const restoredH = await page.evaluate(
+      () => Math.round(globalThis.document.querySelector('[data-testid="sculpture-chat-drawer"]').getBoundingClientRect().height)
+    );
+    assert.equal(restoredH, 844);
+
+    assert.deepEqual(errors, []);
+    await mobCtx.close();
+  });
 });
