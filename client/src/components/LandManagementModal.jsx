@@ -17,6 +17,7 @@ import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -424,9 +425,12 @@ export default function LandManagementModal({
               3D artworks, and configure unlock security.
             </InfoTip>
           </h2>
-          <button type="button" className="btn" onClick={onClose} aria-label="Close land management">
-            <XeroIcon emoji="✕" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="land-mgmt-notif-bell-btn" />
+            <button type="button" className="btn" onClick={onClose} aria-label="Close land management">
+              <XeroIcon emoji="✕" size={15} />
+            </button>
+          </div>
         </div>
 
         {loading ? (

@@ -35,6 +35,7 @@ import {
   reapAndArchiveExpiredLands
 } from '../../shared/landArchiveService.mjs';
 import {
+  clearUserNotifications,
   deleteNotification,
   listUserNotifications,
   markNotificationsRead,
@@ -1970,6 +1971,22 @@ export default {
       } catch (err) {
         return jsonResponse(
           { error: err.message || 'Could not update notification preferences' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    if (pathname === '/api/notifications' && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const scope = url.searchParams.get('scope') === 'read' ? 'read' : 'all';
+        const out = await clearUserNotifications(d1Adapter, user.id, { scope });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Could not clear notifications' },
           err?.statusCode || 400,
           request
         );

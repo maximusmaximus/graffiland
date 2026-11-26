@@ -1,4 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import { createPortal } from 'react-dom';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import { api } from '../utils/api';
 import { isPendingSculptureAction } from '../utils/pendingApprovalPreview.js';
@@ -47,6 +56,19 @@ const DEFAULT_PREFS = {
   browser_push_enabled: false
 };
 
+const NOTIF_CONTEXT_KEY = Symbol.for('sprayland.NotificationContext.v1');
+const NotificationContext =
+  (typeof globalThis !== 'undefined' && globalThis[NOTIF_CONTEXT_KEY]) ||
+  (() => {
+    const ctx = createContext(null);
+    if (typeof globalThis !== 'undefined') globalThis[NOTIF_CONTEXT_KEY] = ctx;
+    return ctx;
+  })();
+
+export function useNotificationCenter() {
+  return useContext(NotificationContext);
+}
+
 function formatRelativeTime(iso) {
   if (!iso) return '';
   const ts = Date.parse(iso);
@@ -70,18 +92,43 @@ function iconForCategory(category) {
   return found ? found.icon : '🔔';
 }
 
-export default function NotificationCenter({
+function computePortalAnchorStyle(anchorEl, isMobile) {
+  if (isMobile || typeof window === 'undefined' || !anchorEl?.getBoundingClientRect) {
+    return null;
+  }
+  try {
+    const rect = anchorEl.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 800;
+    const popW = Math.min(410, vw - 24);
+    const top = Math.max(10, Math.min(rect.bottom + 8, Math.max(10, vh - 320)));
+    const desiredRight = Math.max(12, vw - rect.right);
+    const maxRight = Math.max(12, vw - popW - 12);
+    const right = Math.min(desiredRight, maxRight);
+    return {
+      top: `${Math.round(top)}px`,
+      right: `${Math.round(right)}px`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function useNotificationEngine({
   user = null,
   variant = 'desktop',
   refreshSignal = 0,
   pendingApprovals = null,
   onApprovalResolved = null,
   onAction = null,
-  onOpenSettingsExternal = null
+  onOpenSettingsExternal = null,
+  usePortal = true
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('inbox');
   const [notifications, setNotifications] = useState([]);
+  const [allNotifications, setAllNotifications] = useState([]);
   const [fetchedPending, setFetchedPending] = useState([]);
   const [resolvedRequestIds, setResolvedRequestIds] = useState(() => new Set());
   const [approvalBusyId, setApprovalBusyId] = useState('');
@@ -91,10 +138,12 @@ export default function NotificationCenter({
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
   const [mintStatus, setMintStatus] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
   const [savingPrefKey, setSavingPrefKey] = useState('');
   const [browserPerm, setBrowserPerm] = useState(getBrowserNotificationPermission);
   const [pushFeedback, setPushFeedback] = useState('');
   const [settingsSavedNotice, setSettingsSavedNotice] = useState('');
+  const [anchorStyle, setAnchorStyle] = useState(null);
   const settingsNoticeTimerRef = useRef(null);
 
   useEffect(() => {
@@ -114,12 +163,15 @@ export default function NotificationCenter({
   }, []);
 
   const containerRef = useRef(null);
+  const popoverRef = useRef(null);
   const seenIdsRef = useRef(new Set());
   const viewedWhileOpenIdsRef = useRef(new Set());
   const openRef = useRef(false);
   const initializedRef = useRef(false);
   const pendingApprovalsRef = useRef(pendingApprovals);
   pendingApprovalsRef.current = pendingApprovals;
+
+  const isMobile = variant === 'mobile';
 
   const livePendingList = useMemo(() => {
     const source = Array.isArray(pendingApprovals) ? pendingApprovals : fetchedPending;
@@ -150,6 +202,9 @@ export default function NotificationCenter({
           return !dismissedIds.has(n.id);
         })
       );
+      setAllNotifications((prev) =>
+        prev.map((n) => (dismissedIds.has(n.id) ? { ...n, read: true } : n))
+      );
       setUnreadCount(0);
     }
   }, [pendingById]);
@@ -172,6 +227,7 @@ export default function NotificationCenter({
     async ({ silent = false } = {}) => {
       if (!user) {
         setNotifications([]);
+        setAllNotifications([]);
         setFetchedPending([]);
         setResolvedRequestIds(new Set());
         setUnreadCount(0);
@@ -212,9 +268,16 @@ export default function NotificationCenter({
             .filter((r) => r && r.id && r.status === 'pending')
             .map((r) => r.id)
         );
-        // Seen/read notifications are automatically dismissed and stay hidden; keep items seen
-        // during the current open session visible, and ONLY show pending-approval alerts while still pending.
-        const visibleList = list.filter((n) => {
+        // Keep history clean: drop stale approval prompts whose request is no longer pending
+        const filteredHistory = list.filter((n) => {
+          if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
+            return activePendingIds.has(n.meta.requestId);
+          }
+          return true;
+        });
+        // Seen/read notifications are automatically dismissed from Inbox and stay in History;
+        // keep items seen during the current open session visible, and ONLY show pending-approval alerts while still pending.
+        const visibleList = filteredHistory.filter((n) => {
           if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
             return activePendingIds.has(n.meta.requestId);
           }
@@ -223,6 +286,7 @@ export default function NotificationCenter({
         const unseenCount = visibleList.filter(
           (n) => !n.read && !viewedWhileOpenIdsRef.current.has(n.id)
         ).length;
+        setAllNotifications(filteredHistory);
         setNotifications(visibleList);
         setUnreadCount(openRef.current ? 0 : unseenCount);
         setPreferences(prefs);
@@ -258,6 +322,7 @@ export default function NotificationCenter({
     if (!userId) {
       setOpen(false);
       setNotifications([]);
+      setAllNotifications([]);
       setUnreadCount(0);
       setMintStatus(null);
       return;
@@ -276,7 +341,7 @@ export default function NotificationCenter({
     }
   }, [user, refreshSignal]);
 
-  // Automatically mark displayed notifications as seen/read the moment the user views the inbox
+  // Automatically mark displayed inbox notifications as seen/read the moment the user views the inbox
   useEffect(() => {
     if (!open || activeTab !== 'inbox' || !user) return;
     const newlyViewedIds = notifications
@@ -293,34 +358,51 @@ export default function NotificationCenter({
   useEffect(() => {
     if (!open) return undefined;
     const onDocDown = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
+      if (popoverRef.current && popoverRef.current.contains(e.target)) return;
+      if (containerRef.current && containerRef.current.contains(e.target)) return;
+      if (e.target?.closest?.('[data-notif-trigger="1"]')) return;
+      closePopover();
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         closePopover();
       }
     };
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') closePopover();
-    };
     document.addEventListener('pointerdown', onDocDown);
-    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('pointerdown', onDocDown);
-      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
   }, [open, closePopover]);
 
-  if (!user) return null;
+  const openNotifications = useCallback(
+    (preferredTab = '', anchorEl = null) => {
+      if (preferredTab) setActiveTab(preferredTab);
+      if (usePortal) {
+        setAnchorStyle(computePortalAnchorStyle(anchorEl, isMobile));
+      }
+      openRef.current = true;
+      setOpen(true);
+      setBrowserPerm(getBrowserNotificationPermission());
+      loadNotifications({ silent: true });
+      if (onOpenSettingsExternal) onOpenSettingsExternal();
+    },
+    [usePortal, isMobile, loadNotifications, onOpenSettingsExternal]
+  );
 
-  const handleToggleOpen = () => {
-    if (open) {
-      closePopover();
-      return;
-    }
-    openRef.current = true;
-    setOpen(true);
-    setBrowserPerm(getBrowserNotificationPermission());
-    loadNotifications({ silent: true });
-    if (onOpenSettingsExternal) onOpenSettingsExternal();
-  };
+  const toggleNotifications = useCallback(
+    (preferredTab = '', anchorEl = null) => {
+      if (openRef.current && (!preferredTab || preferredTab === activeTab)) {
+        closePopover();
+        return;
+      }
+      openNotifications(preferredTab, anchorEl);
+    },
+    [activeTab, closePopover, openNotifications]
+  );
 
   const handleNotificationAction = async (item, overrideAction = null) => {
     const effective = overrideAction ? { ...item, ...overrideAction } : item;
@@ -390,7 +472,7 @@ export default function NotificationCenter({
 
       setResolvedRequestIds((prev) => new Set([...prev, requestId]));
       setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
-      setNotifications((prev) => {
+      const updateList = (prev) => {
         const filtered = prev.filter(
           (n) =>
             n.id !== item?.id &&
@@ -398,7 +480,9 @@ export default function NotificationCenter({
             (!executedNotif || n.id !== executedNotif.id)
         );
         return executedNotif ? [executedNotif, ...filtered] : filtered;
-      });
+      };
+      setNotifications(updateList);
+      setAllNotifications(updateList);
       if (item?.id && !item.isSyntheticPending) {
         api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
       }
@@ -482,9 +566,10 @@ export default function NotificationCenter({
       await api.rejectSignatureRequest(requestId);
       setResolvedRequestIds((prev) => new Set([...prev, requestId]));
       setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
-      setNotifications((prev) =>
-        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId)
-      );
+      const stripRejected = (prev) =>
+        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId);
+      setNotifications(stripRejected);
+      setAllNotifications(stripRejected);
       if (item?.id && !item.isSyntheticPending) {
         api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
       }
@@ -520,8 +605,29 @@ export default function NotificationCenter({
     e.stopPropagation();
     const target = notifications.find((n) => n.id === id);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setAllNotifications((prev) => prev.filter((n) => n.id !== id));
     if (target && !target.read) setUnreadCount((c) => Math.max(0, c - 1));
     api.deleteNotification(id).catch(() => {});
+  };
+
+  const handleClearAllHistory = async (e) => {
+    e?.stopPropagation?.();
+    if (clearingAll || allNotifications.length === 0) return;
+    setClearingAll(true);
+    try {
+      if (typeof api.clearNotifications === 'function') {
+        await api.clearNotifications('all');
+      }
+      setNotifications([]);
+      setAllNotifications([]);
+      setUnreadCount(0);
+      viewedWhileOpenIdsRef.current.clear();
+      notifySettingsSaved('Cleared notification history.');
+    } catch {
+      notifySettingsSaved('Could not clear notification history.', { tone: 'error' });
+    } finally {
+      setClearingAll(false);
+    }
   };
 
   const handleTogglePref = async (key) => {
@@ -597,8 +703,6 @@ export default function NotificationCenter({
     }
   };
 
-  const isMobile = variant === 'mobile';
-
   // Combine persisted notifications with any live pending approvals whose notification was already read/dismissed
   const existingReqIdsInNotifs = new Set(
     notifications
@@ -639,526 +743,769 @@ export default function NotificationCenter({
     const reqId = item.actionType === 'open_land_approval' ? item.meta?.requestId : '';
     return !(reqId && resolvedRequestIds.has(reqId));
   });
+
+  const historyDisplayNotifications = allNotifications.filter((item) => {
+    const reqId = item.actionType === 'open_land_approval' ? item.meta?.requestId : '';
+    return !(reqId && resolvedRequestIds.has(reqId));
+  });
+
   const badgeCount = open ? 0 : unreadCount + syntheticPendingNotifs.length;
+
+  const renderNotificationList = (items) => (
+    <div className="notif-list">
+      {items.map((item) => {
+        const artHref =
+          item.meta?.sculptureUrl ||
+          (item.sculptureId ? `?sculpture=${encodeURIComponent(item.sculptureId)}` : '');
+        const parcelHref =
+          item.meta?.parcelUrl ||
+          (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
+        const isApprovalLink = item.actionType === 'open_land_approval';
+        const requestId = isApprovalLink ? String(item.meta?.requestId || '') : '';
+        const liveReq = requestId ? pendingById.get(requestId) || null : null;
+        const effectiveReq =
+          liveReq ||
+          (requestId
+            ? {
+                id: requestId,
+                parcelId: item.parcelId || '',
+                action: item.meta?.action || '',
+                summaryTitle: String(item.title || '').replace(/^✍️\s*Approval needed:\s*/i, '')
+              }
+            : null);
+        const hasSculpturePreview = Boolean(
+          isApprovalLink &&
+            (item.meta?.hasSculpturePreview ||
+              isPendingSculptureAction(effectiveReq?.action || ''))
+        );
+        const isBusyApproval = Boolean(requestId && approvalBusyId === requestId);
+        const itemApprovalErr = requestId ? approvalErrors?.[requestId] || null : null;
+        const canAutoFit =
+          itemApprovalErr?.code === 'exceeds_land_bounds' &&
+          Number(itemApprovalErr?.maxSafeScale) >= 0.001;
+        const isRepairAlert = Boolean(item.meta?.needsRepair);
+        const isLandLink =
+          !isApprovalLink && item.actionType === 'open_land' && Boolean(parcelHref);
+        const isArtLink =
+          !isApprovalLink &&
+          !isLandLink &&
+          Boolean(artHref) &&
+          (item.actionType === 'open_sculpture' || Boolean(item.sculptureId));
+        return (
+          <div
+            key={item.id}
+            className={`notif-item severity-${item.severity || 'info'} ${
+              item.read ? 'is-read' : 'is-unread'
+            }`}
+            data-request-id={requestId || undefined}
+            onClick={() => handleNotificationAction(item)}
+          >
+            <div className="notif-item-icon" aria-hidden="true">
+              {isApprovalLink
+                ? '✍️'
+                : isRepairAlert
+                ? '🔗'
+                : item.meta?.approvedAndMinted
+                ? '✨'
+                : item.meta?.landMinted
+                ? '🗺️'
+                : iconForCategory(item.category)}
+            </div>
+            <div className="notif-item-content">
+              <div className="notif-item-top">
+                <strong className="notif-item-title">
+                  {hasSculpturePreview && (
+                    <span
+                      className="map-preview-pill"
+                      style={{ marginRight: 5, verticalAlign: 'middle' }}
+                    >
+                      Preview
+                    </span>
+                  )}
+                  {item.title}
+                </strong>
+                <span className="notif-item-time">{formatRelativeTime(item.createdAt)}</span>
+              </div>
+              <p className="notif-item-msg">{item.message}</p>
+              {itemApprovalErr?.message && (
+                <div
+                  className="approval-inline-error"
+                  data-testid="notif-approval-error"
+                  role="alert"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ marginBottom: 6 }}
+                >
+                  <div className="approval-inline-error-msg">⚠️ {itemApprovalErr.message}</div>
+                  {canAutoFit && effectiveReq && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      data-testid="notif-autofit-approve-btn"
+                      disabled={Boolean(approvalBusyId)}
+                      onClick={(e) =>
+                        handleInlineApprove(e, effectiveReq, item, {
+                          autoFitScale: true
+                        })
+                      }
+                    >
+                      {isBusyApproval
+                        ? 'Fitting…'
+                        : `📐 Auto-Fit (${itemApprovalErr.maxSafeScale}×) & Approve`}
+                    </button>
+                  )}
+                </div>
+              )}
+              {(item.actionLabel || isLandLink || isArtLink || Boolean(effectiveReq)) && (
+                <div className="notif-item-actions">
+                  {isApprovalLink && effectiveReq ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary notif-inline-approve-btn"
+                        data-testid="notif-inline-approve-btn"
+                        disabled={Boolean(approvalBusyId)}
+                        onClick={(e) => handleInlineApprove(e, effectiveReq, item)}
+                      >
+                        {isBusyApproval ? 'Approving…' : '✅ Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-danger notif-inline-reject-btn"
+                        data-testid="notif-inline-reject-btn"
+                        disabled={Boolean(approvalBusyId)}
+                        onClick={(e) => handleInlineReject(e, effectiveReq, item)}
+                      >
+                        {isBusyApproval ? '…' : '✕ Reject'}
+                      </button>
+                      {hasSculpturePreview && (
+                        <button
+                          type="button"
+                          className="btn-xs notif-action-btn"
+                          data-testid="notif-preview-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleNotificationAction(item, {
+                              actionType: 'preview_pending_sculpture',
+                              pendingRequest: liveReq || effectiveReq
+                            });
+                          }}
+                        >
+                          👁️ Preview
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="notif-secondary-link notif-secondary-btn"
+                        data-testid="notif-approve-land-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNotificationAction(item);
+                        }}
+                      >
+                        Open Land →
+                      </button>
+                    </>
+                  ) : isLandLink ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary notif-action-btn notif-go-land-btn"
+                        data-testid="notif-go-to-land-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNotificationAction(item, { actionType: 'open_land' });
+                        }}
+                      >
+                        📍 {item.actionLabel || 'Go to Land'} →
+                      </button>
+                      {artHref && (
+                        <a
+                          href={artHref}
+                          className="notif-secondary-link"
+                          data-testid="notif-art-link"
+                          onClick={(e) => {
+                            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleNotificationAction(item, {
+                                actionType: 'open_sculpture'
+                              });
+                            }
+                          }}
+                        >
+                          View Art
+                        </a>
+                      )}
+                    </>
+                  ) : isArtLink ? (
+                    <a
+                      href={artHref}
+                      className="btn-xs notif-action-btn notif-action-link"
+                      data-testid="notif-art-link"
+                      onClick={(e) => {
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleNotificationAction(item, { actionType: 'open_sculpture' });
+                        }
+                      }}
+                    >
+                      {item.actionLabel || 'View Art'} →
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-xs notif-action-btn"
+                      data-testid={
+                        isApprovalLink
+                          ? 'notif-approve-land-btn'
+                          : isRepairAlert
+                          ? 'notif-repair-btn'
+                          : undefined
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleNotificationAction(item);
+                      }}
+                    >
+                      {item.actionLabel} →
+                    </button>
+                  )}
+                  {!isApprovalLink && !isLandLink && parcelHref && (
+                    <a
+                      href={parcelHref}
+                      className="notif-secondary-link notif-land-pill-link"
+                      data-testid="notif-land-link"
+                      onClick={(e) => {
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleNotificationAction(item, { actionType: 'open_land' });
+                        }
+                      }}
+                    >
+                      📍 Go to Land
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+            {!item.isSyntheticPending && (
+              <button
+                type="button"
+                className="notif-dismiss-btn"
+                aria-label="Dismiss notification"
+                title="Dismiss"
+                onClick={(e) => handleDelete(e, item.id)}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const popoverNode =
+    open && user ? (
+      <div
+        ref={popoverRef}
+        className={`notif-popover glass-card ${isMobile ? 'notif-popover-mobile' : ''} ${
+          usePortal ? 'notif-popover-portal' : ''
+        }`}
+        style={usePortal && anchorStyle ? anchorStyle : undefined}
+        role="dialog"
+        aria-label="Notifications"
+        data-testid="notif-popover"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="notif-header">
+          <div className="notif-header-title">
+            <strong>🔔 Notifications</strong>
+            {badgeCount > 0 && <span className="notif-pill-unread">{badgeCount} new</span>}
+          </div>
+          <div className="notif-header-actions">
+            <div className="notif-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'inbox'}
+                data-testid="notif-tab-inbox"
+                className={`notif-tab ${activeTab === 'inbox' ? 'active' : ''}`}
+                onClick={() => setActiveTab('inbox')}
+              >
+                Inbox
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'history'}
+                data-testid="notif-tab-history"
+                className={`notif-tab ${activeTab === 'history' ? 'active' : ''}`}
+                onClick={() => setActiveTab('history')}
+              >
+                History
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'settings'}
+                data-testid="notif-tab-settings"
+                className={`notif-tab ${activeTab === 'settings' ? 'active' : ''}`}
+                onClick={() => setActiveTab('settings')}
+              >
+                ⚙️ Settings
+              </button>
+            </div>
+            <button
+              type="button"
+              className="notif-close-btn"
+              aria-label="Close notifications"
+              onClick={closePopover}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {mintStatus && (
+          <div
+            className={`notif-mint-banner ${
+              mintStatus.canMintDesktop ? 'mint-open' : 'mint-full'
+            }`}
+          >
+            <div className="notif-mint-banner-text">
+              {mintStatus.canMintDesktop ? (
+                <>
+                  <strong>
+                    ✅ Mint Ready · {mintStatus.remainingSlots}/{mintStatus.maxSlots} free Desktop
+                    slots open
+                  </strong>
+                  <span>
+                    Tap Mint Land to see the simple ways to mint (Mobile AR instant permanent land
+                    or Desktop 3D plot).
+                  </span>
+                </>
+              ) : (
+                <>
+                  <strong>
+                    ⏳ {mintStatus.usedSlots}/{mintStatus.maxSlots} starter Desktop lands full
+                  </strong>
+                  <span>
+                    Tap Mint Land to see how to mint right now in Mobile AR or unlock more slots.
+                  </span>
+                </>
+              )}
+            </div>
+            {onAction && (
+              <button
+                type="button"
+                className="btn-xs notif-mint-banner-btn"
+                data-testid="notif-mint-land-btn"
+                onClick={() => {
+                  closePopover();
+                  onAction({
+                    actionType: 'open_mint',
+                    category: mintStatus.canMintDesktop
+                      ? 'mint_slots_unlocked'
+                      : 'mint_limit_reached'
+                  });
+                }}
+              >
+                🏗️ Mint Land
+              </button>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'inbox' ? (
+          <div className="notif-inbox-body">
+            <div className="notif-inbox-toolbar">
+              <span className="notif-toolbar-meta">
+                {loading
+                  ? 'Refreshing...'
+                  : displayNotifications.length > 0
+                  ? `${displayNotifications.length} alert${displayNotifications.length === 1 ? '' : 's'}`
+                  : 'No unread alerts'}
+              </span>
+              <div className="notif-toolbar-btns">
+                <button
+                  type="button"
+                  className="notif-link-btn"
+                  data-testid="notif-refresh-btn"
+                  disabled={loading}
+                  onClick={() => loadNotifications({ silent: false })}
+                  title="Refresh notifications"
+                >
+                  🔄 Refresh
+                </button>
+                {!preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
+                  <button
+                    type="button"
+                    className="notif-link-btn"
+                    onClick={() => setActiveTab('settings')}
+                  >
+                    🔔 Enable Browser Alerts
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {approvalNotice?.text && (
+              <div
+                className="settings-inline-saved notif-settings-saved-pill notif-approval-status-bar"
+                data-testid="notif-approval-status"
+                role="status"
+                style={{ margin: '0 12px 8px' }}
+              >
+                <span className="notif-approval-status-text">✅ {approvalNotice.text}</span>
+                {approvalNotice.isApproved && approvalNotice.parcelId && (
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-primary notif-approved-go-land-btn"
+                    data-testid="notif-approved-go-to-land-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleNotificationAction(
+                        {
+                          id: '',
+                          isSyntheticPending: true,
+                          parcelId: approvalNotice.parcelId,
+                          sculptureId: approvalNotice.sculptureId || '',
+                          actionType: 'open_land',
+                          actionLabel: 'Go to Land',
+                          meta: {
+                            parcelId: approvalNotice.parcelId,
+                            parcelUrl: `?parcel=${encodeURIComponent(approvalNotice.parcelId)}`,
+                            sculptureId: approvalNotice.sculptureId || '',
+                            landTitle: approvalNotice.landTitle || ''
+                          }
+                        },
+                        { actionType: 'open_land' }
+                      );
+                    }}
+                  >
+                    📍 Go to Land →
+                  </button>
+                )}
+              </div>
+            )}
+
+            {displayNotifications.length === 0 ? (
+              <div className="notif-empty">
+                <div className="notif-empty-icon">✨</div>
+                <strong>You’re all caught up!</strong>
+                <p>
+                  You’ll see alerts with direct links here whenever new art is minted on a land you
+                  own or contributed to, or when mint slots change.
+                </p>
+                {historyDisplayNotifications.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    data-testid="notif-open-history-from-empty"
+                    style={{ marginTop: 10 }}
+                    onClick={() => setActiveTab('history')}
+                  >
+                    📜 View recent history ({historyDisplayNotifications.length})
+                  </button>
+                )}
+              </div>
+            ) : (
+              renderNotificationList(displayNotifications)
+            )}
+          </div>
+        ) : activeTab === 'history' ? (
+          <div className="notif-inbox-body" data-testid="notif-history-body">
+            <div className="notif-inbox-toolbar">
+              <span className="notif-toolbar-meta">
+                {loading
+                  ? 'Refreshing...'
+                  : historyDisplayNotifications.length > 0
+                  ? `${historyDisplayNotifications.length} saved alert${
+                      historyDisplayNotifications.length === 1 ? '' : 's'
+                    }`
+                  : 'No notification history'}
+              </span>
+              <div className="notif-toolbar-btns">
+                <button
+                  type="button"
+                  className="notif-link-btn"
+                  disabled={loading}
+                  onClick={() => loadNotifications({ silent: false })}
+                >
+                  🔄 Refresh
+                </button>
+                {historyDisplayNotifications.length > 0 && (
+                  <button
+                    type="button"
+                    className="notif-link-btn notif-clear-btn"
+                    data-testid="notif-clear-all-btn"
+                    disabled={clearingAll}
+                    onClick={handleClearAllHistory}
+                  >
+                    {clearingAll ? 'Clearing…' : '🗑️ Clear All'}
+                  </button>
+                )}
+              </div>
+            </div>
+            {historyDisplayNotifications.length === 0 ? (
+              <div className="notif-empty">
+                <div className="notif-empty-icon">📜</div>
+                <strong>No past notifications</strong>
+                <p>Recent alerts you’ve read stay listed here so you can reopen lands or clear them anytime.</p>
+              </div>
+            ) : (
+              renderNotificationList(historyDisplayNotifications)
+            )}
+          </div>
+        ) : (
+          <div className="notif-settings-body">
+            {settingsSavedNotice && (
+              <div
+                className="settings-inline-saved notif-settings-saved-pill"
+                data-testid="notif-settings-saved"
+                role="status"
+              >
+                ✅ {settingsSavedNotice}
+              </div>
+            )}
+            <MeasurementUnitSetting compact />
+            <div className="notif-push-card">
+              <div className="notif-push-info">
+                <strong>🔔 Browser Notifications</strong>
+                <span>
+                  {browserPerm === 'unsupported'
+                    ? 'Not supported in this browser.'
+                    : browserPerm === 'denied'
+                    ? 'Blocked in browser permissions — enable in site settings.'
+                    : preferences.browser_push_enabled && browserPerm === 'granted'
+                    ? 'Active — desktop/mobile browser popups will alert you in real time.'
+                    : 'Get instant browser popups for land sculptures and unlocked mint slots.'}
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`btn-xs ${
+                  preferences.browser_push_enabled && browserPerm === 'granted' ? 'btn-primary' : ''
+                }`}
+                disabled={savingPrefKey === 'browser_push_enabled' || browserPerm === 'unsupported'}
+                onClick={handleToggleBrowserPush}
+              >
+                {preferences.browser_push_enabled && browserPerm === 'granted' ? 'On ✓' : 'Turn On'}
+              </button>
+            </div>
+            {pushFeedback && <div className="notif-push-feedback">{pushFeedback}</div>}
+
+            <div className="notif-pref-list">
+              {CATEGORY_META.map((cat) => {
+                const enabled = Boolean(preferences[cat.key]);
+                return (
+                  <label key={cat.key} className="notif-pref-row">
+                    <div className="notif-pref-copy">
+                      <strong>
+                        {cat.icon} {cat.label}
+                      </strong>
+                      <span>{cat.hint}</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      disabled={savingPrefKey === cat.key}
+                      onChange={() => handleTogglePref(cat.key)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    ) : null;
+
+  const portalElement =
+    usePortal && open && user && typeof document !== 'undefined' && document.body
+      ? createPortal(
+          <>
+            <div
+              className="notif-portal-backdrop"
+              data-testid="notif-portal-backdrop"
+              onClick={(e) => {
+                e.stopPropagation();
+                closePopover();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+            {popoverNode}
+          </>,
+          document.body
+        )
+      : null;
+
+  const contextValue = useMemo(
+    () => ({
+      available: true,
+      user,
+      variant,
+      open,
+      activeTab,
+      badgeCount,
+      unreadCount,
+      pendingCount: livePendingList.length,
+      historyCount: historyDisplayNotifications.length,
+      openNotifications,
+      closeNotifications: closePopover,
+      toggleNotifications,
+      refreshNotifications: () => loadNotifications({ silent: false })
+    }),
+    [
+      user,
+      variant,
+      open,
+      activeTab,
+      badgeCount,
+      unreadCount,
+      livePendingList.length,
+      historyDisplayNotifications.length,
+      openNotifications,
+      closePopover,
+      toggleNotifications,
+      loadNotifications
+    ]
+  );
+
+  return {
+    containerRef,
+    contextValue,
+    badgeCount,
+    open,
+    toggleNotifications,
+    popoverNode,
+    portalElement
+  };
+}
+
+export function NotificationProvider({
+  user = null,
+  variant = 'desktop',
+  refreshSignal = 0,
+  pendingApprovals = null,
+  onApprovalResolved = null,
+  onAction = null,
+  onOpenSettingsExternal = null,
+  children
+}) {
+  const engine = useNotificationEngine({
+    user,
+    variant,
+    refreshSignal,
+    pendingApprovals,
+    onApprovalResolved,
+    onAction,
+    onOpenSettingsExternal,
+    usePortal: true
+  });
+
+  return (
+    <NotificationContext.Provider value={engine.contextValue}>
+      {children}
+      {engine.portalElement}
+    </NotificationContext.Provider>
+  );
+}
+
+export function GlobalNotificationBell({
+  compact = false,
+  variantOverride = '',
+  className = '',
+  testId = ''
+}) {
+  const ctx = useContext(NotificationContext);
+  if (!ctx?.available || !ctx.user) return null;
+  const isMobile = (variantOverride || ctx.variant) === 'mobile';
+  const badgeCount = ctx.badgeCount || 0;
+  return (
+    <button
+      type="button"
+      data-notif-trigger="1"
+      data-testid={testId || undefined}
+      className={`notif-bell-btn ${
+        compact
+          ? 'notif-bell-compact'
+          : isMobile
+          ? 'hud-pill notif-bell-mobile'
+          : 'btn-ghost'
+      } ${badgeCount > 0 ? 'has-unread' : ''} ${ctx.open ? 'is-open' : ''} ${className}`.trim()}
+      aria-label={`Notifications${badgeCount > 0 ? ` (${badgeCount} unread)` : ''}`}
+      aria-expanded={ctx.open}
+      aria-haspopup="dialog"
+      title="Notifications & alert settings"
+      onClick={(e) => {
+        e.stopPropagation();
+        ctx.toggleNotifications('', e.currentTarget);
+      }}
+    >
+      <span aria-hidden="true">🔔</span>
+      {badgeCount > 0 && (
+        <span className="notif-count-badge" data-testid="notif-unread-badge">
+          {badgeCount > 99 ? '99+' : badgeCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function StandaloneNotificationCenter(props) {
+  const { user = null, variant = 'desktop' } = props;
+  const isMobile = variant === 'mobile';
+  const engine = useNotificationEngine({
+    ...props,
+    usePortal: false
+  });
+
+  if (!user) return null;
 
   return (
     <div
-      ref={containerRef}
+      ref={engine.containerRef}
       className={`notif-center ${isMobile ? 'notif-center-mobile' : 'notif-center-desktop'}`}
     >
       <button
         type="button"
+        data-notif-trigger="1"
         className={`notif-bell-btn ${isMobile ? 'hud-pill notif-bell-mobile' : 'btn-ghost'} ${
-          badgeCount > 0 ? 'has-unread' : ''
-        }`}
-        aria-label={`Notifications${badgeCount > 0 ? ` (${badgeCount} unread)` : ''}`}
-        aria-expanded={open}
+          engine.badgeCount > 0 ? 'has-unread' : ''
+        } ${engine.open ? 'is-open' : ''}`}
+        aria-label={`Notifications${engine.badgeCount > 0 ? ` (${engine.badgeCount} unread)` : ''}`}
+        aria-expanded={engine.open}
+        aria-haspopup="dialog"
         title="Notifications & alert settings"
-        onClick={handleToggleOpen}
+        onClick={(e) => engine.toggleNotifications('', e.currentTarget)}
       >
         <span aria-hidden="true">🔔</span>
-        {badgeCount > 0 && (
+        {engine.badgeCount > 0 && (
           <span className="notif-count-badge" data-testid="notif-unread-badge">
-            {badgeCount > 99 ? '99+' : badgeCount}
+            {engine.badgeCount > 99 ? '99+' : engine.badgeCount}
           </span>
         )}
       </button>
-
-      {open && (
-        <div
-          className={`notif-popover glass-card ${isMobile ? 'notif-popover-mobile' : ''}`}
-          role="dialog"
-          aria-label="Notifications"
-        >
-          <div className="notif-header">
-            <div className="notif-header-title">
-              <strong>🔔 Notifications</strong>
-              {badgeCount > 0 && <span className="notif-pill-unread">{badgeCount} new</span>}
-            </div>
-            <div className="notif-header-actions">
-              <div className="notif-tabs" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === 'inbox'}
-                  className={`notif-tab ${activeTab === 'inbox' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('inbox')}
-                >
-                  Inbox
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === 'settings'}
-                  className={`notif-tab ${activeTab === 'settings' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('settings')}
-                >
-                  ⚙️ Settings
-                </button>
-              </div>
-              <button
-                type="button"
-                className="notif-close-btn"
-                aria-label="Close notifications"
-                onClick={closePopover}
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-
-          {mintStatus && (
-            <div
-              className={`notif-mint-banner ${
-                mintStatus.canMintDesktop ? 'mint-open' : 'mint-full'
-              }`}
-            >
-              <div className="notif-mint-banner-text">
-                {mintStatus.canMintDesktop ? (
-                  <>
-                    <strong>
-                      ✅ Mint Ready · {mintStatus.remainingSlots}/{mintStatus.maxSlots} free Desktop
-                      slots open
-                    </strong>
-                    <span>
-                      Tap Mint Land to see the simple ways to mint (Mobile AR instant permanent land
-                      or Desktop 3D plot).
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <strong>
-                      ⏳ {mintStatus.usedSlots}/{mintStatus.maxSlots} starter Desktop lands full
-                    </strong>
-                    <span>
-                      Tap Mint Land to see how to mint right now in Mobile AR or unlock more slots.
-                    </span>
-                  </>
-                )}
-              </div>
-              {onAction && (
-                <button
-                  type="button"
-                  className="btn-xs notif-mint-banner-btn"
-                  data-testid="notif-mint-land-btn"
-                  onClick={() => {
-                    closePopover();
-                    onAction({
-                      actionType: 'open_mint',
-                      category: mintStatus.canMintDesktop
-                        ? 'mint_slots_unlocked'
-                        : 'mint_limit_reached'
-                    });
-                  }}
-                >
-                  🏗️ Mint Land
-                </button>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'inbox' ? (
-            <div className="notif-inbox-body">
-              <div className="notif-inbox-toolbar">
-                <span className="notif-toolbar-meta">
-                  {loading
-                    ? 'Refreshing...'
-                    : displayNotifications.length > 0
-                    ? `${displayNotifications.length} alert${displayNotifications.length === 1 ? '' : 's'}`
-                    : 'No unread alerts'}
-                </span>
-                <div className="notif-toolbar-btns">
-                  {!preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
-                    <button
-                      type="button"
-                      className="notif-link-btn"
-                      onClick={() => setActiveTab('settings')}
-                    >
-                      🔔 Enable Browser Alerts
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {approvalNotice?.text && (
-                <div
-                  className="settings-inline-saved notif-settings-saved-pill notif-approval-status-bar"
-                  data-testid="notif-approval-status"
-                  role="status"
-                  style={{ margin: '0 12px 8px' }}
-                >
-                  <span className="notif-approval-status-text">✅ {approvalNotice.text}</span>
-                  {approvalNotice.isApproved && approvalNotice.parcelId && (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-primary notif-approved-go-land-btn"
-                      data-testid="notif-approved-go-to-land-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleNotificationAction(
-                          {
-                            id: '',
-                            isSyntheticPending: true,
-                            parcelId: approvalNotice.parcelId,
-                            sculptureId: approvalNotice.sculptureId || '',
-                            actionType: 'open_land',
-                            actionLabel: 'Go to Land',
-                            meta: {
-                              parcelId: approvalNotice.parcelId,
-                              parcelUrl: `?parcel=${encodeURIComponent(approvalNotice.parcelId)}`,
-                              sculptureId: approvalNotice.sculptureId || '',
-                              landTitle: approvalNotice.landTitle || ''
-                            }
-                          },
-                          { actionType: 'open_land' }
-                        );
-                      }}
-                    >
-                      📍 Go to Land →
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {displayNotifications.length === 0 ? (
-                <div className="notif-empty">
-                  <div className="notif-empty-icon">✨</div>
-                  <strong>You’re all caught up!</strong>
-                  <p>
-                    You’ll see alerts with direct links here whenever new art is minted on a land
-                    you own or contributed to, or when mint slots change.
-                  </p>
-                </div>
-              ) : (
-                <div className="notif-list">
-                  {displayNotifications.map((item) => {
-                    const artHref =
-                      item.meta?.sculptureUrl ||
-                      (item.sculptureId ? `?sculpture=${encodeURIComponent(item.sculptureId)}` : '');
-                    const parcelHref =
-                      item.meta?.parcelUrl ||
-                      (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
-                    const isApprovalLink = item.actionType === 'open_land_approval';
-                    const requestId = isApprovalLink ? String(item.meta?.requestId || '') : '';
-                    const liveReq = requestId ? pendingById.get(requestId) || null : null;
-                    const effectiveReq =
-                      liveReq ||
-                      (requestId
-                        ? {
-                            id: requestId,
-                            parcelId: item.parcelId || '',
-                            action: item.meta?.action || '',
-                            summaryTitle: String(item.title || '').replace(
-                              /^✍️\s*Approval needed:\s*/i,
-                              ''
-                            )
-                          }
-                        : null);
-                    const hasSculpturePreview = Boolean(
-                      isApprovalLink &&
-                        (item.meta?.hasSculpturePreview ||
-                          isPendingSculptureAction(effectiveReq?.action || ''))
-                    );
-                    const isBusyApproval = Boolean(requestId && approvalBusyId === requestId);
-                    const itemApprovalErr = requestId ? approvalErrors?.[requestId] || null : null;
-                    const canAutoFit =
-                      itemApprovalErr?.code === 'exceeds_land_bounds' &&
-                      Number(itemApprovalErr?.maxSafeScale) >= 0.001;
-                    const isRepairAlert = Boolean(item.meta?.needsRepair);
-                    const isLandLink =
-                      !isApprovalLink && item.actionType === 'open_land' && Boolean(parcelHref);
-                    const isArtLink =
-                      !isApprovalLink &&
-                      !isLandLink &&
-                      Boolean(artHref) &&
-                      (item.actionType === 'open_sculpture' || Boolean(item.sculptureId));
-                    return (
-                      <div
-                        key={item.id}
-                        className={`notif-item severity-${item.severity || 'info'} ${
-                          item.read ? 'is-read' : 'is-unread'
-                        }`}
-                        data-request-id={requestId || undefined}
-                        onClick={() => handleNotificationAction(item)}
-                      >
-                        <div className="notif-item-icon" aria-hidden="true">
-                          {isApprovalLink
-                            ? '✍️'
-                            : isRepairAlert
-                            ? '🔗'
-                            : item.meta?.approvedAndMinted
-                            ? '✨'
-                            : item.meta?.landMinted
-                            ? '🗺️'
-                            : iconForCategory(item.category)}
-                        </div>
-                        <div className="notif-item-content">
-                          <div className="notif-item-top">
-                            <strong className="notif-item-title">
-                              {hasSculpturePreview && (
-                                <span
-                                  className="map-preview-pill"
-                                  style={{ marginRight: 5, verticalAlign: 'middle' }}
-                                >
-                                  Preview
-                                </span>
-                              )}
-                              {item.title}
-                            </strong>
-                            <span className="notif-item-time">
-                              {formatRelativeTime(item.createdAt)}
-                            </span>
-                          </div>
-                          <p className="notif-item-msg">{item.message}</p>
-                          {itemApprovalErr?.message && (
-                            <div
-                              className="approval-inline-error"
-                              data-testid="notif-approval-error"
-                              role="alert"
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ marginBottom: 6 }}
-                            >
-                              <div className="approval-inline-error-msg">
-                                ⚠️ {itemApprovalErr.message}
-                              </div>
-                              {canAutoFit && effectiveReq && (
-                                <button
-                                  type="button"
-                                  className="btn btn-xs btn-primary"
-                                  data-testid="notif-autofit-approve-btn"
-                                  disabled={Boolean(approvalBusyId)}
-                                  onClick={(e) =>
-                                    handleInlineApprove(e, effectiveReq, item, {
-                                      autoFitScale: true
-                                    })
-                                  }
-                                >
-                                  {isBusyApproval
-                                    ? 'Fitting…'
-                                    : `📐 Auto-Fit (${itemApprovalErr.maxSafeScale}×) & Approve`}
-                                </button>
-                              )}
-                            </div>
-                          )}
-                          {(item.actionLabel || isLandLink || isArtLink || Boolean(effectiveReq)) && (
-                            <div className="notif-item-actions">
-                              {isApprovalLink && effectiveReq ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="btn btn-xs btn-primary notif-inline-approve-btn"
-                                    data-testid="notif-inline-approve-btn"
-                                    disabled={Boolean(approvalBusyId)}
-                                    onClick={(e) => handleInlineApprove(e, effectiveReq, item)}
-                                  >
-                                    {isBusyApproval ? 'Approving…' : '✅ Approve'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-xs btn-danger notif-inline-reject-btn"
-                                    data-testid="notif-inline-reject-btn"
-                                    disabled={Boolean(approvalBusyId)}
-                                    onClick={(e) => handleInlineReject(e, effectiveReq, item)}
-                                  >
-                                    {isBusyApproval ? '…' : '✕ Reject'}
-                                  </button>
-                                  {hasSculpturePreview && (
-                                    <button
-                                      type="button"
-                                      className="btn-xs notif-action-btn"
-                                      data-testid="notif-preview-btn"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleNotificationAction(item, {
-                                          actionType: 'preview_pending_sculpture',
-                                          pendingRequest: liveReq || effectiveReq
-                                        });
-                                      }}
-                                    >
-                                      👁️ Preview
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="notif-secondary-link notif-secondary-btn"
-                                    data-testid="notif-approve-land-btn"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleNotificationAction(item);
-                                    }}
-                                  >
-                                    Open Land →
-                                  </button>
-                                </>
-                              ) : isLandLink ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="btn btn-xs btn-primary notif-action-btn notif-go-land-btn"
-                                    data-testid="notif-go-to-land-btn"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleNotificationAction(item, { actionType: 'open_land' });
-                                    }}
-                                  >
-                                    📍 {item.actionLabel || 'Go to Land'} →
-                                  </button>
-                                  {artHref && (
-                                    <a
-                                      href={artHref}
-                                      className="notif-secondary-link"
-                                      data-testid="notif-art-link"
-                                      onClick={(e) => {
-                                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          handleNotificationAction(item, {
-                                            actionType: 'open_sculpture'
-                                          });
-                                        }
-                                      }}
-                                    >
-                                      View Art
-                                    </a>
-                                  )}
-                                </>
-                              ) : isArtLink ? (
-                                <a
-                                  href={artHref}
-                                  className="btn-xs notif-action-btn notif-action-link"
-                                  data-testid="notif-art-link"
-                                  onClick={(e) => {
-                                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      handleNotificationAction(item, { actionType: 'open_sculpture' });
-                                    }
-                                  }}
-                                >
-                                  {item.actionLabel || 'View Art'} →
-                                </a>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="btn-xs notif-action-btn"
-                                  data-testid={
-                                    isApprovalLink
-                                      ? 'notif-approve-land-btn'
-                                      : isRepairAlert
-                                      ? 'notif-repair-btn'
-                                      : undefined
-                                  }
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleNotificationAction(item);
-                                  }}
-                                >
-                                  {item.actionLabel} →
-                                </button>
-                              )}
-                              {!isApprovalLink && !isLandLink && parcelHref && (
-                                <a
-                                  href={parcelHref}
-                                  className="notif-secondary-link notif-land-pill-link"
-                                  data-testid="notif-land-link"
-                                  onClick={(e) => {
-                                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      handleNotificationAction(item, { actionType: 'open_land' });
-                                    }
-                                  }}
-                                >
-                                  📍 Go to Land
-                                </a>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        {!item.isSyntheticPending && (
-                          <button
-                            type="button"
-                            className="notif-dismiss-btn"
-                            aria-label="Dismiss notification"
-                            title="Dismiss"
-                            onClick={(e) => handleDelete(e, item.id)}
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="notif-settings-body">
-              {settingsSavedNotice && (
-                <div
-                  className="settings-inline-saved notif-settings-saved-pill"
-                  data-testid="notif-settings-saved"
-                  role="status"
-                >
-                  ✅ {settingsSavedNotice}
-                </div>
-              )}
-              <MeasurementUnitSetting compact />
-              <div className="notif-push-card">
-                <div className="notif-push-info">
-                  <strong>🔔 Browser Notifications</strong>
-                  <span>
-                    {browserPerm === 'unsupported'
-                      ? 'Not supported in this browser.'
-                      : browserPerm === 'denied'
-                      ? 'Blocked in browser permissions — enable in site settings.'
-                      : preferences.browser_push_enabled && browserPerm === 'granted'
-                      ? 'Active — desktop/mobile browser popups will alert you in real time.'
-                      : 'Get instant browser popups for land sculptures and unlocked mint slots.'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className={`btn-xs ${
-                    preferences.browser_push_enabled && browserPerm === 'granted'
-                      ? 'btn-primary'
-                      : ''
-                  }`}
-                  disabled={savingPrefKey === 'browser_push_enabled' || browserPerm === 'unsupported'}
-                  onClick={handleToggleBrowserPush}
-                >
-                  {preferences.browser_push_enabled && browserPerm === 'granted'
-                    ? 'On ✓'
-                    : 'Turn On'}
-                </button>
-              </div>
-              {pushFeedback && <div className="notif-push-feedback">{pushFeedback}</div>}
-
-              <div className="notif-pref-list">
-                {CATEGORY_META.map((cat) => {
-                  const enabled = Boolean(preferences[cat.key]);
-                  return (
-                    <label key={cat.key} className="notif-pref-row">
-                      <div className="notif-pref-copy">
-                        <strong>
-                          {cat.icon} {cat.label}
-                        </strong>
-                        <span>{cat.hint}</span>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        disabled={savingPrefKey === cat.key}
-                        onChange={() => handleTogglePref(cat.key)}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {engine.popoverNode}
     </div>
   );
+}
+
+export default function NotificationCenter(props) {
+  const ctx = useContext(NotificationContext);
+  if (ctx?.available) {
+    if (!ctx.user) return null;
+    const isMobile = (props.variant || ctx.variant) === 'mobile';
+    return (
+      <div className={`notif-center ${isMobile ? 'notif-center-mobile' : 'notif-center-desktop'}`}>
+        <GlobalNotificationBell variantOverride={props.variant} />
+      </div>
+    );
+  }
+  return <StandaloneNotificationCenter {...props} />;
 }
