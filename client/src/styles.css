@@ -236,6 +236,7 @@ select {
   inset: 0;
   z-index: 10;
   pointer-events: none;
+  overflow: hidden;
 }
 
 .hud-layer button,
@@ -13059,12 +13060,56 @@ button.user-handle-badge:hover .user-handle-text {
   }
 }
 
-/* Mobile Portrait-Only Lock & Anti-Tilt Viewport Guard */
+/* Mobile Portrait-Only Lock, No-Zoom & Anchored HUD Viewport Guard */
 html.mobile-portrait-locked,
 body.mobile-portrait-locked {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
   overscroll-behavior: none;
   -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   touch-action: manipulation;
+}
+
+html.mobile-portrait-locked #root {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Keep all mobile form controls >=16px so iOS Safari never auto-zooms the viewport on focus */
+html.mobile-portrait-locked input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html.mobile-portrait-locked textarea,
+html.mobile-portrait-locked select {
+  font-size: 16px !important;
+}
+
+/* Lock HUD & action buttons against browser pinch-zoom or double-tap zoom so they never drift */
+html.mobile-portrait-locked .hud-layer,
+html.mobile-portrait-locked .hud-layer button,
+html.mobile-portrait-locked .key-carousel,
+html.mobile-portrait-locked .mobile-top-hud-left,
+html.mobile-portrait-locked .mobile-top-hud-right,
+html.mobile-portrait-locked .floating-map-btn,
+html.mobile-portrait-locked .floating-tools-toggle,
+html.mobile-portrait-locked .modal-backdrop {
+  touch-action: none;
+}
+
+/* Scrollable modals, sheets & chat feeds allow vertical 1-finger pan only (never page pinch-zoom) */
+html.mobile-portrait-locked .modal-card,
+html.mobile-portrait-locked .plot-visit-body,
+html.mobile-portrait-locked .chat-board-feed,
+html.mobile-portrait-locked .mobile-map-sheet {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
 }
 
 .mobile-portrait-lock-overlay {
