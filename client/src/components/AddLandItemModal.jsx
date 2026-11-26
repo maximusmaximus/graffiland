@@ -11,6 +11,7 @@ import {
 } from '../../../shared/sculpturePlacement.mjs';
 import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { isLandOwnedByUser } from '../utils/landMapHelpers.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -211,6 +212,18 @@ export default function AddLandItemModal({
     user?.activeMintRecipient || user?.walletAddress || '<YOUR_WALLET_ADDRESS>';
 
   const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
+  const requiresApproval = Boolean(parcel?.requireApproval || parcel?.settings?.requireApproval);
+  const isLandOwner = useMemo(() => {
+    if (!user?.id || !parcel) return true;
+    const hasOwnerInfo = Boolean(
+      parcel.ownerSub ||
+        parcel.stewardSub ||
+        parcel.firstClaimantAddress ||
+        parcel.ownerAddress
+    );
+    if (!hasOwnerInfo) return true;
+    return isLandOwnedByUser(parcel, user);
+  }, [parcel, user]);
   const activeTypeInfo =
     SUPPORTED_ITEM_TYPES.find((t) => t.id === itemFormat) || SUPPORTED_ITEM_TYPES[0];
 
@@ -396,13 +409,18 @@ export default function AddLandItemModal({
       setStatusIsError(false);
       setServerFitHint(null);
       setStatusMsg(
-        `Uploaded "${res?.sculpture?.title || finalTitle}" (.${resolvedFormat.toUpperCase()}) onto "${landDisplayName}"!`
+        res?.requiresOwnerApproval
+          ? res.message ||
+              `Submitted "${finalTitle}" to the land holder for approval on "${landDisplayName}"! Once approved, the NFT will mint to your wallet.`
+          : `Uploaded "${res?.sculpture?.title || finalTitle}" (.${resolvedFormat.toUpperCase()}) onto "${landDisplayName}"!`
       );
       setModelUrl('');
       setItemTitle('');
       setItemDescription('');
       setValidationState(null);
-      await onSculptureUploaded?.(res?.sculpture);
+      if (!res?.requiresOwnerApproval) {
+        await onSculptureUploaded?.(res?.sculpture);
+      }
     } catch (err) {
       setStatusIsError(true);
       if (err?.data?.maxSafeScale !== undefined) {
@@ -586,10 +604,20 @@ export default function AddLandItemModal({
             >
               {shareLinkCopied ? '✓ Link Copied' : '🔗 Share Link'}
             </button>
-            <span className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}>
-              {isFrozen ? '❄️ Frozen (Placements Blocked)' : '✅ Open for 3D Placements'}
+            <span
+              className={`badge ${
+                isFrozen ? 'badge-error' : !isLandOwner && requiresApproval ? 'gold' : 'teal'
+              }`}
+            >
+              {isFrozen
+                ? '❄️ Frozen (Placements Blocked)'
+                : !isLandOwner && requiresApproval
+                  ? '🛡️ Requires Land Holder Approval'
+                  : !isLandOwner
+                    ? '✅ Open Land · Owner Notified'
+                    : '✅ Open for 3D Placements'}
             </span>
-            {onToggleFreeze && (
+            {isLandOwner && onToggleFreeze && (
               <button
                 type="button"
                 className={`btn btn-xs ${isFrozen ? 'btn-primary' : ''}`}
@@ -655,7 +683,7 @@ export default function AddLandItemModal({
                 </>
               )}
             </button>
-            {onOpenLandManagement && (
+            {isLandOwner && onOpenLandManagement && (
               <button
                 type="button"
                 className="btn btn-sm"
@@ -1061,7 +1089,7 @@ export default function AddLandItemModal({
                       ✏️ Inspect / Modify
                     </button>
                   )}
-                  {onToggleSculptureVisibility && (
+                  {isLandOwner && onToggleSculptureVisibility && (
                     <button
                       type="button"
                       className={`btn btn-xs ${sc.hidden ? 'btn-primary' : ''}`}

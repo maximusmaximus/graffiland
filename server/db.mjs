@@ -325,6 +325,7 @@ export function getDb() {
       allow_agent_erase INTEGER NOT NULL DEFAULT 1,
       allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
       freeze_placements INTEGER NOT NULL DEFAULT 0,
+      require_approval INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 
@@ -781,7 +782,8 @@ export function getDb() {
     "ALTER TABLE land_steward_state ADD COLUMN last_human_interaction_type TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE land_steward_state ADD COLUMN last_human_interaction_sub TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE land_steward_state ADD COLUMN inactivity_expires_at TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE land_steward_state ADD COLUMN had_human_interaction INTEGER NOT NULL DEFAULT 0'
+    'ALTER TABLE land_steward_state ADD COLUMN had_human_interaction INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE land_settings ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0'
   ]) {
     try {
       db.exec(ddl);

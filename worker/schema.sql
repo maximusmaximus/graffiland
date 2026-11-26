@@ -318,6 +318,7 @@ CREATE TABLE IF NOT EXISTS land_settings (
   allow_agent_erase INTEGER NOT NULL DEFAULT 1,
   allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
   freeze_placements INTEGER NOT NULL DEFAULT 0,
+  require_approval INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
 

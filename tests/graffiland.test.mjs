@@ -1289,7 +1289,7 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
     const sId = pub.body.sculpture.id;
     const parcelId = pub.body.sculpture.parcelId;
 
-    // Non-owner cannot edit or place sculptures on this land
+    // Non-owner cannot edit existing owner sculptures, curate/rename the land, or place on frozen land
     const outsiderEdit = await apiJson(`/api/sculptures/${sId}`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${outsiderToken}` },
@@ -1297,16 +1297,38 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
     });
     assert.equal(outsiderEdit.status, 403);
 
-    const outsiderPut = await apiJson(`/api/lands/${parcelId}/sculptures`, {
+    const outsiderLandUpdate = await apiJson(`/api/lands/${parcelId}/update`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+      body: JSON.stringify({ customName: 'Hijacked Plaza' })
+    });
+    assert.equal(outsiderLandUpdate.status, 403);
+
+    // Freezing the land blocks non-owner placements; default open lands allow guest contributions (see tests/open_land_collaboration.test.mjs)
+    const freezeLandRes = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ frozen: true })
+    });
+    assert.equal(freezeLandRes.status, 200);
+
+    const outsiderPutFrozen = await apiJson(`/api/lands/${parcelId}/sculptures`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${outsiderToken}` },
       body: JSON.stringify({
         title: 'Intruder Sculpture',
-        description: 'Should be rejected for non-owner.',
+        description: 'Should be rejected while land is frozen.',
         voxels: [{ x: 0, y: 0.05, z: 0, color: '#ff3e7f', material: 'matte' }]
       })
     });
-    assert.equal(outsiderPut.status, 403);
+    assert.equal(outsiderPutFrozen.status, 403);
+
+    const unfreezeLandRes = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ frozen: false })
+    });
+    assert.equal(unfreezeLandRes.status, 200);
 
     // 2. Owner edits sculpture directly & puts a second sculpture directly on their owned land + curates land
     const directEdit = await apiJson(`/api/sculptures/${sId}`, {

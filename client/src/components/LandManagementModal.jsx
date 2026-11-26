@@ -44,6 +44,7 @@ export default function LandManagementModal({
   const [curationNote, setCurationNote] = useState('');
   const [allowAgentErase, setAllowAgentErase] = useState(true);
   const [allowContributorEdits, setAllowContributorEdits] = useState(true);
+  const [requireApproval, setRequireApproval] = useState(false);
   const [frozen, setFrozen] = useState(false);
   const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
   const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
@@ -87,6 +88,7 @@ export default function LandManagementModal({
         setCurationNote(picked.description || picked.curationNote || '');
         setAllowAgentErase(picked.settings?.allowAgentErase !== false);
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
+        setRequireApproval(Boolean(picked.settings?.requireApproval || picked.requireApproval));
         setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
         setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
         setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
@@ -116,6 +118,7 @@ export default function LandManagementModal({
     setCurationNote(p.description || p.curationNote || '');
     setAllowAgentErase(p.settings?.allowAgentErase !== false);
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
+    setRequireApproval(Boolean(p.settings?.requireApproval || p.requireApproval));
     setFrozen(Boolean(p.settings?.frozen || p.frozen));
     setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
     setRequireOrbUnlock(Boolean(p.securityPolicy?.requireOrbUnlock));
@@ -267,6 +270,7 @@ export default function LandManagementModal({
       await api.updateLandSettings(activeParcel.parcelId, {
         allowAgentErase,
         allowContributorEdits,
+        requireApproval,
         frozen
       });
       await api.updateLandSecurityPolicy(activeParcel.parcelId, {
@@ -614,6 +618,24 @@ export default function LandManagementModal({
 
                   {/* Concise Permission Checkboxes with Clickable "i" Context */}
                   <div className="land-mgmt-toggle-grid">
+                    <div className="land-mgmt-toggle-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          data-testid="land-require-approval-checkbox"
+                          checked={requireApproval}
+                          onChange={(e) => setRequireApproval(e.target.checked)}
+                        />
+                        <span>🛡️ Require Approval</span>
+                      </label>
+                      <InfoTip title="Require Approval">
+                        By default, anyone can add 3D art to your open land (you get notified and
+                        can hide or moderate items anytime). Turn this ON to require your approval
+                        before guests or outside AI agents can place artwork here. Approved artworks
+                        still mint directly to the proposing artist.
+                      </InfoTip>
+                    </div>
+
                     <div className="land-mgmt-toggle-item">
                       <label>
                         <input

@@ -17,9 +17,11 @@ import {
   checkSculptureOrLandOwnership,
   hashPayloadCanonical,
   normalizeParcelId,
+  resolveParcelPlacementAccess,
   resolvePreferredOwnerWallet,
   resolveUserWalletAddresses
 } from './helpers.mjs';
+import { resolvePublicUserHandle } from '../userDisplay.mjs';
 import { listMcpPairings, requireActiveMcpPairing } from './pairingService.mjs';
 import {
   applyCreateSculptureOnLand,
@@ -220,6 +222,13 @@ export function describeSignatureAction({
           ? `${voxelCount}-block voxel sculpture`
           : '3D artwork';
     const desc = clip(p.description || '');
+    const proposerHandle = String(p._proposer?.handle || '').trim();
+    if (proposerHandle) {
+      return {
+        summaryTitle: `Place "${title}" (by ${proposerHandle})`,
+        summaryDescription: `${proposerHandle} requests adding ${kind} on ${target}${desc ? ` — ${desc}` : ''} (NFT mints to artist).`
+      };
+    }
     return {
       summaryTitle: `Place "${title}"`,
       summaryDescription: `Add ${kind} on ${target}${desc ? ` — ${desc}` : ''}.`
@@ -287,6 +296,9 @@ export function describeSignatureAction({
     }
     if (p.allowAgentErase !== undefined) {
       flags.push(p.allowAgentErase ? 'Allow agent erase' : 'Block agent erase');
+    }
+    if (p.requireApproval !== undefined) {
+      flags.push(p.requireApproval ? 'Require approval for guests' : 'Allow anyone to add art');
     }
     return {
       summaryTitle: p.frozen === true ? 'Freeze Land' : p.frozen === false ? 'Unfreeze Land' : 'Update Land Settings',
@@ -506,22 +518,74 @@ export async function executeValidatedSignatureRow(
       })
     : emitMetadataUpdateFn;
   let result;
+  let guestProposerSub = '';
 
   if (reqRow.action === 'create_sculpture') {
-    const parcelCtx = await checkParcelOwnership(db, {
-      parcelId: reqRow.parcel_id,
-      user: ownerUser,
-      signerAddress
-    });
-    result = await applyCreateSculptureOnLand(db, {
-      parcelCtx,
-      ownerUser,
-      ownerAddress: reqRow.owner_address,
-      payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
-      pinSculptureFn,
-      mintSculptureFn,
-      proofSeed: reqRow.id
-    });
+    const proposerInfo =
+      reqRow.requested_by === 'guest_proposal' || payload?._proposer?.id
+        ? payload._proposer || null
+        : null;
+    if (proposerInfo && proposerInfo.id) {
+      // Land owner is approving a guest artist's proposal: verify owner owns the parcel,
+      // then mint the NFT directly to the proposing artist!
+      const parcelCtx = await checkParcelOwnership(db, {
+        parcelId: reqRow.parcel_id,
+        user: ownerUser,
+        signerAddress
+      });
+      const proposerDbRow = await db
+        .get('SELECT * FROM users WHERE id = ?', [String(proposerInfo.id)])
+        .catch(() => null);
+      const artistUser = proposerDbRow || {
+        id: String(proposerInfo.id),
+        email: String(proposerInfo.email || ''),
+        name: String(proposerInfo.name || proposerInfo.handle || 'Artist'),
+        username: String(proposerInfo.username || ''),
+        wallet_address: String(proposerInfo.walletAddress || ''),
+        custom_payout_address: ''
+      };
+      const artistAddress =
+        resolvePreferredOwnerWallet(artistUser) || String(proposerInfo.walletAddress || '');
+      if (!artistAddress) {
+        throw new McpServiceError(
+          'Proposing artist wallet address is unavailable for NFT minting.',
+          400
+        );
+      }
+      guestProposerSub = artistUser.id;
+      result = await applyCreateSculptureOnLand(db, {
+        parcelCtx,
+        ownerUser: artistUser,
+        ownerAddress: artistAddress,
+        payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
+        pinSculptureFn,
+        mintSculptureFn,
+        proofSeed: reqRow.id,
+        isLandOwner: false
+      });
+    } else {
+      const access = await resolveParcelPlacementAccess(db, {
+        parcelId: reqRow.parcel_id,
+        user: ownerUser,
+        signerAddress
+      });
+      if (access.mode === 'guest_requires_owner_approval') {
+        throw new McpServiceError(
+          'The land holder has enabled "Require Approval" on this land. Re-submit to request owner approval.',
+          403
+        );
+      }
+      result = await applyCreateSculptureOnLand(db, {
+        parcelCtx: access.parcelCtx,
+        ownerUser,
+        ownerAddress: reqRow.owner_address,
+        payload: suppliedTxHash ? { ...payload, txHash: suppliedTxHash } : payload,
+        pinSculptureFn,
+        mintSculptureFn,
+        proofSeed: reqRow.id,
+        isLandOwner: access.isOwner
+      });
+    }
   } else if (reqRow.action === 'update_sculpture') {
     const perm = await checkSculptureOrLandOwnership(db, {
       sculptureId: reqRow.sculpture_id,
@@ -678,6 +742,13 @@ export async function executeValidatedSignatureRow(
     request: formattedRequest,
     result
   }).catch(() => null);
+  if (guestProposerSub && guestProposerSub !== (ownerUser?.id || reqRow.owner_sub)) {
+    await notifyLandApprovalExecuted(db, {
+      userSub: guestProposerSub,
+      request: formattedRequest,
+      result
+    }).catch(() => null);
+  }
   return {
     ok: true,
     request: formattedRequest,
@@ -996,11 +1067,14 @@ export async function signRequestByMobile(
     if (nextScale === null && autoFitScale) {
       try {
         if (row.action === 'create_sculpture') {
-          const parcelCtx = await checkParcelOwnership(db, {
+          const access = await resolveParcelPlacementAccess(db, {
             parcelId: row.parcel_id,
             user
           });
-          await preflightCreateSculptureOnLand(db, { parcelCtx, payload: parsedPayload });
+          await preflightCreateSculptureOnLand(db, {
+            parcelCtx: access.parcelCtx,
+            payload: parsedPayload
+          });
         } else if (row.action === 'update_sculpture') {
           const perm = await checkSculptureOrLandOwnership(db, {
             sculptureId: row.sculpture_id,
@@ -1271,6 +1345,97 @@ export async function compactSignatureRequestsMaintenance(
   }
 
   return { expiredMarked, rowsCompacted, bytesFreed, housekeepingDeleted };
+}
+
+export async function enqueueGuestProposalForLandOwner(
+  db,
+  {
+    parcelCtx,
+    landOwnerUser,
+    landOwnerAddress,
+    proposerUser,
+    payload,
+    agentName = '',
+    notifyMobileFn = null,
+    stagedBlobStore = null
+  }
+) {
+  if (!landOwnerUser?.id) {
+    throw new McpServiceError(
+      'Unable to locate the land holder account for approval routing.',
+      400
+    );
+  }
+  const proposerHandle = resolvePublicUserHandle(proposerUser, {
+    fallback: 'Artist',
+    includeAt: true
+  });
+  const proposerWallet = resolvePreferredOwnerWallet(proposerUser);
+  if (!proposerWallet) {
+    throw new McpServiceError('Artist wallet address unavailable for NFT minting.', 400);
+  }
+  const ownerPairingRow = await db
+    .get(
+      `SELECT code FROM mcp_pairings
+       WHERE owner_sub = ? AND status = 'connected'
+       ORDER BY last_active_at DESC LIMIT 1`,
+      [landOwnerUser.id]
+    )
+    .catch(() => null);
+  const ownerPairingCode = ownerPairingRow?.code || '';
+  const proposalPayload = {
+    ...(payload && typeof payload === 'object' ? payload : {}),
+    _proposer: {
+      id: proposerUser.id,
+      email: proposerUser.email || '',
+      name: proposerUser.name || '',
+      username: proposerUser.username || '',
+      handle: proposerHandle,
+      walletAddress: proposerWallet
+    }
+  };
+  const displayAgent = agentName
+    ? `${proposerHandle} via ${String(agentName).trim()}`
+    : proposerHandle;
+  const reqObj = await enqueueSignatureRequest(db, {
+    pairingCode: ownerPairingCode,
+    ownerUser: landOwnerUser,
+    ownerAddress: landOwnerAddress || resolvePreferredOwnerWallet(landOwnerUser),
+    action: 'create_sculpture',
+    parcelId: parcelCtx.parcelId,
+    payload: proposalPayload,
+    requestedBy: 'guest_proposal',
+    agentName: displayAgent,
+    stagedBlobStore
+  });
+
+  await notifyPendingLandApproval(db, {
+    userSub: landOwnerUser.id,
+    request: reqObj
+  }).catch(() => {});
+
+  if (typeof notifyMobileFn === 'function' && ownerPairingCode) {
+    try {
+      await notifyMobileFn({
+        type: 'signature_request',
+        pairingCode: ownerPairingCode,
+        request: reqObj
+      });
+    } catch {
+      // non-blocking push notification
+    }
+  }
+
+  const ownerHandle = resolvePublicUserHandle(landOwnerUser, {
+    fallback: 'the land holder',
+    includeAt: true
+  });
+  return {
+    status: 'pending_owner_approval',
+    requiresOwnerApproval: true,
+    message: `Submitted "${payload?.title || 'Artwork'}" to ${ownerHandle} for approval on "${reqObj.landDisplayName || parcelCtx.parcelId}". Once approved, the artwork NFT will be minted to your wallet (${proposerWallet}).`,
+    request: reqObj
+  };
 }
 
 export async function handlePairedLandMutationViaMcp(

@@ -88,7 +88,8 @@ export async function isUserLandOwner(db, { parcelId, user = null, signerAddress
       cleanParcelId
     ])
     .catch(() => null);
-  if (stewardRow) {
+  const hasExplicitSteward = Boolean(stewardRow?.steward_sub || stewardRow?.steward_address);
+  if (hasExplicitSteward) {
     if (userId && stewardRow.steward_sub === userId) return true;
     if (stewardRow.steward_address && allowed.has(String(stewardRow.steward_address).toLowerCase())) {
       return true;
@@ -96,7 +97,10 @@ export async function isUserLandOwner(db, { parcelId, user = null, signerAddress
   }
 
   const parcelRow = await db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [cleanParcelId]);
-  if (parcelRow) {
+  const hasExplicitClaimant = Boolean(
+    parcelRow?.first_claimant_sub || parcelRow?.first_claimant_address
+  );
+  if (hasExplicitClaimant) {
     if (userId && parcelRow.first_claimant_sub === userId) return true;
     if (
       parcelRow.first_claimant_address &&
@@ -104,6 +108,12 @@ export async function isUserLandOwner(db, { parcelId, user = null, signerAddress
     ) {
       return true;
     }
+  }
+
+  // If an explicit land holder is recorded in land_steward_state or land_parcels,
+  // never grant land-owner rights to a guest artist who placed a sculpture on it.
+  if (hasExplicitSteward || hasExplicitClaimant) {
+    return false;
   }
 
   const firstVisible = await db.get(
@@ -198,21 +208,13 @@ export async function checkParcelOwnership(db, { parcelId, user = null, signerAd
     );
   }
 
-  const allowed = new Set(resolveUserWalletAddresses(user));
-  if (signerAddress && ethers.isAddress(signerAddress)) {
-    allowed.add(ethers.getAddress(signerAddress).toLowerCase());
-  }
-
-  const ownsVisibleSculpture = (visibleRows || []).some((s) =>
-    allowed.has(String(s.recipient_address || '').toLowerCase())
-  );
   const ownsParcelDirect = await isUserLandOwner(db, {
     parcelId: cleanParcelId,
     user,
     signerAddress
   });
 
-  if (!ownsVisibleSculpture && !ownsParcelDirect) {
+  if (!ownsParcelDirect) {
     throw new McpServiceError(
       `You do not hold property ownership on Virtual Land ${cleanParcelId}.`,
       403
@@ -239,6 +241,125 @@ export async function checkParcelOwnership(db, { parcelId, user = null, signerAd
       latest_claimant_address: visibleRows[0]?.recipient_address || ''
     },
     visibleRows: visibleRows || []
+  };
+}
+
+/**
+ * Resolves placement access on ANY minted Virtual Land parcel for an authenticated user/agent:
+ *  - Frozen lands block all new placements (403).
+ *  - Land owners ('owner_direct') and explicitly added Contributors ('contributor_direct') can place directly.
+ *  - On open lands where `require_approval` is OFF (default), anyone can place directly ('guest_direct')
+ *    with NFT ownership going to the artist and an automatic notification sent to the land holder.
+ *  - When the land holder turns ON `require_approval` in Land Settings, non-owner/non-contributor
+ *    placements enter the land holder's approval queue ('guest_requires_owner_approval'); upon owner
+ *    approval, the NFT still mints to the proposing artist.
+ */
+export async function resolveParcelPlacementAccess(
+  db,
+  { parcelId, user = null, signerAddress = '' }
+) {
+  const cleanParcelId = normalizeParcelId(parcelId);
+  if (!cleanParcelId) {
+    throw new McpServiceError('Virtual Land parcelId is required.', 400);
+  }
+  const [parcelRow, stewardRow, visibleRows, settingsRow] = await Promise.all([
+    db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [cleanParcelId]).catch(() => null),
+    db
+      .get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [cleanParcelId])
+      .catch(() => null),
+    db
+      .all(
+        'SELECT * FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC',
+        [cleanParcelId]
+      )
+      .catch(() => []),
+    db.get('SELECT * FROM land_settings WHERE parcel_id = ?', [cleanParcelId]).catch(() => null)
+  ]);
+
+  if (!parcelRow && !stewardRow && (!visibleRows || visibleRows.length === 0)) {
+    throw new McpServiceError(
+      `Virtual Land parcel ${cleanParcelId} was not found. Publish a sculpture here first to claim it.`,
+      404
+    );
+  }
+
+  const isFrozen = Boolean(settingsRow?.freeze_placements);
+  const requireApproval = Boolean(settingsRow?.require_approval);
+  const allowContributorEdits = settingsRow ? Boolean(settingsRow.allow_contributor_edits) : true;
+
+  if (isFrozen) {
+    const landLabel = await getLatestParcelDisplayName(db, cleanParcelId);
+    throw new McpServiceError(
+      `Virtual Land "${landLabel}" is frozen — no new sculptures can be placed until the land holder unfreezes it in Land Settings.`,
+      403
+    );
+  }
+
+  const isOwner = await isUserLandOwner(db, {
+    parcelId: cleanParcelId,
+    user,
+    signerAddress
+  });
+  const isContributor =
+    !isOwner && user ? await isUserParcelContributor(db, { parcelId: cleanParcelId, user }) : false;
+
+  const landOwnerSub = String(
+    stewardRow?.steward_sub || parcelRow?.first_claimant_sub || visibleRows?.[0]?.creator_sub || ''
+  ).trim();
+  const landOwnerAddress = String(
+    stewardRow?.steward_address ||
+      parcelRow?.first_claimant_address ||
+      visibleRows?.[0]?.recipient_address ||
+      ''
+  ).trim();
+  const landOwnerUserRow = landOwnerSub
+    ? await db.get('SELECT * FROM users WHERE id = ?', [landOwnerSub]).catch(() => null)
+    : null;
+  const landOwnerUser = landOwnerUserRow || {
+    id: landOwnerSub,
+    name: stewardRow?.steward_name || visibleRows?.[0]?.creator_name || 'Land Holder',
+    username: '',
+    wallet_address: landOwnerAddress,
+    custom_payout_address: ''
+  };
+
+  const geohash =
+    parcelRow?.geohash ||
+    visibleRows?.[0]?.geohash ||
+    cleanParcelId.replace(/^GLAND-/, '').toLowerCase();
+  const bounds = decodeGeohashBounds(geohash);
+  const parcelCtx = {
+    parcelId: cleanParcelId,
+    geohash,
+    bounds,
+    parcelRow: parcelRow || {
+      parcel_id: cleanParcelId,
+      geohash,
+      center_lat: bounds.center[0],
+      center_lng: bounds.center[1],
+      first_claimant_sub: landOwnerSub,
+      first_claimant_address: landOwnerAddress,
+      latest_claimant_address: landOwnerAddress
+    },
+    visibleRows: visibleRows || []
+  };
+
+  let mode = 'guest_direct';
+  if (isOwner) mode = 'owner_direct';
+  else if (isContributor) mode = 'contributor_direct';
+  else if (requireApproval) mode = 'guest_requires_owner_approval';
+
+  return {
+    parcelCtx,
+    isOwner,
+    isContributor,
+    isFrozen,
+    requireApproval,
+    allowContributorEdits,
+    mode,
+    landOwnerSub,
+    landOwnerAddress: resolvePreferredOwnerWallet(landOwnerUser) || landOwnerAddress,
+    landOwnerUser
   };
 }
 
