@@ -47,7 +47,10 @@ import {
   resolveSculpturePlacement,
   tiltToDegrees
 } from '../sculpturePlacement.mjs';
-import { DEFAULT_MAX_ORB_REPROJ_PX, DEFAULT_MIN_ORB_INLIERS } from '../landmarkService.mjs';
+import {
+  formatLandSecurityPolicy,
+  seedLandSecurityPolicy
+} from '../landmarkService.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -750,7 +753,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
             .catch(() => []),
           db
             .all(
-              `SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, updated_at
+              `SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, anchor_pack_json, updated_at
                FROM parcel_landmark_anchors
                WHERE parcel_id IN (${ownedPlaceholders})`,
               ownedParcelIds
@@ -806,15 +809,8 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     const contribRows = contribsByParcel.get(pid) || [];
     const eligibleVisitors = eligibleVisitorsMap.get(normalizeParcelId(pid)) || [];
     const spRow = secPolicyByParcel.get(pid);
-    const securityPolicy = {
-      parcelId: normalizeParcelId(pid),
-      requirePasskeyUnlock: Boolean(spRow?.require_passkey_unlock),
-      requireOrbUnlock: Boolean(spRow?.require_orb_unlock),
-      minOrbInliers: Number(spRow?.min_orb_inliers || DEFAULT_MIN_ORB_INLIERS),
-      maxReprojErrPx: Number(spRow?.max_reproj_err_px || DEFAULT_MAX_ORB_REPROJ_PX),
-      updatedAt: spRow?.updated_at || ''
-    };
     const landmarkAnchor = landmarkByParcel.get(pid) || null;
+    const securityPolicy = formatLandSecurityPolicy(pid, spRow, landmarkAnchor);
     const geohash = onLand[0]?.geohash || lp?.geohash || pid.replace(/^GLAND-/, '').toLowerCase();
     const bounds = geohash ? decodeGeohashBounds(geohash) : null;
     const vr = volumeMap.get(pid);
@@ -912,9 +908,10 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
             featureCount: Number(landmarkAnchor.feature_count || 0),
             descriptorDigest: landmarkAnchor.descriptor_digest,
             anchorCid: landmarkAnchor.anchor_cid || '',
+            lightingSlots: securityPolicy.lightingSlots || [],
             updatedAt: landmarkAnchor.updated_at
           }
-        : { hasLandmark: false, keyframeCount: 0, featureCount: 0 },
+        : { hasLandmark: false, keyframeCount: 0, featureCount: 0, lightingSlots: [] },
       contributors: (contribRows || []).map(formatContributorRow),
       eligibleVisitors,
       sculptureCount: visibleCount,
@@ -2573,6 +2570,16 @@ export async function applyPublishOnBehalf(
       ]
     );
   }
+
+  await seedLandSecurityPolicy(db, {
+    parcelId: locBundle.parcelId,
+    ownerSub: ownerUser.id,
+    originSource: 'mobile_ar',
+    lat: fittedVolume ? fittedVolume.centerLat : locBundle.parcelBounds.center[0],
+    lng: fittedVolume ? fittedVolume.centerLng : locBundle.parcelBounds.center[1],
+    geoInfo: locBundle.geoInfo || null,
+    skipRemoteLookup: true
+  }).catch(() => null);
 
   if (fittedVolume) {
     await db

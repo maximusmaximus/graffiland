@@ -300,7 +300,7 @@ export async function searchLocations({ query = '', lat = null, lng = null, limi
  * (street/place, neighborhood, city, region, country) using ArcGIS World Geocoder
  * with Photon OSM fallback. Never throws on upstream outage.
  */
-export async function reverseGeocodeLocation({ lat, lng } = {}) {
+export async function reverseGeocodeLocation({ lat = null, lng = null } = {}) {
   const nLat = Number(lat);
   const nLng = Number(lng);
   if (
@@ -346,6 +346,11 @@ export async function reverseGeocodeLocation({ lat, lng } = {}) {
   let region = '';
   let country = '';
   let fullLabel = '';
+  let addrType = '';
+  let placeType = '';
+  let osmKey = '';
+  let osmValue = '';
+  let housenumber = '';
 
   const addr = arcgisData?.address;
   if (addr && typeof addr === 'object') {
@@ -360,6 +365,9 @@ export async function reverseGeocodeLocation({ lat, lng } = {}) {
     region = rawRegion;
     country = rawCountry;
     fullLabel = String(addr.LongLabel || addr.Match_addr || '').trim();
+    addrType = String(addr.Addr_type || '').trim();
+    placeType = String(addr.Type || '').trim();
+    housenumber = String(addr.AddNum || '').trim();
   }
 
   const phProps = photonData?.features?.[0]?.properties;
@@ -384,6 +392,11 @@ export async function reverseGeocodeLocation({ lat, lng } = {}) {
     if (!country) {
       country = String(phProps.countrycode || phProps.country || '').trim();
     }
+    osmKey = String(phProps.osm_key || '').trim().toLowerCase();
+    osmValue = String(phProps.osm_value || '').trim().toLowerCase();
+    if (!housenumber && phProps.housenumber) {
+      housenumber = String(phProps.housenumber).trim();
+    }
   }
 
   const localityParts = [];
@@ -406,6 +419,17 @@ export async function reverseGeocodeLocation({ lat, lng } = {}) {
       ? `${street} · ${areaLine}`
       : street || areaLine || fullLabel || `${nLat.toFixed(5)}, ${nLng.toFixed(5)}`;
 
+  const envTier = classifyEnvironmentTier({
+    addrType,
+    placeType,
+    osmKey,
+    osmValue,
+    street,
+    housenumber,
+    city,
+    neighborhood
+  });
+
   return {
     lat: Number(nLat.toFixed(6)),
     lng: Number(nLng.toFixed(6)),
@@ -416,6 +440,133 @@ export async function reverseGeocodeLocation({ lat, lng } = {}) {
     region,
     country,
     shortLabel,
-    fullLabel: fullLabel || shortLabel
+    fullLabel: fullLabel || shortLabel,
+    addrType,
+    placeType,
+    osmKey,
+    osmValue,
+    housenumber,
+    envTier
   };
+}
+
+/**
+ * Deterministic, zero-cost environment classifier using Nominatim, Photon, and ArcGIS fields.
+ * Seeds initial Auto ORB strictness before a physical Mobile AR Scene Scan occurs.
+ *
+ * @param {Record<string, any>} [signals]
+ * @returns {'dense_urban' | 'suburban_plaza' | 'open_nature' | 'unknown'}
+ */
+export function classifyEnvironmentTier(signals = {}) {
+  if (!signals || typeof signals !== 'object') return 'unknown';
+  const category = String(signals.category || signals.osm_key || signals.osmKey || '').toLowerCase();
+  const type = String(signals.type || signals.osm_value || signals.osmValue || '').toLowerCase();
+  const addresstype = String(signals.addresstype || signals.addr_type || signals.addrType || '').toLowerCase();
+  const placeType = String(signals.placeType || signals.place_type || '').toLowerCase();
+  const street = String(signals.street || signals.road || '').trim();
+  const housenumber = String(signals.housenumber || signals.house_number || '').trim();
+  const city = String(signals.city || '').trim();
+  const hay = `${category} ${type} ${addresstype} ${placeType}`.trim();
+
+  // 1) Open nature / low-texture outdoor areas (parks, forests, beaches, meadows, water)
+  if (
+    category === 'natural' ||
+    category === 'water' ||
+    category === 'waterway' ||
+    (category === 'landuse' && /^(forest|grass|meadow|farmland|orchard|vineyard|heath|scrub|conservation|recreation_ground)$/.test(type)) ||
+    /^(forest|wood|water|beach|sand|wetland|grassland|heath|scrub|peak|cliff|bay|lake|river|meadow|nature_reserve)$/.test(type) ||
+    /\b(forest|wood|water|river|lake|beach|meadow|trail|wilderness|nature reserve)\b/.test(hay)
+  ) {
+    return 'open_nature';
+  }
+
+  // 2) Suburban plazas / parks / squares / civic open spaces
+  if (
+    category === 'leisure' ||
+    category === 'tourism' ||
+    category === 'place' ||
+    /^(park|plaza|square|garden|playground|pitch|stadium|pedestrian|attraction|monument|memorial|camp_site|viewpoint)$/.test(type) ||
+    /^(park|plaza|square|public square|garden|recreation)$/.test(placeType) ||
+    /\b(park|plaza|square|garden|promenade|campus|courtyard)\b/.test(hay)
+  ) {
+    return 'suburban_plaza';
+  }
+
+  // 3) Dense urban (buildings, street intersections, commercial/retail storefronts, dense addresses)
+  if (
+    category === 'building' ||
+    category === 'shop' ||
+    category === 'office' ||
+    category === 'amenity' ||
+    (category === 'highway' && (Boolean(street) || Boolean(city) || /^(primary|secondary|tertiary|residential|commercial|footway|pedestrian|living_street)$/.test(type))) ||
+    /^(pointaddress|streetaddress|streetint|subaddress|poi)$/.test(addresstype) ||
+    /^(building|house|apartments|commercial|retail|industrial|office|shop|restaurant|cafe|hotel|museum|cinema|theatre|bank)$/.test(type) ||
+    (Boolean(street) && Boolean(housenumber))
+  ) {
+    return 'dense_urban';
+  }
+
+  // 4) Road/city present without dense building tag -> suburban_plaza
+  if (street && city) {
+    return 'suburban_plaza';
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Best-effort environment tier lookup for coordinates with strict timeout and zero-throw fallback.
+ * Reuses already-fetched `geoInfo` when present so Mobile AR mints perform zero extra HTTP calls.
+ */
+export async function seedEnvironmentTierForCoords({
+  lat = null,
+  lng = null,
+  geoInfo = null,
+  skipRemoteLookup = false,
+  timeoutMs = 1800
+} = {}) {
+  if (geoInfo && typeof geoInfo === 'object') {
+    const direct = classifyEnvironmentTier(geoInfo);
+    if (direct !== 'unknown') return direct;
+  }
+  if (skipRemoteLookup) return 'unknown';
+
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (
+    !Number.isFinite(nLat) ||
+    !Number.isFinite(nLng) ||
+    nLat < -85 ||
+    nLat > 85 ||
+    nLng < -180 ||
+    nLng > 180
+  ) {
+    return 'unknown';
+  }
+
+  try {
+    const photonUrl = `https://photon.komoot.io/reverse?lon=${encodeURIComponent(
+      nLng.toFixed(6)
+    )}&lat=${encodeURIComponent(nLat.toFixed(6))}`;
+    const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&location=${encodeURIComponent(
+      `${nLng.toFixed(6)},${nLat.toFixed(6)}`
+    )}`;
+    const [photonData, arcgisData] = await Promise.all([
+      safeFetchJson(photonUrl, { Accept: 'application/json' }, timeoutMs),
+      safeFetchJson(arcgisUrl, { Accept: 'application/json' }, timeoutMs)
+    ]);
+    const phProps = photonData?.features?.[0]?.properties || {};
+    const addr = arcgisData?.address || {};
+    return classifyEnvironmentTier({
+      osmKey: phProps.osm_key,
+      osmValue: phProps.osm_value,
+      addrType: addr.Addr_type,
+      placeType: addr.Type,
+      street: addr.Address || phProps.street || '',
+      housenumber: addr.AddNum || phProps.housenumber || '',
+      city: addr.City || phProps.city || phProps.town || ''
+    });
+  } catch {
+    return 'unknown';
+  }
 }

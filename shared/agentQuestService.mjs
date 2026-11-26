@@ -37,6 +37,7 @@ import {
   getParcelQualifiedHumanContributors,
   recordFeeLedgerSplit
 } from './marketplaceService.mjs';
+import { seedLandSecurityPolicy } from './landmarkService.mjs';
 
 function parseSlotOffsets(rawJson) {
   try {
@@ -384,7 +385,10 @@ export async function claimDormantLand(
     curationNote = '',
     volume = null,
     txHash = '',
-    chainCfg = null
+    chainCfg = null,
+    envTier = '',
+    geoInfo = null,
+    skipRemoteLookup = undefined
   }
 ) {
   const effectiveDescription = String(description || curationNote || '').trim().slice(0, 240);
@@ -702,6 +706,28 @@ export async function claimDormantLand(
     compact: true
   });
 
+  const skipGeo =
+    skipRemoteLookup !== undefined
+      ? Boolean(skipRemoteLookup)
+      : typeof process !== 'undefined' &&
+        (process.env?.NODE_ENV === 'test' ||
+          Boolean(process.env?.NODE_TEST_CONTEXT) ||
+          process.env?.GRAFFILAND_SKIP_GEO_SEED === '1' ||
+          /\.test\.mjs$/i.test(String(process.argv?.[1] || '')) ||
+          (Array.isArray(process.execArgv) && process.execArgv.includes('--test')));
+
+  const securityPolicy = await seedLandSecurityPolicy(db, {
+    parcelId: cleanParcelId,
+    ownerSub: agentUser.id,
+    originSource: isAgent ? 'agent_mcp' : 'browser_map',
+    envTier,
+    lat: resolvedVolume?.centerLat ?? bounds.center[0],
+    lng: resolvedVolume?.centerLng ?? bounds.center[1],
+    geoInfo,
+    skipRemoteLookup: skipGeo,
+    timeoutMs: 1400
+  }).catch(() => null);
+
   await notifyLandMinted(db, {
     userSub: agentUser.id,
     parcelId: cleanParcelId,
@@ -732,6 +758,7 @@ export async function claimDormantLand(
     permanentOwnership: false,
     bounds,
     volume: resolvedVolume,
+    securityPolicy,
     limits: LAND_VOLUME_LIMITS,
     slots: {
       usedSlots: usedSlots + 1,

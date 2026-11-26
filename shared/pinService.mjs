@@ -5,7 +5,13 @@ import {
   verifyParcelPhysicalPresence,
   verifyParcelPresenceSignature
 } from './chatPolicy.mjs';
-import { getLandSecurityPolicy, verifyOrbProofAgainstParcel } from './landmarkService.mjs';
+import {
+  applyLightingRelaxation,
+  getLandSecurityPolicy,
+  normalizeLightingSlot,
+  verifyOrbProofAgainstParcel
+} from './landmarkService.mjs';
+import { computeSolarPosition, decodeGeohashBounds } from '../server/services/pol.mjs';
 import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
 import { checkParcelOwnership, checkSculptureOwnership } from './mcpService.mjs';
 import { hasRegisteredPasskey, verifyPasskeyAssertion } from './passkeyService.mjs';
@@ -462,19 +468,58 @@ export async function issueParcelPresenceChallenge(
   ]);
   const allowedCredentialIds = (userPasskeys || []).map((r) => r.credential_id).filter(Boolean);
   const userHasPasskey = allowedCredentialIds.length > 0;
+  const hasPack = Boolean(anchorRow?.descriptor_digest);
+  const geohashClean = String(sculpture.geohash || '').toLowerCase();
+  const bounds = geohashClean ? decodeGeohashBounds(geohashClean) : null;
+  const solarLat = Number.isFinite(Number(body?.lat))
+    ? Number(body.lat)
+    : Number.isFinite(Number(sculpture.lat))
+      ? Number(sculpture.lat)
+      : bounds?.center?.[0];
+  const solarLng = Number.isFinite(Number(body?.lng))
+    ? Number(body.lng)
+    : Number.isFinite(Number(sculpture.lng))
+      ? Number(sculpture.lng)
+      : bounds?.center?.[1];
+  const solar =
+    Number.isFinite(solarLat) && Number.isFinite(solarLng)
+      ? computeSolarPosition(solarLat, solarLng)
+      : { regime: 'daylight' };
+  const desiredSlot = normalizeLightingSlot('', solar.regime);
+  const relaxed = applyLightingRelaxation({
+    minOrbInliers: policy.minOrbInliers,
+    maxReprojErrPx: policy.maxReprojErrPx,
+    lightingAdaptive: policy.lightingAdaptive,
+    solarRegime: solar.regime,
+    hasMatchingLightingSlot: (policy.lightingSlots || []).includes(desiredSlot)
+  });
+
+  const orbRequired = Boolean(policy.requireOrbUnlock && hasPack);
+  const orbStatus = !hasPack ? 'no_pack' : orbRequired ? 'required' : 'optional';
 
   return {
     challengeId,
     challengeNonce,
     sculptureId: sculpture.id,
     parcelId: sculpture.parcel_id,
-    geohash: String(sculpture.geohash || '').toLowerCase(),
+    geohash: geohashClean,
     webauthnRequired: Boolean(policy.requirePasskeyUnlock || userHasPasskey),
     allowedCredentialIds,
-    orbRequired: Boolean(policy.requireOrbUnlock || anchorRow?.descriptor_digest),
+    orbRequired,
+    orbStatus,
+    upgradePath: hasPack ? '' : 'first_mobile_scan',
     descriptorDigest: anchorRow?.descriptor_digest || '',
-    minOrbInliers: policy.minOrbInliers,
-    maxReprojErrPx: policy.maxReprojErrPx,
+    minOrbInliers: relaxed.effectiveMinOrbInliers,
+    maxReprojErrPx: relaxed.effectiveMaxReprojErrPx,
+    baseMinOrbInliers: policy.minOrbInliers,
+    baseMaxReprojErrPx: policy.maxReprojErrPx,
+    solarRegime: relaxed.solarRegime,
+    lightingRelaxed: relaxed.relaxed,
+    lightingAdaptive: policy.lightingAdaptive,
+    lightingSlots: policy.lightingSlots || [],
+    envTier: policy.envTier,
+    originSource: policy.originSource,
+    isAuto: policy.isAuto,
     expiresAt
   };
 }
@@ -554,7 +599,9 @@ export async function unlockPinnedBatchForParcelVisitor(
   const orbCheck = await verifyOrbProofAgainstParcel(db, {
     parcelId: sculpture.parcel_id,
     orbProof: body?.orbProof,
-    policy
+    policy,
+    lat: body?.sightProof?.lat ?? sculpture.lat,
+    lng: body?.sightProof?.lng ?? sculpture.lng
   });
 
   const userHasPasskey = await hasRegisteredPasskey(db, user.id);
@@ -609,6 +656,8 @@ export async function unlockPinnedBatchForParcelVisitor(
       geohash: String(sculpture.geohash || '').toLowerCase(),
       verifiedPresence,
       orbCheck,
+      orbStatus: orbCheck?.orbStatus || (orbCheck?.verified ? 'verified' : 'skipped'),
+      upgradePath: orbCheck?.upgradePath || '',
       webauthnResult,
       meta,
       parcelSealKeyB64: '',
@@ -642,6 +691,8 @@ export async function unlockPinnedBatchForParcelVisitor(
     geohash: String(sculpture.geohash || '').toLowerCase(),
     verifiedPresence,
     orbCheck,
+    orbStatus: orbCheck?.orbStatus || (orbCheck?.verified ? 'verified' : 'skipped'),
+    upgradePath: orbCheck?.upgradePath || '',
     webauthnResult,
     meta,
     ipfsCid: batchRow.ipfs_cid,
