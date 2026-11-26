@@ -1161,56 +1161,6 @@ function useNotificationEngine({
           </div>
         </div>
 
-        {mintStatus && (
-          <div
-            className={`notif-mint-banner ${
-              mintStatus.canMintDesktop ? 'mint-open' : 'mint-full'
-            }`}
-          >
-            <div className="notif-mint-banner-text">
-              {mintStatus.canMintDesktop ? (
-                <>
-                  <strong>
-                    ✅ Mint Ready · {mintStatus.remainingSlots}/{mintStatus.maxSlots} free Desktop
-                    slots open
-                  </strong>
-                  <span>
-                    Tap Mint Land to see the simple ways to mint (Mobile AR instant permanent land
-                    or Desktop 3D plot).
-                  </span>
-                </>
-              ) : (
-                <>
-                  <strong>
-                    ⏳ {mintStatus.usedSlots}/{mintStatus.maxSlots} starter Desktop lands full
-                  </strong>
-                  <span>
-                    Tap Mint Land to see how to mint right now in Mobile AR or unlock more slots.
-                  </span>
-                </>
-              )}
-            </div>
-            {onAction && (
-              <button
-                type="button"
-                className="btn-xs notif-mint-banner-btn"
-                data-testid="notif-mint-land-btn"
-                onClick={() => {
-                  closePopover();
-                  onAction({
-                    actionType: 'open_mint',
-                    category: mintStatus.canMintDesktop
-                      ? 'mint_slots_unlocked'
-                      : 'mint_limit_reached'
-                  });
-                }}
-              >
-                🏗️ Mint Land
-              </button>
-            )}
-          </div>
-        )}
-
         {activeTab === 'inbox' ? (
           <div className="notif-inbox-body">
             <div className="notif-inbox-toolbar">
@@ -1446,6 +1396,7 @@ function useNotificationEngine({
       unreadCount: unreadRegularCount,
       pendingCount: livePendingList.length,
       historyCount: historyDisplayNotifications.length,
+      mintStatus,
       openNotifications,
       closeNotifications: closePopover,
       toggleNotifications,
@@ -1460,6 +1411,7 @@ function useNotificationEngine({
       unreadRegularCount,
       livePendingList.length,
       historyDisplayNotifications.length,
+      mintStatus,
       openNotifications,
       closePopover,
       toggleNotifications,

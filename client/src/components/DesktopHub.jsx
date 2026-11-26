@@ -3414,6 +3414,7 @@ export default function DesktopHub({
             onUserUpdate(nextUser);
           }}
           onSelectSculpture={(sc) => openSculpture(sc)}
+          onOpenMintGuide={openMintLandMode}
           onOpenLand={(land) => {
             const cLat = Number(land?.centerLat ?? land?.volume?.centerLat);
             const cLng = Number(land?.centerLng ?? land?.volume?.centerLng);
