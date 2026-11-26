@@ -2432,13 +2432,15 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(view.getByTestId('mobile-map-canvas').getAttribute('data-map-expanded'), 'compact');
     assert.ok(view.getByTestId('mobile-nearest-lands-list'));
 
-    // Switch back to 2D, expand Card #2 via triangle, then click "3D Map" button -> jumps to 3D focused on Land #2
+    // Switch back to 2D, expand Card #2 via triangle -> redundant per-item "3D Map" button is removed on all expanded cards!
     RTL.fireEvent.click(view.getByTestId('mobile-map-2d-toggle-btn'));
     const reopenedToggles = view.getAllByTestId('land-card-expand-toggle');
     RTL.fireEvent.click(reopenedToggles[1]);
-    const card3dBtns = view.getAllByTestId('land-card-3d-map-btn');
-    assert.equal(card3dBtns.length, 2);
-    RTL.fireEvent.click(card3dBtns[1]);
+    assert.equal(view.queryAllByTestId('land-card-3d-map-btn').length, 0);
+    // Selecting Card #2 via its rank badge and toggling the map's 3D button still focuses Land #2 in 3D
+    const rankBtns = view.getAllByTestId('land-card-rank-btn');
+    RTL.fireEvent.click(rankBtns[1]);
+    RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
     assert.ok(selectedParcels.includes('GLAND-SECOND02'));
     cleanup();
@@ -7621,5 +7623,208 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(map3dSrc.includes('data-testid="map3d-zoom-out-btn"'), 'MapView3D must expose Zoom Out button');
     assert.ok(map3dSrc.includes('data-testid="map3d-fit-draft-btn"'), 'MapView3D must expose Fit Draft button');
     assert.ok(map3dSrc.includes('computeDraft3DAutoFit'), 'MapView3D must auto-fit tall/wide drafts');
+  });
+
+  test('ARLandInspectorPanel greys out on-site actions when remote and notifies user to visit land in person', async () => {
+    const { default: ARLandInspectorPanel, evaluateArLandActionProximity } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+    const { subscribeSettingsSaved } = await loadJsxModule('client/src/utils/toastNotice.js');
+
+    // 1) Pure proximity evaluator edge cases (inside, mid-range, remote, null GPS)
+    const insideGate = evaluateArLandActionProximity({
+      isInside: true,
+      edgeDistanceMetersExact: 0,
+      outOfArRange: false
+    });
+    assert.equal(insideGate.canDrawAtLand, true);
+    assert.equal(insideGate.canCheckInAtLand, true);
+    assert.equal(insideGate.canChatAtLand, true);
+    assert.equal(insideGate.canAlignAtLand, true);
+
+    const midRangeGate = evaluateArLandActionProximity({
+      isInside: false,
+      edgeDistanceMetersExact: 60,
+      outOfArRange: false
+    });
+    assert.equal(midRangeGate.canDrawAtLand, false);
+    assert.equal(midRangeGate.canCheckInAtLand, false);
+    assert.equal(midRangeGate.canChatAtLand, true);
+    assert.equal(midRangeGate.canAlignAtLand, true);
+
+    const farGate = evaluateArLandActionProximity({
+      isInside: false,
+      edgeDistanceMetersExact: 1770,
+      outOfArRange: true
+    });
+    assert.equal(farGate.canDrawAtLand, false);
+    assert.equal(farGate.canCheckInAtLand, false);
+    assert.equal(farGate.canChatAtLand, false);
+    assert.equal(farGate.canAlignAtLand, false);
+
+    // Null GPS must NOT coerce Number(null) -> 0 and unlock actions!
+    const noGpsGate = evaluateArLandActionProximity({
+      isInside: false,
+      edgeDistanceMetersExact: null,
+      edgeDistanceMeters: null,
+      distanceMeters: null,
+      outOfArRange: false
+    });
+    assert.equal(noGpsGate.edgeDistM, null);
+    assert.equal(noGpsGate.canDrawAtLand, false);
+    assert.equal(noGpsGate.canCheckInAtLand, false);
+    assert.equal(noGpsGate.canChatAtLand, false);
+    assert.equal(noGpsGate.canAlignAtLand, false);
+
+    // 2) Remote land (1.1 mi away): Draw, Land Chat, Check In IRL, and Align AR are greyed out & locked
+    const remoteLand = {
+      parcelId: 'GLAND-DISMAL01',
+      customName: 'DismalLand',
+      displayName: 'DismalLand',
+      description: 'might be kinda scary idn',
+      centerLat: 39.7285,
+      centerLng: -121.8375,
+      edgeDistanceMeters: 1770,
+      edgeDistanceMetersExact: 1770.2,
+      distanceMeters: 1785,
+      isInside: false,
+      outOfArRange: true,
+      isOwned: true,
+      isFrozen: false,
+      stewardUsername: 'bigdog',
+      googleMapsUrl: 'https://www.google.com/maps/dir/?api=1&destination=39.7285,-121.8375',
+      expiration: {
+        state: 'expiring',
+        urgent: false,
+        badgeText: '27d 20h left',
+        detailText: 'Visit in person to permanently own'
+      },
+      sculptures: [{ id: 'sc-snarl', title: 'Steamboat Snarl', voxelCount: 410 }]
+    };
+
+    const fired = { draw: 0, chat: 0, checkIn: 0, manage: 0, inspectArt: 0 };
+    const toasts = [];
+    const unsub = subscribeSettingsSaved((detail) => toasts.push(detail));
+
+    try {
+      const remoteView = RTL.render(
+        React.createElement(ARLandInspectorPanel, {
+          land: remoteLand,
+          sensorStatus: { trueNorthLocked: true, manualYawNudgeDeg: 4, needsCompassCalibration: true },
+          onDrawHere: () => {
+            fired.draw += 1;
+          },
+          onOpenLandChat: () => {
+            fired.chat += 1;
+          },
+          onCheckInLand: async () => {
+            fired.checkIn += 1;
+            return true;
+          },
+          onManageLand: () => {
+            fired.manage += 1;
+          },
+          onInspectSculpture: () => {
+            fired.inspectArt += 1;
+          },
+          onAdjustCompassNudge: () => {},
+          onResetCompassNudge: () => {},
+          onClose: () => {}
+        })
+      );
+
+      const drawBtn = remoteView.getByTestId('ar-land-draw-btn');
+      const chatBtn = remoteView.getByTestId('ar-land-chat-btn');
+      const checkInBtn = remoteView.getByTestId('ar-land-checkin-btn');
+      const alignBtn = remoteView.getByTestId('ar-compass-align-toggle-btn');
+
+      // All 4 in-person buttons are visually locked/greyed out (and Draw does NOT carry btn-primary)
+      for (const btn of [drawBtn, chatBtn, checkInBtn, alignBtn]) {
+        assert.equal(btn.getAttribute('data-locked'), 'true');
+        assert.equal(btn.getAttribute('aria-disabled'), 'true');
+        assert.ok(btn.className.includes('is-action-locked'));
+      }
+      assert.equal(drawBtn.className.includes('btn-primary'), false);
+      // Align controls must NOT auto-expand while remote, even with non-zero manualYawNudgeDeg
+      assert.equal(Boolean(remoteView.queryByTestId('ar-compass-nudge-controls')), false);
+      // Visit lock note & recommended Navigate highlight are shown
+      assert.ok(remoteView.getByTestId('ar-land-visit-lock-note').textContent.includes('Visit DismalLand in person'));
+      assert.ok(remoteView.getByTestId('ar-land-gmaps-link').className.includes('is-recommended'));
+
+      // Clicking EVERY locked button blocks the action AND emits a visit-required notification toast
+      RTL.fireEvent.click(drawBtn);
+      RTL.fireEvent.click(chatBtn);
+      RTL.fireEvent.click(checkInBtn);
+      RTL.fireEvent.click(alignBtn);
+
+      assert.equal(fired.draw, 0, 'Remote click on Draw Here must NOT trigger onDrawHere');
+      assert.equal(fired.chat, 0, 'Remote click on Land Chat must NOT trigger onOpenLandChat');
+      assert.equal(fired.checkIn, 0, 'Remote click on Check In IRL must NOT trigger onCheckInLand');
+      assert.equal(
+        Boolean(remoteView.queryByTestId('ar-compass-nudge-controls')),
+        false,
+        'Remote click on Align AR must NOT expand compass nudge controls'
+      );
+      assert.equal(toasts.length, 4, 'Each locked button tap must emit a visit-required notification');
+      assert.ok(toasts[0].message.includes('Visit DismalLand in person to draw on this land'));
+      assert.equal(toasts[0].tone, 'warning');
+      assert.ok(toasts[0].actionLabel.includes('Navigate'));
+      assert.ok(toasts[1].message.includes('Visit DismalLand in person to join Land Chat'));
+      assert.ok(toasts[2].message.includes('Visit DismalLand in person to check in IRL'));
+      assert.ok(toasts[3].message.includes('Visit DismalLand in person to align this land in AR'));
+
+      // Remote-allowed controls (Manage + View 3D artwork) continue working cleanly
+      RTL.fireEvent.click(remoteView.getByTestId('ar-land-manage-btn'));
+      RTL.fireEvent.click(remoteView.getByTestId('ar-land-artwork-label'));
+      assert.equal(fired.manage, 1);
+      assert.equal(fired.inspectArt, 1);
+      cleanup();
+
+      // 3) On-site land (isInside: true): all actions unlock and execute normally
+      const localView = RTL.render(
+        React.createElement(ARLandInspectorPanel, {
+          land: {
+            ...remoteLand,
+            isInside: true,
+            outOfArRange: false,
+            edgeDistanceMeters: 0,
+            edgeDistanceMetersExact: 0,
+            distanceMeters: 2
+          },
+          onDrawHere: () => {
+            fired.draw += 1;
+          },
+          onOpenLandChat: () => {
+            fired.chat += 1;
+          },
+          onCheckInLand: async () => {
+            fired.checkIn += 1;
+            return true;
+          },
+          onAdjustCompassNudge: () => {},
+          onResetCompassNudge: () => {},
+          onClose: () => {}
+        })
+      );
+
+      assert.equal(Boolean(localView.queryByTestId('ar-land-visit-lock-note')), false);
+      const localDraw = localView.getByTestId('ar-land-draw-btn');
+      assert.equal(localDraw.getAttribute('data-locked'), 'false');
+      assert.ok(localDraw.className.includes('btn-primary'));
+      RTL.fireEvent.click(localDraw);
+      RTL.fireEvent.click(localView.getByTestId('ar-land-chat-btn'));
+      await RTL.act(async () => {
+        RTL.fireEvent.click(localView.getByTestId('ar-land-checkin-btn'));
+      });
+      RTL.fireEvent.click(localView.getByTestId('ar-compass-align-toggle-btn'));
+      assert.equal(fired.draw, 1);
+      assert.equal(fired.chat, 1);
+      assert.equal(fired.checkIn, 1);
+      assert.ok(localView.getByTestId('ar-compass-nudge-controls'));
+      cleanup();
+    } finally {
+      unsub();
+      cleanup();
+    }
   });
 });

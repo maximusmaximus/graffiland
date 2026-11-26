@@ -45,7 +45,9 @@ import {
   SavedDraftsModal
 } from './studio/AgentPairModals.jsx';
 import ARLandGuidanceOverlay from './studio/ARLandGuidanceOverlay.jsx';
-import ARLandInspectorPanel from './studio/ARLandInspectorPanel.jsx';
+import ARLandInspectorPanel, {
+  evaluateArLandActionProximity
+} from './studio/ARLandInspectorPanel.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
@@ -1793,6 +1795,13 @@ export default function MobileStudio({
               if (nextLand?.parcelId) ar.selectArLand(nextLand, nextLand.sculptures || []);
             }}
             onDrawHere={(targetLand) => {
+              const gate = evaluateArLandActionProximity(targetLand);
+              if (!gate.canDrawAtLand) {
+                showTemporaryHint(
+                  `Visit ${targetLand?.displayName || 'this land'} in person to draw on it.`
+                );
+                return;
+              }
               setArViewSession(null);
               ar.setArSelectedLandId('');
               brush.setMode('draw');
@@ -1802,6 +1811,13 @@ export default function MobileStudio({
               );
             }}
             onCheckInLand={async (targetLand) => {
+              const gate = evaluateArLandActionProximity(targetLand);
+              if (!gate.canCheckInAtLand) {
+                showTemporaryHint(
+                  `Visit ${targetLand?.displayName || 'this land'} in person to check in IRL.`
+                );
+                return false;
+              }
               if (!user) {
                 setLoginOpen(true);
                 showTemporaryHint('Sign in to verify your in-person visit on this land.');
@@ -1835,14 +1851,18 @@ export default function MobileStudio({
                 return false;
               }
             }}
-            onOpen3DMap={(targetLand) => {
-              setArViewSession(null);
-              ar.setArSelectedLandId('');
-              ar.openAreaMap({
-                initialDimensionMode: '3d',
-                focusParcelId: targetLand.parcelId
-              });
-            }}
+            onOpen3DMap={
+              arViewSession?.source === 'map'
+                ? null
+                : (targetLand) => {
+                    setArViewSession(null);
+                    ar.setArSelectedLandId('');
+                    ar.openAreaMap({
+                      initialDimensionMode: '3d',
+                      focusParcelId: targetLand.parcelId
+                    });
+                  }
+            }
             onManageLand={(pid) => {
               setArViewSession(null);
               ar.setArSelectedLandId('');
@@ -1857,6 +1877,13 @@ export default function MobileStudio({
               ar.setMapSelectedSculpture(sc);
             }}
             onOpenLandChat={(targetLand, canonicalTarget) => {
+              const gate = evaluateArLandActionProximity(targetLand);
+              if (!gate.canChatAtLand) {
+                showTemporaryHint(
+                  `Visit ${targetLand?.displayName || 'this land'} in person to join Land Chat.`
+                );
+                return;
+              }
               chat.openCameraSelectedChat(
                 canonicalTarget,
                 targetLand?.distanceMeters ?? 0,
