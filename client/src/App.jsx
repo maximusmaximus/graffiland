@@ -1,10 +1,10 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { parseParcelParamFromLocation } from '../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../shared/profileRules.mjs';
-import BrandLogo from './components/BrandLogo.jsx';
 import DirectLinkIntroOverlay from './components/DirectLinkIntroOverlay.jsx';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import GoogleLoginGate from './components/GoogleLoginGate.jsx';
+import LaunchSplashOverlay from './components/LaunchSplashOverlay.jsx';
 import SettingsSavedToast from './components/SettingsSavedToast.jsx';
 import UsernameOnboardingModal from './components/UsernameOnboardingModal.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
@@ -94,46 +94,13 @@ export default function App() {
     setUser(null);
   }
 
-  if (loading) {
-    return (
-      <div
-        style={{
-          height: '100dvh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 12,
-          background: '#060a14',
-          color: '#f3f6ff'
-        }}
-      >
-        <BrandLogo variant="stacked" height={96} />
-        <span className="mono" style={{ fontSize: 12, color: 'rgba(186, 202, 228, 0.78)' }}>
-          Loading…
-        </span>
-      </div>
-    );
-  }
-
   const lazyFallback = (
     <div
       style={{
         height: '100dvh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-        background: '#060a14',
-        color: '#f3f6ff'
+        background: '#060a14'
       }}
-    >
-      <BrandLogo variant="stacked" height={88} />
-      <span className="mono" style={{ fontSize: 12, color: 'rgba(186, 202, 228, 0.78)' }}>
-        Loading Workspace…
-      </span>
-    </div>
+    />
   );
 
   function dismissWelcome(dontShowAgain = true) {
@@ -203,9 +170,16 @@ export default function App() {
       />
     ) : null;
 
-  if (isMobile) {
-    return (
-      <>
+  return (
+    <>
+      {loading ? (
+        <div
+          style={{
+            height: '100dvh',
+            background: '#060a14'
+          }}
+        />
+      ) : isMobile ? (
         <Suspense fallback={lazyFallback}>
           <MobileStudio
             config={config}
@@ -218,31 +192,23 @@ export default function App() {
             skipTutorialSignal={skipTutorialSignal}
           />
         </Suspense>
-        {welcomeOverlay}
-        {directLinkIntroOverlay}
-        {directLoginModal}
-        {onboardingModal}
-        <SettingsSavedToast />
-      </>
-    );
-  }
-
-  return (
-    <>
-      <Suspense fallback={lazyFallback}>
-        <DesktopHub
-          config={config}
-          user={user}
-          onUserUpdate={setUser}
-          onLogout={handleLogout}
-          welcomeRequest={desktopAction}
-          onOpenWelcome={() => setWelcomeOpen(true)}
-        />
-      </Suspense>
-      {welcomeOverlay}
-      {directLinkIntroOverlay}
-      {directLoginModal}
-      {onboardingModal}
+      ) : (
+        <Suspense fallback={lazyFallback}>
+          <DesktopHub
+            config={config}
+            user={user}
+            onUserUpdate={setUser}
+            onLogout={handleLogout}
+            welcomeRequest={desktopAction}
+            onOpenWelcome={() => setWelcomeOpen(true)}
+          />
+        </Suspense>
+      )}
+      {!loading && welcomeOverlay}
+      {!loading && directLinkIntroOverlay}
+      {!loading && directLoginModal}
+      {!loading && onboardingModal}
+      <LaunchSplashOverlay appReady={!loading} />
       <SettingsSavedToast />
     </>
   );
