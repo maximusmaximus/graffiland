@@ -2789,7 +2789,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       });
 
       RTL.fireEvent.click(view.getByRole('button', { name: /Notifications/i }));
-      assert.ok(view.getByText(/2\/3 free Desktop slots open/i));
+      assert.equal(Boolean(view.queryByText(/free Desktop slots open/i)), false);
+      assert.equal(Boolean(view.queryByTestId('notif-mint-land-btn')), false);
       assert.ok(view.getByText(/New sculpture on "Sunset Plaza"/i));
 
       // Switch to Settings tab and enable Browser Notifications
@@ -5031,10 +5032,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(view.queryByTestId('notif-art-link'), null);
       assert.ok(view.getByText(/You’re all caught up!/i));
 
-      // Clicking Mint Land button triggers open_mint -> opens How to Mint info guide
-      RTL.fireEvent.click(view.getByTestId('notif-mint-land-btn'));
-      assert.equal(actions.length, 1);
-      assert.equal(actions[0].actionType, 'open_mint');
+      // Mint Ready banner is no longer shown inside Notifications (moved to User Profile)
+      assert.equal(Boolean(view.queryByTestId('notif-mint-land-btn')), false);
+      assert.equal(Boolean(view.queryByText(/Mint Ready/i)), false);
       cleanup();
 
       let startedMapMint = false;
@@ -8322,5 +8322,117 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       globalThis.fetch = origFetch;
       cleanup();
     }
+  });
+
+  test('ProfileModal shows organized Land Mints Allowed breakdown with "i" details for owner (and hides it on other profiles)', async () => {
+    const { default: ProfileModal } = await loadJsxModule('client/src/components/ProfileModal.jsx');
+
+    const ownerUser = {
+      id: 'u-mint-profile',
+      username: 'bigdog',
+      name: 'BigDog',
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+    const ownerProfilePayload = {
+      profile: {
+        id: 'u-mint-profile',
+        userNumber: 7,
+        userNumberLabel: '#0007',
+        username: 'bigdog',
+        displayName: '@bigdog',
+        bio: 'Sculpting the city',
+        walletAddress: ownerUser.walletAddress,
+        accountType: 'human',
+        joinedAt: '2026-01-15T00:00:00.000Z'
+      },
+      stats: {
+        landCount: 3,
+        sculptureCount: 5,
+        totalBlocks: 420,
+        actionCount: 8,
+        awakenedLands: 1
+      },
+      mintStatus: {
+        usedSlots: 2,
+        forfeitedSlots: 0,
+        maxSlots: 21,
+        remainingSlots: 19,
+        canMintDesktop: true,
+        canClaimInPersonMobile: true,
+        unbuiltParcels: [
+          { parcelId: 'GLAND-UNB1', displayName: 'DismalLand' },
+          { parcelId: 'GLAND-UNB2', displayName: 'Neon Corner' }
+        ],
+        totalOwnedParcels: 3
+      },
+      lands: [],
+      sculptures: [],
+      listings: [],
+      actions: []
+    };
+
+    const openedLands = [];
+    let mintGuideOpened = false;
+    const view = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'bigdog',
+        user: ownerUser,
+        fetchProfileFn: async () => ownerProfilePayload,
+        onOpenLand: (land) => openedLands.push(land),
+        onOpenMintGuide: () => {
+          mintGuideOpened = true;
+        },
+        onClose: () => {}
+      })
+    );
+
+    await RTL.waitFor(() => {
+      assert.ok(view.getByTestId('profile-mint-allowance'));
+    });
+    assert.equal(view.getByTestId('profile-mint-status-pill').textContent.trim(), '19 / 21 open');
+    assert.equal(view.getByTestId('profile-mint-remaining-val').textContent.trim(), '19');
+    assert.equal(view.getByTestId('profile-mint-unbuilt-val').textContent.trim(), '2');
+    assert.ok(
+      view
+        .getByTestId('profile-mint-summary')
+        .textContent.includes('mint 19 more Desktop lands before needing human AR art')
+    );
+
+    // Extra details & unbuilt lands live cleanly inside the "i" InfoTip
+    assert.equal(Boolean(view.queryByText(/28 days/i)), false);
+    RTL.fireEvent.click(view.getByRole('button', { name: /Info: How Land Mint Allowances Work/i }));
+    await RTL.waitFor(() => {
+      assert.ok(view.getByText(/28 days/i));
+      assert.ok(view.getByText(/Mobile AR \(Unlimited/i));
+      assert.ok(view.getByText(/DismalLand/i));
+    });
+
+    // Clicking an unbuilt land inside "i" jumps straight to that land
+    RTL.fireEvent.click(view.getByRole('button', { name: /DismalLand/i }));
+    assert.equal(openedLands.length, 1);
+    assert.equal(openedLands[0].parcelId, 'GLAND-UNB1');
+
+    // Optional Mint Land shortcut works cleanly
+    RTL.fireEvent.click(view.getByTestId('profile-mint-guide-btn'));
+    assert.equal(mintGuideOpened, true);
+    cleanup();
+
+    // Viewing someone else's public profile does NOT show private mint allowance card
+    const otherView = RTL.render(
+      React.createElement(ProfileModal, {
+        handle: 'maya',
+        user: ownerUser,
+        fetchProfileFn: async () => ({
+          ...ownerProfilePayload,
+          profile: { ...ownerProfilePayload.profile, id: 'u-other', username: 'maya', displayName: '@maya' }
+        }),
+        onClose: () => {}
+      })
+    );
+    await RTL.waitFor(() => {
+      assert.equal(otherView.getByTestId('profile-handle').textContent.trim(), '@maya');
+    });
+    assert.equal(Boolean(otherView.queryByTestId('profile-mint-allowance')), false);
+    cleanup();
   });
 });

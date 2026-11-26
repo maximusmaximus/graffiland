@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
   buildParcelShareUrl,
   resolveLandDisplayName
@@ -38,7 +39,7 @@ import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
-import { GlobalNotificationBell } from './NotificationCenter.jsx';
+import { GlobalNotificationBell, useNotificationCenter } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -63,6 +64,7 @@ export default function ProfileModal({
   onUserUpdate = null,
   onSelectSculpture = null,
   onOpenLand = null,
+  onOpenMintGuide = null,
   onOpenWalletSettings = null,
   onLogout = null,
   onShowHint = null,
@@ -132,7 +134,71 @@ export default function ProfileModal({
   const actions = useMemo(() => data?.actions || [], [data?.actions]);
 
   const isOwner = Boolean(user?.id && profile?.id && String(user.id) === String(profile.id));
+  const notifCtx = useNotificationCenter();
+  const [fallbackMintStatus, setFallbackMintStatus] = useState(null);
   const { unitSystem } = useMeasurementUnits();
+
+  useEffect(() => {
+    if (!isOwner || data?.mintStatus || notifCtx?.mintStatus) return undefined;
+    if (typeof api.getNotifications !== 'function') return undefined;
+    let cancelled = false;
+    api
+      .getNotifications(1)
+      .then((res) => {
+        if (!cancelled && res?.mintStatus) {
+          setFallbackMintStatus(res.mintStatus);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwner, data?.mintStatus, notifCtx?.mintStatus]);
+
+  const mintAllowance = useMemo(() => {
+    if (!isOwner) return null;
+    const src = data?.mintStatus || notifCtx?.mintStatus || fallbackMintStatus || null;
+    const defaultMax = LAND_VOLUME_LIMITS.starterFreeHumanClaims;
+    if (src) {
+      const maxSlots = Math.max(1, Number(src.maxSlots ?? defaultMax));
+      const remainingSlots = Math.max(0, Number(src.remainingSlots ?? 0));
+      const usedSlots = Math.max(0, Number(src.usedSlots ?? Math.max(0, maxSlots - remainingSlots)));
+      const forfeitedSlots = Math.max(0, Number(src.forfeitedSlots ?? 0));
+      const unbuiltParcels = Array.isArray(src.unbuiltParcels) ? src.unbuiltParcels : [];
+      const unbuiltCount =
+        unbuiltParcels.length > 0 ? unbuiltParcels.length : Math.max(0, usedSlots - forfeitedSlots);
+      return {
+        maxSlots,
+        usedSlots,
+        remainingSlots,
+        forfeitedSlots,
+        unbuiltCount,
+        unbuiltParcels,
+        canMintDesktop: remainingSlots > 0,
+        usedPct: Math.min(100, Math.round((Math.min(usedSlots, maxSlots) / maxSlots) * 100))
+      };
+    }
+    // Lightweight client fallback if API did not include mintStatus
+    const unbuiltFromLands = lands.filter(
+      (l) => Number(l?.sculptureCount || 0) === 0 && l?.stewardStatus !== 'awakened'
+    );
+    const usedSlots = unbuiltFromLands.length;
+    const remainingSlots = Math.max(0, defaultMax - usedSlots);
+    return {
+      maxSlots: defaultMax,
+      usedSlots,
+      remainingSlots,
+      forfeitedSlots: 0,
+      unbuiltCount: usedSlots,
+      unbuiltParcels: unbuiltFromLands.map((l) => ({
+        parcelId: l.parcelId,
+        customName: l.customName || '',
+        displayName: resolveLandDisplayName(l, { defaultName: 'Virtual Land' })
+      })),
+      canMintDesktop: remainingSlots > 0,
+      usedPct: Math.min(100, Math.round((Math.min(usedSlots, defaultMax) / defaultMax) * 100))
+    };
+  }, [isOwner, data?.mintStatus, notifCtx?.mintStatus, fallbackMintStatus, lands]);
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
@@ -1145,6 +1211,155 @@ export default function ProfileModal({
                 <div className="profile-stat-lbl">Actions</div>
               </div>
             </div>
+
+            {/* Owner Land Mint Allowance Card (organized slot breakdown + "i" details) */}
+            {isOwner && mintAllowance && (
+              <div
+                className={`card profile-mint-card ${
+                  mintAllowance.canMintDesktop ? 'is-open' : 'is-full'
+                }`}
+                data-testid="profile-mint-allowance"
+              >
+                <div className="profile-mint-head">
+                  <div className="profile-mint-title-row">
+                    <span className="profile-mint-title">
+                      <XeroIcon emoji="🏗️" size={14} /> Land Mints Allowed
+                    </span>
+                    <InfoTip title="How Land Mint Allowances Work" mode="inline">
+                      <div className="profile-mint-tip-body">
+                        <p>
+                          <strong>Desktop 3D Plots ({mintAllowance.maxSlots} starter slots):</strong>{' '}
+                          You can mint up to <strong>{mintAllowance.maxSlots}</strong> Desktop lands
+                          before adding human art. Once a human visits one of those lands in person
+                          on Mobile AR and adds a 3+ block sculpture, that land becomes permanently
+                          owned and <strong>frees up its slot</strong>.
+                        </p>
+                        <p>
+                          <strong>Mobile AR (Unlimited &amp; Instant Permanent):</strong> Sculpting
+                          in person on Mobile AR creates an immediately permanent land and never
+                          uses a Desktop starter slot.
+                        </p>
+                        <p>
+                          <strong>Timers &amp; Expired Slots:</strong> Unbuilt Desktop lands expire
+                          after 28 days (72h for AI-agent lands) without an in-person human visit.
+                          Expired unvisited starter lands permanently consume their slot
+                          {mintAllowance.forfeitedSlots > 0
+                            ? ` (${mintAllowance.forfeitedSlots} forfeited so far)`
+                            : ''}
+                          .
+                        </p>
+                        {mintAllowance.unbuiltParcels.length > 0 && (
+                          <div className="profile-mint-tip-unbuilt">
+                            <div className="profile-mint-tip-unbuilt-lbl">
+                              Lands waiting for human AR art ({mintAllowance.unbuiltParcels.length}):
+                            </div>
+                            <div className="profile-mint-tip-chips">
+                              {mintAllowance.unbuiltParcels.slice(0, 6).map((p) =>
+                                onOpenLand ? (
+                                  <button
+                                    key={p.parcelId}
+                                    type="button"
+                                    className="profile-mint-unbuilt-chip"
+                                    onClick={() => onOpenLand(p)}
+                                  >
+                                    📍 {p.displayName || p.parcelId}
+                                  </button>
+                                ) : (
+                                  <span key={p.parcelId} className="profile-mint-unbuilt-chip">
+                                    📍 {p.displayName || p.parcelId}
+                                  </span>
+                                )
+                              )}
+                              {mintAllowance.unbuiltParcels.length > 6 && (
+                                <span className="profile-mint-unbuilt-more">
+                                  +{mintAllowance.unbuiltParcels.length - 6} more
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </InfoTip>
+                  </div>
+                  <span
+                    className={`profile-mint-pill mono ${
+                      mintAllowance.canMintDesktop ? 'is-open' : 'is-full'
+                    }`}
+                    data-testid="profile-mint-status-pill"
+                  >
+                    {mintAllowance.remainingSlots} / {mintAllowance.maxSlots} open
+                  </span>
+                </div>
+
+                <div
+                  className="profile-mint-bar"
+                  role="progressbar"
+                  aria-label="Desktop land mint slots used"
+                  aria-valuemin={0}
+                  aria-valuemax={mintAllowance.maxSlots}
+                  aria-valuenow={mintAllowance.usedSlots}
+                >
+                  <div
+                    className="profile-mint-bar-fill"
+                    style={{ width: `${mintAllowance.usedPct}%` }}
+                  />
+                </div>
+
+                <div className="profile-mint-metrics">
+                  <div className="profile-mint-metric">
+                    <div
+                      className="profile-mint-metric-val mono"
+                      data-testid="profile-mint-remaining-val"
+                    >
+                      {mintAllowance.remainingSlots}
+                    </div>
+                    <div className="profile-mint-metric-lbl">Can Mint Now</div>
+                  </div>
+                  <div className="profile-mint-metric">
+                    <div
+                      className="profile-mint-metric-val mono"
+                      data-testid="profile-mint-unbuilt-val"
+                    >
+                      {mintAllowance.unbuiltCount}
+                    </div>
+                    <div className="profile-mint-metric-lbl">Need Human Art</div>
+                  </div>
+                  <div className="profile-mint-metric">
+                    <div className="profile-mint-metric-val">Unlimited</div>
+                    <div className="profile-mint-metric-lbl">Mobile AR Mints</div>
+                  </div>
+                </div>
+
+                <div className="profile-mint-footer">
+                  <span className="profile-mint-summary" data-testid="profile-mint-summary">
+                    {mintAllowance.canMintDesktop
+                      ? mintAllowance.unbuiltCount > 0
+                        ? `You can mint ${mintAllowance.remainingSlots} more Desktop land${
+                            mintAllowance.remainingSlots === 1 ? '' : 's'
+                          } before needing human AR art on your ${mintAllowance.unbuiltCount} unbuilt land${
+                            mintAllowance.unbuiltCount === 1 ? '' : 's'
+                          }.`
+                        : `You can mint up to ${mintAllowance.remainingSlots} Desktop land${
+                            mintAllowance.remainingSlots === 1 ? '' : 's'
+                          } before needing human AR art on them.`
+                      : `All ${mintAllowance.maxSlots} Desktop slots used — add human AR art on an unbuilt land to unlock more, or mint in Mobile AR.`}
+                  </span>
+                  {onOpenMintGuide && (
+                    <button
+                      type="button"
+                      className="btn btn-xs profile-mint-action-btn"
+                      data-testid="profile-mint-guide-btn"
+                      onClick={() => {
+                        onClose?.();
+                        onOpenMintGuide();
+                      }}
+                    >
+                      🏗️ {mintAllowance.canMintDesktop ? 'Mint Land' : 'How to Unlock'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Public & Owner Content Tabs */}
             <div className="profile-tabs" role="tablist" aria-label="Profile content">

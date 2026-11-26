@@ -2395,6 +2395,10 @@ export default function MobileStudio({
             onUserUpdate(nextUser);
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
+          onOpenMintGuide={() => {
+            setInfoInitialTab('mint');
+            setInfoOpen(true);
+          }}
           onOpenLand={(land) => {
             if (!land?.parcelId) return;
             setProfileHandle('');

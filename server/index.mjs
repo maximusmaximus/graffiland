@@ -35,6 +35,7 @@ import {
 import {
   clearUserNotifications,
   deleteNotification,
+  getUserMintCapacityStatus,
   listUserNotifications,
   markNotificationsRead,
   updateNotificationPreferences
@@ -424,12 +425,15 @@ export function createAppServer(serverOptions = {}) {
   app.get('/api/profile/me', requireAuth, async (req, res) => {
     try {
       const origin = `${req.protocol}://${req.get('host')}`;
-      const pub = await getPublicProfile(chatDb, {
-        identifier: req.user.id,
-        origin,
-        pathname: '/'
-      });
-      res.json({ user: sanitizeUser(req.user), ...pub });
+      const [pub, mintStatus] = await Promise.all([
+        getPublicProfile(chatDb, {
+          identifier: req.user.id,
+          origin,
+          pathname: '/'
+        }),
+        getUserMintCapacityStatus(chatDb, req.user.id).catch(() => null)
+      ]);
+      res.json({ user: sanitizeUser(req.user), ...pub, mintStatus });
     } catch (err) {
       res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to load profile' });
     }
@@ -445,12 +449,15 @@ export function createAppServer(serverOptions = {}) {
         headerImage: req.body?.headerImage
       });
       const origin = `${req.protocol}://${req.get('host')}`;
-      const pub = await getPublicProfile(chatDb, {
-        identifier: updated.id,
-        origin,
-        pathname: '/'
-      });
-      res.json({ user: sanitizeUser(updated), ...pub });
+      const [pub, mintStatus] = await Promise.all([
+        getPublicProfile(chatDb, {
+          identifier: updated.id,
+          origin,
+          pathname: '/'
+        }),
+        getUserMintCapacityStatus(chatDb, updated.id).catch(() => null)
+      ]);
+      res.json({ user: sanitizeUser(updated), ...pub, mintStatus });
     } catch (err) {
       res.status(err?.statusCode || 400).json({ error: err.message || 'Failed to save profile' });
     }

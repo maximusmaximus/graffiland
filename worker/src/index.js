@@ -37,6 +37,7 @@ import {
 import {
   clearUserNotifications,
   deleteNotification,
+  getUserMintCapacityStatus,
   listUserNotifications,
   markNotificationsRead,
   updateNotificationPreferences
@@ -1454,12 +1455,15 @@ export default {
       try {
         const user = await getAuthUser(request, env, cfg);
         if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
-        const pub = await getPublicProfile(d1Adapter, {
-          identifier: user.id,
-          origin: request.headers.get('Origin') || url.origin,
-          pathname: '/'
-        });
-        return jsonResponse({ user: sanitizeUser(user), ...pub }, 200, request);
+        const [pub, mintStatus] = await Promise.all([
+          getPublicProfile(d1Adapter, {
+            identifier: user.id,
+            origin: request.headers.get('Origin') || url.origin,
+            pathname: '/'
+          }),
+          getUserMintCapacityStatus(d1Adapter, user.id).catch(() => null)
+        ]);
+        return jsonResponse({ user: sanitizeUser(user), ...pub, mintStatus }, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Failed to load profile' }, err?.statusCode || 400, request);
       }
@@ -1503,12 +1507,15 @@ export default {
           avatarImage: nextAvatar,
           headerImage: nextHeader
         });
-        const pub = await getPublicProfile(d1Adapter, {
-          identifier: updated.id,
-          origin: request.headers.get('Origin') || url.origin,
-          pathname: '/'
-        });
-        return jsonResponse({ user: sanitizeUser(updated), ...pub }, 200, request);
+        const [pub, mintStatus] = await Promise.all([
+          getPublicProfile(d1Adapter, {
+            identifier: updated.id,
+            origin: request.headers.get('Origin') || url.origin,
+            pathname: '/'
+          }),
+          getUserMintCapacityStatus(d1Adapter, updated.id).catch(() => null)
+        ]);
+        return jsonResponse({ user: sanitizeUser(updated), ...pub, mintStatus }, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Failed to save profile' }, err?.statusCode || 400, request);
       }
