@@ -47,7 +47,7 @@ import {
   resolveSculpturePlacement,
   tiltToDegrees
 } from '../sculpturePlacement.mjs';
-import { getLandSecurityPolicy } from '../landmarkService.mjs';
+import { DEFAULT_MAX_ORB_REPROJ_PX, DEFAULT_MIN_ORB_INLIERS } from '../landmarkService.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -87,6 +87,30 @@ export async function listLandsWithCurations(db) {
     .all('SELECT id, username, avatar_image, user_number FROM users')
     .catch(() => []);
   const viewCountsMap = await getLandViewCountsMap(db);
+  // Single bulk query for all visible sculptures (eliminates 2*N per-parcel queries inside the loop)
+  const allVisibleScRows = await db
+    .all(
+      `SELECT s.parcel_id, s.geohash, s.lat, s.lng, s.voxels_json,
+              s.recipient_address, s.creator_name, s.creator_sub, s.title, s.place_name, s.created_at,
+              a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+              m.scale AS custom_model_scale
+       FROM sculptures s
+       LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
+       LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
+       WHERE s.hidden = 0
+       ORDER BY s.created_at ASC`
+    )
+    .catch(() => []);
+  const scByParcelMap = new Map();
+  for (const row of allVisibleScRows || []) {
+    if (!row?.parcel_id) continue;
+    let bucket = scByParcelMap.get(row.parcel_id);
+    if (!bucket) {
+      bucket = [];
+      scByParcelMap.set(row.parcel_id, bucket);
+    }
+    bucket.push(row);
+  }
 
   const scMap = new Map((scRows || []).map((r) => [r.parcel_id, r]));
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
@@ -115,12 +139,8 @@ export async function listLandsWithCurations(db) {
     const st = stewardMap.get(parcelId);
     const geohash = sc?.geohash || lp?.geohash || parcelId.replace(/^GLAND-/, '').toLowerCase();
     const bounds = decodeGeohashBounds(geohash);
-    const first = sc
-      ? await db.get(
-          'SELECT recipient_address, creator_name, creator_sub, title, place_name FROM sculptures WHERE parcel_id = ? AND hidden = 0 ORDER BY created_at ASC LIMIT 1',
-          [parcelId]
-        )
-      : null;
+    const parcelScRows = sc ? scByParcelMap.get(parcelId) || [] : [];
+    const first = parcelScRows.length > 0 ? parcelScRows[0] : null;
     const cur = curationMap.get(parcelId);
     const vr = volumeMap.get(parcelId);
     let parsedCorners = [];
@@ -132,28 +152,13 @@ export async function listLandsWithCurations(db) {
       }
     }
     let fittedFallbackVolume = null;
-    let parcelScRows = [];
-    if (sc) {
-      parcelScRows = await db
-        .all(
-          `SELECT s.lat, s.lng, s.voxels_json, s.parcel_id, s.geohash,
-                  a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
-                  m.scale AS custom_model_scale
-           FROM sculptures s
-           LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
-           LEFT JOIN sculpture_models m ON m.sculpture_id = s.id
-           WHERE s.parcel_id = ? AND s.hidden = 0`,
-          [parcelId]
-        )
-        .catch(() => []);
-      if (!vr && parcelScRows && parcelScRows.length > 0) {
-        fittedFallbackVolume = buildMultiObjectFittedLandVolume({
-          parcelId,
-          geohash,
-          sculptures: parcelScRows,
-          paddingFraction: 0.1
-        });
-      }
+    if (sc && !vr && parcelScRows.length > 0) {
+      fittedFallbackVolume = buildMultiObjectFittedLandVolume({
+        parcelId,
+        geohash,
+        sculptures: parcelScRows,
+        paddingFraction: 0.1
+      });
     }
 
     const rawVolume = vr
@@ -526,6 +531,97 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
   });
 }
 
+async function findEligibleParcelVisitorsMap(db, { parcelIds = [], ownerSub = '' }) {
+  const cleanIds = [...new Set((parcelIds || []).map(normalizeParcelId).filter(Boolean))];
+  const out = new Map(cleanIds.map((pid) => [pid, []]));
+  if (cleanIds.length === 0) return out;
+  const placeholders = cleanIds.map(() => '?').join(', ');
+
+  const pairs = new Map(cleanIds.map((pid) => [pid, new Set()]));
+  const addPair = (pid, uid) => {
+    const cleanPid = normalizeParcelId(pid);
+    if (!uid || uid === ownerSub || !pairs.has(cleanPid)) return;
+    pairs.get(cleanPid).add(uid);
+  };
+
+  const [grantRows, msgRows, presenceRows] = await Promise.all([
+    db
+      .all(
+        `SELECT COALESCE(s.parcel_id, g.sculpture_id) AS parcel_id, g.requester_sub AS uid
+         FROM sculpture_chat_grants g
+         LEFT JOIN sculptures s ON s.id = g.sculpture_id
+         WHERE g.status = 'granted'
+           AND (g.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders}))`,
+        [...cleanIds, ...cleanIds]
+      )
+      .catch(() => []),
+    db
+      .all(
+        `SELECT COALESCE(s.parcel_id, m.sculpture_id) AS parcel_id, m.sender_sub AS uid
+         FROM sculpture_chat_messages m
+         LEFT JOIN sculptures s ON s.id = m.sculpture_id
+         WHERE m.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders})`,
+        [...cleanIds, ...cleanIds]
+      )
+      .catch(() => []),
+    db
+      .all(
+        `SELECT parcel_id, user_id AS uid
+         FROM parcel_presence_challenges
+         WHERE consumed = 1 AND parcel_id IN (${placeholders})`,
+        cleanIds
+      )
+      .catch(() => [])
+  ]);
+
+  const allUserIds = new Set();
+  for (const r of [...(grantRows || []), ...(msgRows || []), ...(presenceRows || [])]) {
+    if (r?.parcel_id && r?.uid && r.uid !== ownerSub) {
+      addPair(r.parcel_id, r.uid);
+      if (pairs.has(normalizeParcelId(r.parcel_id))) allUserIds.add(r.uid);
+    }
+  }
+  if (allUserIds.size === 0) return out;
+
+  const uidList = [...allUserIds];
+  const userRows = await db
+    .all(
+      `SELECT id AS userId, email, username, avatar_image AS avatarImage,
+              user_number AS userNumber, wallet_address AS walletAddress,
+              custom_payout_address AS customPayoutAddress, created_at
+       FROM users
+       WHERE id IN (${uidList.map(() => '?').join(', ')})
+       ORDER BY username ASC, created_at ASC`,
+      uidList
+    )
+    .catch(() => []);
+
+  const formattedUsers = (userRows || []).map((r) => {
+    const username = String(r.username || '').trim();
+    return {
+      userId: r.userId,
+      email: r.email || '',
+      username,
+      avatarImage: resolveSafeUserAvatar(r.avatarImage || ''),
+      name: resolvePublicUserHandle(
+        { id: r.userId, username, userNumber: r.userNumber },
+        { fallback: 'Visitor', includeAt: true }
+      ),
+      walletAddress: r.customPayoutAddress || r.walletAddress || ''
+    };
+  });
+
+  for (const pid of cleanIds) {
+    const allowedSet = pairs.get(pid);
+    if (!allowedSet || allowedSet.size === 0) continue;
+    out.set(
+      pid,
+      formattedUsers.filter((u) => allowedSet.has(u.userId))
+    );
+  }
+  return out;
+}
+
 export async function listOwnerLandsAndSculptures(db, ownerUser) {
   await reapAndArchiveExpiredLands(db).catch(() => {});
   const wallets = new Set(resolveUserWalletAddresses(ownerUser));
@@ -599,30 +695,106 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
   const viewCountsMap = await getLandViewCountsMap(db);
 
+  // Bulk-load per-parcel metadata once to eliminate 5*N queries inside the owned-parcel loop
+  const ownedParcelIds = [...ownedParcelSet];
+  const ownedPlaceholders = ownedParcelIds.map(() => '?').join(', ');
+  const [
+    settingsRows,
+    allContribRows,
+    allSecPolicyRows,
+    allLandmarkRows,
+    eligibleVisitorsMap
+  ] =
+    ownedParcelIds.length > 0
+      ? await Promise.all([
+          db
+            .all(
+              `SELECT * FROM land_settings WHERE parcel_id IN (${ownedPlaceholders})`,
+              ownedParcelIds
+            )
+            .catch(() => []),
+          db
+            .all(
+              `SELECT lc.*, COALESCE(u.username, '') AS contributor_username, COALESCE(u.avatar_image, '') AS contributor_avatar
+               FROM land_contributors lc
+               LEFT JOIN users u ON u.id = lc.contributor_sub
+               WHERE lc.parcel_id IN (${ownedPlaceholders})
+               ORDER BY lc.created_at DESC`,
+              ownedParcelIds
+            )
+            .catch(() => []),
+          db
+            .all(
+              `SELECT * FROM land_security_policies WHERE parcel_id IN (${ownedPlaceholders})`,
+              ownedParcelIds
+            )
+            .catch(() => []),
+          db
+            .all(
+              `SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, updated_at
+               FROM parcel_landmark_anchors
+               WHERE parcel_id IN (${ownedPlaceholders})`,
+              ownedParcelIds
+            )
+            .catch(() => []),
+          findEligibleParcelVisitorsMap(db, {
+            parcelIds: ownedParcelIds,
+            ownerSub: ownerUser.id
+          })
+        ])
+      : [[], [], [], [], new Map()];
+
+  const settingsByParcel = new Map((settingsRows || []).map((r) => [r.parcel_id, r]));
+  const contribsByParcel = new Map();
+  for (const r of allContribRows || []) {
+    if (!r?.parcel_id) continue;
+    let bucket = contribsByParcel.get(r.parcel_id);
+    if (!bucket) {
+      bucket = [];
+      contribsByParcel.set(r.parcel_id, bucket);
+    }
+    bucket.push(r);
+  }
+  const secPolicyByParcel = new Map((allSecPolicyRows || []).map((r) => [r.parcel_id, r]));
+  const landmarkByParcel = new Map((allLandmarkRows || []).map((r) => [r.parcel_id, r]));
+
+  const sculpturesByParcel = new Map();
+  for (const s of allRows || []) {
+    if (!s?.parcel_id) continue;
+    let bucket = sculpturesByParcel.get(s.parcel_id);
+    if (!bucket) {
+      bucket = [];
+      sculpturesByParcel.set(s.parcel_id, bucket);
+    }
+    bucket.push(s);
+  }
+
   const parcels = [];
-  for (const pid of ownedParcelSet) {
-    const onLand = (allRows || []).filter((s) => s.parcel_id === pid);
+  for (const pid of ownedParcelIds) {
+    const onLand = sculpturesByParcel.get(pid) || [];
     const lp = lpMap.get(pid);
     const st = stewardMap.get(pid);
     const cur = curationMap.get(pid);
-    const settings = await getLandSettingsInternal(db, pid);
-    const contribRows = await db.all(
-      `SELECT lc.*, COALESCE(u.username, '') AS contributor_username, COALESCE(u.avatar_image, '') AS contributor_avatar
-       FROM land_contributors lc
-       LEFT JOIN users u ON u.id = lc.contributor_sub
-       WHERE lc.parcel_id = ?
-       ORDER BY lc.created_at DESC`,
-      [pid]
-    );
-    const eligibleVisitors = await findEligibleParcelVisitors(db, {
-      parcelId: pid,
-      ownerSub: ownerUser.id
-    });
-    const securityPolicy = await getLandSecurityPolicy(db, pid);
-    const landmarkAnchor = await db.get(
-      'SELECT parcel_id, descriptor_digest, keyframe_count, feature_count, anchor_cid, updated_at FROM parcel_landmark_anchors WHERE parcel_id = ?',
-      [pid]
-    );
+    const sRow = settingsByParcel.get(pid);
+    const settings = {
+      parcelId: normalizeParcelId(pid),
+      allowAgentErase: sRow ? Boolean(sRow.allow_agent_erase) : true,
+      allowContributorEdits: sRow ? Boolean(sRow.allow_contributor_edits) : true,
+      frozen: sRow ? Boolean(sRow.freeze_placements) : false,
+      updatedAt: sRow?.updated_at || ''
+    };
+    const contribRows = contribsByParcel.get(pid) || [];
+    const eligibleVisitors = eligibleVisitorsMap.get(normalizeParcelId(pid)) || [];
+    const spRow = secPolicyByParcel.get(pid);
+    const securityPolicy = {
+      parcelId: normalizeParcelId(pid),
+      requirePasskeyUnlock: Boolean(spRow?.require_passkey_unlock),
+      requireOrbUnlock: Boolean(spRow?.require_orb_unlock),
+      minOrbInliers: Number(spRow?.min_orb_inliers || DEFAULT_MIN_ORB_INLIERS),
+      maxReprojErrPx: Number(spRow?.max_reproj_err_px || DEFAULT_MAX_ORB_REPROJ_PX),
+      updatedAt: spRow?.updated_at || ''
+    };
+    const landmarkAnchor = landmarkByParcel.get(pid) || null;
     const geohash = onLand[0]?.geohash || lp?.geohash || pid.replace(/^GLAND-/, '').toLowerCase();
     const bounds = geohash ? decodeGeohashBounds(geohash) : null;
     const vr = volumeMap.get(pid);

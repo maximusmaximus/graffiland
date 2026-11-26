@@ -107,7 +107,7 @@ export default function MobilePairApprovalDropdown({
       setLastApprovedBanner(null);
       return undefined;
     }
-    onRefreshSignatures?.();
+    onRefreshSignatures?.({ includeHistory: true });
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
@@ -293,7 +293,7 @@ export default function MobilePairApprovalDropdown({
           className={`mobile-pair-tab ${activeTab === 'history' ? 'active' : ''}`}
           onClick={() => {
             onSelectTab('history');
-            onRefreshSignatures?.();
+            onRefreshSignatures?.({ includeHistory: true });
           }}
         >
           <span>📜 History</span>
@@ -762,7 +762,7 @@ export default function MobilePairApprovalDropdown({
               <button
                 type="button"
                 className="btn btn-xs btn-outline"
-                onClick={() => onRefreshSignatures?.()}
+                onClick={() => onRefreshSignatures?.({ includeHistory: true })}
               >
                 🔄 Refresh
               </button>

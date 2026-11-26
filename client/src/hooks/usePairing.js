@@ -130,24 +130,29 @@ export function usePairing({
     }
   }, [user?.id]);
 
-  const refreshPendingSignatures = useCallback(async () => {
-    if (!user?.id) {
-      setPendingSignatures([]);
-      setSignatureHistory([]);
-      return [];
-    }
-    try {
-      const res = await api.listPendingSignatures({ includeHistory: true });
-      const list = res.requests || [];
-      setPendingSignatures(list);
-      if (Array.isArray(res.history)) {
-        setSignatureHistory(res.history);
+  const mcpWsConnectedRef = useRef(false);
+
+  const refreshPendingSignatures = useCallback(
+    async ({ includeHistory = false } = {}) => {
+      if (!user?.id) {
+        setPendingSignatures([]);
+        setSignatureHistory([]);
+        return [];
       }
-      return list;
-    } catch {
-      return [];
-    }
-  }, [user?.id]);
+      try {
+        const res = await api.listPendingSignatures({ includeHistory });
+        const list = res.requests || [];
+        setPendingSignatures(list);
+        if (Array.isArray(res.history)) {
+          setSignatureHistory(res.history);
+        }
+        return list;
+      } catch {
+        return [];
+      }
+    },
+    [user?.id]
+  );
 
   useEffect(() => {
     if (!user?.id) {
@@ -157,12 +162,49 @@ export function usePairing({
       return undefined;
     }
     refreshMcpPairings();
-    refreshPendingSignatures();
-    const timer = setInterval(() => {
-      refreshMcpPairings();
-      refreshPendingSignatures();
-    }, 4500);
-    return () => clearInterval(timer);
+    refreshPendingSignatures({ includeHistory: true });
+    let timer = null;
+    let disposed = false;
+
+    const scheduleNext = () => {
+      if (disposed) return;
+      clearTimeout(timer);
+      // When the live MCP WebSocket is connected, fall back to a light 25s safety poll;
+      // when offline, poll every 10s (paused automatically while the tab is hidden).
+      const delayMs = mcpWsConnectedRef.current ? 25000 : 10000;
+      timer = setTimeout(async () => {
+        if (disposed) return;
+        const isHidden =
+          typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        if (!isHidden) {
+          await Promise.all([
+            refreshMcpPairings(),
+            refreshPendingSignatures({ includeHistory: false })
+          ]);
+        }
+        scheduleNext();
+      }, delayMs);
+    };
+    scheduleNext();
+
+    const onVisibility = () => {
+      if (disposed) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        refreshMcpPairings();
+        refreshPendingSignatures({ includeHistory: false });
+        scheduleNext();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
   }, [user?.id, refreshMcpPairings, refreshPendingSignatures]);
 
   useEffect(() => {
@@ -182,6 +224,7 @@ export function usePairing({
         ws = nextWs;
         nextWs.onopen = () => {
           if (closed || ws !== nextWs) return;
+          mcpWsConnectedRef.current = true;
           nextWs.send(JSON.stringify({ type: 'subscribe_mcp', pairingCode: activeCode }));
           clearInterval(pingTimer);
           pingTimer = setInterval(() => {
@@ -211,6 +254,7 @@ export function usePairing({
         };
         nextWs.onclose = () => {
           if (closed || ws !== nextWs) return;
+          mcpWsConnectedRef.current = false;
           clearInterval(pingTimer);
           pingTimer = null;
           ws = null;
@@ -245,6 +289,7 @@ export function usePairing({
     }
     return () => {
       closed = true;
+      mcpWsConnectedRef.current = false;
       clearTimeout(retryTimer);
       clearInterval(pingTimer);
       if (typeof window !== 'undefined') {
@@ -612,7 +657,7 @@ export function usePairing({
           ...(overrideScale ? { overrideScale } : {})
         };
         const res = await api.mobileSignRequest(reqItem.id, payload);
-        await refreshPendingSignatures();
+        await refreshPendingSignatures({ includeHistory: true });
         onSignatureExecutedRef.current?.(res, reqItem);
         const label =
           reqItem.summaryTitle ||
@@ -682,7 +727,7 @@ export function usePairing({
       });
       try {
         await api.rejectSignatureRequest(reqId);
-        await refreshPendingSignatures();
+        await refreshPendingSignatures({ includeHistory: true });
         notifySettingsSaved('Signature request rejected.');
         showHintRef.current?.('Signature request rejected.');
       } catch (err) {

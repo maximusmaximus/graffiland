@@ -984,39 +984,51 @@ export default function MobileStudio({
     [ar.mapParcels, ar.nearbyParcels, lands.myLands?.parcels]
   );
 
+  const sigExecDebounceRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      if (sigExecDebounceRef.current) clearTimeout(sigExecDebounceRef.current);
+    };
+  }, []);
+
   const handleSignatureExecuted = useCallback(
     (_res, reqItem) => {
-      lands.refreshMyLands();
-      ar.loadPublicMapData();
-      setNotifRefreshBump((n) => n + 1);
-      const loc = pol.locationRef.current || pol.location;
-      if (loc) {
-        api
-          .listSculptures({ lat: loc.lat, lng: loc.lng, radiusMeters: 300, includeVoxels: false })
-          .then((nRes) => ar.hydrateNearbyList(nRes.sculptures || [], loc))
-          .catch(() => {});
-      }
       const targetParcelId = String(reqItem?.parcelId || '').trim().toUpperCase();
-      if (targetParcelId) {
-        setParcelVisit((prev) => {
-          if (!prev?.parcel?.parcelId || prev.parcel.parcelId.toUpperCase() !== targetParcelId) {
-            return prev;
-          }
+      if (sigExecDebounceRef.current) clearTimeout(sigExecDebounceRef.current);
+      // Coalesce back-to-back approvals so we don't stack overlapping full-catalog reloads in one 10s window
+      sigExecDebounceRef.current = setTimeout(() => {
+        sigExecDebounceRef.current = null;
+        lands.refreshMyLands();
+        ar.loadPublicMapData();
+        setNotifRefreshBump((n) => n + 1);
+        const loc = pol.locationRef.current || pol.location;
+        if (loc) {
           api
-            .getLandDetail(prev.parcel.parcelId)
-            .then((fresh) => {
-              if (fresh?.parcel) {
-                setParcelVisit((cur) =>
-                  cur?.parcel?.parcelId?.toUpperCase() === targetParcelId
-                    ? { ...cur, parcel: fresh.parcel, sculptures: fresh.sculptures || [] }
-                    : cur
-                );
-              }
-            })
+            .listSculptures({ lat: loc.lat, lng: loc.lng, radiusMeters: 300, includeVoxels: false })
+            .then((nRes) => ar.hydrateNearbyList(nRes.sculptures || [], loc))
             .catch(() => {});
-          return prev;
-        });
-      }
+        }
+        if (targetParcelId) {
+          setParcelVisit((prev) => {
+            if (!prev?.parcel?.parcelId || prev.parcel.parcelId.toUpperCase() !== targetParcelId) {
+              return prev;
+            }
+            api
+              .getLandDetail(prev.parcel.parcelId)
+              .then((fresh) => {
+                if (fresh?.parcel) {
+                  setParcelVisit((cur) =>
+                    cur?.parcel?.parcelId?.toUpperCase() === targetParcelId
+                      ? { ...cur, parcel: fresh.parcel, sculptures: fresh.sculptures || [] }
+                      : cur
+                  );
+                }
+              })
+              .catch(() => {});
+            return prev;
+          });
+        }
+      }, 350);
     },
     [ar, lands, pol]
   );

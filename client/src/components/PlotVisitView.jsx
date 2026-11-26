@@ -378,7 +378,10 @@ export default function PlotVisitView({
       return undefined;
     }
     loadOwnerPendingAndPairing();
-    const timer = setInterval(loadOwnerPendingAndPairing, 5000);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      loadOwnerPendingAndPairing();
+    }, 12000);
     return () => clearInterval(timer);
   }, [user?.id, isLandOwner, activeParcel?.parcelId, loadOwnerPendingAndPairing]);
 

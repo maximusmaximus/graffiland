@@ -244,6 +244,9 @@ export function getDb() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sigreq_owner_status ON land_signature_requests(owner_sub, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sigreq_owner_updated ON land_signature_requests(owner_sub, updated_at DESC, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sigreq_owner_addr_lower ON land_signature_requests(LOWER(owner_address), status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sigreq_status_expires ON land_signature_requests(status, expires_at);
 
     CREATE TABLE IF NOT EXISTS parcel_curations (
       parcel_id TEXT PRIMARY KEY,
