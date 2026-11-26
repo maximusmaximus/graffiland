@@ -4,7 +4,7 @@ import {
   resolveLandDisplayName
 } from '../../../../shared/landVolume.mjs';
 import { api, resolveApiUrl } from '../../utils/api.js';
-import { buildSculptureShareUrl, copyToClipboard } from '../../utils/clipboard.js';
+import { buildLandShareToXUrl, buildSculptureShareUrl, copyToClipboard } from '../../utils/clipboard.js';
 import {
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
@@ -47,6 +47,7 @@ import {
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
 import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
+import XLogoIcon from '../XLogoIcon.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
@@ -377,6 +378,22 @@ function MobileIsoSvgFallback({
                     </>
                   )}
                 </button>
+                <a
+                  href={buildLandShareToXUrl({
+                    parcelId: primaryEntry.parcel.parcelId,
+                    customName: primaryEntry.parcel.customName || '',
+                    landName
+                  })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="plot-iso-land-x-btn"
+                  data-testid="plot-land-label-x-btn"
+                  aria-label={`Share ${landName} on X`}
+                  title={`Share ${landName} on X (Twitter)`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <XLogoIcon size={12} />
+                </a>
               </div>
             );
           })()}
@@ -1925,6 +1942,22 @@ export default function MobileIsometricMap({
                       </>
                     )}
                   </button>
+                  <a
+                    href={buildLandShareToXUrl({
+                      parcelId: primaryEntry.parcel.parcelId,
+                      customName: primaryEntry.parcel.customName || '',
+                      landName: primaryLandLabel
+                    })}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="plot-iso-land-x-btn"
+                    data-testid="plot-land-label-x-btn"
+                    aria-label={`Share ${primaryLandLabel} on X`}
+                    title={`Share ${primaryLandLabel} on X (Twitter)`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <XLogoIcon size={12} />
+                  </a>
                 </div>
               )}
               {visibleShowcaseSculptures.map((sc) => {

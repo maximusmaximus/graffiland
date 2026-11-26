@@ -21,7 +21,7 @@ import {
   parcelLocalOffsetToWorldLatLng
 } from '../../../shared/sculpturePlacement.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
-import { copyToClipboard } from '../utils/clipboard.js';
+import { buildLandShareToXUrl, copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   computeClosestLandsPerimeterFit,
@@ -53,6 +53,7 @@ import {
   buildNeighborArrowsSignature,
   computeNeighborEdgeArrows
 } from '../utils/neighborEdgeArrows.js';
+import { X_LOGO_SVG_PATH } from './XLogoIcon.jsx';
 import {
   colorWithAlpha,
   computeGizmoDepthProfile,
@@ -2327,7 +2328,34 @@ export default function MapView3D({
         }, 1800);
       });
 
-      labelPill.append(badge, shareBtn);
+      const xShareLink = document.createElement('a');
+      xShareLink.href = buildLandShareToXUrl({
+        parcelId: pid,
+        customName: p.customName || '',
+        landName
+      });
+      xShareLink.target = '_blank';
+      xShareLink.rel = 'noopener noreferrer';
+      xShareLink.className = 'map3d-land-label-x-btn map3d-ui-stop';
+      xShareLink.dataset.testid = 'map3d-land-x-share-btn';
+      xShareLink.dataset.parcelId = pid;
+      xShareLink.setAttribute('aria-label', `Share ${landName} on X`);
+      xShareLink.title = `Share ${landName} on X (Twitter)`;
+      const svgNs = 'http://www.w3.org/2000/svg';
+      const xSvg = document.createElementNS(svgNs, 'svg');
+      xSvg.setAttribute('viewBox', '0 0 24 24');
+      xSvg.setAttribute('width', '12');
+      xSvg.setAttribute('height', '12');
+      xSvg.setAttribute('fill', 'currentColor');
+      xSvg.setAttribute('aria-hidden', 'true');
+      const xPath = document.createElementNS(svgNs, 'path');
+      xPath.setAttribute('d', X_LOGO_SVG_PATH);
+      xSvg.appendChild(xPath);
+      xShareLink.appendChild(xSvg);
+      xShareLink.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      xShareLink.addEventListener('click', (ev) => ev.stopPropagation());
+
+      labelPill.append(badge, shareBtn, xShareLink);
       wrap.appendChild(labelPill);
       wrap.style.display = 'none';
       pinLayer.appendChild(wrap);

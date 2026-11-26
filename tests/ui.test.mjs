@@ -4363,21 +4363,21 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     }
   });
 
-  test('DirectLinkIntroOverlay shows ultra-clean <= 3-sentence intro and dismisses via close box, backdrop click, Escape, or Sign In', async () => {
+  test('DirectLinkIntroOverlay shows clean agent-copy & free-land Google sign-in intro and dismisses via close box, backdrop click, Escape, or Google Sign In', async () => {
     const { default: DirectLinkIntroOverlay, DIRECT_LINK_INTRO_COPY } = await loadJsxModule(
       'client/src/components/DirectLinkIntroOverlay.jsx'
     );
 
-    // Copy must be strictly <= 3 sentences and cover seeing art, making art + minting land + forever, and signing in
+    // Copy must be ultra-clean (<= 2 sentences) and tell visitors they can copy the land for their agent + sign in with Google for free land
     const sentences = DIRECT_LINK_INTRO_COPY.trim()
       .split(/(?<=[.!?])\s+/)
       .filter(Boolean);
     assert.ok(sentences.length >= 2 && sentences.length <= 3, `Expected <= 3 sentences, got ${sentences.length}`);
-    assert.match(DIRECT_LINK_INTRO_COPY, /see virtual art/i);
-    assert.match(DIRECT_LINK_INTRO_COPY, /make your own virtual art/i);
-    assert.match(DIRECT_LINK_INTRO_COPY, /minting land/i);
-    assert.match(DIRECT_LINK_INTRO_COPY, /preserve it forever/i);
-    assert.match(DIRECT_LINK_INTRO_COPY, /sign in/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /copy this land/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /agent/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /3d models/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /sign in with google/i);
+    assert.match(DIRECT_LINK_INTRO_COPY, /free/i);
 
     let closeCount = 0;
     let signInCount = 0;
@@ -4393,8 +4393,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     assert.ok(view.getByTestId('brand-logo-lockup'));
-    assert.equal(/welcome/i.test(view.container.textContent || ''), false);
     assert.equal(view.getByTestId('direct-link-intro-text').textContent.trim(), DIRECT_LINK_INTRO_COPY);
+    assert.ok(view.getByTestId('direct-link-intro-copy-btn'));
+    assert.match(view.getByTestId('direct-link-intro-signin-btn').textContent || '', /Sign in with Google/i);
 
     // Clicking inside the card must NOT dismiss
     RTL.fireEvent.click(view.getByTestId('direct-link-intro-card'));
@@ -4414,7 +4415,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.keyDown(globalThis.window, { key: 'Escape' });
     assert.equal(closeCount, 3);
 
-    // Sign In button fires onSignIn
+    // Google Sign In button fires onSignIn
     RTL.fireEvent.click(view.getByTestId('direct-link-intro-signin-btn'));
     assert.equal(signInCount, 1);
     cleanup();

@@ -42,6 +42,7 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../../shared/notificationService.mjs';
+import { buildLandSharePageHtml, renderLandOgPng } from '../../shared/landOgImage.mjs';
 import { validateProfileImage } from '../../shared/profileRules.mjs';
 import {
   createWorkerStagedBlobStore,
@@ -2503,6 +2504,57 @@ export default {
         checked.valid ? 200 : 400,
         request
       );
+    }
+
+    const landOgMatch = pathname.match(/^\/api\/og\/land\/([^/]+?)(?:\.png)?$/i);
+    if (landOgMatch && request.method === 'GET') {
+      const rawId = decodeURIComponent(landOgMatch[1] || '').trim();
+      const slugHint = String(url.searchParams.get('slug') || '').replace(/-/g, ' ').trim();
+      let detail = null;
+      try {
+        detail = await getPublicParcelDetail(d1Adapter, { parcelOrSlug: rawId });
+      } catch {
+        detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
+      }
+      const pngBytes = await renderLandOgPng({
+        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
+        sculptures: detail?.sculptures || []
+      });
+      return new Response(pngBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=300, s-maxage=600',
+          'X-Content-Type-Options': 'nosniff',
+          ...corsHeaders(request)
+        }
+      });
+    }
+
+    const landShareMatch = pathname.match(/^\/share\/land\/([^/]+)$/i);
+    if (landShareMatch && request.method === 'GET') {
+      const rawId = decodeURIComponent(landShareMatch[1] || '').trim();
+      const slugHint = String(url.searchParams.get('slug') || '').replace(/-/g, ' ').trim();
+      let detail = null;
+      try {
+        detail = await getPublicParcelDetail(d1Adapter, { parcelOrSlug: rawId });
+      } catch {
+        detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
+      }
+      const html = buildLandSharePageHtml({
+        parcelId: rawId,
+        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
+        sculptures: detail?.sculptures || [],
+        apiOrigin: url.origin,
+        publicUrl: String(env.PUBLIC_URL || 'https://spray.land').replace(/\/+$/, '')
+      });
+      return new Response(html, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=180, s-maxage=300'
+        }
+      });
     }
 
     const landDetailMatch = pathname.match(/^\/api\/lands\/([^/]+)$/);
