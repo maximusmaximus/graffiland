@@ -424,8 +424,14 @@ CREATE TABLE IF NOT EXISTS land_security_policies (
   owner_sub TEXT NOT NULL,
   require_passkey_unlock INTEGER NOT NULL DEFAULT 0,
   require_orb_unlock INTEGER NOT NULL DEFAULT 0,
-  min_orb_inliers INTEGER NOT NULL DEFAULT 8,
-  max_reproj_err_px REAL NOT NULL DEFAULT 6.5,
+  min_orb_inliers INTEGER NOT NULL DEFAULT 6,
+  max_reproj_err_px REAL NOT NULL DEFAULT 8.0,
+  origin_source TEXT NOT NULL DEFAULT 'unknown',
+  env_tier TEXT NOT NULL DEFAULT 'unknown',
+  auto_min_orb_inliers INTEGER,
+  auto_max_reproj_err_px REAL,
+  override_flag INTEGER NOT NULL DEFAULT 0,
+  lighting_adaptive INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
 

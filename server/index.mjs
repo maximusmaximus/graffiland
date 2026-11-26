@@ -183,6 +183,7 @@ import {
   fetchParcelLandmarkAnchor,
   refundRelayerQuota,
   saveParcelLandmarkAnchor,
+  seedLandSecurityPolicy,
   updateLandSecurityPolicy
 } from '../shared/landmarkService.mjs';
 import {
@@ -1824,6 +1825,7 @@ export function createAppServer(serverOptions = {}) {
         parcelId: req.params.parcelId,
         user: req.user,
         body: req.body,
+        userAgent: req.headers['user-agent'] || '',
         pinJsonFn: (obj, name) => pinJsonDocumentToIpfs(obj, name)
       })
     )
@@ -2259,6 +2261,16 @@ export function createAppServer(serverOptions = {}) {
           now
         );
       }
+
+      await seedLandSecurityPolicy(chatDb, {
+        parcelId: locationBundle.parcelId,
+        ownerSub: req.user.id,
+        originSource: 'mobile_ar',
+        lat: parcelCenterLat,
+        lng: parcelCenterLng,
+        geoInfo: locationBundle.geoInfo || null,
+        skipRemoteLookup: true
+      }).catch(() => null);
 
       await recordLandView(chatDb, {
         parcelId: locationBundle.parcelId,

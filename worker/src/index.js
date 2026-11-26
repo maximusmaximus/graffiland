@@ -173,6 +173,7 @@ import {
   fetchParcelLandmarkAnchor,
   refundRelayerQuota,
   saveParcelLandmarkAnchor,
+  seedLandSecurityPolicy,
   updateLandSecurityPolicy
 } from '../../shared/landmarkService.mjs';
 import {
@@ -2752,6 +2753,7 @@ export default {
           parcelId: decodeURIComponent(landLandmarkMatch[1]),
           user,
           body,
+          userAgent: request.headers.get('User-Agent') || '',
           pinJsonFn: makeWorkerPinJsonHook()
         });
         return jsonResponse(out, 200, request);
@@ -3374,6 +3376,16 @@ export default {
             )
             .run();
         }
+
+        await seedLandSecurityPolicy(d1Adapter, {
+          parcelId: locationBundle.parcelId,
+          ownerSub: user.id,
+          originSource: 'mobile_ar',
+          lat: parcelCenterLat,
+          lng: parcelCenterLng,
+          geoInfo: locationBundle.geoInfo || null,
+          skipRemoteLookup: true
+        }).catch(() => null);
 
         await recordLandView(d1Adapter, {
           parcelId: locationBundle.parcelId,

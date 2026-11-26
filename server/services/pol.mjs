@@ -194,7 +194,11 @@ export async function reverseGeocode(lat, lng) {
       country: addr.country || '',
       countryCode: (addr.country_code || '').toUpperCase(),
       postcode: addr.postcode || '',
-      displayName: data.display_name || placeName
+      displayName: data.display_name || placeName,
+      category: String(data.category || data.class || '').toLowerCase(),
+      type: String(data.type || '').toLowerCase(),
+      addresstype: String(data.addresstype || '').toLowerCase(),
+      housenumber: String(addr.house_number || '').trim()
     };
   } catch {
     return fallback;

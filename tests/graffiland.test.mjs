@@ -2926,6 +2926,45 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
     assert.equal(failLowInliers.status, 403);
     assert.match(failLowInliers.body.error, /inliers/i);
 
+    const badMatches = [];
+    const okMatches = [];
+    for (let k = 0; k < 2; k += 1) {
+      for (let f = 0; f < 5; f += 1) {
+        const feat = validKeyframes[k].features[f];
+        const origBytes = new Uint8Array(Buffer.from(feat.descB64, 'base64'));
+        const invBytes = origBytes.map((b) => ~b & 0xff);
+        badMatches.push({
+          keyframeIndex: k,
+          featureIndex: f,
+          liveDescB64: Buffer.from(invBytes).toString('base64'),
+          u: feat.u,
+          v: feat.v
+        });
+        okMatches.push({
+          keyframeIndex: k,
+          featureIndex: f,
+          liveDescB64: feat.descB64,
+          u: feat.u,
+          v: feat.v
+        });
+      }
+    }
+
+    // Attempt 2b: Omitting matchedDescriptors MUST be blocked (403)
+    const p2b = await buildSignedPresence();
+    const failOmittedMatches = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        ...p2b.signed,
+        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        webauthnAssertion: await signWebAuthnAssertion(p2b.ch.challengeNonce, 1),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(failOmittedMatches.status, 403);
+    assert.match(failOmittedMatches.body.error, /matchedDescriptors/i);
+
     // Attempt 3: Valid ORB + forged wrong WebAuthn key -> 403
     const wrongKeyPair = await globalThis.crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-256' },
@@ -2938,7 +2977,12 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
       body: JSON.stringify({
         ...p3.signed,
-        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        orbProof: {
+          descriptorDigest,
+          inlierCount: 10,
+          reprojectionErrorPx: 1.8,
+          matchedDescriptors: okMatches
+        },
         webauthnAssertion: await signWebAuthnAssertion(
           p3.ch.challengeNonce,
           1,
@@ -2957,7 +3001,12 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
       body: JSON.stringify({
         ...p4.signed,
-        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        orbProof: {
+          descriptorDigest,
+          inlierCount: 10,
+          reprojectionErrorPx: 1.8,
+          matchedDescriptors: okMatches
+        },
         webauthnAssertion: await signWebAuthnAssertion(p4.ch.challengeNonce, 2),
         deviceProfile: { isMobile: true }
       })
@@ -2981,7 +3030,12 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
       headers: { Authorization: `Bearer ${visitorToken}`, 'User-Agent': mobileUa },
       body: JSON.stringify({
         ...p5.signed,
-        orbProof: { descriptorDigest, inlierCount: 11, reprojectionErrorPx: 1.8 },
+        orbProof: {
+          descriptorDigest,
+          inlierCount: 10,
+          reprojectionErrorPx: 1.8,
+          matchedDescriptors: okMatches
+        },
         webauthnAssertion: await signWebAuthnAssertion(p5.ch.challengeNonce, 1),
         deviceProfile: { isMobile: true }
       })
@@ -2991,25 +3045,6 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
 
     // Attempt 6: Server-side ORB matchedDescriptors Hamming check (forged -> 403, valid -> 200)
     const p6Bad = await buildSignedPresence();
-    const badMatches = [];
-    const okMatches = [];
-    for (let k = 0; k < 2; k += 1) {
-      for (let f = 0; f < 5; f += 1) {
-        const feat = validKeyframes[k].features[f];
-        const origBytes = new Uint8Array(Buffer.from(feat.descB64, 'base64'));
-        const invBytes = origBytes.map((b) => ~b & 0xff);
-        badMatches.push({
-          keyframeIndex: k,
-          featureIndex: f,
-          liveDescB64: Buffer.from(invBytes).toString('base64')
-        });
-        okMatches.push({
-          keyframeIndex: k,
-          featureIndex: f,
-          liveDescB64: feat.descB64
-        });
-      }
-    }
 
     const badOrbDesc = await apiJson(`/api/sculptures/${sc.id}/pins/unlock`, {
       method: 'POST',
