@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'ethers';
 import {
   IN_PERSON_HUMAN_INTERACTIONS,
@@ -6,8 +6,14 @@ import {
   NON_QUALIFYING_INTERACTIONS,
   STEWARD_DEFAULTS
 } from '../../../shared/constants.mjs';
+import {
+  buildAutonomousAgentPrompt,
+  buildPropertyOwnerPrompt,
+  buildStdioMcpSnippet
+} from '../../../shared/landSignatureMessage.mjs';
 import { buildPayoutLinkMessage } from '../../../shared/payoutLinkMessage.mjs';
-import { api } from '../utils/api.js';
+import { api, API_BASE } from '../utils/api.js';
+import { copyToClipboard } from '../utils/clipboard.js';
 import {
   isWebAuthnSupported,
   registerHardwarePasskey,
@@ -31,10 +37,15 @@ function detectInitialViewportTab() {
 export default function InfoTermsModal({
   config,
   user,
+  mcpState = null,
+  onMcpStateChange = null,
   initialTab = 'guide',
+  initialViewportGuide = '',
   onUserUpdate,
   onOpenProfile = null,
   onOpenArchive = null,
+  onOpenPair = null,
+  onOpenWelcome = null,
   onStartMapMint = null,
   onStartMobileDraw = null,
   onOpenMobileMap = null,
@@ -46,13 +57,119 @@ export default function InfoTermsModal({
   useEffect(() => {
     setTab(initialTab || 'guide');
   }, [initialTab]);
-  const [viewportGuide, setViewportGuide] = useState(detectInitialViewportTab);
+  const [viewportGuide, setViewportGuide] = useState(
+    () => initialViewportGuide || detectInitialViewportTab()
+  );
+  useEffect(() => {
+    if (initialViewportGuide) {
+      setViewportGuide(initialViewportGuide);
+    }
+  }, [initialViewportGuide]);
+  const [agentPromptPreview, setAgentPromptPreview] = useState(''); // '' | 'owner' | 'autonomous'
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentCopyFeedback, setAgentCopyFeedback] = useState('');
   const [payoutInput, setPayoutInput] = useState(user?.customPayoutAddress || '');
   const [savingPayout, setSavingPayout] = useState(false);
   const [exportedKey, setExportedKey] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
   const [exportBusy, setExportBusy] = useState(false);
   const [needsPasskey, setNeedsPasskey] = useState(false);
+
+  const apiOrigin =
+    API_BASE ||
+    (typeof window !== 'undefined'
+      ? window.location.origin
+      : 'https://graffiland-api.maxinfeld-artshow.workers.dev');
+
+  const autonomousPrompt = useMemo(
+    () =>
+      buildAutonomousAgentPrompt({
+        apiOrigin,
+        publicUrl:
+          typeof window !== 'undefined' ? window.location.origin : 'https://spray.land'
+      }),
+    [apiOrigin]
+  );
+
+  const stdioConfigJson = useMemo(() => buildStdioMcpSnippet({ apiOrigin }), [apiOrigin]);
+
+  const ownerPromptPreview = useMemo(
+    () =>
+      buildPropertyOwnerPrompt({
+        apiOrigin,
+        pairingCode:
+          mcpState?.activePairing?.code ||
+          mcpState?.pairings?.[0]?.code ||
+          '<YOUR_GLP_PAIRING_CODE>',
+        ownerAddress: user?.activeMintRecipient || user?.walletAddress || '<YOUR_WALLET_ADDRESS>'
+      }),
+    [apiOrigin, mcpState, user]
+  );
+
+  function flashAgentCopy(msg) {
+    setAgentCopyFeedback(msg);
+    setTimeout(() => {
+      setAgentCopyFeedback((cur) => (cur === msg ? '' : cur));
+    }, 3400);
+  }
+
+  async function handleCopyAutonomousPrompt() {
+    const ok = await copyToClipboard(autonomousPrompt);
+    flashAgentCopy(
+      ok
+        ? 'Copied Autonomous Agent Prompt! Paste into your AI agent.'
+        : 'Clipboard unavailable — open Preview Prompt to copy.'
+    );
+  }
+
+  async function handleCopyStdioConfig() {
+    const ok = await copyToClipboard(stdioConfigJson);
+    flashAgentCopy(ok ? 'Copied graffiland-mcp JSON config!' : 'Clipboard unavailable.');
+  }
+
+  async function handleCopyPropertyOwnerPrompt() {
+    if (!user?.id) {
+      const ok = await copyToClipboard(ownerPromptPreview);
+      flashAgentCopy(
+        ok
+          ? 'Copied Property-Agent Prompt! Sign in to insert your personal GLP code.'
+          : 'Sign in first to generate your personal GLP code.'
+      );
+      return;
+    }
+    setAgentBusy(true);
+    try {
+      let code =
+        mcpState?.activePairing?.code ||
+        mcpState?.pairings?.find((p) => p.status === 'pending')?.code;
+      let prompt = '';
+      if (!code) {
+        const created = await api.createMcpPairing({ apiOrigin });
+        const refreshed = await api.listMcpPairings().catch(() => null);
+        if (refreshed) onMcpStateChange?.(refreshed);
+        code = created?.pairing?.code || '<YOUR_GLP_PAIRING_CODE>';
+        prompt =
+          created?.ownerPrompt ||
+          buildPropertyOwnerPrompt({
+            apiOrigin,
+            pairingCode: code,
+            ownerAddress: user.activeMintRecipient || user.walletAddress
+          });
+      } else {
+        prompt = buildPropertyOwnerPrompt({
+          apiOrigin,
+          pairingCode: code,
+          ownerAddress: user.activeMintRecipient || user.walletAddress
+        });
+      }
+      const ok = await copyToClipboard(prompt);
+      flashAgentCopy(ok ? `Copied Property-Agent Prompt (${code})!` : `Generated ${code}.`);
+    } catch (err) {
+      flashAgentCopy(err?.message || 'Could not generate pairing prompt.');
+    } finally {
+      setAgentBusy(false);
+    }
+  }
 
   async function savePayout() {
     setSavingPayout(true);
@@ -298,7 +415,7 @@ export default function InfoTermsModal({
               <span>&ldquo;i&rdquo; icon gives you info about how something works — click it anytime!</span>
             </div>
 
-            {/* Clean Viewport Menu: Desktop vs Mobile */}
+            {/* Clean Viewport Menu: Desktop vs Mobile vs AI Agents */}
             <div className="info-viewport-menu" role="tablist" aria-label="Choose device guide">
               <button
                 type="button"
@@ -318,6 +435,16 @@ export default function InfoTermsModal({
               >
                 <XeroIcon emoji="📱" size={14} /> Mobile AR Studio
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewportGuide === 'agents'}
+                data-testid="info-guide-agents-tab"
+                className={`btn btn-sm ${viewportGuide === 'agents' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setViewportGuide('agents')}
+              >
+                <XeroIcon emoji="🤖" size={14} /> AI Agents &amp; Collectors
+              </button>
             </div>
 
             {viewportGuide === 'desktop' ? (
@@ -325,14 +452,14 @@ export default function InfoTermsModal({
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="🗺️" size={16} />
-                    <strong>Isometric 3D Map, Zoom &amp; Live Search</strong>
+                    <strong>3D Map, Zoom &amp; Live Search</strong>
                     <InfoTip title="Map Camera, Zoom & Search">
-                      Desktop starts in Isometric 3D with real OpenFreeMap buildings. Search any
-                      street intersection (e.g., <em>Market &amp; 5th</em>), business, address,
-                      coordinates, or named land. Use scroll wheel, <strong>− Zoom Out</strong> /{' '}
-                      <strong>+</strong>, or <strong>📐 Fit Draft</strong> anytime to zoom out and
-                      see the full height and top rectangle of any land. Switch 2D/3D/Isometric,
-                      tilt (0°–65°), rotate (±15°), or toggle Buildings and Terrain.
+                      Desktop opens in 3D with real OpenFreeMap buildings. Search any street
+                      intersection (e.g., <em>Market &amp; 5th</em>), business, address,
+                      coordinates, or named land. Use scroll wheel, the map zoom/compass buttons, or{' '}
+                      <strong>📐 Fit Draft</strong> anytime to zoom out and see the full height and
+                      top rectangle of any land. Switch 2D/3D or toggle Buildings, Terrain, Fit
+                      Lands, and Me right on the map.
                     </InfoTip>
                   </div>
                   <p>
@@ -346,12 +473,13 @@ export default function InfoTermsModal({
                     <XeroIcon emoji="🏗️" size={16} />
                     <strong>Draw, Shape &amp; Mint 3D Land</strong>
                     <InfoTip title="3D Box Controls, Shortcuts & Limits">
-                      Click <strong>Draw Land</strong> and drag to place a 3D box. Drag{' '}
-                      <strong>top rim bars</strong> or the <strong>↕ orb</strong> up/down to set
-                      height (the map zooms out automatically so the top stays in view up to 250m),{' '}
-                      <strong>corner balls</strong> to scale, <strong>bottom side bars</strong> to
-                      stretch edges, <strong>gold vertical bars</strong> to rotate, or the center to
-                      move. Keyboard shortcuts: <strong>Ctrl+Z / Cmd+Z</strong> to undo,{' '}
+                      Open <strong>Mint Land</strong> (or hold down on the map) and drag to place a
+                      3D box. Drag <strong>top rim bars</strong> or the <strong>↕ orb</strong>{' '}
+                      up/down to set height (the map zooms out automatically so the top stays in
+                      view up to 250m), <strong>corner balls</strong> to scale,{' '}
+                      <strong>bottom side bars</strong> to stretch edges,{' '}
+                      <strong>gold vertical bars</strong> to rotate, or the center to move. Keyboard
+                      shortcuts: <strong>Ctrl+Z / Cmd+Z</strong> to undo,{' '}
                       <strong>Delete / Backspace</strong> to remove an unminted draft, and{' '}
                       <strong>Ctrl+C / Ctrl+V</strong> to duplicate. Limits: 4–120m sides, max 5,000
                       m² area, 4–250m height, max 500,000 m³ volume,{' '}
@@ -403,6 +531,158 @@ export default function InfoTermsModal({
                   <p>
                     Invite your agents to add art to the land, pair your phone over QR, and unlock
                     Land Management once paired.
+                  </p>
+                </div>
+              </div>
+            ) : viewportGuide === 'agents' ? (
+              <div key="agents" className="info-simple-list" data-testid="info-guide-agents">
+                <div className="card info-simple-card" style={{ borderColor: 'rgba(0, 245, 212, 0.34)' }}>
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🧑" size={16} />
+                    <strong>Pair a Personal Helper Agent to Your Lands</strong>
+                    <InfoTip title="Property-Agent Pairing">
+                      Copy a <code>GLP-...</code> pairing prompt so your personal AI helper can
+                      generate &amp; place 3D art on lands you own, with two-way approval on your
+                      phone or desktop notifications.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Give your AI assistant a ready-to-paste prompt linked to your account to build
+                    3D models and stages on your lands.
+                  </p>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      onClick={handleCopyPropertyOwnerPrompt}
+                      disabled={agentBusy}
+                    >
+                      <XeroIcon emoji="📋" size={14} />{' '}
+                      {agentBusy ? 'Generating...' : 'Copy Property-Agent Prompt'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      onClick={() =>
+                        setAgentPromptPreview((cur) => (cur === 'owner' ? '' : 'owner'))
+                      }
+                    >
+                      <XeroIcon emoji="👀" size={12} />{' '}
+                      {agentPromptPreview === 'owner' ? 'Hide Prompt' : 'Preview Prompt'}
+                    </button>
+                    {typeof onOpenPair === 'function' && (
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        onClick={() => {
+                          onClose?.();
+                          onOpenPair();
+                        }}
+                      >
+                        <XeroIcon emoji="🔗" size={12} /> Pairing
+                      </button>
+                    )}
+                    {!user && typeof onRequestLogin === 'function' && (
+                      <button type="button" className="btn btn-xs" onClick={onRequestLogin}>
+                        Sign In
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 62, 127, 0.32)' }}>
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🤖" size={16} />
+                    <strong>Autonomous AI Agents (Wallet / MCP Auth)</strong>
+                    <InfoTip title="Zero-OAuth Autonomous Login & Incentives">
+                      Sign an EIP-191 challenge at <code>/api/agents/challenge</code> or run{' '}
+                      <code>npx graffiland-mcp</code>. Start with{' '}
+                      {STEWARD_DEFAULTS.starterDormantSlots} free land slots ($0 platform claim fee;
+                      agents pay own chain network gas). When an IRL human adds{' '}
+                      {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks on your land, it locks in
+                      permanently, unlocks +{STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots, and
+                      earns 3% of sales forever.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Zero-OAuth wallet or MCP login · Agents pay own gas · Earn 3% steward royalties
+                    forever when humans visit &amp; add art.
+                  </p>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-primary"
+                      onClick={handleCopyAutonomousPrompt}
+                    >
+                      <XeroIcon emoji="📋" size={14} /> Copy Autonomous Agent Prompt
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      onClick={handleCopyStdioConfig}
+                    >
+                      <XeroIcon emoji="⚙️" size={16} /> MCP Config
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      onClick={() =>
+                        setAgentPromptPreview((cur) => (cur === 'autonomous' ? '' : 'autonomous'))
+                      }
+                    >
+                      <XeroIcon emoji="👀" size={12} />{' '}
+                      {agentPromptPreview === 'autonomous' ? 'Hide Prompt' : 'Preview Prompt'}
+                    </button>
+                    <a
+                      className="btn btn-xs"
+                      href={`${apiOrigin}/llms.txt`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      /llms.txt
+                    </a>
+                    <a
+                      className="btn btn-xs"
+                      href={`${apiOrigin}/.well-known/agent.json`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      agent.json
+                    </a>
+                  </div>
+                </div>
+
+                {agentCopyFeedback && (
+                  <div className="mono desktop-intro-feedback" role="status" aria-live="polite">
+                    ✅ {agentCopyFeedback}
+                  </div>
+                )}
+
+                {agentPromptPreview && (
+                  <textarea
+                    readOnly
+                    className="input mono"
+                    rows={6}
+                    style={{ width: '100%', fontSize: 11, lineHeight: 1.45 }}
+                    aria-label="Agent connection prompt preview"
+                    value={agentPromptPreview === 'autonomous' ? autonomousPrompt : ownerPromptPreview}
+                  />
+                )}
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="💎" size={16} />
+                    <strong>Collectors &amp; Verified IRL 3D NFTs</strong>
+                    <InfoTip title="Proof of Real Presence & Revenue Split">
+                      Every human piece is verified via live phone camera, motion sensors, and GPS,
+                      and stored as a standard ERC-721 + 3D <code>.glb</code> asset. Every
+                      marketplace trade splits 90% Seller · 5% Platform · 3% AI Agent Steward · 2%
+                      verified IRL Human Artists.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Collect verified real-world 3D NFTs with transparent on-chain 5% / 3% / 2% / 90%
+                    royalty splits.
                   </p>
                 </div>
               </div>
@@ -583,9 +863,24 @@ export default function InfoTermsModal({
               </p>
             </div>
 
-            <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', paddingTop: 2 }}>
-              Brand: SPRAY.LAND Voxel Spray Can · Typeface: Audiowide (SIL OFL 1.1) · Icons: Xero
-              Emoji by Max Infeld (CC BY 4.0)
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingTop: 2 }}>
+              {typeof onOpenWelcome === 'function' && (
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  data-testid="info-reopen-intro-btn"
+                  onClick={() => {
+                    onClose?.();
+                    onOpenWelcome();
+                  }}
+                >
+                  <XeroIcon emoji="👋" size={12} /> Intro Walkthrough
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                Brand: SPRAY.LAND Voxel Spray Can · Typeface: Audiowide (SIL OFL 1.1) · Icons: Xero
+                Emoji by Max Infeld (CC BY 4.0)
+              </span>
             </div>
           </div>
         )}

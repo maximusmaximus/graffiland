@@ -490,7 +490,6 @@ export default function MapView3D({
   onNavigateSculpture = null,
   focusTarget = null,
   onViewModeChange = null,
-  onToggleDrawMode = null,
   onDismissAuto3dHint = null
 }) {
   const stageRef = useRef(null);
@@ -529,7 +528,7 @@ export default function MapView3D({
   const [gizmoCursor, setGizmoCursor] = useState('');
   const [gizmoHint, setGizmoHint] = useState('');
   const [holdDrawActive, setHoldDrawActive] = useState(false);
-  const [draftCanvasDragMode, setDraftCanvasDragMode] = useState('orbit'); // 'orbit' | 'pan'
+  const draftCanvasDragMode = 'orbit';
   const [rendered3dSculptureCount, setRendered3dSculptureCount] = useState(0);
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
   const [edgeTags, setEdgeTags] = useState([]);
@@ -603,8 +602,7 @@ export default function MapView3D({
   const gizmoDragRef = useRef(null);
   const orbitDragRef = useRef(null);
   const shiftPanActiveRef = useRef(false);
-  const draftCanvasDragModeRef = useRef(draftCanvasDragMode);
-  const prevDraftCountRef = useRef(draftParcels.length);
+  const draftCanvasDragModeRef = useRef('orbit');
   const jumpToSearchResultRef = useRef(null);
 
   useEffect(() => {
@@ -634,15 +632,6 @@ export default function MapView3D({
   useEffect(() => {
     drawModeRef.current = drawMode;
   }, [drawMode]);
-  useEffect(() => {
-    draftCanvasDragModeRef.current = draftCanvasDragMode;
-  }, [draftCanvasDragMode]);
-  useEffect(() => {
-    if (prevDraftCountRef.current === 0 && draftParcels.length > 0) {
-      setDraftCanvasDragMode('orbit');
-    }
-    prevDraftCountRef.current = draftParcels.length;
-  }, [draftParcels.length]);
   useEffect(() => {
     showBuildingsRef.current = showBuildings;
   }, [showBuildings]);
@@ -1265,7 +1254,7 @@ export default function MapView3D({
           const containerRect = containerEl.getBoundingClientRect();
           containerEl
             .querySelectorAll(
-              '.map3d-search-box, .map3d-legend, .map3d-gizmo-pill, .map3d-auto3d-pill, .maplibregl-ctrl-top-right, .maplibregl-ctrl-bottom-right'
+              '.map3d-search-box, .map3d-floating-toolbar, .map3d-legend, .map3d-gizmo-pill, .map3d-auto3d-pill, .maplibregl-ctrl-top-right, .maplibregl-ctrl-bottom-right'
             )
             .forEach((node) => {
               const r = node.getBoundingClientRect();
@@ -3408,45 +3397,6 @@ export default function MapView3D({
     }
   }
 
-  function rotateCamera(deltaDeg) {
-    const map = mapRef.current;
-    if (!map) return;
-    map.easeTo({ bearing: map.getBearing() + deltaDeg, duration: 300 });
-  }
-
-  function setTiltPitch(nextPitch) {
-    const map = mapRef.current;
-    if (!map) return;
-    const p = Math.max(0, Math.min(65, Number(nextPitch)));
-    map.setPitch(p);
-    setPitchDeg(p);
-    if (p <= 3 && viewMode !== '2d') {
-      onViewModeChange?.('2d');
-    } else if (p >= 20 && viewMode === '2d') {
-      onViewModeChange?.('3d');
-    }
-  }
-
-  function handleResetNorth() {
-    const map = mapRef.current;
-    if (!map) return;
-    map.easeTo({ bearing: 0, duration: 300 });
-  }
-
-  function handleZoomBy(deltaZoom) {
-    const map = mapRef.current;
-    if (!map) return;
-    userAdjustedRef.current = true;
-    const minZ = Number(map.getMinZoom?.() ?? 1);
-    const maxZ = Number(map.getMaxZoom?.() ?? 22);
-    const nextZoom = Math.max(minZ, Math.min(maxZ, map.getZoom() + Number(deltaZoom || 0)));
-    const nextOpts = { zoom: nextZoom, duration: 240 };
-    if (deltaZoom < 0 && nextZoom < 14) {
-      nextOpts.padding = { top: 0, bottom: 0, left: 0, right: 0 };
-    }
-    map.easeTo(nextOpts);
-  }
-
   function handleFitActiveDraft() {
     const map = mapRef.current;
     const activeDraft =
@@ -3529,197 +3479,8 @@ export default function MapView3D({
       }
       data-hovered-draft-id={hoveredDraftId || ''}
       data-active-handle={activeHandle || ''}
-      style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', flex: 1, minHeight: 0 }}
+      style={{ display: 'flex', flexDirection: 'column', gap: 0, height: '100%', flex: 1, minHeight: 0 }}
     >
-      {/* Top Camera & Draw Toolbar */}
-      <div className="map3d-toolbar">
-        <div className="map3d-toolbar-group" role="group" aria-label="Map Dimension Mode">
-          <button
-            type="button"
-            className={`btn ${viewMode === '2d' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
-            onClick={() => onViewModeChange?.('2d')}
-          >
-            2D
-          </button>
-          <button
-            type="button"
-            className={`btn ${viewMode === '3d' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
-            onClick={() => onViewModeChange?.('3d')}
-          >
-            3D
-          </button>
-          <button
-            type="button"
-            className={`btn ${viewMode === 'isometric' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
-            onClick={() => onViewModeChange?.('isometric')}
-          >
-            Isometric
-          </button>
-          {onToggleDrawMode && (
-            <button
-              type="button"
-              className={`btn ${drawMode ? 'btn-primary' : ''}`}
-              style={{
-                padding: '4px 9px',
-                fontSize: 11.5,
-                borderColor: drawMode ? undefined : 'rgba(0, 245, 212, 0.45)',
-                color: drawMode ? undefined : 'var(--accent)'
-              }}
-              aria-pressed={drawMode}
-              onClick={onToggleDrawMode}
-            >
-              {drawMode ? '✏️ Drawing Land' : '✏️ Draw Land'}
-            </button>
-          )}
-          {draftParcels.length > 0 && !drawMode && (
-            <button
-              type="button"
-              className={`btn ${draftCanvasDragMode === 'orbit' ? 'btn-primary' : ''}`}
-              data-testid="map3d-orbit-pan-toggle"
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-              aria-pressed={draftCanvasDragMode === 'orbit'}
-              title={
-                draftCanvasDragMode === 'orbit'
-                  ? 'Dragging the map orbits around your drawn land (click to switch to Pan, or hold Shift+drag to pan)'
-                  : 'Switch map drag back to orbiting around your drawn land'
-              }
-              onClick={() =>
-                setDraftCanvasDragMode((cur) => (cur === 'orbit' ? 'pan' : 'orbit'))
-              }
-            >
-              {draftCanvasDragMode === 'orbit' ? '🔄 Orbit Land' : '✋ Pan Map'}
-            </button>
-          )}
-          <InfoTip title="3D Map & Land Handles" mode="popover">
-            <strong>Hold down</strong> in one spot on the map (or click <strong>Draw Land</strong>)
-            and drag to draw a 3D cube. Once drawn, <strong>click &amp; drag anywhere around the land</strong>{' '}
-            to rotate &amp; tilt the 3D map around it (hold <strong>Shift+drag</strong> to pan). Drag{' '}
-            <strong>corner balls</strong> to scale, <strong>side bars</strong> to stretch an edge,{' '}
-            <strong>vertical gold bars</strong> to rotate, the <strong>center ↕ orb</strong> to pull
-            height up/down, or click any <strong>3D sculpture</strong> to view all metadata.
-          </InfoTip>
-        </div>
-
-        <div className="map3d-toolbar-group" role="group" aria-label="Canvas Tilt and Rotation">
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: '4px 8px', fontSize: 11.5 }}
-            onClick={() => rotateCamera(-15)}
-            title="Rotate map counter-clockwise 15°"
-          >
-            ↺ -15°
-          </button>
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: '4px 8px', fontSize: 11.5 }}
-            onClick={() => rotateCamera(15)}
-            title="Rotate map clockwise 15°"
-          >
-            ↻ +15°
-          </button>
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: '4px 8px', fontSize: 11.5 }}
-            onClick={handleResetNorth}
-            title="Reset compass north"
-          >
-            <XeroIcon emoji="🧭" size={12} /> North
-          </button>
-          <label className="map3d-tilt-control" title="Tilt from flat 2D to 3D">
-            <span>Tilt {Math.round(pitchDeg)}°</span>
-            <input
-              type="range"
-              min={0}
-              max={65}
-              step={1}
-              value={Math.round(pitchDeg)}
-              aria-label="Canvas 2D to 3D tilt"
-              onChange={(e) => setTiltPitch(Number(e.target.value))}
-            />
-          </label>
-        </div>
-
-        <div className="map3d-toolbar-group">
-          <button
-            type="button"
-            className="btn"
-            data-testid="map3d-zoom-out-btn"
-            style={{ padding: '4px 8px', fontSize: 11.5 }}
-            onClick={() => handleZoomBy(-1.25)}
-            title="Zoom out to see the full 3D land height and top rectangle"
-            aria-label="Zoom out map"
-          >
-            − Zoom Out
-          </button>
-          <button
-            type="button"
-            className="btn"
-            data-testid="map3d-zoom-in-btn"
-            style={{ padding: '4px 8px', fontSize: 11.5 }}
-            onClick={() => handleZoomBy(1.25)}
-            title="Zoom in closer"
-            aria-label="Zoom in map"
-          >
-            +
-          </button>
-          {draftParcels.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              data-testid="map3d-fit-draft-btn"
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-              onClick={handleFitActiveDraft}
-              title="Zoom out to frame the entire drafted land boundary including its top rectangle"
-            >
-              📐 Fit Draft
-            </button>
-          )}
-          <button
-            type="button"
-            className={`btn ${showBuildings ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
-            onClick={() => setShowBuildings((v) => !v)}
-          >
-            <XeroIcon emoji="🏢" size={12} /> Buildings
-          </button>
-          <button
-            type="button"
-            className={`btn ${showTerrain ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
-            onClick={() => setShowTerrain((v) => !v)}
-          >
-            <XeroIcon emoji="🏔️" size={12} /> Terrain
-          </button>
-          {parcels.length > 0 && (
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-              onClick={handleFitClosestLands}
-              title="Zoom in full-width on the perimeter of the closest lands"
-            >
-              <XeroIcon emoji="🗺️" size={12} /> Fit Lands
-            </button>
-          )}
-          {userLocation && (
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-              onClick={handleCenterOnUser}
-            >
-              <XeroIcon emoji="🎯" size={12} /> Me
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* Main 3D WebGL Map + Synchronized Wireframe & Gizmo Overlay */}
       <div
         className={`map-container ${drawMode && !hoveredDraftId ? 'is-draw-mode' : ''} ${isGizmoDragging || drawMode ? 'is-draft-interacting' : ''}`}
@@ -3754,89 +3515,165 @@ export default function MapView3D({
           }}
         />
 
-        {/* Dynamic Live Intersection / Business / Address / Parcel Search */}
-        <div ref={searchBoxRef} className="map3d-search-box map3d-ui-stop">
-          <form className="map3d-search-form" onSubmit={handleSearchSubmit}>
-            <input
-              type="text"
-              className="input map3d-search-input"
-              placeholder="Search intersections, businesses, or land names…"
-              aria-label="Search locations, intersections, or businesses"
-              autoComplete="off"
-              value={searchQuery}
-              onFocus={() => {
-                if (searchResults.length > 0) setSearchOpen(true);
-              }}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-            />
-            {searchQuery && (
+        {/* Compact Floating Search & Map Controls Directly On Map */}
+        <div className="map3d-top-overlay map3d-ui-stop">
+          <div ref={searchBoxRef} className="map3d-search-box">
+            <form className="map3d-search-form" onSubmit={handleSearchSubmit}>
+              <input
+                type="text"
+                className="input map3d-search-input"
+                placeholder="Search intersections, businesses, or land names…"
+                aria-label="Search locations, intersections, or businesses"
+                autoComplete="off"
+                value={searchQuery}
+                onFocus={() => {
+                  if (searchResults.length > 0) setSearchOpen(true);
+                }}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSearchResults([]);
+                    setSearchOpen(false);
+                    setSearchError('');
+                    searchPinMarkerRef.current?.remove();
+                    searchPinMarkerRef.current = null;
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ padding: '4px 9px', fontSize: 11.5 }}
+                disabled={searchBusy}
+              >
+                {searchBusy ? '…' : 'Find'}
+              </button>
               <button
                 type="button"
-                className="btn btn-ghost btn-xs"
-                aria-label="Clear search"
-                onClick={() => {
-                  setSearchQuery('');
-                  setSearchResults([]);
-                  setSearchOpen(false);
-                  setSearchError('');
-                  searchPinMarkerRef.current?.remove();
-                  searchPinMarkerRef.current = null;
-                }}
+                className="btn btn-ghost"
+                data-testid="map3d-theme-toggle-btn"
+                style={{ padding: '4px 7px', fontSize: 11.5, flexShrink: 0 }}
+                title={isDarkMap ? 'Dark Map (click for Light)' : 'Light Map (click for Dark)'}
+                aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
+                onClick={toggleMapTheme}
               >
-                ✕
+                <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
               </button>
+            </form>
+            {searchError && <div className="map3d-search-error">{searchError}</div>}
+            {searchOpen && searchResults.length > 0 && (
+              <div className="map3d-search-results" role="listbox" aria-label="Location search results">
+                {searchResults.map((item, idx) => {
+                  const distLabel = formatSearchDistance(item.distanceMeters);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="option"
+                      aria-selected={idx === activeSearchIdx}
+                      className={`map3d-search-item ${idx === activeSearchIdx ? 'is-active' : ''}`}
+                      onMouseEnter={() => setActiveSearchIdx(idx)}
+                      onClick={() => jumpToSearchResult(item)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                        <strong>{item.label}</strong>
+                        <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+                          {distLabel && <span className="mono" style={{ fontSize: 10, color: 'var(--accent)' }}>{distLabel}</span>}
+                          <span className="badge teal" style={{ fontSize: 10 }}>{item.category}</span>
+                        </div>
+                      </div>
+                      <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                        {item.subtitle}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
+          </div>
+
+          <div
+            className="map3d-floating-toolbar"
+            data-testid="map3d-overlay-toolbar"
+            role="toolbar"
+            aria-label="Map controls"
+          >
             <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ padding: '5px 10px', fontSize: 12 }}
-              disabled={searchBusy}
+              type="button"
+              className={`btn ${viewMode === '2d' ? 'btn-primary' : ''}`}
+              onClick={() => onViewModeChange?.('2d')}
             >
-              {searchBusy ? '…' : 'Find'}
+              2D
             </button>
             <button
               type="button"
-              className="btn btn-ghost"
-              data-testid="map3d-theme-toggle-btn"
-              style={{ padding: '5px 8px', fontSize: 12, flexShrink: 0 }}
-              title={isDarkMap ? 'Dark Map (click for Light)' : 'Light Map (click for Dark)'}
-              aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
-              onClick={toggleMapTheme}
+              className={`btn ${viewMode !== '2d' ? 'btn-primary' : ''}`}
+              onClick={() => onViewModeChange?.('3d')}
             >
-              <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
+              3D
             </button>
-          </form>
-          {searchError && <div className="map3d-search-error">{searchError}</div>}
-          {searchOpen && searchResults.length > 0 && (
-            <div className="map3d-search-results" role="listbox" aria-label="Location search results">
-              {searchResults.map((item, idx) => {
-                const distLabel = formatSearchDistance(item.distanceMeters);
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    role="option"
-                    aria-selected={idx === activeSearchIdx}
-                    className={`map3d-search-item ${idx === activeSearchIdx ? 'is-active' : ''}`}
-                    onMouseEnter={() => setActiveSearchIdx(idx)}
-                    onClick={() => jumpToSearchResult(item)}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                      <strong>{item.label}</strong>
-                      <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-                        {distLabel && <span className="mono" style={{ fontSize: 10, color: 'var(--accent)' }}>{distLabel}</span>}
-                        <span className="badge teal" style={{ fontSize: 10 }}>{item.category}</span>
-                      </div>
-                    </div>
-                    <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                      {item.subtitle}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+            {draftParcels.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="map3d-fit-draft-btn"
+                onClick={handleFitActiveDraft}
+                title="Zoom out to frame the entire drafted land boundary including its top rectangle"
+              >
+                📐 Fit Draft
+              </button>
+            )}
+            <button
+              type="button"
+              className={`btn ${showBuildings ? 'btn-primary' : ''}`}
+              onClick={() => setShowBuildings((v) => !v)}
+            >
+              <XeroIcon emoji="🏢" size={12} /> Buildings
+            </button>
+            <button
+              type="button"
+              className={`btn ${showTerrain ? 'btn-primary' : ''}`}
+              onClick={() => setShowTerrain((v) => !v)}
+            >
+              <XeroIcon emoji="🏔️" size={12} /> Terrain
+            </button>
+            {parcels.length > 0 && (
+              <button
+                type="button"
+                className="btn"
+                onClick={handleFitClosestLands}
+                title="Zoom in full-width on the perimeter of the closest lands"
+              >
+                <XeroIcon emoji="🗺️" size={12} /> Fit Lands
+              </button>
+            )}
+            {userLocation && (
+              <button
+                type="button"
+                className="btn"
+                onClick={handleCenterOnUser}
+              >
+                <XeroIcon emoji="🎯" size={12} /> Me
+              </button>
+            )}
+            <InfoTip title="3D Map & Land Handles" mode="popover">
+              <strong>Hold down</strong> in one spot on the map (or open <strong>Mint Land</strong>)
+              and drag to draw a 3D cube. Once drawn, <strong>click &amp; drag anywhere around the land</strong>{' '}
+              to rotate &amp; tilt the 3D map around it (hold <strong>Shift+drag</strong> to pan). Drag{' '}
+              <strong>corner balls</strong> to scale, <strong>side bars</strong> to stretch an edge,{' '}
+              <strong>vertical gold bars</strong> to rotate, the <strong>center ↕ orb</strong> to pull
+              height up/down, or click any <strong>3D sculpture</strong> to view all metadata.
+            </InfoTip>
+          </div>
         </div>
 
         {/* Live Gizmo Handle Feedback Pill */}

@@ -2221,8 +2221,9 @@ select {
 
 .desktop-map-stage .map-container {
   flex: 1;
-  height: auto;
+  height: 100%;
   min-height: 0;
+  border-radius: 14px;
 }
 
 .desktop-nearby-panel {
@@ -3063,42 +3064,37 @@ select {
   flex: 1;
 }
 
-.map3d-toolbar {
-  position: relative;
-  z-index: 25;
+.map3d-top-overlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 52px;
+  z-index: 14;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   flex-wrap: wrap;
-  padding: 6px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: rgba(12, 16, 28, 0.9);
-}
-
-.map3d-toolbar-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-
-.map3d-tilt-control {
-  display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 3px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 11px;
-  color: var(--muted);
+  pointer-events: none;
 }
 
-.map3d-tilt-control input[type='range'] {
-  width: 76px;
-  accent-color: var(--accent);
+.map3d-floating-toolbar {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(8, 12, 22, 0.86);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+}
+
+.map3d-floating-toolbar .btn {
+  padding: 4px 7px;
+  font-size: 11px;
+  line-height: 1.15;
 }
 
 .map-container.is-draw-mode,
@@ -3116,11 +3112,11 @@ select {
 }
 
 .map3d-search-box {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 12;
-  width: min(370px, calc(100% - 76px));
+  position: relative;
+  pointer-events: auto;
+  flex: 0 1 310px;
+  width: min(310px, 100%);
+  min-width: 210px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -3128,11 +3124,11 @@ select {
 
 .map3d-search-form {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   background: rgba(8, 12, 22, 0.88);
   border: 1px solid rgba(0, 245, 212, 0.32);
-  border-radius: 11px;
-  padding: 4px;
+  border-radius: 10px;
+  padding: 3px 4px;
   backdrop-filter: blur(12px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
@@ -3140,8 +3136,8 @@ select {
 .map3d-search-input {
   border: none;
   background: transparent;
-  padding: 6px 8px;
-  font-size: 12.5px;
+  padding: 4px 7px;
+  font-size: 12px;
   flex: 1;
   min-width: 0;
 }
