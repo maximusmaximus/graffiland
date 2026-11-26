@@ -2563,9 +2563,15 @@ export default {
           user,
           body,
           pinSculptureFn: makeWorkerPinHook(),
-          mintSculptureFn: makeWorkerMintHook()
+          mintSculptureFn: makeWorkerMintHook(),
+          notifyMobileFn: notifyWorkerMobile,
+          stagedBlobStore
         });
-        return jsonResponse(out, 200, request);
+        if (out?.requiresOwnerApproval && quotaConsumed) {
+          await refundRelayerQuota(d1Adapter, { userId: user.id });
+          quotaConsumed = false;
+        }
+        return jsonResponse(out, out?.requiresOwnerApproval ? 202 : 200, request);
       } catch (err) {
         if (quotaConsumed) await refundRelayerQuota(d1Adapter, { userId: user.id });
         return jsonResponse(

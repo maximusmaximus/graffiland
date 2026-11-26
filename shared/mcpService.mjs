@@ -22,6 +22,7 @@ import {
   isUserLandOwner,
   isUserParcelContributor,
   normalizeParcelId,
+  resolveParcelPlacementAccess,
   resolvePreferredOwnerWallet,
   resolveUserWalletAddresses,
   upsertAnchorAndRevision,
@@ -38,7 +39,7 @@ import {
 } from './mcp/pairingService.mjs';
 import {
   addLandContributor,
-  directOwnerCreateSculptureOnLand,
+  applyCreateSculptureOnLand,
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
@@ -63,6 +64,7 @@ import {
   compactSignatureRequestsMaintenance,
   compactSignatureResult,
   createPublishSignatureRequestForMobile,
+  enqueueGuestProposalForLandOwner,
   getSignatureRequest,
   getSignatureRequestPreviewModel,
   handlePairedLandMutationViaMcp,
@@ -72,6 +74,49 @@ import {
   signRequestByAgent,
   signRequestByMobile
 } from './mcp/signatureService.mjs';
+
+export async function directOwnerCreateSculptureOnLand(
+  db,
+  {
+    parcelId,
+    user,
+    body,
+    pinSculptureFn,
+    mintSculptureFn,
+    notifyMobileFn = null,
+    stagedBlobStore = null
+  }
+) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const access = await resolveParcelPlacementAccess(db, { parcelId, user });
+  if (access.mode === 'guest_requires_owner_approval') {
+    await preflightCreateSculptureOnLand(db, {
+      parcelCtx: access.parcelCtx,
+      payload: body || {}
+    });
+    return enqueueGuestProposalForLandOwner(db, {
+      parcelCtx: access.parcelCtx,
+      landOwnerUser: access.landOwnerUser,
+      landOwnerAddress: access.landOwnerAddress,
+      proposerUser: user,
+      payload: body || {},
+      agentName: '',
+      notifyMobileFn,
+      stagedBlobStore
+    });
+  }
+  const ownerAddress = resolvePreferredOwnerWallet(user);
+  return applyCreateSculptureOnLand(db, {
+    parcelCtx: access.parcelCtx,
+    ownerUser: user,
+    ownerAddress,
+    payload: body || {},
+    pinSculptureFn,
+    mintSculptureFn,
+    proofSeed: `direct:${user.id}`,
+    isLandOwner: access.isOwner
+  });
+}
 
 export {
   DEFAULT_MCP_PAIRING_TTL_HOURS,
@@ -88,7 +133,6 @@ export {
   connectMcpPairing,
   createMcpPairing,
   createPublishSignatureRequestForMobile,
-  directOwnerCreateSculptureOnLand,
   directOwnerDeleteSculpture,
   directOwnerEraseLand,
   directOwnerRollbackRevision,
@@ -96,6 +140,7 @@ export {
   directOwnerUpdateParcel,
   directOwnerUpdateSculpture,
   disconnectMcpPairing,
+  enqueueGuestProposalForLandOwner,
   getLandSettingsInternal,
   getMyLandsWorkspace,
   getPublicParcelDetail,
@@ -113,6 +158,7 @@ export {
   rejectSignatureRequest,
   removeLandContributor,
   requireActiveMcpPairing,
+  resolveParcelPlacementAccess,
   resolvePreferredOwnerWallet,
   resolveUserWalletAddresses,
   signRequestByAgent,
@@ -196,6 +242,9 @@ export async function handleMcpJsonRpc(
     } else if (toolName === 'get_land') {
       const parcelId = normalizeParcelId(args.parcelId);
       const isOwner = await isUserLandOwner(db, { parcelId, user: ownerUser });
+      const isContributor = !isOwner
+        ? await isUserParcelContributor(db, { parcelId, user: ownerUser })
+        : false;
       const showHidden = Boolean(args.includeHidden && isOwner);
       const rows = await db.all(
         `SELECT s.*,
@@ -234,6 +283,16 @@ export async function handleMcpJsonRpc(
           compact: true
         }),
         settings,
+        permissions: {
+          isOwner,
+          isContributor,
+          frozen: Boolean(settings.frozen),
+          requireApproval: Boolean(settings.requireApproval),
+          canPlaceDirectly:
+            !settings.frozen && (isOwner || isContributor || !settings.requireApproval),
+          requiresOwnerApproval:
+            !settings.frozen && !isOwner && !isContributor && Boolean(settings.requireApproval)
+        },
         curation: cur
           ? {
               customName: cur.custom_name,
@@ -293,7 +352,6 @@ export async function handleMcpJsonRpc(
         sculptureCount: detail.sculptures.length
       };
     } else if (toolName === 'put_sculpture_on_land' || toolName === 'load_3d_model_on_land') {
-      const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
       const modelCheck = extractCustomModelInput(args);
       if (modelCheck.error) throw new McpServiceError(modelCheck.error, 400);
       if (toolName === 'load_3d_model_on_land' && !modelCheck.provided) {
@@ -321,6 +379,7 @@ export async function handleMcpJsonRpc(
         : {};
 
       if (toolName === 'load_3d_model_on_land' && args.sculptureId) {
+        const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
         const perm = await checkSculptureOrLandOwnership(db, {
           sculptureId: args.sculptureId,
           user: ownerUser,
@@ -360,6 +419,11 @@ export async function handleMcpJsonRpc(
           stagedBlobStore
         });
       } else {
+        const access = await resolveParcelPlacementAccess(db, {
+          parcelId: args.parcelId,
+          user: ownerUser
+        });
+        const parcelCtx = access.parcelCtx;
         let createPayload;
         if (modelCheck.provided) {
           const checkedMeta = validateEditableTitleAndDescription({
@@ -400,20 +464,33 @@ export async function handleMcpJsonRpc(
           };
         }
         await preflightCreateSculptureOnLand(db, { parcelCtx, payload: createPayload });
-        toolResult = await handlePairedLandMutationViaMcp(db, {
-          pairing,
-          ownerUser,
-          action: 'create_sculpture',
-          parcelId: parcelCtx.parcelId,
-          payload: createPayload,
-          signature: args.signature || '',
-          auth: args.auth || null,
-          txHash: args.txHash || '',
-          pinSculptureFn,
-          mintSculptureFn,
-          notifyMobileFn,
-          stagedBlobStore
-        });
+        if (access.mode === 'guest_requires_owner_approval') {
+          toolResult = await enqueueGuestProposalForLandOwner(db, {
+            parcelCtx,
+            landOwnerUser: access.landOwnerUser,
+            landOwnerAddress: access.landOwnerAddress,
+            proposerUser: ownerUser,
+            payload: createPayload,
+            agentName: pairing.agentName || 'paired-agent',
+            notifyMobileFn,
+            stagedBlobStore
+          });
+        } else {
+          toolResult = await handlePairedLandMutationViaMcp(db, {
+            pairing,
+            ownerUser,
+            action: 'create_sculpture',
+            parcelId: parcelCtx.parcelId,
+            payload: createPayload,
+            signature: args.signature || '',
+            auth: args.auth || null,
+            txHash: args.txHash || '',
+            pinSculptureFn,
+            mintSculptureFn,
+            notifyMobileFn,
+            stagedBlobStore
+          });
+        }
       }
     } else if (toolName === 'update_land_sculpture') {
       const perm = await checkSculptureOrLandOwnership(db, {
@@ -579,6 +656,9 @@ export async function handleMcpJsonRpc(
             : {}),
           ...(args.allowAgentErase !== undefined
             ? { allowAgentErase: Boolean(args.allowAgentErase) }
+            : {}),
+          ...(args.requireApproval !== undefined
+            ? { requireApproval: Boolean(args.requireApproval) }
             : {})
         },
         signature: args.signature || '',

@@ -21,7 +21,7 @@ export const MCP_TOOLS = [
   {
     name: 'put_sculpture_on_land',
     description:
-      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on a Virtual Land parcel owned by the paired user. Strict 1 unit = 1 meter scale (zero autoscaling): placements exceeding the land W×D×H bounds or overlapping existing artworks are rejected (409) with exact maxSafeScale and parcelDimensions. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
+      'Place/mint a new 3D sculpture (voxel blocks OR non-voxel .glb/.gltf/.obj/.stl/.ply custom 3D model) on any open unfrozen Virtual Land parcel (owned or another holder\'s land — by default all open lands allow community additions with land holder notification; if the land holder enabled requireApproval, the request routes to the land holder\'s approval queue and mints the NFT to the proposing artist upon approval). Strict 1 unit = 1 meter scale (zero autoscaling): placements exceeding the land W×D×H bounds or overlapping existing artworks are rejected (409) with exact maxSafeScale and parcelDimensions.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,7 +47,7 @@ export const MCP_TOOLS = [
   {
     name: 'load_3d_model_on_land',
     description:
-      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto an owned Virtual Land parcel (places new item or replaces existing sculptureId when provided). Strict 1 unit = 1 meter scale (no autoscaling): models larger than the land W×D×H boundary are rejected (409) with exact maxSafeScale. Call validate_3d_model_url with parcelId first to pre-check fit. Autonomous AI agents pay their own chain gas (`txHash`); paired humans execute with owner signature or mobile approval.',
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto any open unfrozen Virtual Land parcel (places new item on owned or community open lands, routing to land holder approval automatically if requireApproval is ON while minting the NFT to the proposing artist; or replaces an existing sculptureId when owned). Strict 1 unit = 1 meter scale (no autoscaling): models larger than the land W×D×H boundary are rejected (409) with exact maxSafeScale.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -206,12 +206,13 @@ export const MCP_TOOLS = [
   {
     name: 'update_land_settings',
     description:
-      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks any new sculptures from being placed there), allowContributorEdits, and allowAgentErase.',
+      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks any new sculptures from being placed there), requireApproval (default false — when true, non-owner guest submissions require land holder approval before minting), allowContributorEdits, and allowAgentErase.',
     inputSchema: {
       type: 'object',
       properties: {
         parcelId: { type: 'string' },
         frozen: { type: 'boolean' },
+        requireApproval: { type: 'boolean' },
         allowContributorEdits: { type: 'boolean' },
         allowAgentErase: { type: 'boolean' },
         signature: { type: 'string' }

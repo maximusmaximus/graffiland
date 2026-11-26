@@ -1727,13 +1727,18 @@ export function createAppServer(serverOptions = {}) {
         dailyQuota: effectiveRelayerDailyQuota
       });
       try {
-        return await directOwnerCreateSculptureOnLand(chatDb, {
+        const out = await directOwnerCreateSculptureOnLand(chatDb, {
           parcelId: req.params.parcelId,
           user: req.user,
           body: req.body,
           pinSculptureFn: makePinHook(),
-          mintSculptureFn: makeMintHook()
+          mintSculptureFn: makeMintHook(),
+          notifyMobileFn: notifyPairedMobile
         });
+        if (out?.requiresOwnerApproval && quotaRes?.consumed) {
+          await refundRelayerQuota(chatDb, { userId: req.user.id });
+        }
+        return out;
       } catch (err) {
         if (quotaRes?.consumed) {
           await refundRelayerQuota(chatDb, { userId: req.user.id });

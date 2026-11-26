@@ -299,6 +299,9 @@ export default function PlotVisitView({
   );
   const hasCenter = Number.isFinite(centerLat) && Number.isFinite(centerLng);
   const isFrozen = Boolean(activeParcel?.frozen || activeParcel?.settings?.frozen);
+  const requiresApproval = Boolean(
+    activeParcel?.requireApproval || activeParcel?.settings?.requireApproval
+  );
   const { unitSystem } = useMeasurementUnits(
     userLocation,
     hasCenter ? { lat: centerLat, lng: centerLng } : null
@@ -1273,6 +1276,16 @@ export default function PlotVisitView({
               >
                 {isFrozen ? '❄️ Frozen' : '✅ Open'}
               </span>
+              {!isFrozen && requiresApproval && (
+                <span
+                  className="badge gold"
+                  data-testid="plot-approval-required-badge"
+                  style={{ fontSize: 10, flexShrink: 0 }}
+                  title="The land holder enabled Require Approval — guest submissions wait for owner approval"
+                >
+                  🛡️ Approval Required
+                </span>
+              )}
               <span
                 className="plot-views-counter mono"
                 data-testid="plot-views-counter"
@@ -2440,6 +2453,16 @@ export default function PlotVisitView({
                           >
                             🔗 Copy Share Link
                           </button>
+                          {!isLandOwner && !isFrozen && user && onOpenAddLandItem && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              data-testid="plot-guest-add-item-btn"
+                              onClick={() => onOpenAddLandItem(activeParcel.parcelId)}
+                            >
+                              {requiresApproval ? '🎨 Propose 3D Art' : '+ Add 3D Art'}
+                            </button>
+                          )}
                         </div>
                       )}
 

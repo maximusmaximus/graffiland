@@ -1228,9 +1228,10 @@ export default function DesktopHub({
     return (
       ownedUserParcels.find((p) => p.parcelId === pid) ||
       parcels.find((p) => p.parcelId === pid) ||
+      (visitedParcel?.parcel?.parcelId?.toUpperCase() === pid ? visitedParcel.parcel : null) ||
       null
     );
-  }, [addItemParcelId, ownedUserParcels, parcels]);
+  }, [addItemParcelId, ownedUserParcels, parcels, visitedParcel]);
 
   const activeAddItemSculptures = useMemo(() => {
     if (!activeAddItemParcel) return [];

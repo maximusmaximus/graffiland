@@ -273,6 +273,7 @@ export async function listLandsWithCurations(db) {
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
+      requireApproval: Boolean(settingsMap.get(parcelId)?.require_approval),
       settings: {
         allowAgentErase: settingsMap.has(parcelId)
           ? Boolean(settingsMap.get(parcelId).allow_agent_erase)
@@ -280,6 +281,7 @@ export async function listLandsWithCurations(db) {
         allowContributorEdits: settingsMap.has(parcelId)
           ? Boolean(settingsMap.get(parcelId).allow_contributor_edits)
           : true,
+        requireApproval: Boolean(settingsMap.get(parcelId)?.require_approval),
         frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements)
       },
       pageViews: viewCountsMap.get(parcelId)?.pageViews || 0,
@@ -462,6 +464,7 @@ export async function getLandSettingsInternal(db, parcelId) {
     parcelId: cleanId,
     allowAgentErase: row ? Boolean(row.allow_agent_erase) : true,
     allowContributorEdits: row ? Boolean(row.allow_contributor_edits) : true,
+    requireApproval: row ? Boolean(row.require_approval) : false,
     frozen: row ? Boolean(row.freeze_placements) : false,
     updatedAt: row?.updated_at || ''
   };
@@ -663,22 +666,22 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const ownedSculptures = (allRows || []).filter(
     (r) => !r.hidden && wallets.has(String(r.recipient_address || '').toLowerCase())
   );
-  const ownedParcelSet = new Set(ownedSculptures.map((s) => s.parcel_id));
 
-  // Include minted 3D parcels & stewarded parcels even before any sculpture is placed on them
+  // Determine true land ownership without falsely claiming parcels where the user only placed guest art
   const lpRows = await db.all('SELECT * FROM land_parcels').catch(() => []);
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
+  const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
+  const stewardMap = new Map((stewardRows || []).map((st) => [st.parcel_id, st]));
+
+  const ownedParcelSet = new Set();
   for (const lp of lpRows || []) {
     if (
       (ownerId && lp.first_claimant_sub === ownerId) ||
-      wallets.has(String(lp.first_claimant_address || '').toLowerCase()) ||
-      wallets.has(String(lp.latest_claimant_address || '').toLowerCase())
+      wallets.has(String(lp.first_claimant_address || '').toLowerCase())
     ) {
       ownedParcelSet.add(lp.parcel_id);
     }
   }
-  const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
-  const stewardMap = new Map((stewardRows || []).map((st) => [st.parcel_id, st]));
   for (const st of stewardRows || []) {
     if (st.status === 'archived' || st.status === 'expired') continue;
     if (
@@ -686,6 +689,20 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       wallets.has(String(st.steward_address || '').toLowerCase())
     ) {
       ownedParcelSet.add(st.parcel_id);
+    }
+  }
+  // Legacy fallback: if a parcel has no land_parcels/steward record, credit ownership to its first visible sculpture
+  const firstVisibleByParcel = new Map();
+  for (let i = (allRows || []).length - 1; i >= 0; i--) {
+    const r = allRows[i];
+    if (r && !r.hidden && r.parcel_id && !firstVisibleByParcel.has(r.parcel_id)) {
+      firstVisibleByParcel.set(r.parcel_id, r);
+    }
+  }
+  for (const [pid, firstSc] of firstVisibleByParcel.entries()) {
+    if (lpMap.has(pid) || stewardMap.has(pid)) continue;
+    if (wallets.has(String(firstSc.recipient_address || '').toLowerCase())) {
+      ownedParcelSet.add(pid);
     }
   }
 
@@ -780,6 +797,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       parcelId: normalizeParcelId(pid),
       allowAgentErase: sRow ? Boolean(sRow.allow_agent_erase) : true,
       allowContributorEdits: sRow ? Boolean(sRow.allow_contributor_edits) : true,
+      requireApproval: sRow ? Boolean(sRow.require_approval) : false,
       frozen: sRow ? Boolean(sRow.freeze_placements) : false,
       updatedAt: sRow?.updated_at || ''
     };
@@ -882,6 +900,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       featuredSculptureId: cur?.featured_sculpture_id || '',
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settings.frozen),
+      requireApproval: Boolean(settings.requireApproval),
       settings,
       securityPolicy,
       landmarkAnchor: landmarkAnchor
@@ -1816,7 +1835,8 @@ export async function applyCreateSculptureOnLand(
     pinSculptureFn,
     mintSculptureFn,
     proofSeed = '',
-    layerRole = ''
+    layerRole = '',
+    isLandOwner = true
   }
 ) {
   const {
@@ -2036,12 +2056,22 @@ export async function applyCreateSculptureOnLand(
     }
   }
 
-  await db.run(
-    `UPDATE land_parcels
-     SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ?
-     WHERE parcel_id = ?`,
-    [ownerAddress, now, parcelCtx.parcelId]
-  );
+  if (isLandOwner) {
+    await db.run(
+      `UPDATE land_parcels
+       SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ?
+       WHERE parcel_id = ?`,
+      [ownerAddress, now, parcelCtx.parcelId]
+    );
+  } else {
+    // Guest / contributor placement keeps land ownership with the land holder
+    await db.run(
+      `UPDATE land_parcels
+       SET sculpture_count = sculpture_count + 1, updated_at = ?
+       WHERE parcel_id = ?`,
+      [now, parcelCtx.parcelId]
+    );
+  }
 
   const effectiveLayerRole =
     layerRole === 'steward_stage' ||
@@ -2865,6 +2895,14 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
     body?.allowContributorEdits !== undefined
       ? Boolean(body.allowContributorEdits)
       : current.allowContributorEdits;
+  const requireApprovalInput =
+    body?.requireApproval !== undefined
+      ? body.requireApproval
+      : body?.require_approval;
+  const requireApproval =
+    requireApprovalInput !== undefined
+      ? Boolean(requireApprovalInput)
+      : current.requireApproval;
   const frozenInput =
     body?.frozen !== undefined
       ? body.frozen
@@ -2877,14 +2915,15 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
 
   await db.run(
     `INSERT INTO land_settings (
-      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       owner_sub = excluded.owner_sub,
       owner_address = excluded.owner_address,
       allow_agent_erase = excluded.allow_agent_erase,
       allow_contributor_edits = excluded.allow_contributor_edits,
       freeze_placements = excluded.freeze_placements,
+      require_approval = excluded.require_approval,
       updated_at = excluded.updated_at`,
     [
       parcelCtx.parcelId,
@@ -2893,6 +2932,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       allowAgentErase ? 1 : 0,
       allowContributorEdits ? 1 : 0,
       frozen ? 1 : 0,
+      requireApproval ? 1 : 0,
       now
     ]
   );
