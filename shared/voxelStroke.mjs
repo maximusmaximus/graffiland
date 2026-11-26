@@ -1,4 +1,8 @@
-import { HUMAN_MAX_DRAW_SPAN_METERS, VOXEL_STEP } from './constants.mjs';
+import {
+  HUMAN_MAX_DRAW_SPAN_METERS,
+  MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
+  VOXEL_STEP
+} from './constants.mjs';
 
 export const BLOCK_SIZE_PRESETS = Object.freeze([
   { id: 's', label: 'S', scale: 0.5, hint: 'Fine · 0.5×' },
@@ -663,4 +667,132 @@ export function computeMaxHumanDrawScale(
     }
   }
   return Math.max(minScale, Math.floor(lo * 1000) / 1000);
+}
+
+/**
+ * Resolves the active 3D drawing origin used to enforce the 10 ft max line distance:
+ * 1) User-set surface origin (`surfaceAnchor`), if present.
+ * 2) Device origin captured at the start of the current continuous stroke (`strokeDeviceOrigin`).
+ * 3) Live device/camera position (`cameraPosition`).
+ */
+export function resolveDrawOriginPoint({
+  surfaceAnchor = null,
+  strokeDeviceOrigin = null,
+  cameraPosition = null
+} = {}) {
+  const toPoint = (raw, source) => {
+    if (!raw) return null;
+    const x = Number(raw.x);
+    const y = Number(raw.y);
+    const z = Number(raw.z);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+    return { x, y, z, source };
+  };
+  return (
+    toPoint(surfaceAnchor, 'surface_anchor') ||
+    toPoint(strokeDeviceOrigin, 'device_origin') ||
+    toPoint(cameraPosition, 'device_origin') ||
+    null
+  );
+}
+
+export function distanceFromDrawOrigin(point, originPoint) {
+  if (!point || !originPoint) return 0;
+  const dx = Number(point.x) - Number(originPoint.x);
+  const dy = Number(point.y) - Number(originPoint.y);
+  const dz = Number(point.z) - Number(originPoint.z);
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return Infinity;
+  return Math.hypot(dx, dy, dz);
+}
+
+export function isWithinDrawOriginRadius(
+  point,
+  originPoint,
+  maxRadiusMeters = MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+) {
+  if (!point || !originPoint) return true;
+  const limit = Number(maxRadiusMeters) > 0 ? Number(maxRadiusMeters) : MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS;
+  return distanceFromDrawOrigin(point, originPoint) <= limit + 1e-4;
+}
+
+/**
+ * Clamps a 3D point radially back onto the sphere of radius `maxRadiusMeters` around `originPoint`.
+ * When `originPoint` lies on a locked surface plane, radial scaling preserves the exact plane.
+ */
+export function clampPointToDrawOriginRadius(
+  point,
+  originPoint,
+  maxRadiusMeters = MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+) {
+  const limit = Number(maxRadiusMeters) > 0 ? Number(maxRadiusMeters) : MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS;
+  if (!point || !originPoint) {
+    return {
+      x: Number(point?.x) || 0,
+      y: Number(point?.y) || 0,
+      z: Number(point?.z) || 0,
+      clamped: false,
+      distanceMeters: 0
+    };
+  }
+  const dx = Number(point.x) - Number(originPoint.x);
+  const dy = Number(point.y) - Number(originPoint.y);
+  const dz = Number(point.z) - Number(originPoint.z);
+  const dist = Math.hypot(dx, dy, dz);
+  if (!Number.isFinite(dist) || dist <= limit + 1e-4) {
+    return {
+      x: Number(point.x),
+      y: Number(point.y),
+      z: Number(point.z),
+      clamped: false,
+      distanceMeters: Number.isFinite(dist) ? dist : 0
+    };
+  }
+  const s = limit / dist;
+  return {
+    x: Number(originPoint.x) + dx * s,
+    y: Number(originPoint.y) + dy * s,
+    z: Number(originPoint.z) + dz * s,
+    clamped: true,
+    distanceMeters: dist
+  };
+}
+
+/**
+ * Walks a connected 3D voxel stroke sequentially and stops cleanly at the exact 10 ft radius
+ * boundary around `originPoint` so a single line can never extend past `maxRadiusMeters`.
+ */
+export function filterStrokeByOriginRadius({
+  pathPoints = [],
+  originPoint = null,
+  maxRadiusMeters = MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+} = {}) {
+  const list = Array.isArray(pathPoints) ? pathPoints : [];
+  if (!originPoint || list.length === 0) {
+    const last = list.length > 0 ? list[list.length - 1] : null;
+    return {
+      allowed: list,
+      lastAllowedPoint: last ? { x: last.x, y: last.y, z: last.z, scale: last.scale } : null,
+      limitReached: false
+    };
+  }
+
+  const limit = Number(maxRadiusMeters) > 0 ? Number(maxRadiusMeters) : MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS;
+  const allowed = [];
+  let limitReached = false;
+
+  for (const pt of list) {
+    if (!pt || !Number.isFinite(Number(pt.x))) continue;
+    if (distanceFromDrawOrigin(pt, originPoint) > limit + 1e-4) {
+      limitReached = true;
+      break;
+    }
+    allowed.push(pt);
+  }
+
+  const last = allowed.length > 0 ? allowed[allowed.length - 1] : null;
+  return {
+    allowed,
+    lastAllowedPoint: last ? { x: last.x, y: last.y, z: last.z, scale: last.scale } : null,
+    limitReached
+  };
 }

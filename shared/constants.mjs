@@ -5,6 +5,8 @@ export const AREA_HALF_SPAN_METERS = (AREA_LIMIT_BLOCKS / 2) * VOXEL_STEP; // 25
 export const HUMAN_MAX_DRAW_SPAN_FEET = 250; // 250ft x 250ft max human sculpture/drawing footprint
 export const HUMAN_MAX_DRAW_SPAN_METERS = 76.2; // Exact 250 ft (250 * 0.3048 m)
 export const HUMAN_MAX_DRAW_HALF_SPAN_METERS = HUMAN_MAX_DRAW_SPAN_METERS / 2; // 38.1 m
+export const MAX_DRAW_DISTANCE_FROM_ORIGIN_FEET = 10; // Max 10 ft single-line draw distance from set origin or device origin
+export const MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS = 3.048; // Exact 10 ft (10 * 0.3048 m)
 export const AR_MAX_VISIBLE_DISTANCE_FEET = 300; // AR camera strictly hides lands & sculptures >= 300 ft away
 export const AR_MAX_VISIBLE_DISTANCE_METERS = 91.44; // Exact 300 ft (300 * 0.3048 m)
 export const STALE_DRAW_ERASE_DISTANCE_FEET = 20; // Auto-erase idle in-view drawing after moving > 20 ft
@@ -158,6 +160,8 @@ export const POLICY = {
   humanMaxDrawSpanFeet: HUMAN_MAX_DRAW_SPAN_FEET,
   humanMaxDrawSpanMeters: HUMAN_MAX_DRAW_SPAN_METERS,
   humanMaxDrawHalfSpanMeters: HUMAN_MAX_DRAW_HALF_SPAN_METERS,
+  maxDrawDistanceFromOriginFeet: MAX_DRAW_DISTANCE_FROM_ORIGIN_FEET,
+  maxDrawDistanceFromOriginMeters: MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
   landVolumeLimits: LAND_VOLUME_LIMITS,
   inPersonHumanInteractions: IN_PERSON_HUMAN_INTERACTIONS,
   nonQualifyingInteractions: NON_QUALIFYING_INTERACTIONS,
