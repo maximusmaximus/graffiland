@@ -49,7 +49,6 @@ import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js'
 import AddLandItemModal from './AddLandItemModal.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import BrandLogo from './BrandLogo.jsx';
-import DesktopIntroBanner from './DesktopIntroBanner.jsx';
 import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
@@ -70,7 +69,6 @@ import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const DESKTOP_SESSION_KEY = 'graffiland_desktop_session_v1';
-const DESKTOP_NOTICE_SESSION_KEY = 'graffiland_desktop_notice_dismissed_v1';
 const NEARBY_RADIUS_METERS = 5000;
 
 function loadDesktopSession() {
@@ -151,7 +149,6 @@ export default function DesktopHub({
 
   const [sculptures, setSculptures] = useState([]);
   const [parcels, setParcels] = useState([]);
-  const [quests, setQuests] = useState([]);
   const [listings, setListings] = useState([]);
   const [dualLeaders, setDualLeaders] = useState({ aiStewards: [], humanArtists: [] });
   const [marketBusyId, setMarketBusyId] = useState('');
@@ -168,7 +165,7 @@ export default function DesktopHub({
       : 'land'
   ); // 'land' | 'sculptures'
   const [selectedLandParcelId, setSelectedLandParcelId] = useState('');
-  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'quests' | 'market' | 'leaders'
+  const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'market' | 'leaders'
   const [drawMode, setDrawMode] = useState(false);
   const [viewMode, setViewMode] = useState('isometric'); // 'isometric' | '3d' | '2d'
   const viewModeRef = useRef(viewMode);
@@ -218,6 +215,7 @@ export default function DesktopHub({
   const [pairOpen, setPairOpen] = useState(() => initialSession.activeView === 'pair');
   const [infoOpen, setInfoOpen] = useState(() => initialSession.activeView === 'info');
   const [infoInitialTab, setInfoInitialTab] = useState('guide');
+  const [infoInitialViewport, setInfoInitialViewport] = useState('');
   const [archiveOpen, setArchiveOpen] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -262,18 +260,6 @@ export default function DesktopHub({
   const [previewApprovalErrors, setPreviewApprovalErrors] = useState({});
   const notifiedRepairKeysRef = useRef(new Set());
   const [mcpNotice, setMcpNotice] = useState('');
-  const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(() => {
-    try {
-      return sessionStorage.getItem(DESKTOP_NOTICE_SESSION_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
-  const [introRoleTab, setIntroRoleTab] = useState(() =>
-    ['agent', 'collector'].includes(initialSession.introRoleTab)
-      ? initialSession.introRoleTab
-      : 'human'
-  );
 
   const activeView = selected
     ? 'sculpture'
@@ -289,26 +275,23 @@ export default function DesktopHub({
       nearbyCategory,
       nearbyDefaultVersion: 2,
       mapViewport,
-      introRoleTab,
       lastSculptureId: lastSculpture?.id || '',
       lastSculptureSnapshot: summarizeSculptureSnapshot(lastSculpture),
       activeView
     });
-  }, [areaFilter, nearbyCategory, mapViewport, introRoleTab, lastSculpture, activeView]);
+  }, [areaFilter, nearbyCategory, mapViewport, lastSculpture, activeView]);
 
   const refreshData = useCallback(async () => {
     try {
-      const [sRes, pRes, qRes, mRes, lRes] = await Promise.all([
+      const [sRes, pRes, mRes, lRes] = await Promise.all([
         api.listSculptures({ includeVoxels: true }),
         api.listParcels(),
-        api.getNearbyQuests().catch(() => ({ quests: [] })),
         api.listMarketplaceListings().catch(() => ({ listings: [] })),
         api.getAgentLeaderboard(25).catch(() => ({ aiStewards: [], humanArtists: [] }))
       ]);
       const nextList = sRes.sculptures || [];
       setSculptures(nextList);
       setParcels(pRes.parcels || []);
-      setQuests(qRes.quests || []);
       setListings(mRes.listings || []);
       setDualLeaders({
         aiStewards: lRes.aiStewards || [],
@@ -927,16 +910,9 @@ export default function DesktopHub({
   function openInfoModal() {
     setSelected(null);
     setPairOpen(false);
+    setInfoInitialTab('guide');
+    setInfoInitialViewport('');
     setInfoOpen(true);
-  }
-
-  function dismissMobileNotice() {
-    setMobileNoticeDismissed(true);
-    try {
-      sessionStorage.setItem(DESKTOP_NOTICE_SESSION_KEY, '1');
-    } catch {
-      // ignore
-    }
   }
 
   function openMintLandMode() {
@@ -2049,11 +2025,13 @@ export default function DesktopHub({
     if (!welcomeRequest?.type) return;
     if (welcomeRequest.type === 'agent') {
       setPairOpen(false);
-      setInfoOpen(false);
-      setMobileNoticeDismissed(false);
-      setIntroRoleTab('agent');
+      setInfoInitialTab('guide');
+      setInfoInitialViewport('agents');
+      setInfoOpen(true);
     } else if (welcomeRequest.type === 'info') {
       setPairOpen(false);
+      setInfoInitialTab('guide');
+      setInfoInitialViewport('');
       setInfoOpen(true);
     }
   }, [welcomeRequest]);
@@ -2185,24 +2163,6 @@ export default function DesktopHub({
       </header>
 
       <main className="desktop-main">
-        {!mobileNoticeDismissed && (
-          <DesktopIntroBanner
-            user={user}
-            mcpState={mcpState}
-            onMcpStateChange={setMcpState}
-            roleTab={introRoleTab}
-            onRoleTabChange={setIntroRoleTab}
-            onOpenPair={openPairModal}
-            onOpenQuests={() => setSidebarTab('quests')}
-            onOpenMarket={() => setSidebarTab('market')}
-            onOpenLeaders={() => setSidebarTab('leaders')}
-            onOpenWelcome={onOpenWelcome}
-            onOpenInfo={openInfoModal}
-            onRequestLogin={() => setLoginOpen(true)}
-            onDismiss={dismissMobileNotice}
-          />
-        )}
-
         <div className="desktop-map-layout">
           <div className="desktop-map-stage">
             <MapView3D
@@ -2249,11 +2209,6 @@ export default function DesktopHub({
               onTitleParcel={(p) => setTitleModalTarget({ mode: 'owned', parcel: p })}
               onCopyParcelShareLink={handleCopyParcelShareLink}
               onViewModeChange={(nextMode) => setViewMode(nextMode)}
-              onToggleDrawMode={() => {
-                const next = !drawMode;
-                setDrawMode(next);
-                if (next) setSidebarTab('land');
-              }}
               onDismissAuto3dHint={() => setAutoSwitchedHint(false)}
             />
           </div>
@@ -2331,14 +2286,6 @@ export default function DesktopHub({
               </button>
               <button
                 type="button"
-                className={`btn ${sidebarTab === 'quests' ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => switchSidebarTab('quests')}
-              >
-                <XeroIcon emoji="🔥" size={11} /> Quests ({quests.length})
-              </button>
-              <button
-                type="button"
                 className={`btn ${sidebarTab === 'market' ? 'btn-primary' : ''}`}
                 style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
                 onClick={() => switchSidebarTab('market')}
@@ -2363,7 +2310,7 @@ export default function DesktopHub({
               </button>
             </div>
 
-            {sidebarTab !== 'leaders' && sidebarTab !== 'quests' && sidebarTab !== 'market' && sidebarTab !== 'land' && (
+            {sidebarTab !== 'leaders' && sidebarTab !== 'market' && sidebarTab !== 'land' && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -2478,68 +2425,6 @@ export default function DesktopHub({
                 config={config}
                 onSignIn={() => setLoginOpen(true)}
               />
-            ) : sidebarTab === 'quests' ? (
-              <div className="desktop-nearby-list" aria-label="Agent Land Quests">
-                <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', padding: '2px 2px 6px' }}>
-                  Visit these AI agent lands IRL with your phone to earn 2x XP, bounties, and a 2% Human Pool share.
-                </div>
-                {quests.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--muted)', padding: '12px 4px' }}>
-                    No active quests yet. AI agents can create stages &amp; quests via graffiland-mcp.
-                  </div>
-                ) : (
-                  quests.map((q) => {
-                    const parcelSculpture = sculptures.find((s) => s.parcelId === q.parcelId);
-                    return (
-                      <div key={q.id} className="desktop-nearby-item" style={{ cursor: 'default' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%', flexWrap: 'wrap' }}>
-                          <strong style={{ fontSize: 12.5 }}>{q.title}</strong>
-                          <span className={`badge ${q.firstSparkBoost ? 'pink' : 'teal'}`} style={{ fontSize: 10 }}>
-                            {q.firstSparkBoost ? '🔥 First-Spark · 2x XP' : '🎨 Active Quest'}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'left', marginTop: 2 }}>
-                          {q.prompt}
-                        </div>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-                          <span className="badge gold" style={{ fontSize: 10 }}>{getLiveLandName(q)}</span>
-                          <span className="badge" style={{ fontSize: 10 }}>
-                            <UserHandleBadge
-                              user={{
-                                id: q.stewardSub,
-                                username: q.stewardUsername,
-                                stewardName: q.stewardName,
-                                stewardType: q.stewardType || 'agent',
-                                avatarImage: q.stewardAvatar
-                              }}
-                              fallback="AI Steward"
-                              size="xs"
-                            />
-                          </span>
-                          {q.bountyEth > 0 && (
-                            <span className="badge teal" style={{ fontSize: 10 }}>
-                              🏆 {q.bountyEth} ETH Bounty
-                            </span>
-                          )}
-                          <span className="badge" style={{ fontSize: 10 }}>
-                            🪑 {q.openSlotsCount} plinth slots
-                          </span>
-                        </div>
-                        {parcelSculpture && (
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            style={{ marginTop: 6, padding: '3px 9px', fontSize: 11, alignSelf: 'flex-start' }}
-                            onClick={() => openSculpture(parcelSculpture)}
-                          >
-                            Inspect Land Stage
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
             ) : sidebarTab === 'market' ? (
               <div className="desktop-nearby-list" aria-label="SPRAY.LAND Marketplace">
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--accent)', padding: '2px 2px 6px' }}>
@@ -2601,12 +2486,9 @@ export default function DesktopHub({
               </div>
             ) : sidebarTab === 'leaders' ? (
               <div className="desktop-nearby-list" aria-label="Creator Leaderboard">
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', margin: '2px 0 4px' }}>
-                  <XeroIcon emoji="🎨" size={12} /> Human Street Artists (2% Contributor Pool)
-                </div>
                 {creatorLeaderboard.length === 0 && dualLeaders.humanArtists.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 4px' }}>
-                    No human builders ranked yet.
+                    No builders ranked yet.
                   </div>
                 ) : (
                   (dualLeaders.humanArtists.length > 0
@@ -2664,43 +2546,6 @@ export default function DesktopHub({
                       </div>
                       <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
                         {entry.metaText}
-                      </span>
-                    </div>
-                  ))
-                )}
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#ff9f1c', margin: '10px 0 4px' }}>
-                  <XeroIcon emoji="🤖" size={12} /> AI Land Stewards (3% Steward Royalties)
-                </div>
-                {dualLeaders.aiStewards.length === 0 ? (
-                  <div style={{ fontSize: 11.5, color: 'var(--muted)', padding: '4px' }}>
-                    No AI stewards registered yet. Agents onboard via /llms.txt &amp; graffiland-mcp!
-                  </div>
-                ) : (
-                  dualLeaders.aiStewards.map((ag, idx) => (
-                    <div
-                      key={ag.agentId}
-                      className="desktop-nearby-item"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setProfileHandle(ag.agentId)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setProfileHandle(ag.agentId);
-                        }
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                        <strong style={{ fontSize: 12.5 }}>
-                          #{idx + 1} {ag.name}
-                        </strong>
-                        <span className="badge gold" style={{ fontSize: 10 }}>
-                          {ag.activatedLandsCount} awakened · {ag.attractedHumans || 0} humans
-                        </span>
-                      </div>
-                      <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-                        {ag.totalXp} XP · {ag.earnedRoyaltiesEth || 0} ETH earned · {ag.availableSlots} free slots
                       </span>
                     </div>
                   ))
@@ -3585,16 +3430,22 @@ export default function DesktopHub({
         <InfoTermsModal
           config={config}
           user={user}
+          mcpState={mcpState}
+          onMcpStateChange={setMcpState}
           initialTab={infoInitialTab}
+          initialViewportGuide={infoInitialViewport}
           onUserUpdate={onUserUpdate}
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
           onOpenArchive={(archId = '') => {
             setArchiveInitialId(archId || '');
             setArchiveOpen(true);
           }}
+          onOpenPair={openPairModal}
+          onOpenWelcome={onOpenWelcome}
           onStartMapMint={() => {
             setInfoOpen(false);
             setInfoInitialTab('guide');
+            setInfoInitialViewport('');
             openMintLandMode();
           }}
           onLogout={() => {
@@ -3608,6 +3459,7 @@ export default function DesktopHub({
           onClose={() => {
             setInfoOpen(false);
             setInfoInitialTab('guide');
+            setInfoInitialViewport('');
           }}
         />
       )}

@@ -5920,9 +5920,10 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         'GLAND-DESK01'
       );
 
-      // 4) Switching to Quests then clicking the Sculptures folder tab returns cleanly to Sculptures list
-      RTL.fireEvent.click(view.getByRole('button', { name: /Quests \(0\)/i }));
-      assert.equal(view.queryByTestId('desktop-nearby-lands-list'), null);
+      // 4) Quests tab is removed; switching to Market then clicking the Sculptures folder tab returns cleanly to Sculptures list
+      assert.equal(Boolean(view.queryByRole('button', { name: /Quests/i })), false);
+      RTL.fireEvent.click(view.getByRole('button', { name: /Market \(0\)/i }));
+      assert.equal(Boolean(view.queryByTestId('desktop-nearby-lands-list')), false);
       RTL.fireEvent.click(sculpturesTab);
       assert.equal(sculpturesTab.getAttribute('aria-selected'), 'true');
       assert.equal(landTab.getAttribute('aria-selected'), 'false');
@@ -7609,15 +7610,19 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       `Expected tall 250m parcel preview fit on compact viewport to zoom out below z14.0, got ${tallIsoFit?.zoom}`
     );
 
-    // MapView3D exposes explicit Zoom Out, Zoom In, Fit Draft controls & unrestricted minZoom
+    // MapView3D keeps unrestricted minZoom & floating Fit Draft control while omitting removed camera/zoom/iso/draw/orbit toolbar buttons
     const map3dSrc = fsMod.readFileSync(
       path.join(ROOT, 'client/src/components/MapView3D.jsx'),
       'utf8'
     );
     assert.ok(map3dSrc.includes('minZoom: 1'), 'MapView3D must explicitly allow zooming out to minZoom 1');
-    assert.ok(map3dSrc.includes('data-testid="map3d-zoom-out-btn"'), 'MapView3D must expose Zoom Out button');
     assert.ok(map3dSrc.includes('data-testid="map3d-fit-draft-btn"'), 'MapView3D must expose Fit Draft button');
+    assert.ok(map3dSrc.includes('data-testid="map3d-overlay-toolbar"'), 'MapView3D must float remaining compact controls on the map');
     assert.ok(map3dSrc.includes('computeDraft3DAutoFit'), 'MapView3D must auto-fit tall/wide drafts');
+    assert.equal(map3dSrc.includes('data-testid="map3d-zoom-out-btn"'), false, 'MapView3D must not render removed Zoom Out toolbar button');
+    assert.equal(map3dSrc.includes('data-testid="map3d-orbit-pan-toggle"'), false, 'MapView3D must not render removed Orbit Land toolbar button');
+    assert.equal(map3dSrc.includes('↺ -15°'), false, 'MapView3D must not render removed rotate buttons');
+    assert.equal(map3dSrc.includes('Tilt {Math.round(pitchDeg)}°'), false, 'MapView3D must not render removed tilt slider');
   });
 
   test('ARLandInspectorPanel greys out on-site actions when remote and notifies user to visit land in person', async () => {
@@ -7908,5 +7913,84 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     const hudText = hudView.container.textContent || '';
     assert.equal(/\bPro\b|\bQuick\b|Simple/i.test(hudText), false, `Expected no Quick/Pro simple-mode pill in StudioHudTopBar, got: ${hudText}`);
     cleanup();
+  });
+
+  test('DesktopHub removes dismissible intro banner, Quests tab, and pool/AI steward leaderboard headers while InfoTermsModal houses AI Agent info', async () => {
+    const { default: DesktopHub } = await loadJsxModule('client/src/components/DesktopHub.jsx');
+    const { default: InfoTermsModal } = await loadJsxModule('client/src/components/InfoTermsModal.jsx');
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/sculptures')) return { ok: true, json: async () => ({ sculptures: [] }) };
+      if (u.includes('/api/parcels/mine')) return { ok: true, json: async () => ({ parcels: [], parcelCount: 0 }) };
+      if (u.includes('/api/parcels')) return { ok: true, json: async () => ({ parcels: [] }) };
+      if (u.includes('/api/marketplace/listings')) return { ok: true, json: async () => ({ listings: [] }) };
+      if (u.includes('/api/leaderboard')) return { ok: true, json: async () => ({ aiStewards: [], humanArtists: [] }) };
+      if (u.includes('/api/mcp/pairings')) return { ok: true, json: async () => ({ pairings: [], mcpActive: false }) };
+      if (u.includes('/api/signatures/pending')) return { ok: true, json: async () => ({ requests: [] }) };
+      if (u.includes('/api/notifications')) return { ok: true, json: async () => ({ notifications: [], unreadCount: 0 }) };
+      return { ok: true, json: async () => ({}) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(DesktopHub, {
+          config: { policy: {} },
+          user: { id: 'u1', username: 'bigdog', walletAddress: '0x1111111111111111111111111111111111111111' },
+          onUserUpdate: () => {},
+          onLogout: () => {}
+        })
+      );
+
+      // 1) Closeable DesktopIntroBanner is gone
+      assert.equal(Boolean(view.queryByLabelText('Desktop Introduction and Agent Connection')), false);
+
+      // 2) Quests tab is removed
+      assert.equal(Boolean(view.queryByRole('button', { name: /Quests/i })), false);
+
+      // 3) Leaders tab omits "Human Street Artists (2% Contributor Pool)" and "AI Land Stewards (3% Steward Royalties)"
+      RTL.fireEvent.click(view.getByRole('button', { name: /Leaders/i }));
+      const leadersText = view.getByLabelText('Creator Leaderboard').textContent || '';
+      assert.equal(leadersText.includes('Human Street Artists (2% Contributor Pool)'), false);
+      assert.equal(leadersText.includes('AI Land Stewards (3% Steward Royalties)'), false);
+      assert.equal(leadersText.includes('No AI stewards registered yet'), false);
+
+      // 4) MapView3D compact controls float directly inside .map-container (no separate .map3d-toolbar above it)
+      assert.equal(Boolean(view.container.querySelector('.map3d-toolbar')), false);
+      const overlayToolbar = view.getByTestId('map3d-overlay-toolbar');
+      assert.ok(view.container.querySelector('.map-container')?.contains(overlayToolbar));
+      assert.equal(Boolean(view.queryByRole('button', { name: /^Isometric$/i })), false);
+      assert.equal(Boolean(view.queryByRole('button', { name: /Draw Land/i })), false);
+      assert.equal(Boolean(view.queryByTestId('map3d-orbit-pan-toggle')), false);
+      assert.equal(Boolean(view.queryByTestId('map3d-zoom-out-btn')), false);
+      assert.equal(Boolean(view.queryByRole('button', { name: /North/i })), false);
+      cleanup();
+
+      // 5) InfoTermsModal houses the moved AI Agents & Collectors guide (prompts, MCP config, /llms.txt, agent.json)
+      const infoView = RTL.render(
+        React.createElement(InfoTermsModal, {
+          config: { policy: {} },
+          user: { id: 'u1', username: 'bigdog', walletAddress: '0x1111111111111111111111111111111111111111' },
+          initialTab: 'guide',
+          initialViewportGuide: 'agents',
+          onOpenWelcome: () => {},
+          onOpenPair: () => {},
+          onClose: () => {}
+        })
+      );
+      const agentsPanel = infoView.getByTestId('info-guide-agents');
+      assert.ok(agentsPanel.textContent.includes('Copy Property-Agent Prompt'));
+      assert.ok(agentsPanel.textContent.includes('Copy Autonomous Agent Prompt'));
+      assert.ok(agentsPanel.textContent.includes('MCP Config'));
+      assert.ok(agentsPanel.textContent.includes('/llms.txt'));
+      assert.ok(agentsPanel.textContent.includes('agent.json'));
+      assert.ok(agentsPanel.textContent.includes('Collectors'));
+      assert.ok(infoView.getByTestId('info-reopen-intro-btn'));
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
   });
 });

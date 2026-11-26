@@ -294,25 +294,18 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForTimeout(800);
     assert.equal(await page.locator(welcomeSelector).count(), 0);
 
-    // Reopen via Intro button and test Escape dismissal
-    await page.getByRole('button', { name: /^Intro$/i }).click();
-    await page.waitForSelector(welcomeSelector);
-    await page.keyboard.press('Escape');
-    await page.waitForSelector(welcomeSelector, { state: 'detached' });
-
-    // Reopen via Intro button and test "Connect AI" CTA
-    await page.getByRole('button', { name: /^Intro$/i }).click();
-    await page.waitForSelector(welcomeSelector);
-    await page.getByRole('button', { name: /Connect AI/i }).click();
-    await page.waitForSelector(welcomeSelector, { state: 'detached' });
-    await page.waitForSelector('text=Wallet / MCP Auth');
-    const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
-    assert.ok(selectedTabText.includes('AI Agents'));
-
-    // Open viewport-tabbed Info modal above MapLibre via header Info button
+    // Open Info modal above MapLibre via header Info button, verify Desktop / Mobile / AI Agents tabs & Intro walkthrough reopen
     await page.getByRole('button', { name: /^Info$/i }).click();
     await page.waitForSelector('[data-testid="info-guide-desktop"]');
     await page.waitForSelector('[data-testid="info-guide-tip-callout"]');
+    await page.getByTestId('info-guide-agents-tab').click();
+    await page.waitForSelector('[data-testid="info-guide-agents"]');
+    await page.waitForSelector('text=Wallet / MCP Auth');
+    await page.getByTestId('info-reopen-intro-btn').click();
+    await page.waitForSelector(welcomeSelector);
+    await page.getByRole('button', { name: /Connect AI/i }).click();
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    await page.waitForSelector('[data-testid="info-guide-agents"]');
     await page.getByRole('tab', { name: /Mobile AR Studio/i }).click();
     await page.waitForSelector('[data-testid="info-guide-mobile"]');
     await page.waitForSelector('text=Proof of Location Threat Model');
@@ -468,12 +461,8 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.ok(postCloseMap.focusZoom >= 17.5, `Expected zoomed focus >= 17.5, got ${JSON.stringify(postCloseMap)}`);
     assert.ok(postCloseMap.liveZoom >= 17.0, `Expected live map zoomed into land >= 17.0 after closing sculpture, got ${JSON.stringify(postCloseMap)}`);
 
-    // Switch sidebar tabs: Quests -> Market -> Gallery -> Leaders -> List
-    await page.getByRole('button', { name: /Quests/i }).click();
-    await page.waitForSelector('[aria-label="Agent Land Quests"]');
-    const questsText = await page.textContent('[aria-label="Agent Land Quests"]');
-    assert.ok(questsText.includes('E2E Neon Plinth Quest'));
-    assert.ok(questsText.includes('First-Spark'));
+    // Switch sidebar tabs: Market -> Gallery -> Leaders -> List (Quests tab hidden)
+    assert.equal(await page.getByRole('button', { name: /Quests/i }).count(), 0);
 
     await page.getByRole('button', { name: /Market/i }).click();
     await page.waitForSelector('[aria-label="SPRAY.LAND Marketplace"]');
