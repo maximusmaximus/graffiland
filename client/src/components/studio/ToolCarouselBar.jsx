@@ -37,7 +37,9 @@ export default function ToolCarouselBar({
           <span>{activeItem.label}</span>
           <span className="key-tool-hint">
             {activeUnavailable
-              ? '· Tap for requirement'
+              ? '· Tap for fix'
+              : activeAvail.needsAuth
+              ? '· Tap to sign in'
               : canTouch
               ? '· Swipe'
               : '· Arrows / Swipe'}

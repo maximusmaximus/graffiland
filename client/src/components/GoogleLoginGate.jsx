@@ -9,7 +9,8 @@ export default function GoogleLoginGate({
   onSuccess,
   onClose,
   inline = false,
-  backdropClassName = ''
+  backdropClassName = '',
+  subtitle = ''
 }) {
   const gsiRef = useRef(null);
   const [devEmail, setDevEmail] = useState('artist@graffiland.local');
@@ -83,7 +84,7 @@ export default function GoogleLoginGate({
   }
 
   const card = (
-    <div className="modal-card" style={{ maxWidth: 440 }}>
+    <div className="modal-card" data-testid="google-login-gate" style={{ maxWidth: 440 }}>
       <div className="modal-header">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <BrandLogo variant="lockup" height={28} />
@@ -103,7 +104,7 @@ export default function GoogleLoginGate({
       </div>
 
       <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
-        Sign in free to save your art, own your land, and keep everything in your account.
+        {subtitle || 'Sign in free to save your art, own your land, and keep everything in your account.'}
       </p>
 
       {error && (

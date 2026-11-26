@@ -85,7 +85,7 @@ export default function DesktopQrScanner({
         markCameraActive();
       } catch {
         if (active) {
-          setErrorText('Camera access blocked — tap "Scan QR Photo" below or type the 6-char code.');
+          setErrorText('Camera blocked. Allow Camera in phone Settings, or tap "Scan QR Photo".');
         }
       }
     };

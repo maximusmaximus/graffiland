@@ -11,7 +11,13 @@ import {
   isTransientHardwareError,
   stopMediaStreamTracks
 } from '../utils/cameraRecovery.js';
-import { describeCameraError, describeGeolocationError } from '../utils/permissionMessages.js';
+import {
+  describeCameraError,
+  describeGeolocationError,
+  describeHttpsRequiredError,
+  describeMotionError
+} from '../utils/permissionMessages.js';
+import { tryLockPortraitOrientation } from '../utils/mobilePortraitLock.js';
 import { OrbLandmarkTracker } from '../utils/orbTracker.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
 import {
@@ -201,11 +207,18 @@ export function useProofOfLocation({
           : polRefined;
         setLocation(refined);
         locationRef.current = refined;
+        setSensorBanner((prev) =>
+          prev && /location|gps/i.test(prev) ? '' : prev
+        );
         if (notifyNearby) {
           onLocationUpdateRef.current?.(loc, refined);
         }
       },
-      () => {},
+      (err) => {
+        if (!unmountedRef.current && !locationRef.current) {
+          setSensorBanner(describeGeolocationError(err));
+        }
+      },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
     );
   }, []);
@@ -214,7 +227,11 @@ export function useProofOfLocation({
   const enterFullscreen = useCallback(() => {
     const el = document.documentElement;
     if (!document.fullscreenElement && el.requestFullscreen) {
-      el.requestFullscreen().catch(() => {});
+      el.requestFullscreen()
+        .then(() => tryLockPortraitOrientation())
+        .catch(() => {});
+    } else {
+      tryLockPortraitOrientation();
     }
   }, []);
 
@@ -477,7 +494,7 @@ export function useProofOfLocation({
       if (unmountedRef.current) return false;
 
       if (!navigator.mediaDevices?.getUserMedia) {
-        setSensorBanner('Camera API requires HTTPS on mobile.');
+        setSensorBanner(describeHttpsRequiredError());
         return false;
       }
 
@@ -1052,7 +1069,7 @@ export function useProofOfLocation({
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setSensorBanner('GPS Geolocation not supported on this browser.');
+      setSensorBanner('GPS unsupported. Open in Safari or Chrome.');
       return undefined;
     }
 
@@ -1090,6 +1107,9 @@ export function useProofOfLocation({
           : polRefined;
         setLocation(refined);
         locationRef.current = refined;
+        setSensorBanner((prev) =>
+          prev && /location|gps/i.test(prev) ? '' : prev
+        );
         syncSensorStatus();
 
         if (dirLightRef.current) {
@@ -1285,12 +1305,12 @@ export function useProofOfLocation({
       } else {
         setNeedsGyroTap(false);
         setGyroFallbackActive(true);
-        setSensorBanner('Gyroscope permission denied; drag screen to aim 3D brush.');
+        setSensorBanner(describeMotionError('denied'));
       }
     } catch {
       setNeedsGyroTap(false);
       setGyroFallbackActive(true);
-      setSensorBanner('Gyroscope unavailable on this browser; drag screen to aim 3D brush.');
+      setSensorBanner(describeMotionError('unavailable'));
     }
   }, [attachOrientation, enterFullscreen]);
 

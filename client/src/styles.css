@@ -13059,6 +13059,111 @@ button.user-handle-badge:hover .user-handle-text {
   }
 }
 
+/* Mobile Portrait-Only Lock & Anti-Tilt Viewport Guard */
+html.mobile-portrait-locked,
+body.mobile-portrait-locked {
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+.mobile-portrait-lock-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 35%, rgba(16, 26, 48, 0.98), rgba(6, 10, 20, 0.99));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+}
+
+.mobile-portrait-lock-card {
+  max-width: 320px;
+  width: 100%;
+  padding: 24px 22px;
+  border-radius: 20px;
+  border: 1px solid rgba(0, 245, 212, 0.35);
+  background: rgba(12, 18, 34, 0.94);
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.62);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.mobile-portrait-phone-glyph {
+  width: 34px;
+  height: 58px;
+  border-radius: 9px;
+  border: 2.5px solid var(--accent);
+  background: rgba(0, 245, 212, 0.08);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  margin-bottom: 4px;
+  box-shadow: 0 0 18px rgba(0, 245, 212, 0.28);
+  animation: portraitPhoneReturn 2.2s ease-in-out infinite;
+}
+
+.mobile-portrait-phone-notch {
+  width: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.72);
+}
+
+.mobile-portrait-phone-bar {
+  width: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(243, 246, 255, 0.65);
+}
+
+.mobile-portrait-lock-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.mobile-portrait-lock-copy {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@keyframes portraitPhoneReturn {
+  0%,
+  15% {
+    transform: rotate(-90deg);
+    opacity: 0.75;
+  }
+  48%,
+  85% {
+    transform: rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(-90deg);
+    opacity: 0.75;
+  }
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,

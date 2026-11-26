@@ -5,6 +5,7 @@ import {
   formatShortLength,
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
+import { describeCameraNeededAction } from '../../utils/permissionMessages.js';
 import NotificationCenter from '../NotificationCenter.jsx';
 import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
@@ -58,6 +59,7 @@ export default function StudioHudTopBar({
   cameraRecovering = false,
   onEnableIosGyro,
   onRetryCameraAccess,
+  onRetryLocation = null,
   onCameraRefreshNeeded = null,
   sensorBanner,
   onDismissSensorBanner = null,
@@ -131,7 +133,9 @@ export default function StudioHudTopBar({
   };
 
   const showRedSensorError = Boolean(
-    !cameraRecovering && sensorBanner && (dockOpen || !cameraReady)
+    !cameraRecovering &&
+      sensorBanner &&
+      (dockOpen || !cameraReady || !location || gyroFallbackActive)
   );
   const showCameraFallbackBanner =
     !cameraRecovering &&
@@ -139,6 +143,15 @@ export default function StudioHudTopBar({
     !needsGyroTap &&
     (gyroFallbackActive || !cameraReady) &&
     !arSelectHint;
+  const sensorNeedsGpsRetry = Boolean(
+    !location && typeof onRetryLocation === 'function' && /location|gps/i.test(sensorBanner || '')
+  );
+  const hintNeedsCameraRetry = Boolean(
+    !cameraReady && typeof onRetryCameraAccess === 'function' && /camera/i.test(arSelectHint || '')
+  );
+  const hintNeedsGpsRetry = Boolean(
+    !location && typeof onRetryLocation === 'function' && /location|gps/i.test(arSelectHint || '')
+  );
   const openLoginAction = onOpenLogin || onOpenLoginFromHint;
 
   return (
@@ -667,6 +680,15 @@ export default function StudioHudTopBar({
                   Retry Camera
                 </button>
               )}
+              {sensorNeedsGpsRetry && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onRetryLocation}
+                >
+                  Retry GPS
+                </button>
+              )}
               {onDismissSensorBanner && (
                 <button
                   type="button"
@@ -692,8 +714,8 @@ export default function StudioHudTopBar({
               <XeroIcon emoji={!cameraReady ? '📷' : '👆'} size={14} />
               <span>
                 {!cameraReady
-                  ? 'Camera off/blocked — allow rear camera for AR & Proof of Location.'
-                  : 'Manual Touch-Drag Aim active (no gyro detected — drag screen to aim).'}
+                  ? describeCameraNeededAction()
+                  : 'Motion sensors off — drag screen to aim, or enable Motion in Settings.'}
               </span>
             </span>
             {!cameraReady && (
@@ -747,6 +769,24 @@ export default function StudioHudTopBar({
                   Sign In
                 </button>
               )}
+              {hintNeedsCameraRetry && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onRetryCameraAccess}
+                >
+                  Retry Camera
+                </button>
+              )}
+              {hintNeedsGpsRetry && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={onRetryLocation}
+                >
+                  Retry GPS
+                </button>
+              )}
               {onDismissHint && (
                 <button
                   type="button"
@@ -770,7 +810,7 @@ export default function StudioHudTopBar({
           >
             <span className="mobile-hud-banner-text">
               <XeroIcon emoji="⚠️" size={14} />
-              <span>{originStatus.reason || 'Origin is blocked — clear obstruction to paint'}</span>
+              <span>{originStatus.reason || 'View blocked. Move object away from camera.'}</span>
             </span>
           </div>
         )}

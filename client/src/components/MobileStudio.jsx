@@ -7,6 +7,11 @@ import {
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
 import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
+import {
+  describeApiErrorForMobile,
+  describeCameraNeededAction,
+  describeLocationNeededAction
+} from '../utils/permissionMessages.js';
 import { buildPendingPreviewSculpture } from '../utils/pendingApprovalPreview.js';
 import {
   countUnseenMapItems,
@@ -122,6 +127,8 @@ export default function MobileStudio({
     }
   });
   const [loginOpen, setLoginOpen] = useState(false);
+  const [pendingPublishAfterLogin, setPendingPublishAfterLogin] = useState(false);
+  const pendingPublishAfterLoginRef = useRef(null);
   const [profileHandle, setProfileHandle] = useState(() =>
     parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
   );
@@ -820,39 +827,33 @@ export default function MobileStudio({
   );
 
   const openPublishSheet = useCallback(
-    ({ skipVoxelCheck = false } = {}) => {
-      if (!skipVoxelCheck) {
-        if (!brush.ensureToolUsable('publish')) return;
-      } else {
-        if (!pol.locationRef.current && !pol.location) {
-          brush.notifyToolUnavailable(
-            'publish',
-            'Wait for a GPS location fix first before publishing on-chain.'
-          );
-          return;
-        }
-        if (!pol.cameraReadyRef.current) {
-          brush.notifyToolUnavailable(
-            'publish',
-            'Enable live camera access first for Proof of Location before publishing.'
-          );
-          return;
-        }
-        const cov = pol.polRef.current.getSceneCoverage();
-        if (!cov.optimal) {
-          brush.notifyToolUnavailable(
-            'publish',
-            `Move your phone around to finish mapping this space (${cov.scannedCount}/${cov.targetCount} angles for 100% lock) before publishing.`
-          );
-          return;
-        }
-        if (!user) {
-          brush.notifyToolUnavailable(
-            'publish',
-            'Sign in with Google first before publishing & minting on-chain.'
-          );
-          return;
-        }
+    ({ skipVoxelCheck = false, userOverride = null } = {}) => {
+      if (!skipVoxelCheck && (!brush.voxelsRef.current || brush.voxelsRef.current.length === 0)) {
+        brush.notifyToolUnavailable('publish', 'Draw at least 1 block first.');
+        return;
+      }
+      const activeUser = userOverride || user;
+      if (!activeUser) {
+        pendingPublishAfterLoginRef.current = { skipVoxelCheck };
+        setPendingPublishAfterLogin(true);
+        setLoginOpen(true);
+        return;
+      }
+      if (!pol.locationRef.current && !pol.location) {
+        brush.notifyToolUnavailable('publish', describeLocationNeededAction());
+        return;
+      }
+      if (!pol.cameraReadyRef.current) {
+        brush.notifyToolUnavailable('publish', describeCameraNeededAction());
+        return;
+      }
+      const cov = pol.polRef.current.getSceneCoverage();
+      if (!cov.optimal) {
+        brush.notifyToolUnavailable(
+          'publish',
+          `Scan space to 100% (${cov.scannedCount}/${cov.targetCount}). Pan phone around.`
+        );
+        return;
       }
       setPublishError('');
       setMintReceipt(null);
@@ -1099,7 +1100,7 @@ export default function MobileStudio({
     if (!prevRestartPromptRef.current && pol.mappingRestartPrompt) {
       showTemporaryHint(
         pol.mappingRestartPrompt.summary ||
-          'Device moved substantially — tap 🔄 to restart mapping.'
+          'Moved spots — tap 🔄 to rescan.'
       );
     }
     prevRestartPromptRef.current = pol.mappingRestartPrompt;
@@ -1108,19 +1109,25 @@ export default function MobileStudio({
   const handleRestartSceneMapping = useCallback(
     async (reason = 'manual') => {
       await restartSceneMapping({ reason, refreshCameraFeed: true });
-      showTemporaryHint('Mapping restarted — sweep your phone slowly around the space.');
+      showTemporaryHint('Scan reset — pan phone slowly around.');
     },
     [restartSceneMapping, showTemporaryHint]
   );
 
   const handlePublishSubmit = async (e) => {
     e.preventDefault();
+    if (!user) {
+      pendingPublishAfterLoginRef.current = { skipVoxelCheck: true };
+      setPendingPublishAfterLogin(true);
+      setLoginOpen(true);
+      return;
+    }
     setPublishing(true);
     setPublishError('');
     try {
       const location = pol.location;
       if (!location) {
-        throw new Error('Waiting for GPS location fix before publishing.');
+        throw new Error(describeLocationNeededAction());
       }
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = pol.polRef.current.getSnapshot();
@@ -1236,23 +1243,29 @@ export default function MobileStudio({
         })
         .catch(() => {});
     } catch (err) {
-      setPublishError(err.message || 'Publish failed');
+      setPublishError(describeApiErrorForMobile(err));
     } finally {
       setPublishing(false);
     }
   };
 
   const handleCopyAgentPublishPrompt = async () => {
+    if (!user) {
+      pendingPublishAfterLoginRef.current = { skipVoxelCheck: true };
+      setPendingPublishAfterLogin(true);
+      setLoginOpen(true);
+      return;
+    }
     setPublishing(true);
     setPublishError('');
     try {
       const location = pol.location;
       if (!location) {
-        throw new Error('Waiting for GPS location fix before creating agent publish request.');
+        throw new Error(describeLocationNeededAction());
       }
       const activePairingCode = pairing.mcpPairingsState.activePairing?.code;
       if (!activePairingCode) {
-        throw new Error('Connect a robust MCP pairing code first before delegating signing.');
+        throw new Error('Connect a Pair code first.');
       }
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = pol.polRef.current.getSnapshot();
@@ -1640,6 +1653,7 @@ export default function MobileStudio({
           cameraRecovering={pol.cameraRecovering}
           onEnableIosGyro={pol.enableIosGyro}
           onRetryCameraAccess={pol.retryCameraAccess}
+          onRetryLocation={() => pol.refreshLocationNow({ notifyNearby: true, force: true })}
           onCameraRefreshNeeded={pol.refreshCamera}
           sensorBanner={pol.sensorBanner}
           onDismissSensorBanner={() => pol.setSensorBanner('')}
@@ -1833,7 +1847,7 @@ export default function MobileStudio({
               }
               const loc = pol.location;
               if (!loc) {
-                showTemporaryHint('Waiting for GPS fix before checking in…');
+                showTemporaryHint(describeLocationNeededAction());
                 return false;
               }
               try {
@@ -2036,6 +2050,11 @@ export default function MobileStudio({
             lands.setLandManageOpen(true);
           }}
           onViewInARPreview={() => brush.setMode('preview')}
+          onRequestLogin={() => {
+            pendingPublishAfterLoginRef.current = { skipVoxelCheck: true };
+            setPendingPublishAfterLogin(true);
+            setLoginOpen(true);
+          }}
           onShowHint={showTemporaryHint}
           onClose={() => brush.setMode('draw')}
         />
@@ -2483,11 +2502,29 @@ export default function MobileStudio({
       {loginOpen && (
         <GoogleLoginGate
           config={config}
+          subtitle={
+            pendingPublishAfterLogin
+              ? 'Sign in with Google to publish your 3D art.'
+              : ''
+          }
           onSuccess={(u) => {
             onUserUpdate(u);
             setLoginOpen(false);
+            const pending = pendingPublishAfterLoginRef.current;
+            pendingPublishAfterLoginRef.current = null;
+            setPendingPublishAfterLogin(false);
+            if (pending) {
+              openPublishSheet({
+                skipVoxelCheck: Boolean(pending.skipVoxelCheck),
+                userOverride: u
+              });
+            }
           }}
-          onClose={() => setLoginOpen(false)}
+          onClose={() => {
+            pendingPublishAfterLoginRef.current = null;
+            setPendingPublishAfterLogin(false);
+            setLoginOpen(false);
+          }}
         />
       )}
     </div>
