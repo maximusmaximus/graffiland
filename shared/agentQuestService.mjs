@@ -19,7 +19,8 @@ import {
 import {
   getUserMintCapacityStatus,
   notifyAfterSculpturePublished,
-  notifyFreeLimitReached
+  notifyFreeLimitReached,
+  notifyLandMinted
 } from './notificationService.mjs';
 import { resolveAuthorHandleForStorage } from './userDisplay.mjs';
 import {
@@ -700,6 +701,14 @@ export async function claimDormantLand(
     customName: effectiveCustomName,
     compact: true
   });
+
+  await notifyLandMinted(db, {
+    userSub: agentUser.id,
+    parcelId: cleanParcelId,
+    landTitle: effectiveCustomName,
+    txHash: suppliedTxHash || humanSimTxHash,
+    volume: resolvedVolume
+  }).catch(() => {});
 
   return {
     claimed: true,

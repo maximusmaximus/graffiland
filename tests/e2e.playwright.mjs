@@ -2391,12 +2391,33 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="notif-inline-approve-btn"]', { timeout: 10000 });
     await page.getByTestId('notif-inline-approve-btn').first().click();
     await page.waitForSelector('[data-testid="notif-approval-status"]', { timeout: 15000 });
+    await page.waitForSelector('[data-testid="notif-approved-go-to-land-btn"]', { timeout: 5000 });
 
     // Once approved, temporary "Preview" label disappears and the real sculpture is minted on the land
     await page.waitForSelector('[data-testid="map3d-preview-label"]', {
       state: 'detached',
       timeout: 10000
     });
+
+    // Click the "Go to Land" button right in Notifications -> navigates straight to the minted land showcase!
+    await page.getByTestId('notif-approved-go-to-land-btn').click();
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
+    const plotText = await page.getByTestId('desktop-plot-visit-view').textContent();
+    assert.ok(
+      plotText.includes('Preview Gallery Lot'),
+      `Expected PlotVisitView to navigate to "Preview Gallery Lot", got: ${plotText.slice(0, 200)}`
+    );
+
+    // Persisted notification in backend inbox also links directly to the land it was minted on
+    const afterNotifs = await fetch(`${baseUrl}/api/notifications`, {
+      headers: { Authorization: `Bearer ${ownerAuth.token}` }
+    }).then((r) => r.json());
+    const mintedNotif = (afterNotifs.notifications || []).find(
+      (n) => n.meta?.approvedAndMinted === true && n.parcelId === pid
+    );
+    assert.ok(mintedNotif, 'Expected persisted Approved & minted notification in /api/notifications');
+    assert.equal(mintedNotif.actionType, 'open_land');
+
     const landDetail = await fetch(`${baseUrl}/api/lands/${encodeURIComponent(pid)}`).then((r) =>
       r.json()
     );

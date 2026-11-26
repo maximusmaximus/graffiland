@@ -20,7 +20,8 @@ export function usePairing({
   onDesktopCommand,
   onDelegatedPublishExecuted,
   onSignatureExecuted = null,
-  onConnectionStateChange = null
+  onConnectionStateChange = null,
+  onNavigateToLand = null
 }) {
   const wsRef = useRef(null);
   const onDesktopCommandRef = useRef(onDesktopCommand);
@@ -28,6 +29,7 @@ export function usePairing({
   const onSignatureExecutedRef = useRef(onSignatureExecuted);
   const showHintRef = useRef(showTemporaryHint);
   const onConnectionStateChangeRef = useRef(onConnectionStateChange);
+  const onNavigateToLandRef = useRef(onNavigateToLand);
   const activePairCodeRef = useRef('');
   const hadDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef(null);
@@ -41,12 +43,14 @@ export function usePairing({
     onSignatureExecutedRef.current = onSignatureExecuted;
     showHintRef.current = showTemporaryHint;
     onConnectionStateChangeRef.current = onConnectionStateChange;
+    onNavigateToLandRef.current = onNavigateToLand;
   }, [
     onDesktopCommand,
     onDelegatedPublishExecuted,
     onSignatureExecuted,
     showTemporaryHint,
-    onConnectionStateChange
+    onConnectionStateChange,
+    onNavigateToLand
   ]);
 
   const [pairOpen, setPairOpen] = useState(false);
@@ -613,22 +617,40 @@ export function usePairing({
         const label =
           reqItem.summaryTitle ||
           String(reqItem.action || 'land action').replace(/_/g, ' ');
-        const landLabel = reqItem.landDisplayName || reqItem.parcelName || reqItem.parcelId || 'your land';
+        const targetParcelId = String(
+          res?.result?.sculpture?.parcelId ||
+            res?.result?.parcel?.parcelId ||
+            res?.request?.parcelId ||
+            reqItem.parcelId ||
+            ''
+        ).trim();
+        const landLabel =
+          reqItem.landDisplayName || reqItem.parcelName || targetParcelId || 'your land';
         const fitSuffix = res?.autoFittedScale ? ` (auto-fitted to ${res.autoFittedScale}×)` : '';
-        const msg = `✅ Approved & executed ${label}${fitSuffix} on ${landLabel}!`;
+        const msg = `Approved & minted ${label}${fitSuffix} on ${landLabel}!`;
         if (user?.id) {
           recordUserAction(user.id, {
             type: 'approve_land_tx',
             icon: '✅',
             title: `Approved ${label}${fitSuffix}`,
             detail: landLabel,
-            parcelId: reqItem.parcelId || '',
+            parcelId: targetParcelId,
             sculptureId: res?.result?.sculpture?.id || reqItem.sculptureId || '',
             linkLabel: 'Land'
           });
         }
-        notifySettingsSaved(msg, { tone: 'success', durationMs: 4500 });
+        notifySettingsSaved(msg, {
+          tone: 'success',
+          durationMs: 6000,
+          ...(targetParcelId && onNavigateToLandRef.current
+            ? {
+                actionLabel: '📍 Go to Land →',
+                onAction: () => onNavigateToLandRef.current?.(targetParcelId)
+              }
+            : {})
+        });
         showHintRef.current?.(msg);
+        return res;
       } catch (err) {
         const errMsg = err?.message || 'Could not sign request';
         const maxSafe = Number(err?.data?.maxSafeScale ?? err?.data?.suggestedScale ?? 0);

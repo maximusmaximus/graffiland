@@ -48,6 +48,20 @@ export default function SettingsSavedToast() {
         {icon}
       </span>
       <span className="settings-saved-toast-text">{toast.message}</span>
+      {toast.actionLabel && typeof toast.onAction === 'function' && (
+        <button
+          type="button"
+          className="btn btn-xs btn-primary settings-saved-toast-action"
+          data-testid="settings-toast-action-btn"
+          onClick={() => {
+            const fn = toast.onAction;
+            setToast(null);
+            fn();
+          }}
+        >
+          {toast.actionLabel}
+        </button>
+      )}
       <button
         type="button"
         className="settings-saved-toast-close"

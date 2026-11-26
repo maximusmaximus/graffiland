@@ -1,6 +1,6 @@
 const SETTINGS_SAVED_EVENT = 'graffiland:settings-saved';
 
-/** @type {Set<(detail: { id: number, message: string, tone: string, durationMs: number }) => void>} */
+/** @type {Set<(detail: { id: number, message: string, tone: string, durationMs: number, actionLabel?: string, onAction?: (() => void) | null }) => void>} */
 const fallbackListeners = new Set();
 
 function nextToastId() {
@@ -16,16 +16,23 @@ function nextToastId() {
  * Emits a global floating notification confirming that user/land/sculpture settings were saved.
  * Uses `window` CustomEvent when available so lazy-loaded chunks and standalone bundles always communicate cleanly.
  * @param {string} message
- * @param {{ tone?: 'success' | 'info' | 'warning' | 'error', durationMs?: number }} [opts]
+ * @param {{ tone?: 'success' | 'info' | 'warning' | 'error', durationMs?: number, actionLabel?: string, onAction?: (() => void) | null }} [opts]
  */
-export function notifySettingsSaved(message, { tone = 'success', durationMs = 3400 } = {}) {
+export function notifySettingsSaved(
+  message,
+  { tone = 'success', durationMs, actionLabel = '', onAction = null } = {}
+) {
   const cleanMsg = String(message || '').trim();
   if (!cleanMsg) return;
+  const cleanActionLabel = String(actionLabel || '').trim();
+  const hasAction = Boolean(cleanActionLabel && typeof onAction === 'function');
+  const defaultDuration = hasAction ? 6000 : 3400;
   const detail = {
     id: nextToastId(),
     message: cleanMsg,
     tone,
-    durationMs: Math.max(1200, Math.min(10000, Number(durationMs) || 3400))
+    durationMs: Math.max(1200, Math.min(12000, Number(durationMs) || defaultDuration)),
+    ...(hasAction ? { actionLabel: cleanActionLabel, onAction } : {})
   };
 
   if (
