@@ -169,18 +169,15 @@ const WALKTHROUGH_STEPS = [
 export default function FirstVisitWelcomeOverlay({
   isMobile = false,
   onExplore,
-  onConnectAgent,
-  onOpenGuide,
-  onSkipToCamera
+  onConnectAgent
 }) {
   const [stepIndex, setStepIndex] = useState(0);
-  const [dontShowAgain, setDontShowAgain] = useState(true);
   const startedInsideCardRef = useRef(false);
 
   useEffect(() => {
     function onKeyDown(e) {
       if (e.key === 'Escape') {
-        onExplore?.(dontShowAgain);
+        onExplore?.(true);
       } else if (e.key === 'ArrowRight' && stepIndex < WALKTHROUGH_STEPS.length - 1) {
         setStepIndex((i) => Math.min(WALKTHROUGH_STEPS.length - 1, i + 1));
       } else if (e.key === 'ArrowLeft' && stepIndex > 0) {
@@ -189,7 +186,7 @@ export default function FirstVisitWelcomeOverlay({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dontShowAgain, onExplore, stepIndex]);
+  }, [onExplore, stepIndex]);
 
   const currentStep = WALKTHROUGH_STEPS[stepIndex] || WALKTHROUGH_STEPS[0];
   const isLastStep = stepIndex === WALKTHROUGH_STEPS.length - 1;
@@ -208,7 +205,7 @@ export default function FirstVisitWelcomeOverlay({
         const startedInside = startedInsideCardRef.current;
         startedInsideCardRef.current = false;
         if (e.target === e.currentTarget && !startedInside) {
-          onExplore?.(dontShowAgain);
+          onExplore?.(true);
         }
       }}
     >
@@ -260,7 +257,7 @@ export default function FirstVisitWelcomeOverlay({
             type="button"
             className="btn"
             style={{ padding: '6px 10px', flexShrink: 0 }}
-            onClick={() => onExplore?.(dontShowAgain)}
+            onClick={() => onExplore?.(true)}
             aria-label="Close intro"
           >
             <XeroIcon emoji="✕" size={14} />
@@ -332,25 +329,17 @@ export default function FirstVisitWelcomeOverlay({
           <p className="welcome-step-summary">{currentStep.summary}</p>
         </div>
 
-        <label className="welcome-checkbox-row">
-          <input
-            type="checkbox"
-            checked={dontShowAgain}
-            onChange={(e) => setDontShowAgain(e.target.checked)}
-          />
-          <span>Don&apos;t show again</span>
-        </label>
-
         <div className="welcome-actions-row">
-          <button
-            type="button"
-            className="btn btn-magenta"
-            data-testid="welcome-quick-start-btn"
-            onClick={() => onExplore?.(dontShowAgain)}
-          >
-            <XeroIcon emoji={isMobile ? '📱' : '🚀'} size={15} />{' '}
-            {isMobile ? 'Next: Quick Camera Guide' : 'Quick Start'}
-          </button>
+          {!isMobile && (
+            <button
+              type="button"
+              className="btn btn-magenta"
+              data-testid="welcome-quick-start-btn"
+              onClick={() => onExplore?.(true)}
+            >
+              <XeroIcon emoji="🚀" size={15} /> Quick Start
+            </button>
+          )}
 
           {stepIndex > 0 && (
             <button
@@ -362,7 +351,7 @@ export default function FirstVisitWelcomeOverlay({
             </button>
           )}
 
-          {!isLastStep && (
+          {!isLastStep ? (
             <button
               type="button"
               className="btn btn-primary"
@@ -370,36 +359,26 @@ export default function FirstVisitWelcomeOverlay({
             >
               Next Step ({stepIndex + 2}/3) →
             </button>
+          ) : (
+            isMobile && (
+              <button
+                type="button"
+                className="btn btn-magenta"
+                data-testid="welcome-get-started-btn"
+                onClick={() => onExplore?.(true)}
+              >
+                <XeroIcon emoji="🚀" size={15} /> Get Started
+              </button>
+            )
           )}
 
           {!isMobile && onConnectAgent && (
             <button
               type="button"
               className="btn"
-              onClick={() => onConnectAgent(dontShowAgain)}
+              onClick={() => onConnectAgent(true)}
             >
               <XeroIcon emoji="🤖" size={15} /> Connect AI
-            </button>
-          )}
-
-          {isMobile && onSkipToCamera && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onSkipToCamera(dontShowAgain)}
-            >
-              <XeroIcon emoji="🎥" size={15} /> Skip to Camera
-            </button>
-          )}
-
-          {onOpenGuide && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onOpenGuide(dontShowAgain)}
-              title="Open full guide and help"
-            >
-              <XeroIcon emoji="ℹ️" size={15} /> Guide &amp; Help
             </button>
           )}
         </div>

@@ -107,6 +107,10 @@ export default function App() {
     if (dontShowAgain) {
       saveBoolPreference(WELCOME_OVERLAY_SEEN_KEY, true);
     }
+    if (isMobile) {
+      saveBoolPreference(TUTORIAL_SEEN_KEY, true);
+      setSkipTutorialSignal((n) => n + 1);
+    }
     setWelcomeOpen(false);
   }
 
@@ -134,15 +138,6 @@ export default function App() {
       onConnectAgent={(dontShow) => {
         dismissWelcome(dontShow);
         setDesktopAction({ type: 'agent', ts: Date.now() });
-      }}
-      onOpenGuide={(dontShow) => {
-        dismissWelcome(dontShow);
-        setDesktopAction({ type: 'info', ts: Date.now() });
-      }}
-      onSkipToCamera={(dontShow) => {
-        dismissWelcome(dontShow);
-        saveBoolPreference(TUTORIAL_SEEN_KEY, true);
-        setSkipTutorialSignal((n) => n + 1);
       }}
     />
   ) : null;

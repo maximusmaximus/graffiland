@@ -32,7 +32,6 @@ const TUTORIAL_STEPS = [
 
 export default function FirstRunTutorialModal({ onClose }) {
   const [stepIdx, setStepIdx] = useState(0);
-  const [dontShowAgain, setDontShowAgain] = useState(true);
   const step = TUTORIAL_STEPS[stepIdx];
 
   return (
@@ -41,7 +40,7 @@ export default function FirstRunTutorialModal({ onClose }) {
       role="dialog"
       aria-modal="true"
       aria-label="SPRAY.LAND Quick Start Guide"
-      onClick={() => onClose(dontShowAgain)}
+      onClick={() => onClose(true)}
     >
       <div className="modal-card tutorial-card" style={{ maxWidth: 430 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -56,7 +55,7 @@ export default function FirstRunTutorialModal({ onClose }) {
           <button
             type="button"
             className="btn"
-            onClick={() => onClose(dontShowAgain)}
+            onClick={() => onClose(true)}
             aria-label="Close guide"
           >
             <XeroIcon emoji="❌" size={14} />
@@ -89,25 +88,6 @@ export default function FirstRunTutorialModal({ onClose }) {
           </p>
         </div>
 
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 12,
-            color: 'var(--muted)',
-            marginBottom: 12,
-            cursor: 'pointer'
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={dontShowAgain}
-            onChange={(e) => setDontShowAgain(e.target.checked)}
-          />
-          <span>Don&apos;t show automatically next time (re-open anytime via Guide &amp; Terms)</span>
-        </label>
-
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
           <button
             type="button"
@@ -129,7 +109,7 @@ export default function FirstRunTutorialModal({ onClose }) {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => onClose(dontShowAgain)}
+              onClick={() => onClose(true)}
             >
               <XeroIcon emoji="🖌️" size={15} /> Start Sculpting
             </button>
