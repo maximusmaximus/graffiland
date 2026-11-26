@@ -20,15 +20,19 @@ import {
   formatShortDate,
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
+import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
+import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
+import { computeNeighborEdgeArrows } from '../utils/neighborEdgeArrows.js';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import { buildPendingPreviewSculptures } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordUserAction } from '../utils/userHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
@@ -123,7 +127,8 @@ export default function PlotVisitView({
     width: 0,
     height: 0,
     landTag: null,
-    callouts: []
+    callouts: [],
+    neighborArrows: []
   });
 
   useEffect(() => {
@@ -586,16 +591,22 @@ export default function PlotVisitView({
   );
 
   const activeParcelRef = useRef(activeParcel);
+  const stageParcelsRef = useRef(stageParcels);
   const visibleSculpturesRef = useRef(mapDisplaySculptures);
   const selectedSculptureIdRef = useRef(selectedSculptureId);
   const landDisplayNameRef = useRef(landDisplayName);
+  const unitSystemRef = useRef(unitSystem);
+  const isDesktopVariantRef = useRef(variant === 'desktop');
 
   useEffect(() => {
     activeParcelRef.current = activeParcel;
+    stageParcelsRef.current = stageParcels;
     visibleSculpturesRef.current = mapDisplaySculptures;
     selectedSculptureIdRef.current = selectedSculptureId;
     landDisplayNameRef.current = landDisplayName;
-  }, [activeParcel, landDisplayName, mapDisplaySculptures, selectedSculptureId]);
+    unitSystemRef.current = unitSystem;
+    isDesktopVariantRef.current = variant === 'desktop';
+  }, [activeParcel, landDisplayName, mapDisplaySculptures, selectedSculptureId, stageParcels, unitSystem, variant]);
 
   const recompute2dOverlay = useCallback(() => {
     const map = mapRef.current;
@@ -647,7 +658,7 @@ export default function PlotVisitView({
       }
     }
 
-    const callouts = computeSideArtworkCallouts({
+    const allCallouts = computeSideArtworkCallouts({
       sculptures: visibleSculpturesRef.current || [],
       volume: curParcel?.volume || null,
       viewportWidth: w,
@@ -664,7 +675,90 @@ export default function PlotVisitView({
       }
     });
 
-    setMap2dOverlay({ width: w, height: h, landTag, callouts });
+    const desktopPointers = Boolean(isDesktopVariantRef.current);
+    const callouts = desktopPointers
+      ? allCallouts.filter((c) => !c.isOffScreen)
+      : allCallouts;
+    const offScreenSculptures = desktopPointers
+      ? allCallouts.filter((c) => c.isOffScreen)
+      : [];
+
+    let neighborArrows = [];
+    if (desktopPointers) {
+      const focusedVol = resolveParcelVolume(curParcel);
+      const curPid = String(curParcel.parcelId || '');
+      const otherEntries = (stageParcelsRef.current || [])
+        .filter((p) => p?.parcelId && String(p.parcelId) !== curPid)
+        .map((p) => ({ parcel: p, volume: resolveParcelVolume(p) }))
+        .filter((e) => Boolean(e.volume));
+
+      if (focusedVol && (otherEntries.length > 0 || offScreenSculptures.length > 0)) {
+        const measured2dHud = [];
+        const stageEl = host.parentElement;
+        if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
+          const stageRect = stageEl.getBoundingClientRect();
+          stageEl
+            .querySelectorAll('.mobile-iso-fab-row, .mobile-parcel-map-pill, .leaflet-control-attribution')
+            .forEach((node) => {
+              const r = node.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                measured2dHud.push({
+                  x: r.left - stageRect.left,
+                  y: r.top - stageRect.top,
+                  w: r.width,
+                  h: r.height
+                });
+              }
+            });
+        }
+        const reservedRects = buildDefaultHudReservedRects({
+          stageWidth: w,
+          stageHeight: h,
+          topLeftWidth: 0,
+          measuredRects: measured2dHud
+        });
+        if (landTag) {
+          reservedRects.push({
+            x: landTag.centerX - 96,
+            y: landTag.y - 2,
+            w: 192,
+            h: 34
+          });
+        }
+        for (const c of callouts) {
+          reservedRects.push({ x: c.x, y: c.y, w: c.width, h: c.height || 40 });
+        }
+        const avoidRects = [];
+        if (pts.length >= 4) {
+          const minX = Math.min(...pts.map((p) => p.x));
+          const maxX = Math.max(...pts.map((p) => p.x));
+          const minY = Math.min(...pts.map((p) => p.y));
+          const maxY = Math.max(...pts.map((p) => p.y));
+          if (Number.isFinite(minX) && Number.isFinite(maxX) && maxX > minX && maxY > minY) {
+            avoidRects.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+          }
+        }
+        neighborArrows = computeNeighborEdgeArrows({
+          focusedEntry: { parcel: curParcel, volume: focusedVol },
+          otherEntries,
+          otherSculptures: offScreenSculptures,
+          projectLngLat: (lng, lat) => map.latLngToContainerPoint([Number(lat), Number(lng)]),
+          viewportWidth: w,
+          viewportHeight: h,
+          bearingDeg: 0,
+          reservedRects,
+          avoidRects,
+          maxArrows: 6,
+          topInsetY: 10,
+          bottomInsetY: 10,
+          onScreenPointers: true,
+          defaultLandColor: isMapFullRef.current ? '#ff4da6' : '',
+          unitSystem: unitSystemRef.current
+        });
+      }
+    }
+
+    setMap2dOverlay({ width: w, height: h, landTag, callouts, neighborArrows });
   }, []);
 
   const handleRecenter2D = useCallback(() => {
@@ -1381,6 +1475,7 @@ export default function PlotVisitView({
                 selectedParcelId={activeParcel.parcelId}
                 selectedSculptureId={selectedTarget === 'artwork' ? selectedSculptureId : ''}
                 isFullExpanded={isMapFull}
+                isDesktop={isDesktop}
                 showcaseMode
                 landSelected={selectedTarget === 'land'}
                 initialView={isMapFull ? sharedViewportRef.current : null}
@@ -1597,6 +1692,15 @@ export default function PlotVisitView({
                     </div>
                   ))}
                 </div>
+                {isDesktop && (
+                  <NeighborEdgeArrowsOverlay
+                    arrows={map2dOverlay.neighborArrows}
+                    viewportWidth={map2dOverlay.width}
+                    viewportHeight={map2dOverlay.height}
+                    onSelectParcel={handleSelectNeighborOnMap}
+                    onSelectSculpture={handleSelectArtworkTarget}
+                  />
+                )}
                 <div
                   className="map-compact-fab-row"
                   onPointerDown={(e) => e.stopPropagation()}
