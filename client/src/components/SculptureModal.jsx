@@ -16,7 +16,6 @@ import {
   extractSculptureRotation,
   extractSculptureScale,
   MIN_ARTWORK_SCALE,
-  parcelLocalOffsetToWorldLatLng,
   resolveParcelVolumeForPlacement,
   resolveSculpturePlacement,
   tiltToDegrees
@@ -26,12 +25,8 @@ import {
   ERC721_TRANSFER_ABI
 } from '../../../shared/transferMessage.mjs';
 import { api, API_BASE, resolveApiUrl } from '../utils/api.js';
-import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
+import { resolveMiniMapLandBoundary } from '../utils/landPreviewHelpers.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
-import {
-  buildNeighborArrowsSignature,
-  computeNeighborEdgeArrows
-} from '../utils/neighborEdgeArrows.js';
 import {
   decryptPinnedIpfsBatch,
   encryptPinnedIpfsBatch,
@@ -56,7 +51,6 @@ import {
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
-import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -109,12 +103,10 @@ export default function SculptureModal({
   user,
   config,
   userLocation = null,
-  isDesktop = false,
   allParcels = EMPTY_PARCELS,
   onSculptureUpdated,
   onSculptureDeleted = null,
   onSelectParcel = null,
-  onSelectSculpture = null,
   onModifyInCanvas = null,
   onOpenLandManagement = null,
   onOpenAddLandItem = null,
@@ -288,7 +280,15 @@ export default function SculptureModal({
   const scMapId = sculpture?.id;
   const scMapLat = sculpture?.lat;
   const scMapLng = sculpture?.lng;
-  const scMapBounds = sculpture?.parcelBounds;
+  const miniMapBoundary = useMemo(
+    () =>
+      resolveMiniMapLandBoundary({
+        parcelDetail,
+        allParcels,
+        sculpture
+      }),
+    [parcelDetail, allParcels, sculpture]
+  );
   const scLandDisplayName = resolveLandDisplayName(
     {
       customName: landCustomName || parcelDetail?.customName || sculpture?.parcelName || '',
@@ -415,141 +415,7 @@ export default function SculptureModal({
 
   const { mapTheme } = useMapTheme();
   const miniMapRef = useRef(null);
-  const [miniMapTags, setMiniMapTags] = useState([]);
-  const [miniMapDims, setMiniMapDims] = useState({ width: 0, height: 0 });
-  const miniMapTagsSigRef = useRef('');
-  const miniMapCtxRef = useRef({
-    isDesktop: Boolean(isDesktop),
-    allParcels,
-    parcelSculptures,
-    parcelDetail,
-    sculptureId: scMapId,
-    parcelId: scParcelId,
-    lat: Number(scMapLat),
-    lng: Number(scMapLng),
-    unitSystem
-  });
-
-  const recomputeMiniMapTags = useCallback(() => {
-    const map = miniMapRef.current;
-    const host = landMapHostRef.current;
-    const ctx = miniMapCtxRef.current;
-    if (!map || !host || !ctx.isDesktop) {
-      if (miniMapTagsSigRef.current !== '') {
-        miniMapTagsSigRef.current = '';
-        setMiniMapTags([]);
-      }
-      return;
-    }
-    const w = host.clientWidth || 0;
-    const h = host.clientHeight || 0;
-    if (w < 140 || h < 110 || !Number.isFinite(ctx.lat) || !Number.isFinite(ctx.lng)) return;
-
-    const curPidUpper = String(ctx.parcelId || '').toUpperCase();
-    const otherEntries = (ctx.allParcels || [])
-      .filter((p) => p?.parcelId && String(p.parcelId).toUpperCase() !== curPidUpper)
-      .map((p) => ({ parcel: p, volume: resolveParcelVolume(p) }))
-      .filter((e) => Boolean(e.volume));
-
-    const parentRotDeg = Number(ctx.parcelDetail?.volume?.rotationDeg || 0);
-    const otherSculptures = (ctx.parcelSculptures || [])
-      .filter((s) => s && s.id && s.id !== ctx.sculptureId && !s.hidden)
-      .map((s) => {
-        const sLat = Number(s.lat);
-        const sLng = Number(s.lng);
-        if (!Number.isFinite(sLat) || !Number.isFinite(sLng)) return null;
-        const wPos = parcelLocalOffsetToWorldLatLng(
-          sLat,
-          sLng,
-          Number(s.anchorOffset?.dx || 0),
-          Number(s.anchorOffset?.dz || 0),
-          parentRotDeg
-        );
-        return {
-          id: s.id,
-          sculpture: s,
-          title: s.title || '3D Artwork',
-          lat: wPos.lat,
-          lng: wPos.lng,
-          alt: 0,
-          isPendingPreview: Boolean(s.isPendingPreview)
-        };
-      })
-      .filter(Boolean);
-
-    if (otherEntries.length === 0 && otherSculptures.length === 0) {
-      if (miniMapTagsSigRef.current !== '') {
-        miniMapTagsSigRef.current = '';
-        setMiniMapTags([]);
-      }
-      return;
-    }
-
-    const reservedRects = [];
-    try {
-      const pinPt = map.latLngToContainerPoint([ctx.lat, ctx.lng]);
-      if (pinPt && Number.isFinite(pinPt.x) && Number.isFinite(pinPt.y)) {
-        reservedRects.push({ x: pinPt.x - 16, y: pinPt.y - 26, w: 32, h: 32 });
-      }
-    } catch {
-      // ignore if map projection unavailable
-    }
-
-    const nextTags = computeNeighborEdgeArrows({
-      originCoords: { lat: ctx.lat, lng: ctx.lng },
-      otherEntries,
-      otherSculptures,
-      projectLngLat: (lng, lat) => map.latLngToContainerPoint([Number(lat), Number(lng)]),
-      viewportWidth: w,
-      viewportHeight: h,
-      bearingDeg: 0,
-      reservedRects,
-      maxArrows: 3,
-      edgeInsetX: 5,
-      topInsetY: 6,
-      bottomInsetY: 6,
-      onScreenPointers: true,
-      onScreenMargin: 10,
-      unitSystem: ctx.unitSystem
-    });
-
-    const nextSig = buildNeighborArrowsSignature(nextTags);
-    if (nextSig !== miniMapTagsSigRef.current) {
-      miniMapTagsSigRef.current = nextSig;
-      setMiniMapTags(nextTags);
-      setMiniMapDims((prev) =>
-        prev.width === Math.round(w) && prev.height === Math.round(h)
-          ? prev
-          : { width: Math.round(w), height: Math.round(h) }
-      );
-    }
-  }, []);
-
-  useEffect(() => {
-    miniMapCtxRef.current = {
-      isDesktop: Boolean(isDesktop),
-      allParcels,
-      parcelSculptures,
-      parcelDetail,
-      sculptureId: scMapId,
-      parcelId: scParcelId,
-      lat: Number(scMapLat),
-      lng: Number(scMapLng),
-      unitSystem
-    };
-    recomputeMiniMapTags();
-  }, [
-    isDesktop,
-    allParcels,
-    parcelSculptures,
-    parcelDetail,
-    scMapId,
-    scParcelId,
-    scMapLat,
-    scMapLng,
-    unitSystem,
-    recomputeMiniMapTags
-  ]);
+  const miniMapOverlayRef = useRef(null);
 
   useEffect(() => {
     const host = landMapHostRef.current;
@@ -560,55 +426,80 @@ export default function SculptureModal({
     host.classList.toggle('is-map-light', mapTheme === 'light');
     const map = L.map(host, {
       center: [latNum, lngNum],
-      zoom: 18,
+      zoom: 19,
+      maxZoom: 21,
       zoomControl: false,
       attributionControl: false
     });
     miniMapRef.current = map;
 
     const tileCfg = getLeafletTileConfig(mapTheme);
-    L.tileLayer(tileCfg.url, { ...tileCfg.options, maxZoom: 19 }).addTo(map);
+    L.tileLayer(tileCfg.url, { ...tileCfg.options, maxNativeZoom: 19, maxZoom: 21 }).addTo(map);
 
-    if (scMapBounds?.sw && scMapBounds?.ne) {
-      L.rectangle([scMapBounds.sw, scMapBounds.ne], {
-        color: '#ffd166',
-        weight: 2.5,
-        fillColor: '#00f5d4',
-        fillOpacity: 0.25
-      })
-        .bindTooltip(scLandDisplayName)
-        .addTo(map);
-    }
-
-    const pinUrl = xeroemoji.get('📍')?.svgUrl;
-    const pinIcon = L.divIcon({
-      className: 'graffiland-map-pin',
-      html: pinUrl
-        ? `<img src="${pinUrl}" width="26" height="26" style="filter: drop-shadow(0 2px 6px rgba(0,245,212,0.75));" />`
-        : '📍',
-      iconSize: [26, 26],
-      iconAnchor: [13, 24]
-    });
-    L.marker([latNum, lngNum], { icon: pinIcon }).addTo(map);
-
-    map.on('move', recomputeMiniMapTags);
-    map.on('zoom', recomputeMiniMapTags);
-    map.on('moveend', recomputeMiniMapTags);
+    const overlay = L.layerGroup().addTo(map);
+    miniMapOverlayRef.current = overlay;
 
     const timer = setTimeout(() => {
       map.invalidateSize();
-      recomputeMiniMapTags();
     }, 80);
 
     return () => {
       clearTimeout(timer);
-      map.off('move', recomputeMiniMapTags);
-      map.off('zoom', recomputeMiniMapTags);
-      map.off('moveend', recomputeMiniMapTags);
+      miniMapOverlayRef.current = null;
       miniMapRef.current = null;
       map.remove();
     };
-  }, [scMapId, scMapLat, scMapLng, scMapBounds, scLandDisplayName, mapTheme, recomputeMiniMapTags]);
+  }, [scMapId, scMapLat, scMapLng, mapTheme]);
+
+  // Draw the authoritative oriented land boundary polygon & sculpture pin, fitting cleanly to the land
+  useEffect(() => {
+    const map = miniMapRef.current;
+    const overlay = miniMapOverlayRef.current;
+    if (!map || !overlay) return undefined;
+
+    overlay.clearLayers();
+    let boundaryLayer = null;
+    if (miniMapBoundary.latLngCorners.length >= 4) {
+      boundaryLayer = L.polygon(miniMapBoundary.latLngCorners, {
+        color: '#ffd166',
+        weight: 2.5,
+        fillColor: '#00f5d4',
+        fillOpacity: 0.24
+      })
+        .bindTooltip(scLandDisplayName)
+        .addTo(overlay);
+    }
+
+    if (miniMapBoundary.pinLatLng) {
+      const pinUrl = xeroemoji.get('📍')?.svgUrl;
+      const pinIcon = L.divIcon({
+        className: 'graffiland-map-pin',
+        html: pinUrl
+          ? `<img src="${pinUrl}" width="26" height="26" style="filter: drop-shadow(0 2px 6px rgba(0,245,212,0.75));" />`
+          : '📍',
+        iconSize: [26, 26],
+        iconAnchor: [13, 24]
+      });
+      L.marker(miniMapBoundary.pinLatLng, { icon: pinIcon }).addTo(overlay);
+    }
+
+    const fitToLand = () => {
+      map.invalidateSize();
+      if (boundaryLayer && typeof boundaryLayer.getBounds === 'function') {
+        const fitBounds = boundaryLayer.getBounds();
+        if (miniMapBoundary.pinLatLng && typeof fitBounds.extend === 'function') {
+          fitBounds.extend(miniMapBoundary.pinLatLng);
+        }
+        map.fitBounds(fitBounds, { padding: [26, 26], maxZoom: 20, animate: false });
+      } else if (miniMapBoundary.center) {
+        map.setView(miniMapBoundary.center, 19, { animate: false });
+      }
+    };
+
+    fitToLand();
+    const timer = setTimeout(fitToLand, 90);
+    return () => clearTimeout(timer);
+  }, [miniMapBoundary, scLandDisplayName, mapTheme]);
 
   const pol = sculpture?.proofOfLocation || {};
   const geo = pol.geoInfo || {};
@@ -2261,35 +2152,21 @@ export default function SculptureModal({
               <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land ({scLandDisplayName})
             </div>
             {hasCoords && (
-              <div className="mini-land-map-wrap">
+              <div
+                className="mini-land-map-wrap"
+                data-testid="mini-land-map-wrap"
+                data-boundary-source={miniMapBoundary.hasVolumeBoundary ? 'volume' : 'bounds'}
+              >
                 <div className="mini-land-map-stage">
                   <div ref={landMapHostRef} className="mini-land-map" />
-                  {isDesktop && (
-                    <NeighborEdgeArrowsOverlay
-                      arrows={miniMapTags}
-                      viewportWidth={miniMapDims.width}
-                      viewportHeight={miniMapDims.height}
-                      onSelectParcel={(p) => {
-                        if (onSelectParcel) {
-                          onClose?.();
-                          onSelectParcel(p);
-                        }
-                      }}
-                      onSelectSculpture={(sc) => {
-                        if (onSelectSculpture) {
-                          onSelectSculpture(sc);
-                        }
-                      }}
-                    />
-                  )}
                 </div>
                 <div className="mini-land-map-caption">
                   <span>
                     <XeroIcon emoji="🗺️" size={11} /> {scLandDisplayName}
                   </span>
-                  {sculpture.parcelBounds?.sw && (
-                    <span className="mono">
-                      SW {sculpture.parcelBounds.sw[0].toFixed(5)},{sculpture.parcelBounds.sw[1].toFixed(5)}
+                  {miniMapBoundary.sw && (
+                    <span className="mono" data-testid="mini-land-map-sw">
+                      SW {miniMapBoundary.sw[0].toFixed(5)},{miniMapBoundary.sw[1].toFixed(5)}
                     </span>
                   )}
                 </div>
