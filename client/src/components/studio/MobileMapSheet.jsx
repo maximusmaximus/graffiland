@@ -20,6 +20,7 @@ import {
 import { buildPendingPreviewSculptures } from '../../utils/pendingApprovalPreview.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import MapView from '../MapView.jsx';
+import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobileIsometricMap from './MobileIsometricMap.jsx';
@@ -303,6 +304,7 @@ export default function MobileMapSheet({
           </div>
         </div>
         <div className="mobile-map-header-actions">
+          <GlobalNotificationBell compact testId="mobile-map-notif-bell-btn" />
           <button
             type="button"
             className="btn btn-sm"

@@ -7,6 +7,7 @@ import {
 } from '../../utils/clipboard.js';
 import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
 import { EmojiInput, EmojiTextarea } from '../EmojiField.jsx';
+import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function PublishSculptureModal({
@@ -62,9 +63,12 @@ export default function PublishSculptureModal({
           <h3 className="modal-title">
             <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
           </h3>
-          <button className="btn" onClick={onClose} aria-label="Close publish sheet">
-            <XeroIcon emoji="❌" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="publish-modal-notif-bell-btn" />
+            <button className="btn" onClick={onClose} aria-label="Close publish sheet">
+              <XeroIcon emoji="❌" size={15} />
+            </button>
+          </div>
         </div>
 
         {mintReceipt ? (

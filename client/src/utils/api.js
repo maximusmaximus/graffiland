@@ -363,6 +363,8 @@ export const api = {
     request('/api/notifications/preferences', { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteNotification: (id) =>
     request(`/api/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  clearNotifications: (scope = 'all') =>
+    request(`/api/notifications?scope=${encodeURIComponent(scope)}`, { method: 'DELETE' }),
   claimLand: (payload) =>
     request('/api/lands/claim', { method: 'POST', body: JSON.stringify(payload) }),
   updateLandVolume: (parcelId, volume) =>

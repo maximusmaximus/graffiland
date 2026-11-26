@@ -49,6 +49,7 @@ import {
 } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -1135,9 +1136,12 @@ export default function SculptureModal({
                 )
               )}
             </div>
-            <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
-              <XeroIcon emoji="❌" size={16} />
-            </button>
+            <div className="modal-header-actions">
+              <GlobalNotificationBell compact testId="sculpture-modal-notif-bell-btn" />
+              <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
+                <XeroIcon emoji="❌" size={16} />
+              </button>
+            </div>
           </div>
 
           <SculptureViewer3D

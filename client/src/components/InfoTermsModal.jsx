@@ -17,6 +17,7 @@ import { notifySettingsSaved } from '../utils/toastNotice.js';
 import BrandLogo from './BrandLogo.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -146,9 +147,12 @@ export default function InfoTermsModal({
             <BrandLogo variant="lockup" height={28} />
             <span className="badge teal">Guide &amp; Terms</span>
           </h2>
-          <button className="btn" onClick={onClose} aria-label="Close info">
-            <XeroIcon emoji="✕" size={16} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="info-modal-notif-bell-btn" />
+            <button className="btn" onClick={onClose} aria-label="Close info">
+              <XeroIcon emoji="✕" size={16} />
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>

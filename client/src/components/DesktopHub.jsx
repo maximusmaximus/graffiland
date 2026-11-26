@@ -56,7 +56,10 @@ import InfoTermsModal from './InfoTermsModal.jsx';
 import LandArchiveModal from './LandArchiveModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
-import NotificationCenter from './NotificationCenter.jsx';
+import NotificationCenter, {
+  GlobalNotificationBell,
+  NotificationProvider
+} from './NotificationCenter.jsx';
 import PairWorkbench3D from './PairWorkbench3D.jsx';
 import PlotVisitView from './PlotVisitView.jsx';
 import ProfileModal from './ProfileModal.jsx';
@@ -1028,14 +1031,29 @@ export default function DesktopHub({
       .catch(() => {});
   }
 
+  function dismissOverlaysForNotification({ keepPlot = false, keepSculpture = false } = {}) {
+    setProfileHandle('');
+    setLandManageOpen(false);
+    setInfoOpen(false);
+    setArchiveOpen(false);
+    setAddItemParcelId('');
+    setPairOpen(false);
+    setAdminOpen(false);
+    setTitleModalTarget(null);
+    if (!keepSculpture) setSelected(null);
+    if (!keepPlot) setVisitedParcel(null);
+  }
+
   async function handleNotificationAction(item) {
     if (!item) return;
     if (item.actionType === 'open_pair_mobile') {
+      dismissOverlaysForNotification();
       if (item.meta?.needsRepair) {
         setAgentPairExpanded(true);
       }
       openPairModal();
     } else if (item.actionType === 'preview_pending_sculpture') {
+      dismissOverlaysForNotification({ keepPlot: true });
       const reqId = item.pendingRequest?.id || item.meta?.requestId || '';
       const matchedPreview =
         (reqId && pendingPreviewSculptures.find((p) => p.pendingRequestId === reqId)) ||
@@ -1057,15 +1075,18 @@ export default function DesktopHub({
         openLandShowcase(localParcel);
       }
     } else if (item.actionType === 'open_land_approval' && item.parcelId) {
+      dismissOverlaysForNotification();
       const localParcel =
         (parcels || []).find(
           (p) => String(p.parcelId || '').toUpperCase() === String(item.parcelId).toUpperCase()
         ) || { parcelId: item.parcelId };
       openLandShowcase(localParcel);
     } else if (item.actionType === 'open_mint') {
+      dismissOverlaysForNotification();
       setInfoInitialTab('mint');
       setInfoOpen(true);
     } else if (item.actionType === 'open_archive') {
+      dismissOverlaysForNotification();
       setArchiveInitialId(String(item.meta?.archiveId || ''));
       setArchiveOpen(true);
     } else if (
@@ -1073,6 +1094,7 @@ export default function DesktopHub({
         (item.sculptureId && item.actionType !== 'open_land')) &&
       item.sculptureId
     ) {
+      dismissOverlaysForNotification({ keepPlot: true });
       const localMatch = (sculptures || []).find((s) => s.id === item.sculptureId);
       if (localMatch) {
         openSculpture(localMatch);
@@ -1092,6 +1114,7 @@ export default function DesktopHub({
         setLandManageOpen(true);
       }
     } else if (item.actionType === 'open_land' && item.parcelId) {
+      dismissOverlaysForNotification();
       const localParcel =
         (parcels || []).find(
           (p) => String(p.parcelId || '').toUpperCase() === String(item.parcelId).toUpperCase()
@@ -2036,6 +2059,14 @@ export default function DesktopHub({
   }, [welcomeRequest]);
 
   return (
+    <NotificationProvider
+      user={user}
+      variant="desktop"
+      refreshSignal={notifRefreshSignal}
+      pendingApprovals={pendingApprovals}
+      onApprovalResolved={handleDesktopApprovalResolved}
+      onAction={handleNotificationAction}
+    >
     <div className="desktop-shell">
       <header className="desktop-nav">
         <div className="brand">
@@ -2963,14 +2994,17 @@ export default function DesktopHub({
                   Scan on mobile to sculpt in AR with a live full-size 3D desktop monitor, or connect your AI Agent (MCP) below.
                 </p>
               </div>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setPairOpen(false)}
-                aria-label="Close pairing modal"
-              >
-                <XeroIcon emoji="❌" size={15} />
-              </button>
+              <div className="modal-header-actions">
+                <GlobalNotificationBell compact testId="pair-modal-notif-bell-btn" />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setPairOpen(false)}
+                  aria-label="Close pairing modal"
+                >
+                  <XeroIcon emoji="❌" size={15} />
+                </button>
+              </div>
             </div>
 
             <PairWorkbench3D
@@ -3213,9 +3247,12 @@ export default function DesktopHub({
               <h2 className="modal-title">
                 <XeroIcon emoji="🛡️" size={20} /> Admin Moderation
               </h2>
-              <button type="button" className="btn" onClick={() => setAdminOpen(false)}>
-                <XeroIcon emoji="❌" size={15} />
-              </button>
+              <div className="modal-header-actions">
+                <GlobalNotificationBell compact testId="admin-modal-notif-bell-btn" />
+                <button type="button" className="btn" onClick={() => setAdminOpen(false)}>
+                  <XeroIcon emoji="❌" size={15} />
+                </button>
+              </div>
             </div>
             <AdminPanel
               user={user}
@@ -3591,5 +3628,6 @@ export default function DesktopHub({
         />
       )}
     </div>
+    </NotificationProvider>
   );
 }

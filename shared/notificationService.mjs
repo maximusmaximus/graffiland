@@ -801,6 +801,28 @@ export async function deleteNotification(db, userSub, notificationId) {
   return { deleted: true };
 }
 
+export async function clearUserNotifications(db, userSub, { scope = 'all' } = {}) {
+  const cleanSub = String(userSub || '').trim();
+  if (!cleanSub) return { cleared: false, unreadCount: 0 };
+  if (scope === 'read') {
+    await db.run(
+      `DELETE FROM user_notifications
+       WHERE user_sub = ? AND read_at IS NOT NULL AND read_at != ''`,
+      [cleanSub]
+    );
+  } else {
+    await db.run('DELETE FROM user_notifications WHERE user_sub = ?', [cleanSub]);
+  }
+  const unreadRow = await db
+    .get(
+      `SELECT COUNT(*) AS cnt FROM user_notifications
+       WHERE user_sub = ? AND (read_at IS NULL OR read_at = '')`,
+      [cleanSub]
+    )
+    .catch(() => ({ cnt: 0 }));
+  return { cleared: true, unreadCount: Number(unreadRow?.cnt || 0) };
+}
+
 /**
  * Resolves the primary human/agent owner of a parcel and its friendly title.
  */

@@ -23,6 +23,7 @@ import {
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import { buildPendingPreviewSculptures } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordUserAction } from '../utils/userHistory.js';
@@ -1309,6 +1310,7 @@ export default function PlotVisitView({
         </div>
 
         <div className="plot-visit-header-actions">
+          <GlobalNotificationBell compact testId="plot-visit-notif-bell-btn" />
           {activeParcel && (
             <button
               type="button"

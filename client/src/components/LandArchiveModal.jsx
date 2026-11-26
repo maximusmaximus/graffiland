@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import BrandLogo from './BrandLogo.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const REASON_FILTERS = [
@@ -109,6 +110,7 @@ export default function LandArchiveModal({
             <span className="badge teal">Archive</span>
           </h2>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <GlobalNotificationBell compact testId="archive-modal-notif-bell-btn" />
             <button
               type="button"
               className="btn btn-sm"

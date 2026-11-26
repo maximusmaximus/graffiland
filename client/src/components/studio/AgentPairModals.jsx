@@ -8,6 +8,7 @@ import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
+import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import DesktopQrScanner from './DesktopQrScanner.jsx';
 
@@ -54,9 +55,12 @@ export function PairDesktopMcpModal({
           <h3 className="modal-title">
             <XeroIcon emoji="🔗" size={22} /> Pair Desktop &amp; MCP Agent
           </h3>
-          <button className="btn" onClick={onClose}>
-            <XeroIcon emoji="❌" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact />
+            <button className="btn" onClick={onClose}>
+              <XeroIcon emoji="❌" size={15} />
+            </button>
+          </div>
         </div>
 
         <div className="card" style={{ padding: 12, marginBottom: 12 }}>
@@ -250,9 +254,12 @@ export function AgentHandoffModal({
           <h3 className="modal-title">
             <XeroIcon emoji="🤖" size={22} /> Agent Sculpture Code
           </h3>
-          <button className="btn" onClick={onClose}>
-            <XeroIcon emoji="❌" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact />
+            <button className="btn" onClick={onClose}>
+              <XeroIcon emoji="❌" size={15} />
+            </button>
+          </div>
         </div>
 
         <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
@@ -369,9 +376,12 @@ export function SavedDraftsModal({
           <h3 className="modal-title">
             <XeroIcon emoji="💾" size={22} /> Saved Drafts
           </h3>
-          <button className="btn" onClick={onClose}>
-            <XeroIcon emoji="❌" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact />
+            <button className="btn" onClick={onClose}>
+              <XeroIcon emoji="❌" size={15} />
+            </button>
+          </div>
         </div>
 
         <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>

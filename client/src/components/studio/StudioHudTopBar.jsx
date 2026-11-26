@@ -212,8 +212,21 @@ export default function StudioHudTopBar({
         )}
       </div>
 
-      {/* Top-Right Mobile Controls & Pair/Approvals Hub (temporarily hidden while interacting with land) */}
-      {!isInteractingWithLand && (
+      {/* Top-Right Mobile Controls & Pair/Approvals Hub (keeps Notifications accessible even while interacting with land) */}
+      {isInteractingWithLand ? (
+      <div className="mobile-top-hud-right hud-interactive" data-testid="ar-land-top-right-hud">
+        <div className="mobile-top-hud-row">
+          <NotificationCenter
+            user={user}
+            variant="mobile"
+            refreshSignal={notifRefreshSignal}
+            pendingApprovals={pendingSignatures}
+            onApprovalResolved={onApprovalResolved}
+            onAction={onNotificationAction}
+          />
+        </div>
+      </div>
+      ) : (
       <div className="mobile-top-hud-right hud-interactive">
         <div className="mobile-top-hud-row">
           <NotificationCenter

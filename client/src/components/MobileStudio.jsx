@@ -35,6 +35,7 @@ import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import LandArchiveModal from './LandArchiveModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
+import { NotificationProvider } from './NotificationCenter.jsx';
 import ProfileModal from './ProfileModal.jsx';
 import SculptureChatDrawer from './SculptureChatDrawer.jsx';
 import SculptureModal from './SculptureModal.jsx';
@@ -1336,7 +1337,140 @@ export default function MobileStudio({
     });
   }, [showTemporaryHint]);
 
+  const handleMobileApprovalResolved = ({ requestId = '' } = {}) => {
+    if (
+      requestId &&
+      ar.mapSelectedSculpture?.isPendingPreview &&
+      ar.mapSelectedSculpture.pendingRequestId === requestId
+    ) {
+      ar.setMapSelectedSculpture(null);
+    }
+    pairing.refreshPendingSignatures?.();
+    ar.loadPublicMapData();
+    lands.refreshMyLands();
+    setNotifRefreshBump((n) => n + 1);
+    if (parcelVisit?.parcel?.parcelId) {
+      api
+        .getLandDetail(parcelVisit.parcel.parcelId)
+        .then((res) => {
+          if (res?.parcel) {
+            setParcelVisit({
+              loading: false,
+              parcel: res.parcel,
+              sculptures: res.sculptures || [],
+              error: ''
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  const dismissMobileOverlaysForNotification = ({
+    keepParcelVisit = false,
+    keepSelectedSculpture = false
+  } = {}) => {
+    chat.setChatSelection(null);
+    ar.setMapOpen(false);
+    drafts.setDraftsOpen(false);
+    drafts.setAgentOpen(false);
+    pairing.setPairOpen(false);
+    lands.setLandManageOpen(false);
+    setProfileHandle('');
+    setInfoOpen(false);
+    setArchiveOpen(false);
+    setArViewSession(null);
+    ar.setArSelectedLandId('');
+    setDockOpen(false);
+    if (brush.mode === 'publish') brush.setMode('draw');
+    if (!keepSelectedSculpture) ar.setMapSelectedSculpture(null);
+    if (!keepParcelVisit) setParcelVisit(null);
+  };
+
+  const handleMobileNotificationAction = async (item) => {
+    if (!item) return;
+    if (item.actionType === 'open_pair_mobile') {
+      dismissMobileOverlaysForNotification();
+      setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
+      return;
+    }
+    if (item.actionType === 'preview_pending_sculpture') {
+      dismissMobileOverlaysForNotification({ keepParcelVisit: true });
+      const reqObj =
+        item.pendingRequest ||
+        (pairing.pendingSignatures || []).find((r) => r.id === item.meta?.requestId) ||
+        null;
+      const previewSc = reqObj
+        ? buildPendingPreviewSculpture(reqObj, {
+            parcels: [
+              ...(ar.mapParcels || []),
+              ...(ar.nearbyParcels || []),
+              ...(lands.myLands?.parcels || [])
+            ],
+            existingSculptures: [
+              ...(ar.mapSculptures || []),
+              ...(ar.nearbySculptures || [])
+            ]
+          })
+        : null;
+      if (previewSc) {
+        ar.setMapSelectedSculpture(previewSc);
+        return;
+      }
+    }
+    if (item.actionType === 'open_land_approval' && item.parcelId) {
+      dismissMobileOverlaysForNotification();
+      await navigateToLandById(item.parcelId);
+      return;
+    }
+    if (item.actionType === 'open_mint') {
+      dismissMobileOverlaysForNotification();
+      setInfoInitialTab('mint');
+      setInfoOpen(true);
+    } else if (item.actionType === 'open_archive') {
+      dismissMobileOverlaysForNotification();
+      setArchiveInitialId(String(item.meta?.archiveId || ''));
+      setArchiveOpen(true);
+    } else if (
+      (item.actionType === 'open_sculpture' ||
+        (item.sculptureId && item.actionType !== 'open_land')) &&
+      item.sculptureId
+    ) {
+      dismissMobileOverlaysForNotification({ keepParcelVisit: true });
+      const localMatch =
+        (ar.mapSculptures || []).find((s) => s.id === item.sculptureId) ||
+        (ar.nearbySculptures || []).find((s) => s.id === item.sculptureId);
+      if (localMatch) {
+        ar.setMapSelectedSculpture(localMatch);
+        return;
+      }
+      try {
+        const res = await api.getSculpture(item.sculptureId);
+        if (res?.sculpture) {
+          ar.setMapSelectedSculpture(res.sculpture);
+          return;
+        }
+      } catch {
+        // Fall back to opening the land if sculpture lookup fails
+      }
+      if (item.parcelId) {
+        await navigateToLandById(item.parcelId);
+      }
+    } else if (item.actionType === 'open_land' && item.parcelId) {
+      dismissMobileOverlaysForNotification();
+      await navigateToLandById(item.parcelId);
+    }
+  };
+
   return (
+    <NotificationProvider
+      user={user}
+      variant="mobile"
+      refreshSignal={lands.ownedLandCount + notifRefreshBump}
+      pendingApprovals={pairing.pendingSignatures}
+      onApprovalResolved={handleMobileApprovalResolved}
+      onAction={handleMobileNotificationAction}
+    >
     <div className="mobile-fullscreen">
       <ARViewportCanvas
         videoRef={pol.videoRef}
@@ -1540,34 +1674,7 @@ export default function MobileStudio({
           arExitLabel={arExitLabel}
           notifRefreshSignal={lands.ownedLandCount + notifRefreshBump}
           onNavigateToLand={navigateToLandById}
-          onApprovalResolved={({ requestId = '' } = {}) => {
-            if (
-              requestId &&
-              ar.mapSelectedSculpture?.isPendingPreview &&
-              ar.mapSelectedSculpture.pendingRequestId === requestId
-            ) {
-              ar.setMapSelectedSculpture(null);
-            }
-            pairing.refreshPendingSignatures?.();
-            ar.loadPublicMapData();
-            lands.refreshMyLands();
-            setNotifRefreshBump((n) => n + 1);
-            if (parcelVisit?.parcel?.parcelId) {
-              api
-                .getLandDetail(parcelVisit.parcel.parcelId)
-                .then((res) => {
-                  if (res?.parcel) {
-                    setParcelVisit({
-                      loading: false,
-                      parcel: res.parcel,
-                      sculptures: res.sculptures || [],
-                      error: ''
-                    });
-                  }
-                })
-                .catch(() => {});
-            }
-          }}
+          onApprovalResolved={handleMobileApprovalResolved}
           onPreviewPending={(reqItem) => {
             if (!reqItem) return;
             const previewSc = buildPendingPreviewSculpture(reqItem, {
@@ -1586,75 +1693,7 @@ export default function MobileStudio({
               ar.openAreaMap({ focusParcelId: reqItem.parcelId });
             }
           }}
-          onNotificationAction={async (item) => {
-            if (!item) return;
-            if (item.actionType === 'open_pair_mobile') {
-              setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
-              return;
-            }
-            if (item.actionType === 'preview_pending_sculpture') {
-              const reqObj =
-                item.pendingRequest ||
-                (pairing.pendingSignatures || []).find(
-                  (r) => r.id === item.meta?.requestId
-                ) ||
-                null;
-              const previewSc = reqObj
-                ? buildPendingPreviewSculpture(reqObj, {
-                    parcels: [
-                      ...(ar.mapParcels || []),
-                      ...(ar.nearbyParcels || []),
-                      ...(lands.myLands?.parcels || [])
-                    ],
-                    existingSculptures: [
-                      ...(ar.mapSculptures || []),
-                      ...(ar.nearbySculptures || [])
-                    ]
-                  })
-                : null;
-              if (previewSc) {
-                ar.setMapSelectedSculpture(previewSc);
-                return;
-              }
-            }
-            if (item.actionType === 'open_land_approval' && item.parcelId) {
-              await navigateToLandById(item.parcelId);
-              return;
-            }
-            if (item.actionType === 'open_mint') {
-              setInfoInitialTab('mint');
-              setInfoOpen(true);
-            } else if (item.actionType === 'open_archive') {
-              setArchiveInitialId(String(item.meta?.archiveId || ''));
-              setArchiveOpen(true);
-            } else if (
-              (item.actionType === 'open_sculpture' ||
-                (item.sculptureId && item.actionType !== 'open_land')) &&
-              item.sculptureId
-            ) {
-              const localMatch =
-                (ar.mapSculptures || []).find((s) => s.id === item.sculptureId) ||
-                (ar.nearbySculptures || []).find((s) => s.id === item.sculptureId);
-              if (localMatch) {
-                ar.setMapSelectedSculpture(localMatch);
-                return;
-              }
-              try {
-                const res = await api.getSculpture(item.sculptureId);
-                if (res?.sculpture) {
-                  ar.setMapSelectedSculpture(res.sculpture);
-                  return;
-                }
-              } catch {
-                // Fall back to opening the land if sculpture lookup fails
-              }
-              if (item.parcelId) {
-                await navigateToLandById(item.parcelId);
-              }
-            } else if (item.actionType === 'open_land' && item.parcelId) {
-              await navigateToLandById(item.parcelId);
-            }
-          }}
+          onNotificationAction={handleMobileNotificationAction}
         />
 
         {!isInteractingWithLand && !isArViewOnly && brush.mode === 'draw' && (
@@ -2410,5 +2449,6 @@ export default function MobileStudio({
         />
       )}
     </div>
+    </NotificationProvider>
   );
 }

@@ -24,6 +24,7 @@ import {
   wrapRoomKeyWithClue
 } from '../utils/chatCrypto.js';
 import { EmojiInput } from './EmojiField.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -745,14 +746,17 @@ export default function SculptureChatDrawer({
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            className="btn btn-xs chat-board-close-btn"
-            onClick={onClose}
-            aria-label="Close chat"
-          >
-            <XeroIcon emoji="❌" size={13} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="chat-drawer-notif-bell-btn" />
+            <button
+              type="button"
+              className="btn btn-xs chat-board-close-btn"
+              onClick={onClose}
+              aria-label="Close chat"
+            >
+              <XeroIcon emoji="❌" size={13} />
+            </button>
+          </div>
         </div>
 
         {/* Clean 3-Tab Navigation Bar */}

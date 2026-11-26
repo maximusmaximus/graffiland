@@ -4,6 +4,7 @@ import {
   slugifyLandTitle
 } from '../../../shared/landVolume.mjs';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 export default function TitleLandModal({
@@ -65,14 +66,17 @@ export default function TitleLandModal({
             <XeroIcon emoji="🏷️" size={20} />
             <span>{mode === 'draft' ? 'Title Your Land Plot' : `Rename "${currentLandName}"`}</span>
           </h2>
-          <button
-            type="button"
-            className="btn"
-            aria-label="Close title land popup"
-            onClick={onClose}
-          >
-            <XeroIcon emoji="✕" size={14} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="title-modal-notif-bell-btn" />
+            <button
+              type="button"
+              className="btn"
+              aria-label="Close title land popup"
+              onClick={onClose}
+            >
+              <XeroIcon emoji="✕" size={14} />
+            </button>
+          </div>
         </div>
 
         <form

@@ -38,6 +38,7 @@ import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -575,6 +576,7 @@ export default function ProfileModal({
             />
           </h2>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <GlobalNotificationBell compact testId="profile-modal-notif-bell-btn" />
             {isOwner && !editing && (
               <button
                 type="button"

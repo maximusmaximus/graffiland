@@ -33,6 +33,7 @@ import {
   reapAndArchiveExpiredLands
 } from '../shared/landArchiveService.mjs';
 import {
+  clearUserNotifications,
   deleteNotification,
   listUserNotifications,
   markNotificationsRead,
@@ -1239,6 +1240,16 @@ export function createAppServer(serverOptions = {}) {
       res.json({ preferences });
     } catch (err) {
       res.status(err?.statusCode || 400).json({ error: err.message || 'Could not update notification preferences' });
+    }
+  });
+
+  app.delete('/api/notifications', requireAuth, async (req, res) => {
+    try {
+      const scope = req.query?.scope === 'read' ? 'read' : 'all';
+      const out = await clearUserNotifications(chatDb, req.user.id, { scope });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Could not clear notifications' });
     }
   });
 

@@ -14,6 +14,7 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { isLandOwnedByUser } from '../utils/landMapHelpers.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -577,14 +578,17 @@ export default function AddLandItemModal({
               (.glb/.gltf/.obj/.stl/.ply) and customize placement.
             </InfoTip>
           </h2>
-          <button
-            type="button"
-            className="btn"
-            aria-label="Close add 3D item modal"
-            onClick={onClose}
-          >
-            <XeroIcon emoji="✕" size={15} />
-          </button>
+          <div className="modal-header-actions">
+            <GlobalNotificationBell compact testId="add-item-notif-bell-btn" />
+            <button
+              type="button"
+              className="btn"
+              aria-label="Close add 3D item modal"
+              onClick={onClose}
+            >
+              <XeroIcon emoji="✕" size={15} />
+            </button>
+          </div>
         </div>
 
         <div className="add-item-meta-strip mono">
