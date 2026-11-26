@@ -597,5 +597,51 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     assert.equal(resets, 1);
     assert.equal(xrToggles, 1);
     view.unmount();
+
+    // Verify clean 3-zone hierarchy (Informational vs Actions vs Art) and collapsed Align AR by default when nudge is 0
+    const organizedView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: {
+          parcelId: 'GLAND-PARKING',
+          displayName: 'PARKING LOT 🚗 Land',
+          centerLat: 39.7283,
+          centerLng: -121.8369,
+          stewardUsername: 'bigdog',
+          isInside: true,
+          isOwned: true,
+          dimensionsLabel: '14×14×9.8 ft · 206 ft²',
+          sculptures: [{ id: 'sc-1', title: 'PARKING LOT 🚗', voxelCount: 2406, creatorUsername: 'bigdog' }]
+        },
+        sensorStatus: { trueNorthLocked: true, manualYawNudgeDeg: 0, needsCompassCalibration: false },
+        onDrawHere: () => {},
+        onOpenLandChat: () => {},
+        onOpen3DMap: () => {},
+        onManageLand: () => {},
+        onInspectSculpture: () => {},
+        onAdjustCompassNudge: (d) => deltas.push(d),
+        onResetCompassNudge: () => {},
+        onClose: () => {}
+      })
+    );
+
+    const infoZone = organizedView.getByTestId('ar-land-info-section');
+    const actionsZone = organizedView.getByTestId('ar-land-actions-section');
+    const primaryActions = organizedView.getByTestId('ar-land-primary-actions');
+    const secondaryActions = organizedView.getByTestId('ar-land-secondary-actions');
+    const sculpturesZone = organizedView.getByTestId('ar-land-sculptures-list');
+
+    assert.ok(infoZone.textContent.includes('Owner') && infoZone.textContent.includes('Size'));
+    assert.ok(actionsZone.textContent.includes('Actions'));
+    assert.ok(primaryActions.querySelector('[data-testid="ar-land-draw-btn"]'));
+    assert.ok(primaryActions.querySelector('[data-testid="ar-land-chat-btn"]'));
+    assert.ok(secondaryActions.querySelector('[data-testid="ar-land-3d-map-btn"]'));
+    assert.ok(secondaryActions.querySelector('[data-testid="ar-land-manage-btn"]'));
+    assert.ok(sculpturesZone.textContent.includes('Art on This Land (1)'));
+
+    // Align AR fine-nudge bar stays neatly tucked until tapped when nudge is 0 & compass is healthy
+    assert.equal(organizedView.queryByTestId('ar-compass-nudge-controls'), null);
+    RTL.fireEvent.click(organizedView.getByTestId('ar-compass-align-toggle-btn'));
+    assert.ok(organizedView.getByTestId('ar-compass-nudge-controls'));
+    organizedView.unmount();
   });
 });

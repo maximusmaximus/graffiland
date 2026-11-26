@@ -7786,7 +7786,7 @@ select {
   z-index: 48;
   max-width: 440px;
   margin: 0 auto;
-  max-height: min(56dvh, 430px);
+  max-height: min(58dvh, 460px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 12px 13px;
@@ -8073,12 +8073,51 @@ select {
   gap: 6px;
 }
 
-.ar-land-status-pills {
+.ar-land-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ar-land-status-strip {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
   min-width: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ar-land-status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.2;
+}
+
+.ar-land-status-text.is-gold {
+  color: #ffd166;
+}
+
+.ar-land-status-text.is-teal {
+  color: #67f5e2;
+}
+
+.ar-land-status-text.is-owned {
+  color: #a5f3fc;
+}
+
+.ar-land-status-text.is-danger {
+  color: #ff8ea3;
+}
+
+.ar-land-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 
 .ar-land-top-right {
@@ -8109,7 +8148,7 @@ select {
 
 .ar-land-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 800;
   line-height: 1.2;
   color: #f8fafc;
@@ -8122,15 +8161,6 @@ select {
   max-width: 100%;
 }
 
-.ar-land-subline {
-  font-size: 10.5px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-
 .ar-land-desc {
   margin: 0;
   font-size: 12px;
@@ -8138,39 +8168,187 @@ select {
   color: #cbd5e1;
 }
 
-.ar-land-meta-chips {
+/* Quiet Read-Only Info Card (visually distinct from interactive action buttons) */
+.ar-land-info-card {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.032);
+  border: 1px solid rgba(255, 255, 255, 0.065);
 }
 
-.ar-land-actions {
+.ar-land-info-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ar-land-info-row.is-secondary {
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.ar-land-info-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.ar-land-info-cell.is-right {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.ar-land-info-key {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(148, 163, 184, 0.78);
+  flex-shrink: 0;
+}
+
+.ar-land-info-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #e2e8f0;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ar-land-info-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  flex-shrink: 0;
+}
+
+.ar-land-info-val.is-frozen .ar-land-info-dot {
+  background: #7dd3fc;
+}
+
+.ar-land-info-link {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #8bfce9;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ar-land-info-link-arrow {
+  font-size: 10px;
+  opacity: 0.78;
+}
+
+/* Clear Interactive Actions Zone */
+.ar-land-section-kicker {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.84);
+}
+
+.ar-land-actions-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ar-land-primary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ar-land-primary-grid.is-single {
+  grid-template-columns: 1fr;
+}
+
+.ar-land-primary-btn {
+  min-height: 40px;
+  width: 100%;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  border-radius: 11px;
+}
+
+.ar-land-secondary-primary-btn {
+  min-height: 40px;
+  width: 100%;
+  justify-content: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 11px;
+  background: rgba(16, 30, 52, 0.96);
+  border: 1px solid rgba(0, 245, 212, 0.42);
+  color: #eafffc;
+}
+
+.ar-land-tools-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
   gap: 6px;
 }
 
-.ar-land-primary-cta {
-  font-weight: 800;
+.ar-land-tool-btn {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 4px;
+  border-radius: 10px;
+  background: rgba(17, 25, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  color: #e2e8f0;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.ar-land-tool-btn:hover {
+  border-color: rgba(0, 245, 212, 0.5);
+  color: #ffffff;
+}
+
+.ar-land-tool-btn.is-active {
+  background: rgba(0, 245, 212, 0.14);
+  border-color: rgba(0, 245, 212, 0.58);
+  color: #a9fff2;
 }
 
 .ar-land-sculptures {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding-top: 6px;
+  gap: 6px;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.ar-land-sculptures-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #cbd5e1;
 }
 
 .ar-land-sculptures-scroll {
@@ -8186,9 +8364,9 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -8198,7 +8376,7 @@ select {
 }
 
 .ar-land-sc-title {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 700;
   color: #f8fafc;
   white-space: nowrap;
@@ -8219,6 +8397,13 @@ select {
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
+}
+
+.ar-land-sc-view-btn {
+  background: rgba(0, 245, 212, 0.12);
+  border: 1px solid rgba(0, 245, 212, 0.45);
+  color: #99fff0;
+  font-weight: 700;
 }
 
 /* ==========================================================================
