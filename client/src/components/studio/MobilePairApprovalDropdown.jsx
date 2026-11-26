@@ -92,16 +92,19 @@ export default function MobilePairApprovalDropdown({
   onMobileSignPending,
   onMobileRejectPending,
   onPreviewPending = null,
+  onNavigateToLand = null,
   onRefreshSignatures
 }) {
   const panelRef = useRef(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const [expandedId, setExpandedId] = useState('');
+  const [lastApprovedBanner, setLastApprovedBanner] = useState(null);
 
   useEffect(() => {
     if (!open) {
       setScannerOpen(false);
+      setLastApprovedBanner(null);
       return undefined;
     }
     onRefreshSignatures?.();
@@ -212,6 +215,24 @@ export default function MobilePairApprovalDropdown({
     ? 'MCP Active'
     : 'Ready to Pair';
 
+  const handleApproveAndTrack = async (item, options = {}) => {
+    const res = await onMobileSignPending?.(item, options);
+    if (res?.ok !== false && res) {
+      const targetParcelId = String(
+        res?.result?.sculpture?.parcelId ||
+          res?.result?.parcel?.parcelId ||
+          res?.request?.parcelId ||
+          item?.parcelId ||
+          ''
+      ).trim();
+      const { title } = fallbackSummary(item);
+      setLastApprovedBanner({
+        title,
+        parcelId: targetParcelId
+      });
+    }
+  };
+
   return (
     <div
       ref={panelRef}
@@ -285,6 +306,35 @@ export default function MobilePairApprovalDropdown({
       <div className="mobile-pair-dropdown-body">
         {activeTab === 'pending' && (
           <div className="mobile-approval-list" data-testid="mobile-pending-list">
+            {lastApprovedBanner && (
+              <div
+                className="settings-inline-saved notif-settings-saved-pill notif-approval-status-bar"
+                data-testid="mobile-approval-success-banner"
+                role="status"
+              >
+                <span className="notif-approval-status-text">
+                  ✅ Approved &amp; minted{' '}
+                  {lastApprovedBanner.title.includes('"')
+                    ? lastApprovedBanner.title
+                    : `"${lastApprovedBanner.title}"`}
+                  !
+                </span>
+                {lastApprovedBanner.parcelId && onNavigateToLand && (
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-primary notif-approved-go-land-btn"
+                    data-testid="mobile-approval-go-land-btn"
+                    onClick={() => {
+                      const pid = lastApprovedBanner.parcelId;
+                      onClose?.();
+                      onNavigateToLand(pid);
+                    }}
+                  >
+                    📍 Go to Land →
+                  </button>
+                )}
+              </div>
+            )}
             {!user ? (
               <div className="mobile-pair-empty">
                 <div>Sign in to view and approve AI agent requests for your land.</div>
@@ -374,7 +424,7 @@ export default function MobilePairApprovalDropdown({
                             className="btn btn-xs btn-primary"
                             data-testid="mobile-autofit-approve-btn"
                             disabled={busy}
-                            onClick={() => onMobileSignPending?.(item, { autoFitScale: true })}
+                            onClick={() => handleApproveAndTrack(item, { autoFitScale: true })}
                           >
                             {busy
                               ? 'Fitting & Placing…'
@@ -398,7 +448,7 @@ export default function MobilePairApprovalDropdown({
                         type="button"
                         className="btn btn-sm btn-primary"
                         disabled={busy}
-                        onClick={() => onMobileSignPending?.(item)}
+                        onClick={() => handleApproveAndTrack(item)}
                       >
                         {busy ? 'Approving…' : '✅ Yes, Approve'}
                       </button>
@@ -767,6 +817,21 @@ export default function MobilePairApprovalDropdown({
                       <span>·</span>
                       <span>{formatRelativeTime(item.updatedAt || item.createdAt)}</span>
                     </div>
+                    {item.status === 'executed' && item.parcelId && onNavigateToLand && (
+                      <div className="mobile-approval-actions" style={{ marginTop: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          data-testid="mobile-history-go-land-btn"
+                          onClick={() => {
+                            onClose?.();
+                            onNavigateToLand(item.parcelId);
+                          }}
+                        >
+                          📍 Go to Land →
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })

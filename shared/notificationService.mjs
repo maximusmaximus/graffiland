@@ -522,6 +522,131 @@ export async function notifyPendingLandApproval(db, { userSub, request }) {
 }
 
 /**
+ * Emits a persisted confirmation notification after a pending land/sculpture
+ * request is approved & executed, with a direct "Go to Land" navigation action.
+ * Also marks the superseded pending-approval notification as read.
+ */
+export async function notifyLandApprovalExecuted(db, { userSub, request, result = null }) {
+  const cleanSub = String(userSub || '').trim();
+  if (!cleanSub || !request?.id) return null;
+
+  const now = new Date().toISOString();
+  await db
+    .run(
+      `UPDATE user_notifications
+       SET read_at = ?
+       WHERE user_sub = ? AND dedupe_key = ? AND (read_at IS NULL OR read_at = '')`,
+      [now, cleanSub, `sigreq:${request.id}`]
+    )
+    .catch(() => {});
+
+  const rawParcelId =
+    result?.sculpture?.parcelId || result?.parcel?.parcelId || request?.parcelId || '';
+  const resolvedParcelId = rawParcelId ? normalizeParcelId(rawParcelId) : '';
+  const resolvedSculptureId = String(
+    result?.sculpture?.id || request?.sculptureId || ''
+  ).trim();
+
+  let landTitle = resolveLandDisplayName(
+    { customName: request.parcelName || request.landDisplayName || '' },
+    { defaultName: '' }
+  );
+  if (!landTitle && resolvedParcelId) {
+    const info = await resolveParcelOwnerInfo(db, resolvedParcelId).catch(() => null);
+    landTitle = info?.landTitle || '';
+  }
+  if (!landTitle) landTitle = 'Virtual Land';
+
+  const action = String(request?.action || '').trim();
+  const isMint = action === 'create_sculpture' || action === 'publish_sculpture';
+  const summaryTitle = String(
+    request?.summaryTitle ||
+      result?.sculpture?.title ||
+      (action ? action.replace(/_/g, ' ') : 'Land Transaction')
+  ).trim();
+  const displaySummary = summaryTitle.includes('"') ? summaryTitle : `"${summaryTitle}"`;
+
+  const parcelUrl = resolvedParcelId ? `?parcel=${encodeURIComponent(resolvedParcelId)}` : '';
+  const sculptureUrl = resolvedSculptureId
+    ? `?sculpture=${encodeURIComponent(resolvedSculptureId)}`
+    : '';
+
+  return createNotification(db, {
+    userSub: cleanSub,
+    category: 'land_activity',
+    severity: 'success',
+    title: isMint ? `✅ Approved & minted: ${summaryTitle}` : `✅ Approved: ${summaryTitle}`,
+    message: isMint
+      ? `${displaySummary} was approved and minted on "${landTitle}".`
+      : `${displaySummary} was approved on "${landTitle}".`,
+    parcelId: resolvedParcelId,
+    sculptureId: resolvedSculptureId,
+    actionType: resolvedParcelId ? 'open_land' : resolvedSculptureId ? 'open_sculpture' : '',
+    actionLabel: resolvedParcelId ? 'Go to Land' : resolvedSculptureId ? 'View Art' : '',
+    meta: {
+      requestId: request.id,
+      action,
+      approvedAndMinted: true,
+      isMint,
+      landTitle,
+      parcelId: resolvedParcelId,
+      parcelUrl,
+      sculptureId: resolvedSculptureId,
+      sculptureUrl,
+      txHash: String(request?.txHash || result?.mint?.txHash || '').trim()
+    },
+    dedupeKey: `sigreq_exec:${request.id}`,
+    ignorePrefs: true
+  }).catch(() => null);
+}
+
+/**
+ * Emits a confirmation notification when a Virtual Land parcel is freshly minted,
+ * with a direct "Go to Land" navigation button.
+ */
+export async function notifyLandMinted(
+  db,
+  { userSub, parcelId, landTitle = '', txHash = '', volume = null }
+) {
+  const cleanSub = String(userSub || '').trim();
+  const cleanParcel = parcelId ? normalizeParcelId(parcelId) : '';
+  if (!cleanSub || !cleanParcel) return null;
+
+  const safeTitle = resolveLandDisplayName(
+    { customName: landTitle || '' },
+    { defaultName: 'Virtual Land' }
+  );
+  const dims =
+    volume &&
+    Number.isFinite(Number(volume.widthMeters)) &&
+    Number.isFinite(Number(volume.depthMeters)) &&
+    Number.isFinite(Number(volume.heightMeters))
+      ? ` (${Math.round(volume.widthMeters)}×${Math.round(volume.depthMeters)}×${Math.round(volume.heightMeters)}m)`
+      : '';
+  const parcelUrl = `?parcel=${encodeURIComponent(cleanParcel)}`;
+
+  return createNotification(db, {
+    userSub: cleanSub,
+    category: 'land_activity',
+    severity: 'success',
+    title: `🏗️ Land minted: "${safeTitle}"`,
+    message: `"${safeTitle}"${dims} is now minted and live on the map.`,
+    parcelId: cleanParcel,
+    actionType: 'open_land',
+    actionLabel: 'Go to Land',
+    meta: {
+      landMinted: true,
+      landTitle: safeTitle,
+      parcelId: cleanParcel,
+      parcelUrl,
+      txHash: String(txHash || '').trim()
+    },
+    dedupeKey: `land_minted:${cleanParcel}:${cleanSub}`,
+    ignorePrefs: true
+  }).catch(() => null);
+}
+
+/**
  * Checks a user's MCP pairing health and notifies them when an active pairing is expiring
  * within 2 hours or when their most recent pairing has expired and needs re-pairing.
  */

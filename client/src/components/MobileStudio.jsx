@@ -144,6 +144,7 @@ export default function MobileStudio({
   const [fadeOtherItems, setFadeOtherItems] = useState(false);
   const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
   const [openPairHubSignal, setOpenPairHubSignal] = useState(null);
+  const [notifRefreshBump, setNotifRefreshBump] = useState(0);
   const hintTimerRef = useRef(null);
   const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
@@ -937,10 +938,54 @@ export default function MobileStudio({
     [ensureArCameraLive, refreshArCamera]
   );
 
+  const navigateToLandById = useCallback(
+    async (parcelId) => {
+      const cleanId = String(parcelId || '').trim();
+      if (!cleanId) return;
+      const localMatch =
+        (ar.mapParcels || []).find(
+          (p) => String(p?.parcelId || '').toUpperCase() === cleanId.toUpperCase()
+        ) ||
+        (ar.nearbyParcels || []).find(
+          (p) => String(p?.parcelId || '').toUpperCase() === cleanId.toUpperCase()
+        ) ||
+        (lands.myLands?.parcels || []).find(
+          (p) => String(p?.parcelId || '').toUpperCase() === cleanId.toUpperCase()
+        ) ||
+        null;
+      setParcelVisit({
+        loading: !localMatch,
+        parcel: localMatch,
+        sculptures: Array.isArray(localMatch?.sculptures) ? localMatch.sculptures : [],
+        error: ''
+      });
+      try {
+        const res = await api.getLandDetail(cleanId);
+        setParcelVisit({
+          loading: false,
+          parcel: res?.parcel || localMatch,
+          sculptures: res?.sculptures || [],
+          error: res?.parcel || localMatch ? '' : 'Virtual Land parcel not found.'
+        });
+      } catch (err) {
+        if (!localMatch) {
+          setParcelVisit({
+            loading: false,
+            parcel: null,
+            sculptures: [],
+            error: err?.message || 'Could not load Virtual Land parcel.'
+          });
+        }
+      }
+    },
+    [ar.mapParcels, ar.nearbyParcels, lands.myLands?.parcels]
+  );
+
   const handleSignatureExecuted = useCallback(
     (_res, reqItem) => {
       lands.refreshMyLands();
       ar.loadPublicMapData();
+      setNotifRefreshBump((n) => n + 1);
       const loc = pol.locationRef.current || pol.location;
       if (loc) {
         api
@@ -984,7 +1029,8 @@ export default function MobileStudio({
     onDesktopCommand: handleDesktopCommand,
     onDelegatedPublishExecuted: resetFormAfterPublish,
     onSignatureExecuted: handleSignatureExecuted,
-    onConnectionStateChange: handlePairingConnectionChange
+    onConnectionStateChange: handlePairingConnectionChange,
+    onNavigateToLand: navigateToLandById
   });
   openPairModalRef.current = () => pairing.setPairOpen(true);
 
@@ -1475,7 +1521,8 @@ export default function MobileStudio({
           onInspectArLand={handleInspectArLand}
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
-          notifRefreshSignal={lands.ownedLandCount}
+          notifRefreshSignal={lands.ownedLandCount + notifRefreshBump}
+          onNavigateToLand={navigateToLandById}
           onApprovalResolved={({ requestId = '' } = {}) => {
             if (
               requestId &&
@@ -1487,6 +1534,7 @@ export default function MobileStudio({
             pairing.refreshPendingSignatures?.();
             ar.loadPublicMapData();
             lands.refreshMyLands();
+            setNotifRefreshBump((n) => n + 1);
             if (parcelVisit?.parcel?.parcelId) {
               api
                 .getLandDetail(parcelVisit.parcel.parcelId)
@@ -1553,23 +1601,7 @@ export default function MobileStudio({
               }
             }
             if (item.actionType === 'open_land_approval' && item.parcelId) {
-              setParcelVisit({ loading: true, parcel: null, sculptures: [], error: '' });
-              try {
-                const res = await api.getLandDetail(item.parcelId);
-                setParcelVisit({
-                  loading: false,
-                  parcel: res?.parcel || null,
-                  sculptures: res?.sculptures || [],
-                  error: res?.parcel ? '' : 'Virtual Land parcel not found.'
-                });
-              } catch (err) {
-                setParcelVisit({
-                  loading: false,
-                  parcel: null,
-                  sculptures: [],
-                  error: err?.message || 'Could not load Virtual Land parcel.'
-                });
-              }
+              await navigateToLandById(item.parcelId);
               return;
             }
             if (item.actionType === 'open_mint') {
@@ -1600,15 +1632,10 @@ export default function MobileStudio({
                 // Fall back to opening the land if sculpture lookup fails
               }
               if (item.parcelId) {
-                ar.openAreaMap({ focusParcelId: item.parcelId });
+                await navigateToLandById(item.parcelId);
               }
             } else if (item.actionType === 'open_land' && item.parcelId) {
-              if (lands.hasOwnedLand) {
-                lands.setLandManageParcelId(item.parcelId);
-                lands.setLandManageOpen(true);
-              } else {
-                ar.openAreaMap({ focusParcelId: item.parcelId });
-              }
+              await navigateToLandById(item.parcelId);
             }
           }}
         />

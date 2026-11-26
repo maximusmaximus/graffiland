@@ -35,7 +35,10 @@ import {
   updateLandSettings
 } from './landMutations.mjs';
 import { updateLandVolume } from '../agentQuestService.mjs';
-import { notifyPendingLandApproval } from '../notificationService.mjs';
+import {
+  notifyLandApprovalExecuted,
+  notifyPendingLandApproval
+} from '../notificationService.mjs';
 
 export function describeSignatureAction({
   action,
@@ -463,11 +466,24 @@ export async function executeValidatedSignatureRow(
     ]
   );
 
-  const updatedRow = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [reqRow.id]);
+  const updatedRow = await db.get(
+    `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+     FROM land_signature_requests sr
+     LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+     WHERE sr.id = ?`,
+    [reqRow.id]
+  );
+  const formattedRequest = formatSignatureRequestRow(updatedRow);
+  const executedNotification = await notifyLandApprovalExecuted(db, {
+    userSub: ownerUser?.id || reqRow.owner_sub,
+    request: formattedRequest,
+    result
+  }).catch(() => null);
   return {
     ok: true,
-    request: formatSignatureRequestRow(updatedRow),
-    result
+    request: formattedRequest,
+    result,
+    ...(executedNotification ? { notification: executedNotification } : {})
   };
 }
 

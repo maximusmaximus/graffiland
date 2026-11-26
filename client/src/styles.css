@@ -11345,6 +11345,15 @@ button.user-handle-badge:hover .user-handle-text {
   word-break: break-word;
 }
 
+.settings-saved-toast-action {
+  flex-shrink: 0;
+  white-space: nowrap;
+  align-self: center;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
 .settings-saved-toast-close {
   appearance: none;
   border: 0;
@@ -11416,6 +11425,51 @@ button.user-handle-badge:hover .user-handle-text {
   width: 100%;
   justify-content: flex-start;
   font-size: 11.5px;
+}
+
+.notif-approval-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: auto;
+  padding: 7px 10px;
+}
+
+.notif-approval-status-text {
+  flex: 1 1 160px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.notif-approved-go-land-btn,
+.notif-go-land-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+}
+
+.notif-land-pill-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.12);
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  color: #5eead4;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.notif-land-pill-link:hover {
+  background: rgba(0, 245, 212, 0.22);
+  border-color: rgba(0, 245, 212, 0.62);
+  color: #ffffff;
 }
 
 .land-mgmt-save-row {

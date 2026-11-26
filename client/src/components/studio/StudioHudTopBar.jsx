@@ -102,7 +102,8 @@ export default function StudioHudTopBar({
   notifRefreshSignal = 0,
   onNotificationAction = null,
   onApprovalResolved = null,
-  onPreviewPending = null
+  onPreviewPending = null,
+  onNavigateToLand = null
 }) {
   const [pairHubOpen, setPairHubOpen] = useState(false);
   const [pairHubTab, setPairHubTab] = useState('pair');
@@ -368,6 +369,7 @@ export default function StudioHudTopBar({
           onMobileSignPending={onMobileSignPending}
           onMobileRejectPending={onMobileRejectPending}
           onPreviewPending={onPreviewPending}
+          onNavigateToLand={onNavigateToLand}
           onRefreshSignatures={onRefreshSignatures}
         />
       </div>

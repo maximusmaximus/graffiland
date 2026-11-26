@@ -809,7 +809,29 @@ export default function DesktopHub({
         sculptureId: signRes?.result?.sculpture?.id || reqItem.sculptureId || '',
         linkLabel: 'Land'
       });
-      notifySettingsSaved(`Approved & minted "${title}"${fitSuffix} on "${landTitle}"!`);
+      const targetParcelId = String(
+        signRes?.result?.sculpture?.parcelId ||
+          signRes?.result?.parcel?.parcelId ||
+          signRes?.request?.parcelId ||
+          reqItem.parcelId ||
+          ''
+      ).trim();
+      const quotedTitle = title.includes('"') ? title : `"${title}"`;
+      notifySettingsSaved(
+        `Approved & minted ${quotedTitle}${fitSuffix} on "${landTitle}"!`,
+        targetParcelId
+          ? {
+              actionLabel: '📍 Go to Land →',
+              onAction: () => {
+                const localParcel =
+                  (parcels || []).find(
+                    (p) => String(p.parcelId || '').toUpperCase() === targetParcelId.toUpperCase()
+                  ) || { parcelId: targetParcelId };
+                openLandShowcase(localParcel);
+              }
+            }
+          : undefined
+      );
       handleDesktopApprovalResolved({ requestId: reqItem.id });
     } catch (err) {
       const errMsg = err?.message || 'Could not approve transaction.';
@@ -951,6 +973,7 @@ export default function DesktopHub({
 
   function openLandShowcase(land) {
     if (!land?.parcelId) return;
+    const hadCoords = Boolean(resolveLandCoords(land));
     focusLandOnMap(land);
     const title = getLiveLandName(land, land.displayName || 'Virtual Land');
     recordUserAction(user?.id, {
@@ -974,6 +997,9 @@ export default function DesktopHub({
       .getLandDetail(land.parcelId)
       .then((res) => {
         if (res?.parcel) {
+          if (!hadCoords) {
+            focusLandOnMap(res.parcel);
+          }
           setVisitedParcel({
             loading: false,
             parcel: res.parcel,
@@ -1049,8 +1075,11 @@ export default function DesktopHub({
         setLandManageOpen(true);
       }
     } else if (item.actionType === 'open_land' && item.parcelId) {
-      setLandManageParcelId(item.parcelId);
-      setLandManageOpen(true);
+      const localParcel =
+        (parcels || []).find(
+          (p) => String(p.parcelId || '').toUpperCase() === String(item.parcelId).toUpperCase()
+        ) || { parcelId: item.parcelId };
+      openLandShowcase(localParcel);
     }
   }
 
