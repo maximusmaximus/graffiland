@@ -10074,11 +10074,28 @@ button.user-handle-badge:hover .user-handle-text {
   }
 }
 
-/* ================= Redesigned Clean 3-Tab Chat Board ================= */
+/* ================= Full-Screen Keyboard-Responsive 3-Tab Land Chat ================= */
+.modal-backdrop.chat-board-backdrop {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #070b16;
+  backdrop-filter: none;
+  overscroll-behavior: contain;
+  z-index: 2200;
+}
+
 .modal-card.chat-board-modal {
-  max-width: 500px;
+  max-width: none;
   width: 100%;
-  max-height: 88dvh;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  background: #080d1a;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -10090,8 +10107,9 @@ button.user-handle-badge:hover .user-handle-text {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 14px 16px 10px;
-  background: linear-gradient(180deg, rgba(16, 24, 42, 0.98), rgba(11, 17, 30, 0.96));
+  padding: calc(max(12px, env(safe-area-inset-top)) + 2px)
+    max(14px, calc((100vw - 760px) / 2)) 10px;
+  background: linear-gradient(180deg, rgba(16, 24, 42, 0.99), rgba(11, 17, 30, 0.97));
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
 }
@@ -10157,8 +10175,8 @@ button.user-handle-badge:hover .user-handle-text {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  padding: 8px 12px;
-  background: rgba(8, 12, 22, 0.94);
+  padding: 8px max(12px, calc((100vw - 760px) / 2));
+  background: rgba(8, 12, 22, 0.96);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
 }
@@ -10211,7 +10229,7 @@ button.user-handle-badge:hover .user-handle-text {
 }
 
 .chat-board-error {
-  margin: 8px 12px 0;
+  margin: 8px max(12px, calc((100vw - 760px) / 2)) 0;
   padding: 8px 10px;
   border-radius: 10px;
   background: rgba(255, 77, 109, 0.12);
@@ -10221,16 +10239,37 @@ button.user-handle-badge:hover .user-handle-text {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .chat-board-panel {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 14px 14px;
+  padding: 12px max(14px, calc((100vw - 760px) / 2)) 14px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-board-panel.is-chat-panel,
+.chat-board-panel.is-pins-panel {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.chat-board-panel.is-chat-panel > .chat-board-empty-card,
+.chat-board-panel.is-chat-panel > .chat-board-locked-wrap {
+  margin: 14px max(14px, calc((100vw - 760px) / 2));
+  overflow-y: auto;
+}
+
+.chat-board-panel.is-pins-panel > .chat-board-section-head,
+.chat-board-panel.is-pins-panel > .chat-board-clue-card {
+  margin: 10px max(14px, calc((100vw - 760px) / 2)) 0;
+  flex-shrink: 0;
 }
 
 .chat-board-pin-teaser {
@@ -10238,7 +10277,8 @@ button.user-handle-badge:hover .user-handle-text {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  margin: 8px max(14px, calc((100vw - 760px) / 2)) 0;
+  width: auto;
   padding: 7px 10px;
   border-radius: 10px;
   border: 1px solid rgba(255, 209, 102, 0.34);
@@ -10274,14 +10314,16 @@ button.user-handle-badge:hover .user-handle-text {
 }
 
 .chat-board-feed {
-  flex: 1 1 auto;
-  min-height: 200px;
-  max-height: 46dvh;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 2px 2px 4px;
+  padding: 12px max(14px, calc((100vw - 760px) / 2));
 }
 
 .chat-bubble {
@@ -10316,24 +10358,93 @@ button.user-handle-badge:hover .user-handle-text {
 }
 
 .chat-bubble-text {
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.42;
   color: #f3f7ff;
   word-break: break-word;
 }
 
 .chat-board-composer {
+  position: relative;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px max(12px, calc((100vw - 760px) / 2))
+    calc(10px + env(safe-area-inset-bottom, 0px));
+  background: rgba(10, 16, 30, 0.98);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
+}
+
+.chat-board-modal input,
+.chat-board-modal textarea {
+  font-size: 16px;
+}
+
+.chat-board-composer .chat-composer-input {
+  font-size: 16px;
+  line-height: 1.35;
+  min-height: 44px;
+  padding: 9px 12px;
+}
+
+.chat-board-composer .emoji-picker-popover {
+  top: auto;
+  bottom: calc(100% + 8px);
+  max-height: min(190px, 34vh);
 }
 
 .chat-board-send-btn {
   flex-shrink: 0;
   white-space: nowrap;
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-header,
+.chat-board-backdrop.is-compact-viewport .chat-board-header {
+  padding-top: max(6px, env(safe-area-inset-top));
+  padding-bottom: 6px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-header-info,
+.chat-board-backdrop.is-compact-viewport .chat-board-header-info {
+  gap: 3px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-title,
+.chat-board-backdrop.is-compact-viewport .chat-board-title {
+  font-size: 14.5px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-tabs,
+.chat-board-backdrop.is-compact-viewport .chat-board-tabs {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-tab,
+.chat-board-backdrop.is-compact-viewport .chat-board-tab {
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-feed,
+.chat-board-backdrop.is-compact-viewport .chat-board-feed {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-composer {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.chat-board-backdrop.is-keyboard-open .chat-board-empty-card.is-compact {
+  padding: 10px 10px;
+  gap: 5px;
+  font-size: 12px;
 }
 
 .chat-board-empty-card {
@@ -10403,6 +10514,7 @@ button.user-handle-badge:hover .user-handle-text {
 }
 
 .chat-board-pending-strip {
+  margin: 0 max(14px, calc((100vw - 760px) / 2)) 6px;
   padding: 5px 10px;
   border-radius: 8px;
   background: rgba(255, 209, 102, 0.1);
@@ -10412,6 +10524,7 @@ button.user-handle-badge:hover .user-handle-text {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .chat-board-section-head {
@@ -10432,12 +10545,15 @@ button.user-handle-badge:hover .user-handle-text {
 }
 
 .chat-board-pins-list {
-  flex: 1 1 auto;
-  min-height: 140px;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 10px max(14px, calc((100vw - 760px) / 2));
 }
 
 .chat-pin-card {

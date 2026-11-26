@@ -5,6 +5,7 @@ import {
   resolveSafeUserAvatar
 } from '../../../shared/userDisplay.mjs';
 import { api } from '../utils/api.js';
+import { useVisualViewportLayout } from '../hooks/useVisualViewportLayout.js';
 import {
   computeRoomPossessionProof,
   decryptChatMessage,
@@ -75,6 +76,7 @@ export default function SculptureChatDrawer({
   const [newClueAnswer, setNewClueAnswer] = useState('');
   const [savingClue, setSavingClue] = useState(false);
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'pins' | 'access'
+  const viewport = useVisualViewportLayout(true);
 
   const reqSentRef = useRef(false);
   const autoInitRef = useRef(false);
@@ -83,6 +85,16 @@ export default function SculptureChatDrawer({
   const sightRef = useRef(initialSightProof);
   const boardIdRef = useRef(sculpture.id);
   const listEndRef = useRef(null);
+  const feedRef = useRef(null);
+
+  const scrollFeedToBottom = useCallback((smooth = false) => {
+    if (feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+    if (typeof listEndRef.current?.scrollIntoView === 'function') {
+      listEndRef.current.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+    }
+  }, []);
 
   useEffect(() => {
     boardIdRef.current = sculpture.id;
@@ -408,8 +420,31 @@ export default function SculptureChatDrawer({
   }, [syncBoard]);
 
   useEffect(() => {
-    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+    scrollFeedToBottom(true);
+  }, [messages.length, scrollFeedToBottom]);
+
+  // Keep latest messages & composer smoothly visible whenever the virtual keyboard opens or resizes
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    scrollFeedToBottom(false);
+  }, [activeTab, scrollFeedToBottom, viewport.height, viewport.keyboardOpen]);
+
+  // Lock background document scrolling while full-screen chat is open and support Escape to close
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        onClose?.();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
 
   async function handleInitializeBoard() {
     if (!user || !identity) return;
@@ -652,8 +687,30 @@ export default function SculptureChatDrawer({
     pinMeta?.hasPins || entered?.isLandHolder || pinUnlockStatus === 'locked' || pinnedItems.length > 0
   );
 
+  const backdropStyle =
+    viewport.height > 0
+      ? {
+          top: `${viewport.top}px`,
+          left: `${viewport.left}px`,
+          height: `${viewport.height}px`,
+          width: viewport.width > 0 ? `${viewport.width}px` : '100%'
+        }
+      : undefined;
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className={`modal-backdrop chat-board-backdrop ${
+        viewport.keyboardOpen ? 'is-keyboard-open' : ''
+      } ${viewport.compact ? 'is-compact-viewport' : ''}`}
+      data-testid="sculpture-chat-backdrop"
+      data-fullscreen="true"
+      data-keyboard-open={viewport.keyboardOpen ? 'true' : 'false'}
+      style={backdropStyle}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Land chat for ${landDisplayName}`}
+      onClick={onClose}
+    >
       <div
         className="modal-card chat-board-modal"
         data-testid="sculpture-chat-drawer"
@@ -745,7 +802,7 @@ export default function SculptureChatDrawer({
 
         {/* TAB 1: CHAT FEED + STICKY BOTTOM COMPOSER */}
         {activeTab === 'chat' && (
-          <div className="chat-board-panel" role="tabpanel">
+          <div className="chat-board-panel is-chat-panel" role="tabpanel">
             {!user ? (
               <div className="chat-board-empty-card">
                 <XeroIcon emoji="🔐" size={24} />
@@ -826,7 +883,11 @@ export default function SculptureChatDrawer({
                   </button>
                 )}
 
-                <div className="chat-board-feed" data-testid="chat-board-feed">
+                <div
+                  ref={feedRef}
+                  className="chat-board-feed"
+                  data-testid="chat-board-feed"
+                >
                   {messages.length === 0 ? (
                     <div className="chat-board-empty-card is-compact">
                       <XeroIcon emoji="💬" size={20} />
@@ -876,18 +937,27 @@ export default function SculptureChatDrawer({
                   </div>
                 )}
 
-                <form onSubmit={handleSendMessage} className="chat-board-composer">
+                <form
+                  onSubmit={handleSendMessage}
+                  className="chat-board-composer"
+                  data-testid="chat-composer-form"
+                >
                   <EmojiInput
-                    className="input"
+                    className="input chat-composer-input"
+                    data-testid="chat-composer-input"
                     wrapperStyle={{ flex: 1, minWidth: 0 }}
                     value={msgInput}
                     maxLength={500}
+                    enterKeyHint="send"
+                    autoComplete="off"
+                    onFocus={() => scrollFeedToBottom(false)}
                     onChange={(e) => setMsgInput(e.target.value)}
                     placeholder="Write an encrypted note… (: for emojis)"
                     required
                   />
                   <button
                     className="btn btn-primary chat-board-send-btn"
+                    data-testid="chat-composer-send"
                     type="submit"
                     disabled={sending || !msgInput.trim()}
                   >
@@ -901,7 +971,7 @@ export default function SculptureChatDrawer({
 
         {/* TAB 2: PINNED IPFS NOTES */}
         {activeTab === 'pins' && (
-          <div className="chat-board-panel" role="tabpanel" data-testid="chat-panel-pins">
+          <div className="chat-board-panel is-pins-panel" role="tabpanel" data-testid="chat-panel-pins">
             <div className="chat-board-section-head">
               <strong>
                 <XeroIcon emoji="📌" size={14} /> Parcel-Locked Pinned Notes
@@ -1019,17 +1089,19 @@ export default function SculptureChatDrawer({
             </div>
 
             {entered?.isLandHolder && (
-              <form onSubmit={handleAddPin} className="chat-board-composer">
+              <form onSubmit={handleAddPin} className="chat-board-composer" data-testid="chat-pin-composer-form">
                 <EmojiInput
-                  className="input"
+                  className="input chat-composer-input"
                   wrapperStyle={{ flex: 1, minWidth: 0 }}
                   value={pinInput}
                   maxLength={500}
+                  enterKeyHint="send"
+                  autoComplete="off"
                   onChange={(e) => setPinInput(e.target.value)}
                   placeholder="Pin an encrypted IPFS note… (: for emojis)"
                   required
                 />
-                <button className="btn btn-primary" type="submit" disabled={pinBusy}>
+                <button className="btn btn-primary chat-board-send-btn" type="submit" disabled={pinBusy}>
                   <XeroIcon emoji="📌" size={13} /> {pinBusy ? '…' : 'Pin'}
                 </button>
               </form>
