@@ -130,7 +130,7 @@ export default function GoogleLoginGate({
       ) : config?.allowDevGoogleAuth ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="badge gold" style={{ alignSelf: 'flex-start' }}>
-            <XeroIcon emoji="⚙️" size={14} /> Local Google Dev Fallback (set GOOGLE_CLIENT_ID in .env for OAuth)
+            <XeroIcon emoji="⚙️" size={18} /> Local Google Dev Fallback (set GOOGLE_CLIENT_ID in .env for OAuth)
           </div>
           <div>
             <div className="field-label">

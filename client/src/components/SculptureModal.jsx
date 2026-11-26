@@ -2017,7 +2017,7 @@ export default function SculptureModal({
             }}
             title="Copy direct share link to this sculpture"
           >
-            <XeroIcon emoji="📤" size={14} /> Copy Link
+            <XeroIcon emoji="📋" size={18} /> Copy Link
           </button>
           <a
             className="btn"

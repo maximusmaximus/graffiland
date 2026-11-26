@@ -117,7 +117,7 @@ export default function LandArchiveModal({
               onClick={() => handleCopyLink('')}
               title="Copy link to Land Archive"
             >
-              <XeroIcon emoji="🔗" size={13} /> {copiedId === 'root' ? 'Copied!' : 'Share Archive'}
+              <XeroIcon emoji="📋" size={17} /> {copiedId === 'root' ? 'Copied!' : 'Copy Archive Link'}
             </button>
             <button className="btn" onClick={onClose} aria-label="Close land archive">
               <XeroIcon emoji="✕" size={16} />

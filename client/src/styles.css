@@ -1652,12 +1652,16 @@ select {
 .map-land-label-copy-btn {
   border: none;
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 3px 7px;
   background: rgba(0, 245, 212, 0.16);
   color: #9bfcf0;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.15;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
@@ -4038,9 +4042,9 @@ select {
   border-left: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(0, 245, 212, 0.12);
   color: #9bfcf0;
-  padding: 3px 7px;
+  padding: 4px 8px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.1;
   white-space: nowrap;
@@ -4049,6 +4053,7 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   transition: background 0.14s ease, color 0.14s ease;
 }
 
@@ -5090,8 +5095,8 @@ select {
   border-left: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(0, 245, 212, 0.14);
   color: #9bfcf0;
-  padding: 5px 10px;
-  font-size: 11px;
+  padding: 6px 11px;
+  font-size: 12px;
   font-weight: 800;
   line-height: 1.15;
   white-space: nowrap;
@@ -5099,7 +5104,7 @@ select {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   transition: background 140ms ease, color 140ms ease;
 }
 
@@ -5603,8 +5608,8 @@ select {
   }
 
   .plot-iso-land-copy-btn {
-    font-size: 10.5px;
-    padding: 4px 8px;
+    font-size: 11.5px;
+    padding: 5px 9px;
   }
 
   .plot-iso-land-dims {
@@ -6902,9 +6907,9 @@ select {
 }
 
 .mobile-land-share-btn {
-  padding: 3px 6px;
-  min-height: 24px;
-  min-width: 26px;
+  padding: 4px 8px;
+  min-height: 28px;
+  min-width: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7057,8 +7062,9 @@ select {
 }
 
 .mobile-land-gear-btn {
-  padding: 3px 7px;
-  min-height: 24px;
+  padding: 4px 8px;
+  min-height: 28px;
+  min-width: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

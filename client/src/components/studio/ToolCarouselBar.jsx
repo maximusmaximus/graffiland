@@ -3,7 +3,6 @@ import { KEY_CAROUSEL_SLOT_PX, KEY_TOOLS } from '../../hooks/useVoxelBrush.js';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function ToolCarouselBar({
-  quickSculpt,
   activeKeyTool,
   toolAvailability,
   canTouch,
@@ -22,9 +21,7 @@ export default function ToolCarouselBar({
   onKeyPointerUp,
   onKeyPointerCancel
 }) {
-  const visibleTools = quickSculpt
-    ? KEY_TOOLS.filter((t) => t.quick || t.id === activeKeyTool)
-    : KEY_TOOLS;
+  const visibleTools = KEY_TOOLS;
   const idx = visibleTools.findIndex((t) => t.id === activeKeyTool);
   const safeIdx = idx >= 0 ? idx : 0;
   const activeItem = visibleTools[safeIdx] || visibleTools[0];

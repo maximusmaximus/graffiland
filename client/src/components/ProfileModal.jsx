@@ -797,7 +797,7 @@ export default function ProfileModal({
                         data-testid="copy-profile-link-btn"
                         onClick={() => handleCopyUrl('profile', publicProfileUrl, 'public profile link')}
                       >
-                        <XeroIcon emoji="🔗" size={12} />{' '}
+                        <XeroIcon emoji="📋" size={16} />{' '}
                         {copiedKey === 'profile' ? 'Copied Profile Link!' : 'Copy Public Profile Link'}
                       </button>
                       <a

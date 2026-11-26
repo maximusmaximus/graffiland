@@ -183,7 +183,7 @@ export default function InfoTermsModal({
             className={`btn btn-sm ${tab === 'account' ? 'btn-primary' : ''}`}
             onClick={() => setTab('account')}
           >
-            <XeroIcon emoji="⚙️" size={14} /> Account &amp; Settings
+            <XeroIcon emoji="⚙️" size={18} /> Account &amp; Settings
           </button>
         </div>
 
@@ -441,7 +441,7 @@ export default function InfoTermsModal({
                       <strong>Fade Other Art</strong> while drawing on a land to ghost existing
                       pieces — 3D collision still prevents drawing through them. Supports 4x
                       precision (<code>0.05m</code> grid), Matte/Neon/Glass finishes, up to 4,096
-                      blocks, Quick vs Pro HUD, and auto-saved cloud drafts.
+                      blocks, and auto-saved cloud drafts.
                     </InfoTip>
                   </div>
                   <p>

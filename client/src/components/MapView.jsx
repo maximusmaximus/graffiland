@@ -422,6 +422,11 @@ export default function MapView({
           : isDormant
           ? 'is-dormant'
           : '';
+        const copyIconUrl = xeroemoji.get('📋')?.svgUrl || '';
+        const copyIconHtml = copyIconUrl
+          ? `<img src="${copyIconUrl}" width="15" height="15" class="xero-icon" alt="" aria-hidden="true" style="width:15px;height:15px;object-fit:contain;" />`
+          : '📋';
+        const idleCopyHtml = `${copyIconHtml}${isEmptyLand ? ' Copy' : ''}`;
         const labelIcon = L.divIcon({
           className: 'map-land-simple-label-marker',
           html: `<span class="map-land-simple-label ${stateCls} ${
@@ -434,7 +439,7 @@ export default function MapView({
             p.parcelId
           )}" aria-label="Copy share link for ${escapeHtml(
             landTitle
-          )}" title="Copy share link">${isEmptyLand ? '🔗 Copy' : '🔗'}</button></span>`,
+          )}" title="Copy share link">${idleCopyHtml}</button></span>`,
           iconSize: null
         });
         const labelMarker = L.marker([pLat, pLng], {
@@ -454,7 +459,6 @@ export default function MapView({
             });
             const ok = await copyToClipboard(shareUrl);
             if (ok) {
-              const idleTxt = isEmptyLand ? '🔗 Copy' : '🔗';
               copyBtn.textContent = isEmptyLand ? '✓ Copied' : '✓';
               copyBtn.classList.add('is-copied');
               notifySettingsSaved(`Copied share link for "${landTitle}"!`, {
@@ -462,7 +466,7 @@ export default function MapView({
                 durationMs: 2600
               });
               setTimeout(() => {
-                copyBtn.textContent = idleTxt;
+                copyBtn.innerHTML = idleCopyHtml;
                 copyBtn.classList.remove('is-copied');
               }, 1800);
             }

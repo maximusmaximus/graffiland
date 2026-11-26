@@ -746,7 +746,7 @@ export default function ARLandInspectorPanel({
               data-testid="ar-land-manage-btn"
               onClick={() => onManageLand(land.parcelId)}
             >
-              <XeroIcon emoji="⚙️" size={14} />
+              <XeroIcon emoji="⚙️" size={18} />
               <span>Manage</span>
             </button>
           )}
@@ -766,11 +766,13 @@ export default function ARLandInspectorPanel({
           <button
             type="button"
             className="ar-land-tool-btn"
+            data-testid="ar-land-copy-link-btn"
             onClick={handleCopyShare}
-            aria-label={`Share ${displayName}`}
+            aria-label={`Copy share link for ${displayName}`}
+            title={`Copy share link for ${displayName}`}
           >
-            <XeroIcon emoji="📤" size={14} />
-            <span>Share</span>
+            <XeroIcon emoji="📋" size={18} />
+            <span>Copy Link</span>
           </button>
           {hasAlignTool && (
             <button

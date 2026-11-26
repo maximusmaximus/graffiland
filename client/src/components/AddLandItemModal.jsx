@@ -606,7 +606,13 @@ export default function AddLandItemModal({
               title="Copy shareable visit link for this minted parcel"
               onClick={handleCopyShareLink}
             >
-              {shareLinkCopied ? '✓ Link Copied' : '🔗 Share Link'}
+              {shareLinkCopied ? (
+                '✓ Link Copied'
+              ) : (
+                <>
+                  <XeroIcon emoji="📋" size={16} /> Copy Link
+                </>
+              )}
             </button>
             <span
               className={`badge ${
@@ -696,7 +702,7 @@ export default function AddLandItemModal({
                   onOpenLandManagement(parcel.parcelId);
                 }}
               >
-                ⚙️ Land Settings
+                <XeroIcon emoji="⚙️" size={16} /> Land Settings
               </button>
             )}
           </div>

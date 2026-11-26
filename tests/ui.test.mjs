@@ -88,18 +88,13 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     }
   });
 
-  test('FirstRunTutorialModal progresses steps, toggles Quick Sculpt, and passes dontShowAgain flag', async () => {
+  test('FirstRunTutorialModal progresses steps without Simple/Quick Sculpt mode and passes dontShowAgain flag', async () => {
     const { default: FirstRunTutorialModal } = await loadJsxModule(
       'client/src/components/studio/FirstRunTutorialModal.jsx'
     );
     let closedWith = null;
-    let quickToggled = 0;
     const view = RTL.render(
       React.createElement(FirstRunTutorialModal, {
-        quickSculpt: false,
-        onToggleQuickSculpt: () => {
-          quickToggled += 1;
-        },
         onClose: (dontShow) => {
           closedWith = dontShow;
         }
@@ -108,11 +103,10 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
 
     assert.ok(view.getByTestId('brand-logo-lockup'));
     assert.equal(/welcome/i.test(view.container.textContent || ''), false);
+    assert.equal(/quick sculpt|pro hud|simple studio/i.test(view.container.textContent || ''), false);
     assert.ok(view.getByText(/1\. Aim & Lock Your Starting Surface/i));
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: Surface Scan & Anchor Details/i }));
     assert.ok(view.getByText(/Proof of Location locks your real-world spot/i));
-    RTL.fireEvent.click(view.getByRole('button', { name: /^Pro HUD$/i }));
-    assert.equal(quickToggled, 1);
 
     RTL.fireEvent.click(view.getByText(/Next Step/i));
     assert.ok(view.getByText(/2\. Sculpt 4x Blocks or Hand Off to AI/i));
@@ -7826,5 +7820,92 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       unsub();
       cleanup();
     }
+  });
+
+  test('Copy link buttons use one-size-up copy icon, gear icons are one size up, and Simple/Quick mode is removed from HUD', async () => {
+    const { default: MobileMapSheet } = await loadJsxModule(
+      'client/src/components/studio/MobileMapSheet.jsx'
+    );
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+
+    const ownedParcel = {
+      parcelId: 'GLAND-ICONSIZE1',
+      customName: 'Neon Plaza',
+      displayName: 'Neon Plaza',
+      centerLat: 39.7285,
+      centerLng: -121.8375,
+      ownerSub: 'u-me',
+      stewardSub: 'u-me',
+      stewardUsername: 'bigdog',
+      isOwned: true,
+      isInside: true,
+      edgeDistanceMeters: 0,
+      sculptures: [{ id: 'sc-1', title: 'Glow Arch', parcelId: 'GLAND-ICONSIZE1', voxelCount: 40 }]
+    };
+
+    // 1) MobileMapSheet: copy link uses clipboard copy icon (1f4cb) at size >= 16, gear icon (2699) at size >= 16
+    const mapView = RTL.render(
+      React.createElement(MobileMapSheet, {
+        user: { id: 'u-me', username: 'bigdog' },
+        ownedParcelIds: ['GLAND-ICONSIZE1'],
+        config: {},
+        location: { lat: 39.7285, lng: -121.8375 },
+        areaFilterMode: 'all',
+        mapParcels: [ownedParcel],
+        displayedMapSculptures: ownedParcel.sculptures,
+        areaSculpturesSorted: ownedParcel.sculptures,
+        onManageLand: () => {},
+        onClose: () => {}
+      })
+    );
+    const shareIcon = mapView.getByTestId('land-card-share-btn').querySelector('img');
+    const gearIcon = mapView.getByTestId('land-manage-gear-btn').querySelector('img');
+    assert.ok(shareIcon && String(shareIcon.getAttribute('src') || '').includes('1f4cb'), 'Expected clipboard copy icon on land copy-link button');
+    assert.ok(Number(shareIcon.getAttribute('width')) >= 16, `Expected upsized copy icon >=16px, got ${shareIcon.getAttribute('width')}`);
+    assert.ok(gearIcon && String(gearIcon.getAttribute('src') || '').includes('2699'), 'Expected gear icon on land manage button');
+    assert.ok(Number(gearIcon.getAttribute('width')) >= 16, `Expected upsized gear icon >=16px, got ${gearIcon.getAttribute('width')}`);
+    cleanup();
+
+    // 2) ARLandInspectorPanel: copy link uses clipboard copy icon (1f4cb) & gear icon (2699) one size up (>= 18px)
+    const arView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: ownedParcel,
+        onManageLand: () => {},
+        onClose: () => {}
+      })
+    );
+    const arCopyIcon = arView.getByTestId('ar-land-copy-link-btn').querySelector('img');
+    const arGearIcon = arView.getByTestId('ar-land-manage-btn').querySelector('img');
+    assert.ok(arCopyIcon && String(arCopyIcon.getAttribute('src') || '').includes('1f4cb'));
+    assert.ok(Number(arCopyIcon.getAttribute('width')) >= 18);
+    assert.ok(arGearIcon && String(arGearIcon.getAttribute('src') || '').includes('2699'));
+    assert.ok(Number(arGearIcon.getAttribute('width')) >= 18);
+    cleanup();
+
+    // 3) StudioHudTopBar: Simple/Quick vs Pro mode toggle pill is completely removed
+    const hudView = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        user: { id: 'u-me', username: 'bigdog' },
+        mode: 'draw',
+        dockOpen: false,
+        location: { lat: 39.7285, lng: -121.8375 },
+        voxels: [],
+        hasOwnedLand: true,
+        ownedLandCount: 1,
+        cameraReady: true,
+        originStatus: { originBlocked: false, reason: '' },
+        sceneScan: { optimal: true },
+        nearbyCount: 0,
+        onOpenAreaMap: () => {}
+      })
+    );
+    const hudText = hudView.container.textContent || '';
+    assert.equal(/\bPro\b|\bQuick\b|Simple/i.test(hudText), false, `Expected no Quick/Pro simple-mode pill in StudioHudTopBar, got: ${hudText}`);
+    cleanup();
   });
 });

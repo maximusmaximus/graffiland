@@ -284,7 +284,7 @@ export default function DesktopIntroBanner({
               <XeroIcon emoji="📋" size={12} /> Copy Autonomous Agent Prompt
             </button>
             <button type="button" className="btn btn-xs" onClick={handleCopyStdioConfig}>
-              <XeroIcon emoji="⚙️" size={12} /> MCP Config
+              <XeroIcon emoji="⚙️" size={16} /> MCP Config
             </button>
             <a className="btn btn-xs" href={`${apiOrigin}/llms.txt`} target="_blank" rel="noreferrer">
               /llms.txt

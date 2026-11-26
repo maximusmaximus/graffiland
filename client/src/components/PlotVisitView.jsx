@@ -1414,7 +1414,7 @@ export default function PlotVisitView({
               title="Copy share link"
               onClick={handleCopyShareLink}
             >
-              🔗
+              <XeroIcon emoji="📋" size={18} />
             </button>
           )}
           <button
@@ -1598,13 +1598,18 @@ export default function PlotVisitView({
                             handleCopyShareLink();
                           }}
                         >
-                          {labelLinkCopied
-                            ? isEmptyLand
-                              ? '✓ Copied'
-                              : '✓'
-                            : isEmptyLand
-                              ? '🔗 Copy Link'
-                              : '🔗'}
+                          {labelLinkCopied ? (
+                            isEmptyLand ? (
+                              '✓ Copied'
+                            ) : (
+                              '✓'
+                            )
+                          ) : (
+                            <>
+                              <XeroIcon emoji="📋" size={16} />
+                              {isEmptyLand ? ' Copy Link' : ''}
+                            </>
+                          )}
                         </button>
                       </div>
                     );
@@ -2068,7 +2073,7 @@ export default function PlotVisitView({
                             flashStatus(ok ? `Copied link for "${selectedArtwork.title}"!` : url);
                           }}
                         >
-                          🔗 Copy Artwork Link
+                          <XeroIcon emoji="📋" size={16} /> Copy Artwork Link
                         </button>
                         {(() => {
                           const links = getSculptureChainLinks(selectedArtwork, config);
@@ -2093,7 +2098,7 @@ export default function PlotVisitView({
                         >
                           <div className="plot-mgmt-header">
                             <span className="plot-mgmt-title">
-                              <XeroIcon emoji="⚙️" size={13} />{' '}
+                              <XeroIcon emoji="⚙️" size={17} />{' '}
                               {isLandOwner || isSelectedArtworkOwner
                                 ? 'Artwork Management'
                                 : 'Contributor Edit Access'}
@@ -2202,7 +2207,7 @@ export default function PlotVisitView({
                                   className="btn btn-xs btn-outline"
                                   onClick={() => onSelectSculpture(selectedArtwork)}
                                 >
-                                  ⚙️ Offset, Revisions &amp; Transfer
+                                  <XeroIcon emoji="⚙️" size={16} /> Offset, Revisions &amp; Transfer
                                 </button>
                               )}
 
@@ -2557,7 +2562,7 @@ export default function PlotVisitView({
                             className="btn btn-sm"
                             onClick={handleCopyShareLink}
                           >
-                            🔗 Copy Share Link
+                            <XeroIcon emoji="📋" size={16} /> Copy Share Link
                           </button>
                           {!isLandOwner && !isFrozen && user && onOpenAddLandItem && (
                             <button
@@ -2577,7 +2582,7 @@ export default function PlotVisitView({
                         <div className="card plot-mgmt-section" data-testid="plot-land-management">
                           <div className="plot-mgmt-header">
                             <span className="plot-mgmt-title">
-                              <XeroIcon emoji="⚙️" size={13} /> Land Management
+                              <XeroIcon emoji="⚙️" size={17} /> Land Management
                             </span>
                             <span
                               className="badge gold"
@@ -2706,7 +2711,7 @@ export default function PlotVisitView({
                                   data-testid="plot-land-full-manage-btn"
                                   onClick={() => onOpenManageLand(activeParcel.parcelId)}
                                 >
-                                  ⚙️ Full Land Settings
+                                  <XeroIcon emoji="⚙️" size={16} /> Full Land Settings
                                 </button>
                               )}
                             </div>

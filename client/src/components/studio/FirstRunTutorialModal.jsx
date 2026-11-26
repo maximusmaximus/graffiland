@@ -16,9 +16,9 @@ const TUTORIAL_STEPS = [
     emoji: '🧱',
     title: '2. Sculpt 4x Blocks or Hand Off to AI',
     body: 'Hold and move your phone like a spray can to paint in 3D, or stack and erase blocks.',
-    infoTitle: 'Brush, Stack, Erase & Pro Tools',
+    infoTitle: 'Brush, Stack, Erase & Studio Tools',
     infoBody:
-      'Swipe the bottom carousel between Brush (🖌️), Stack (🧱 — hold to build off faces), and Erase (🧽). Toggle ⚡ Quick mode for a clean studio or Pro mode for Lock & Scale (✅), Foreground Occlusion (🪞), and Agent Code (📋).'
+      'Swipe the bottom carousel between Brush (🖌️), Stack (🧱 — hold to build off faces), Erase (🧽), Lock & Scale (✅), Foreground Occlusion (🪞), and Agent Code (📋).'
   },
   {
     emoji: '🚀',
@@ -30,11 +30,7 @@ const TUTORIAL_STEPS = [
   }
 ];
 
-export default function FirstRunTutorialModal({
-  quickSculpt,
-  onToggleQuickSculpt,
-  onClose
-}) {
+export default function FirstRunTutorialModal({ onClose }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [dontShowAgain, setDontShowAgain] = useState(true);
   const step = TUTORIAL_STEPS[stepIdx];
@@ -91,40 +87,6 @@ export default function FirstRunTutorialModal({
           <p style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--muted)', margin: 0 }}>
             {step.body}
           </p>
-        </div>
-
-        <div
-          className="card"
-          style={{
-            padding: 10,
-            marginBottom: 12,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 8
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <XeroIcon emoji="⚡" size={13} /> Quick Sculpt Mode
-              <InfoTip title="Quick vs Pro HUD">
-                <strong>Quick mode</strong> keeps only Brush, Stack, Erase, Preview &amp; Publish on
-                screen. <strong>Pro HUD</strong> unlocks Transform, Foreground Occlusion, and AI
-                Agent tools.
-              </InfoTip>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-              {quickSculpt ? 'Simple studio controls.' : 'Full Pro studio tools.'}
-            </div>
-          </div>
-          <button
-            type="button"
-            className={`btn ${quickSculpt ? 'btn-primary' : ''}`}
-            style={{ fontSize: 11, padding: '5px 10px', flexShrink: 0 }}
-            onClick={onToggleQuickSculpt}
-          >
-            {quickSculpt ? '⚡ Quick ON' : 'Pro HUD'}
-          </button>
         </div>
 
         <label

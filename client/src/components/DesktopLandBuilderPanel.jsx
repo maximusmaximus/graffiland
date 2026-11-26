@@ -12,6 +12,7 @@ import { buildLandAcquisitionAgentPrompt } from '../../../shared/landSignatureMe
 import { api } from '../utils/api.js';
 import { EmojiInput } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import XeroIcon from './XeroIcon.jsx';
 
 async function copyTextSafe(text) {
   const payload = String(text || '');
@@ -1147,7 +1148,7 @@ export function DesktopLandBuilderPanel({
                   className="btn btn-sm btn-outline"
                   onClick={() => handleCopyMintedParcelLink(activeOwned)}
                 >
-                  🔗 Copy Link
+                  <XeroIcon emoji="📋" size={16} /> Copy Link
                 </button>
                 <button
                   type="button"
@@ -1199,7 +1200,7 @@ export function DesktopLandBuilderPanel({
                     className="btn btn-sm btn-ghost"
                     onClick={() => onOpenLandManagement(activeOwned.parcelId)}
                   >
-                    ⚙️ Manage
+                    <XeroIcon emoji="⚙️" size={16} /> Manage
                   </button>
                 )}
               </>
@@ -1312,7 +1313,7 @@ export function DesktopLandBuilderPanel({
                       title="Copy share link"
                       onClick={() => handleCopyMintedParcelLink(parcel)}
                     >
-                      🔗
+                      <XeroIcon emoji="📋" size={16} />
                     </button>
                     <button
                       type="button"
@@ -1321,7 +1322,7 @@ export function DesktopLandBuilderPanel({
                       title="Copy location & coordinates"
                       onClick={() => handleCopyMintedParcelLocation(parcel)}
                     >
-                      📋
+                      <XeroIcon emoji="📍" size={14} />
                     </button>
                     {onOpenAddLandItem && (
                       <button
