@@ -473,6 +473,7 @@ export default function MobileIsometricMap({
   selectedSculptureId = '',
   focusParcelTick = 0,
   isFullExpanded = false,
+  isDesktop = false,
   showcaseMode = false,
   landSelected = false,
   initialView = null,
@@ -493,6 +494,7 @@ export default function MobileIsometricMap({
   const styleReadyRef = useRef(false);
   const fallbackAppliedRef = useRef(false);
   const isFullExpandedRef = useRef(Boolean(isFullExpanded));
+  const isDesktopRef = useRef(Boolean(isDesktop));
   const initialViewRef = useRef(initialView);
   const onViewportChangeRef = useRef(onViewportChange);
   const lastHandledFocusTickRef = useRef(focusParcelTick);
@@ -510,6 +512,9 @@ export default function MobileIsometricMap({
   useEffect(() => {
     isFullExpandedRef.current = Boolean(isFullExpanded);
   }, [isFullExpanded]);
+  useEffect(() => {
+    isDesktopRef.current = Boolean(isDesktop);
+  }, [isDesktop]);
   useEffect(() => {
     initialViewRef.current = initialView;
   }, [initialView]);
@@ -752,16 +757,18 @@ export default function MobileIsometricMap({
             includeBottomEdges: isElevated
           });
         }
-        pendingLabels.push({
-          parcel: other.parcel,
-          geom: otherGeom,
-          outerColor: otherOuter,
-          innerColor: otherInner,
-          label: formatSimpleLandLabel(other.parcel, null),
-          liftPx: 16,
-          minY: 52,
-          isPrimary: false
-        });
+        if (!isDesktopRef.current) {
+          pendingLabels.push({
+            parcel: other.parcel,
+            geom: otherGeom,
+            outerColor: otherOuter,
+            innerColor: otherInner,
+            label: formatSimpleLandLabel(other.parcel, null),
+            liftPx: 16,
+            minY: 52,
+            isPrimary: false
+          });
+        }
       }
     }
 
@@ -894,7 +901,7 @@ export default function MobileIsometricMap({
         )
       : (hydratedSculpturesRef.current || []).filter((sc) => sc && !sc.hidden && sc.id);
 
-    const callouts = computeSideArtworkCallouts({
+    const allCallouts = computeSideArtworkCallouts({
       sculptures: focusedCalloutSculptures,
       volume: activeVol,
       viewportWidth: w,
@@ -909,6 +916,12 @@ export default function MobileIsometricMap({
       projectScreenPt: (lng, lat, alt) =>
         projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
     });
+    const callouts = isDesktopRef.current
+      ? allCallouts.filter((c) => !c.isOffScreen)
+      : allCallouts;
+    const offScreenSculptures = isDesktopRef.current
+      ? allCallouts.filter((c) => c.isOffScreen)
+      : [];
     latestCalloutsRef.current = callouts;
 
     const positionedIds = new Set();
@@ -971,17 +984,32 @@ export default function MobileIsometricMap({
         prismAvoidRects.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
       }
     }
+    const desktopPointers = Boolean(isDesktopRef.current);
     const nextArrows = primary?.volume
       ? computeNeighborEdgeArrows({
           focusedEntry: primary,
           otherEntries: otherEntriesRef.current || [],
-          projectLngLat: (lng, lat) => map.project([lng, lat]),
+          otherSculptures: offScreenSculptures,
+          projectLngLat: desktopPointers
+            ? (lng, lat, alt = 0) =>
+                projectLngLatAltToScreen(
+                  map,
+                  maplibregl,
+                  lng,
+                  lat,
+                  isFullExpandedRef.current ? alt : 0
+                )
+            : (lng, lat) => map.project([lng, lat]),
           viewportWidth: w,
           viewportHeight: h,
           bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
           reservedRects: [...reservedRects, ...placedRects],
           avoidRects: prismAvoidRects,
-          maxArrows: showcaseModeRef.current ? 2 : null,
+          maxArrows: desktopPointers ? 6 : showcaseModeRef.current ? 2 : null,
+          topInsetY: desktopPointers ? 10 : 42,
+          bottomInsetY: desktopPointers ? 10 : 38,
+          onScreenPointers: desktopPointers,
+          defaultLandColor: desktopPointers && isFullExpandedRef.current ? '#ff4da6' : '',
           unitSystem: unitSystemRef.current
         })
       : [];
@@ -989,6 +1017,11 @@ export default function MobileIsometricMap({
     if (nextSig !== neighborArrowsSigRef.current) {
       neighborArrowsSigRef.current = nextSig;
       setNeighborArrows(nextArrows);
+      setStageDims((prev) =>
+        prev.width === Math.round(w) && prev.height === Math.round(h)
+          ? prev
+          : { width: Math.round(w), height: Math.round(h) }
+      );
     }
   }, []);
 
@@ -1604,7 +1637,7 @@ export default function MobileIsometricMap({
   // Keep GeoJSON sources & showcase callouts synced when parcels, sculptures, hydration, full-view, or selection change
   useEffect(() => {
     syncMapSources();
-  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, isFullExpanded, userLocation, unitSystem, syncMapSources]);
+  }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, isFullExpanded, isDesktop, userLocation, unitSystem, syncMapSources]);
 
   // Smoothly re-frame ONLY on initial mount or explicit land-focus action — NEVER auto-snap while in Full View
   useEffect(() => {
@@ -2099,10 +2132,13 @@ export default function MobileIsometricMap({
         </span>
       </div>
 
-      {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
+      {/* On-Screen Pointer Tags & Off-Screen Viewport-Edge Directional Labels */}
       <NeighborEdgeArrowsOverlay
         arrows={neighborArrows}
+        viewportWidth={stageDims.width}
+        viewportHeight={stageDims.height}
         onSelectParcel={onSelectParcel}
+        onSelectSculpture={onSelectSculpture}
       />
     </div>
   );

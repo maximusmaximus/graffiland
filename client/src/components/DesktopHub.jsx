@@ -2230,6 +2230,12 @@ export default function DesktopHub({
               config={config}
               onSelectSculpture={openSculpture}
               onSelectParcel={openLandShowcase}
+              onNavigateParcel={focusLandOnMap}
+              onNavigateSculpture={(sc) => {
+                if (!sc) return;
+                setLastSculpture(sc);
+                focusLandForSculpture(sc);
+              }}
               onAddDraftRectangle={handleAddDraftRectangle}
               onSelectDraft={(id) => {
                 selectedDraftIdRef.current = id;
@@ -3343,6 +3349,10 @@ export default function DesktopHub({
           user={user}
           config={config}
           userLocation={userLocation}
+          isDesktop
+          allParcels={parcels}
+          onSelectParcel={openLandShowcase}
+          onSelectSculpture={openSculpture}
           onRequestLogin={() => setLoginOpen(true)}
           onSculptureUpdated={(updated, extra = {}) => {
             setSelected(updated);

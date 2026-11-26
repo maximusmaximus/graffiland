@@ -2956,4 +2956,175 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(errors, []);
     await mobCtx.close();
   });
+
+  test('Desktop map views draw same-color pointer lines to on-screen tags and pin off-screen tags to viewport edges for click navigation', async () => {
+    const authRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devProfile: { email: 'desktop-tags@graffiland.test', name: 'Desktop Tag Tester' } })
+    }).then((r) => r.json());
+    assert.ok(authRes.token, 'Expected dev login token');
+
+    // Claim 3 lands: Center focal land, Near East land (~28m away -> on-screen), Far West land (~2.2km away -> off-screen)
+    const claimLand = async (lat, lng, customName) => {
+      const res = await fetch(`${baseUrl}/api/lands/claim`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authRes.token}`
+        },
+        body: JSON.stringify({
+          lat,
+          lng,
+          customName,
+          volume: {
+            centerLat: lat,
+            centerLng: lng,
+            widthMeters: 16,
+            depthMeters: 16,
+            heightMeters: 12,
+            rotationDeg: 0
+          }
+        })
+      });
+      const data = await res.json();
+      assert.equal(res.status, 201, `Failed to claim ${customName}: ${JSON.stringify(data)}`);
+      return data.parcel || data.land || data;
+    };
+
+    const centerLand = await claimLand(37.768, -122.425, 'Pointer Hub Plaza');
+    const nearLand = await claimLand(37.768, -122.42468, 'Adjacent Gallery');
+    const farLand = await claimLand(37.768, -122.45, 'Distant Horizon Plot');
+
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await ctx.newPage();
+    await page.addInitScript(() => {
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+    });
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // 1) Desktop PlotVisitView (direct parcel visit -> 3D isometric + 2D Leaflet)
+    await page.goto(`${baseUrl}/?parcel=${encodeURIComponent(centerLand.parcelId)}`, {
+      waitUntil: 'domcontentloaded'
+    });
+    await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 15000 });
+    const introClose = page.getByTestId('direct-link-intro-close-btn');
+    if (await introClose.isVisible().catch(() => false)) {
+      await introClose.click();
+    }
+
+    // Switch to 2D Leaflet mode where projection is deterministic even without hardware GPU acceleration
+    await page.getByTestId('mobile-map-2d-toggle-btn').click();
+    await page.waitForSelector('.plot-visit-stage[data-map-mode="2d"]', { timeout: 10000 });
+
+    // Zoom out slightly via wheel/Leaflet so Adjacent Gallery (~28m) is guaranteed inside the 2D frame while Distant Horizon (~2.2km) stays off-screen
+    await page.waitForFunction(
+      () => {
+        const btns = Array.from(
+          globalThis.document.querySelectorAll('.plot-visit-stage [data-testid="neighbor-edge-arrow"]')
+        );
+        return btns.length >= 2;
+      },
+      null,
+      { timeout: 10000 }
+    );
+
+    const check2dTags = await page.evaluate(
+      ({ nearPid, farPid }) => {
+        const stage = globalThis.document.querySelector('.plot-visit-stage');
+        const btns = Array.from(stage.querySelectorAll('[data-testid="neighbor-edge-arrow"]')).map((el) => ({
+          parcelId: el.getAttribute('data-parcel-id'),
+          placement: el.getAttribute('data-placement'),
+          side: el.getAttribute('data-edge-side'),
+          tagColor: el.getAttribute('data-tag-color'),
+          hasDot: Boolean(el.querySelector('.neighbor-onscreen-dot')),
+          hasEdgeArrow: Boolean(el.querySelector('svg.neighbor-edge-arrow-svg'))
+        }));
+        const leaders = Array.from(stage.querySelectorAll('[data-testid="neighbor-tag-leader-line"]')).map((g) => ({
+          parcelId: g.getAttribute('data-parcel-id'),
+          lineColor: g.getAttribute('data-line-color'),
+          stroke: g.querySelectorAll('line')[1]?.getAttribute('stroke') || ''
+        }));
+        return {
+          nearBtn: btns.find((b) => b.parcelId === nearPid) || null,
+          farBtn: btns.find((b) => b.parcelId === farPid) || null,
+          nearLeader: leaders.find((l) => l.parcelId === nearPid) || null,
+          farLeader: leaders.find((l) => l.parcelId === farPid) || null,
+          allBtns: btns,
+          allLeaders: leaders
+        };
+      },
+      { nearPid: nearLand.parcelId, farPid: farLand.parcelId }
+    );
+
+    assert.ok(check2dTags.nearBtn, `Expected near neighbor tag in desktop 2D view: ${JSON.stringify(check2dTags.allBtns)}`);
+    assert.equal(check2dTags.nearBtn.placement, 'on-screen', 'On-screen neighbor land must use on-screen pointer placement');
+    assert.equal(check2dTags.nearBtn.hasDot, true, 'On-screen tag should show color dot');
+    assert.ok(check2dTags.nearLeader, 'On-screen neighbor land must draw an SVG leader line');
+    assert.equal(
+      check2dTags.nearLeader.stroke,
+      check2dTags.nearBtn.tagColor,
+      'Leader line stroke color must exactly match the tag color'
+    );
+
+    assert.ok(check2dTags.farBtn, `Expected off-screen neighbor edge tag in desktop 2D view: ${JSON.stringify(check2dTags.allBtns)}`);
+    assert.equal(check2dTags.farBtn.placement, 'edge', 'Off-screen neighbor land must stay pinned on the viewport edge');
+    assert.equal(check2dTags.farBtn.hasEdgeArrow, true, 'Off-screen edge tag must show directional arrow');
+    assert.equal(check2dTags.farLeader, null, 'Off-screen edge tag must NOT draw an interior leader line');
+
+    // Click the off-screen edge tag -> navigates PlotVisitView directly to Distant Horizon Plot
+    await page
+      .locator(`.plot-visit-stage [data-testid="neighbor-edge-arrow"][data-parcel-id="${farLand.parcelId}"]`)
+      .click();
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="desktop-plot-visit-view"]')
+          ?.textContent?.includes('Distant Horizon Plot'),
+      null,
+      { timeout: 10000 }
+    );
+
+    // 2) Close PlotVisitView -> verify Desktop World Map (MapView3D) shows off-screen edge tags & same-color land tags
+    await page.getByTestId('plot-close-btn').click();
+    await page.waitForSelector('.map-container', { timeout: 10000 });
+    await page.waitForFunction(
+      () => globalThis.document.querySelectorAll('.map-container [data-testid="neighbor-edge-arrow"]').length >= 1,
+      null,
+      { timeout: 12000 }
+    );
+
+    const map3dEdgeCheck = await page.evaluate(() => {
+      const edges = Array.from(
+        globalThis.document.querySelectorAll('.map-container [data-testid="neighbor-edge-arrow"]')
+      ).map((el) => ({
+        placement: el.getAttribute('data-placement'),
+        side: el.getAttribute('data-edge-side'),
+        tagColor: el.getAttribute('data-tag-color'),
+        parcelId: el.getAttribute('data-parcel-id'),
+        sculptureId: el.getAttribute('data-sculpture-id')
+      }));
+      return { edges };
+    });
+    assert.ok(map3dEdgeCheck.edges.length >= 1, 'Expected off-screen edge tags on desktop MapView3D');
+    assert.ok(
+      map3dEdgeCheck.edges.every((e) => e.placement === 'edge'),
+      `Expected MapView3D edge overlay items to be off-screen edge tags, got ${JSON.stringify(map3dEdgeCheck.edges)}`
+    );
+
+    // 3) Open SculptureModal on Desktop -> verify mini-land-map renders clickable tags
+    await page.goto(`${baseUrl}/?sculpture=${encodeURIComponent(seededSculptureId)}`, {
+      waitUntil: 'domcontentloaded'
+    });
+    await page.waitForSelector('.mini-land-map-stage', { timeout: 15000 });
+    await page.waitForFunction(
+      () => globalThis.document.querySelectorAll('.mini-land-map-stage [data-testid="neighbor-edge-arrow"]').length >= 1,
+      null,
+      { timeout: 10000 }
+    );
+
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
 });

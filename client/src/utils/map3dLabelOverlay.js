@@ -340,6 +340,17 @@ export function computeSideArtworkCallouts({
         ? pt.y
         : viewportHeight * 0.52 + (idx - (visible.length - 1) / 2) * 14;
 
+    const isOffScreen = Boolean(
+      pt &&
+        (pt.visible === false ||
+          !Number.isFinite(pt.x) ||
+          !Number.isFinite(pt.y) ||
+          pt.x < 8 ||
+          pt.x > viewportWidth - 8 ||
+          pt.y < 8 ||
+          pt.y > viewportHeight - 8)
+    );
+
     const isPendingPreview = Boolean(sc.isPendingPreview);
     const baseSub =
       sc.modelType === 'custom-3d'
@@ -358,6 +369,10 @@ export function computeSideArtworkCallouts({
       title: String(sc.title || '3D Artwork'),
       subtitle,
       sculptureUrl,
+      lat,
+      lng,
+      alt: targetAlt,
+      isOffScreen,
       targetX,
       targetY,
       isSelected: Boolean(selectedSculptureId && String(selectedSculptureId) === String(sc.id))

@@ -855,4 +855,171 @@ describe('Focused Map Neighbor Edge Arrows (No Other-Land Lines + Zero HUD Overl
       }
     }
   });
+
+  test('desktop onScreenPointers points to on-screen locations with same-color leader coordinates while pinning off-screen & behind-camera targets to viewport edges', () => {
+    const vw = 900;
+    const vh = 520;
+    const reservedRects = buildDefaultHudReservedRects({ stageWidth: vw, stageHeight: vh });
+    const frozenNeighbor = {
+      parcel: { parcelId: 'GLAND-FROZEN', customName: 'Ice Gallery', frozen: true },
+      volume: { parcelId: 'GLAND-FROZEN', centerLat: 39.73025, centerLng: -121.8411 }
+    };
+    const allNeighbors = [neighbors[0], frozenNeighbor, neighbors[2], neighbors[3]];
+    const otherSculptures = [
+      {
+        id: 'sc-on-1',
+        sculpture: { id: 'sc-on-1', title: 'Neon Crane', lat: 39.73015, lng: -121.84045 },
+        title: 'Neon Crane',
+        lat: 39.73015,
+        lng: -121.84045
+      },
+      {
+        id: 'sc-off-1',
+        sculpture: { id: 'sc-off-1', title: 'Far Totem', lat: 39.7302, lng: -121.8394 },
+        title: 'Far Totem',
+        lat: 39.7302,
+        lng: -121.8394
+      }
+    ];
+
+    const projectLngLat = (lng, lat) => {
+      if (Math.abs(lng - -121.84067) < 1e-5 && Math.abs(lat - 39.7302) < 1e-5) {
+        return { x: 450, y: 260, visible: true };
+      }
+      if (Math.abs(lng - -121.84021) < 1e-5) return { x: 640, y: 220, visible: true }; // GLAND-EAST on-screen
+      if (Math.abs(lng - -121.8411) < 1e-5) return { x: 290, y: 290, visible: true }; // GLAND-FROZEN on-screen
+      if (Math.abs(lng - -121.8418) < 1e-5) return { x: -320, y: 260, visible: true }; // GLAND-WEST off-screen left
+      if (Math.abs(lat - 39.7291) < 1e-5) return { x: 450, y: 120, visible: false }; // GLAND-SOUTH behind camera
+      if (Math.abs(lng - -121.84045) < 1e-5) return { x: 560, y: 330, visible: true }; // sc-on-1 on-screen
+      if (Math.abs(lng - -121.8394) < 1e-5) return { x: 1380, y: 200, visible: true }; // sc-off-1 off-screen right
+      return { x: 450, y: 260, visible: true };
+    };
+
+    const placed = computeNeighborEdgeArrows({
+      focusedEntry: focusedLand,
+      otherEntries: allNeighbors,
+      otherSculptures,
+      projectLngLat,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      bearingDeg: 0,
+      reservedRects,
+      maxArrows: 6,
+      onScreenPointers: true
+    });
+
+    assert.equal(placed.length, 6, 'Expected all 6 tags (3 on-screen + 3 edge)');
+
+    const east = placed.find((a) => a.parcelId === 'GLAND-EAST');
+    const frozen = placed.find((a) => a.parcelId === 'GLAND-FROZEN');
+    const west = placed.find((a) => a.parcelId === 'GLAND-WEST');
+    const south = placed.find((a) => a.parcelId === 'GLAND-SOUTH');
+    const scOn = placed.find((a) => a.sculptureId === 'sc-on-1');
+    const scOff = placed.find((a) => a.sculptureId === 'sc-off-1');
+
+    // On-screen targets carry exact target coordinates, border anchor, and matching accent color
+    assert.ok(east && east.placement === 'on-screen' && east.side === 'on-screen');
+    assert.equal(east.targetX, 640);
+    assert.equal(east.targetY, 220);
+    assert.equal(east.accentColor, '#ffb703');
+    assert.ok(Number.isFinite(east.fromX) && Number.isFinite(east.fromY));
+    assert.ok(
+      Math.hypot(east.fromX - east.x, east.fromY - east.y) <= Math.hypot(east.width / 2, east.height / 2) + 2,
+      'Leader start anchor must lie on the tag pill border'
+    );
+
+    assert.ok(frozen && frozen.placement === 'on-screen');
+    assert.equal(frozen.accentColor, '#7dd3fc', 'Frozen land tag & leader color must be ice-blue');
+
+    assert.ok(scOn && scOn.placement === 'on-screen' && scOn.kind === 'sculpture');
+    assert.equal(scOn.parcelId, '', 'Sculpture tag should not impersonate a parcelId');
+    assert.equal(scOn.targetX, 560);
+    assert.equal(scOn.targetY, 330);
+    assert.equal(scOn.accentColor, '#00f5d4', 'Sculpture tag & leader color must be teal');
+
+    // Off-screen & behind-camera targets stay pinned to cardinal viewport edges
+    assert.ok(west && west.placement === 'edge' && west.side === 'left' && west.targetX === null);
+    assert.ok(south && south.placement === 'edge' && south.side === 'bottom' && south.targetX === null);
+    assert.ok(scOff && scOff.placement === 'edge' && scOff.kind === 'sculpture' && scOff.side === 'right');
+    assert.equal(scOff.accentColor, '#00f5d4');
+
+    // Zero overlap with HUD, sibling tags, or own target dot
+    const rects = placed.map((a) => ({
+      x: a.x - a.width / 2,
+      y: a.y - a.height / 2,
+      w: a.width,
+      h: a.height
+    }));
+    for (let i = 0; i < placed.length; i++) {
+      for (const hud of reservedRects) {
+        assert.equal(rectsOverlap(rects[i], hud, 4), false, `Tag ${placed[i].label} overlapped HUD`);
+      }
+      if (placed[i].placement === 'on-screen') {
+        const dotRect = { x: placed[i].targetX - 6, y: placed[i].targetY - 6, w: 12, h: 12 };
+        assert.equal(
+          rectsOverlap(rects[i], dotRect, 2),
+          false,
+          `On-screen tag ${placed[i].label} must not cover its own target anchor dot`
+        );
+      }
+      for (let j = i + 1; j < placed.length; j++) {
+        assert.equal(
+          rectsOverlap(rects[i], rects[j], 4),
+          false,
+          `Tags ${placed[i].label} and ${placed[j].label} overlapped`
+        );
+      }
+    }
+  });
+
+  test('edgeOnly mode (MapView3D) skips on-screen items and emits matching-color edge tags for off-screen lands & sculptures', () => {
+    const vw = 1000;
+    const vh = 600;
+    const placed = computeNeighborEdgeArrows({
+      originCoords: { lat: 39.7302, lng: -121.84067 },
+      otherEntries: [
+        neighbors[0], // on-screen -> must be skipped
+        {
+          parcel: { parcelId: 'GLAND-SEL-OFF', customName: 'Selected Far Land' },
+          volume: { parcelId: 'GLAND-SEL-OFF', centerLat: 39.7302, centerLng: -121.844 },
+          isSelected: true
+        },
+        {
+          parcel: { parcelId: 'GLAND-ACT-OFF', customName: 'Active Far Land' },
+          volume: { parcelId: 'GLAND-ACT-OFF', centerLat: 39.733, centerLng: -121.84067 }
+        }
+      ],
+      otherSculptures: [
+        {
+          id: 'sc-off-edge',
+          sculpture: { id: 'sc-off-edge', title: 'Distant Pillar', lat: 39.728, lng: -121.84067 },
+          title: 'Distant Pillar',
+          lat: 39.728,
+          lng: -121.84067
+        }
+      ],
+      projectLngLat: (lng, lat) => {
+        if (Math.abs(lng - -121.84021) < 1e-5) return { x: 600, y: 300, visible: true };
+        if (Math.abs(lng - -121.844) < 1e-5) return { x: -240, y: 300, visible: true };
+        if (Math.abs(lat - 39.733) < 1e-5) return { x: 500, y: -150, visible: true };
+        return { x: 500, y: 920, visible: true };
+      },
+      viewportWidth: vw,
+      viewportHeight: vh,
+      edgeOnly: true,
+      defaultLandColor: '#ff1f8f'
+    });
+
+    assert.equal(placed.some((a) => a.parcelId === 'GLAND-EAST'), false, 'On-screen land must be skipped in edgeOnly mode');
+    const selOff = placed.find((a) => a.parcelId === 'GLAND-SEL-OFF');
+    const actOff = placed.find((a) => a.parcelId === 'GLAND-ACT-OFF');
+    const scOff = placed.find((a) => a.sculptureId === 'sc-off-edge');
+
+    assert.ok(selOff && selOff.placement === 'edge' && selOff.side === 'left');
+    assert.equal(selOff.accentColor, '#ffd166', 'Selected off-screen land edge tag must be gold');
+    assert.ok(actOff && actOff.placement === 'edge' && actOff.side === 'top');
+    assert.equal(actOff.accentColor, '#ff1f8f', 'Active off-screen land edge tag must match MapView3D pink');
+    assert.ok(scOff && scOff.placement === 'edge' && scOff.side === 'bottom');
+    assert.equal(scOff.accentColor, '#00f5d4', 'Off-screen sculpture edge tag must be teal');
+  });
 });

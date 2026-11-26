@@ -3838,6 +3838,181 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     }
   });
 
+  test('Desktop NeighborEdgeArrowsOverlay draws same-color leader lines for on-screen tags and keeps off-screen land/sculpture tags clickable on edges', async () => {
+    const { default: NeighborEdgeArrowsOverlay } = await loadJsxModule(
+      'client/src/components/NeighborEdgeArrowsOverlay.jsx'
+    );
+
+    const onScreenParcel = { parcelId: 'GLAND-ONSCREEN', customName: 'Plaza East' };
+    const offScreenParcel = { parcelId: 'GLAND-OFFSCREEN', customName: 'West Annex' };
+    const onScreenSc = { id: 'sc-on-9', title: 'Holo Fox' };
+    const offScreenSc = { id: 'sc-off-9', title: 'Sky Totem' };
+
+    const items = [
+      {
+        id: 'land:GLAND-ONSCREEN',
+        kind: 'land',
+        parcelId: 'GLAND-ONSCREEN',
+        parcel: onScreenParcel,
+        sculptureId: '',
+        sculpture: null,
+        label: 'Plaza East',
+        fullLabel: 'Plaza East',
+        distanceLabel: '42m',
+        x: 610,
+        y: 185,
+        width: 112,
+        height: 28,
+        side: 'on-screen',
+        placement: 'on-screen',
+        arrowDeg: 90,
+        targetX: 610,
+        targetY: 235,
+        fromX: 610,
+        fromY: 199,
+        accentColor: '#ffb703',
+        dotColor: '#fff3c4',
+        textColor: '#fff3c4'
+      },
+      {
+        id: 'sculpture:sc-on-9',
+        kind: 'sculpture',
+        parcelId: '',
+        parcel: null,
+        sculptureId: 'sc-on-9',
+        sculpture: onScreenSc,
+        label: 'Holo Fox',
+        fullLabel: 'Holo Fox',
+        distanceLabel: '18m',
+        x: 340,
+        y: 260,
+        width: 108,
+        height: 28,
+        side: 'on-screen',
+        placement: 'on-screen',
+        arrowDeg: 90,
+        targetX: 340,
+        targetY: 310,
+        fromX: 340,
+        fromY: 274,
+        accentColor: '#00f5d4',
+        dotColor: '#eafffc',
+        textColor: '#d9fff9'
+      },
+      {
+        id: 'land:GLAND-OFFSCREEN',
+        kind: 'land',
+        parcelId: 'GLAND-OFFSCREEN',
+        parcel: offScreenParcel,
+        sculptureId: '',
+        sculpture: null,
+        label: 'West Annex',
+        fullLabel: 'West Annex',
+        distanceLabel: '210m',
+        x: 60,
+        y: 240,
+        edgeInsetX: 6,
+        width: 118,
+        height: 28,
+        side: 'left',
+        placement: 'edge',
+        arrowDeg: 180,
+        targetX: null,
+        targetY: null,
+        fromX: null,
+        fromY: null,
+        accentColor: '#7dd3fc',
+        dotColor: '#e0f2fe',
+        textColor: '#e0f2fe'
+      },
+      {
+        id: 'sculpture:sc-off-9',
+        kind: 'sculpture',
+        parcelId: '',
+        parcel: null,
+        sculptureId: 'sc-off-9',
+        sculpture: offScreenSc,
+        label: 'Sky Totem',
+        fullLabel: 'Sky Totem',
+        distanceLabel: '95m',
+        x: 840,
+        y: 200,
+        edgeInsetX: 6,
+        width: 110,
+        height: 28,
+        side: 'right',
+        placement: 'edge',
+        arrowDeg: 0,
+        targetX: null,
+        targetY: null,
+        fromX: null,
+        fromY: null,
+        accentColor: '#00f5d4',
+        dotColor: '#eafffc',
+        textColor: '#d9fff9'
+      }
+    ];
+
+    const pickedParcels = [];
+    const pickedSculptures = [];
+    const view = RTL.render(
+      React.createElement(NeighborEdgeArrowsOverlay, {
+        arrows: items,
+        viewportWidth: 900,
+        viewportHeight: 520,
+        onSelectParcel: (p) => pickedParcels.push(p.parcelId),
+        onSelectSculpture: (s) => pickedSculptures.push(s.id)
+      })
+    );
+
+    try {
+      const leaders = view.getAllByTestId('neighbor-tag-leader-line');
+      assert.equal(leaders.length, 2, 'Only the 2 on-screen tags should render SVG leader lines');
+
+      const landLeader = leaders.find((el) => el.getAttribute('data-parcel-id') === 'GLAND-ONSCREEN');
+      const scLeader = leaders.find((el) => el.getAttribute('data-sculpture-id') === 'sc-on-9');
+      assert.ok(landLeader && scLeader);
+
+      const allBtns = view.getAllByTestId('neighbor-edge-arrow');
+      assert.equal(allBtns.length, 4);
+
+      const onLandBtn = allBtns.find((el) => el.getAttribute('data-parcel-id') === 'GLAND-ONSCREEN');
+      const onScBtn = allBtns.find((el) => el.getAttribute('data-sculpture-id') === 'sc-on-9');
+      const offLandBtn = allBtns.find((el) => el.getAttribute('data-parcel-id') === 'GLAND-OFFSCREEN');
+      const offScBtn = allBtns.find((el) => el.getAttribute('data-sculpture-id') === 'sc-off-9');
+
+      // Exact same color between tag and its pointer line
+      assert.equal(onLandBtn.getAttribute('data-placement'), 'on-screen');
+      assert.equal(onLandBtn.getAttribute('data-tag-color'), '#ffb703');
+      assert.equal(landLeader.getAttribute('data-line-color'), '#ffb703');
+      assert.equal(landLeader.querySelectorAll('line')[1].getAttribute('stroke'), '#ffb703');
+      assert.ok(onLandBtn.querySelector('.neighbor-onscreen-dot'));
+
+      assert.equal(onScBtn.getAttribute('data-placement'), 'on-screen');
+      assert.equal(onScBtn.getAttribute('data-tag-color'), '#00f5d4');
+      assert.equal(scLeader.getAttribute('data-line-color'), '#00f5d4');
+      assert.equal(scLeader.querySelectorAll('line')[1].getAttribute('stroke'), '#00f5d4');
+
+      // Off-screen tags stay pinned to viewport edges with directional arrows
+      assert.equal(offLandBtn.getAttribute('data-placement'), 'edge');
+      assert.equal(offLandBtn.getAttribute('data-edge-side'), 'left');
+      assert.ok(offLandBtn.querySelector('svg.neighbor-edge-arrow-svg'));
+      assert.equal(offScBtn.getAttribute('data-placement'), 'edge');
+      assert.equal(offScBtn.getAttribute('data-edge-side'), 'right');
+      assert.ok(offScBtn.querySelector('svg.neighbor-edge-arrow-svg'));
+
+      // Clicking both on-screen & edge tags navigates to the land or sculpture
+      RTL.fireEvent.click(onLandBtn);
+      RTL.fireEvent.click(offLandBtn);
+      RTL.fireEvent.click(onScBtn);
+      RTL.fireEvent.click(offScBtn);
+      assert.deepEqual(pickedParcels, ['GLAND-ONSCREEN', 'GLAND-OFFSCREEN']);
+      assert.deepEqual(pickedSculptures, ['sc-on-9', 'sc-off-9']);
+    } finally {
+      cleanup();
+    }
+  });
+
   test('Clickable artwork labels in PlotVisitView, LandIsometricPreview, and ARLandInspectorPanel navigate directly to the 3D art view', async () => {
     const { default: PlotVisitView } = await loadJsxModule('client/src/components/PlotVisitView.jsx');
     const { default: LandIsometricPreview } = await loadJsxModule(

@@ -663,7 +663,8 @@ export default function LandIsometricPreview({
     const previewSculptures = (hydratedPreviewSculpturesRef.current || []).filter(
       (sc) => sc && !sc.hidden && sc.id
     );
-    const sideCallouts = computeSideArtworkCallouts({
+    const desktopPointers = w >= 460;
+    const allSideCallouts = computeSideArtworkCallouts({
       sculptures: previewSculptures,
       volume: curVol,
       viewportWidth: w,
@@ -677,6 +678,12 @@ export default function LandIsometricPreview({
       projectScreenPt: (lng, lat, alt) =>
         projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
     });
+    const sideCallouts = desktopPointers
+      ? allSideCallouts.filter((c) => !c.isOffScreen)
+      : allSideCallouts;
+    const offScreenSculptures = desktopPointers
+      ? allSideCallouts.filter((c) => c.isOffScreen)
+      : [];
     const positionedCalloutIds = new Set();
     for (const c of sideCallouts) {
       drawArtworkCalloutLeader(ctx, c);
@@ -699,7 +706,7 @@ export default function LandIsometricPreview({
       }
     }
 
-    // Pass 3: Edge-of-label directional arrows pointing toward selectable neighboring lands
+    // Pass 3: On-screen pointer tags (desktop) & viewport-edge directional arrows for off-screen lands/sculptures
     const prismAvoidRects = [];
     if (primaryLabel?.geom) {
       const pts = [...primaryLabel.geom.bottom, ...primaryLabel.geom.top];
@@ -715,12 +722,17 @@ export default function LandIsometricPreview({
       ? computeNeighborEdgeArrows({
           focusedEntry: { parcel: parcelRef.current, volume: curVol },
           otherEntries: otherEntriesRef.current || [],
-          projectLngLat: (lng, lat) => map.project([lng, lat]),
+          otherSculptures: offScreenSculptures,
+          projectLngLat: desktopPointers
+            ? (lng, lat) => projectLngLatAltToScreen(map, maplibregl, lng, lat, 0)
+            : (lng, lat) => map.project([lng, lat]),
           viewportWidth: w,
           viewportHeight: h,
           bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
           reservedRects: [...reservedRects, ...placedRects],
           avoidRects: prismAvoidRects,
+          maxArrows: desktopPointers ? (w >= 520 ? 6 : 4) : null,
+          onScreenPointers: desktopPointers,
           unitSystem: unitSystemRef.current
         })
       : [];
@@ -728,6 +740,11 @@ export default function LandIsometricPreview({
     if (nextSig !== neighborArrowsSigRef.current) {
       neighborArrowsSigRef.current = nextSig;
       setNeighborArrows(nextArrows);
+      setStageSize((prev) =>
+        prev.width === Math.round(w) && prev.height === Math.round(h)
+          ? prev
+          : { width: Math.round(w), height: Math.round(h) }
+      );
     }
   }, []);
 
@@ -1531,10 +1548,13 @@ export default function LandIsometricPreview({
           🎯 Fit
         </button>
 
-        {/* Directional Edge-Arrow Labels Pointing to Selectable Neighboring Lands */}
+        {/* On-Screen Pointer Tags & Viewport-Edge Directional Arrows */}
         <NeighborEdgeArrowsOverlay
           arrows={neighborArrows}
+          viewportWidth={stageSize.width}
+          viewportHeight={stageSize.height}
           onSelectParcel={onSelectParcel}
+          onSelectSculpture={onSelectSculpture}
         />
       </div>
 

@@ -48,6 +48,11 @@ import {
   getMapLibreStyleForTheme,
   useMapTheme
 } from '../utils/mapTheme.js';
+import { useMeasurementUnits } from '../utils/measurementUnits.js';
+import {
+  buildNeighborArrowsSignature,
+  computeNeighborEdgeArrows
+} from '../utils/neighborEdgeArrows.js';
 import {
   colorWithAlpha,
   computeGizmoDepthProfile,
@@ -55,6 +60,7 @@ import {
 } from '../utils/prismDepthFade.js';
 import { buildSculptures3DGeoJson } from '../utils/sculpture3dGeoJson.js';
 import InfoTip from './InfoTip.jsx';
+import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
 const HOLD_TO_DRAW_MS = 380;
@@ -480,6 +486,8 @@ export default function MapView3D({
   onAdd3DItemForParcel = null,
   onTitleParcel = null,
   onCopyParcelShareLink = null,
+  onNavigateParcel = null,
+  onNavigateSculpture = null,
   focusTarget = null,
   onViewModeChange = null,
   onToggleDrawMode = null,
@@ -524,7 +532,16 @@ export default function MapView3D({
   const [draftCanvasDragMode, setDraftCanvasDragMode] = useState('orbit'); // 'orbit' | 'pan'
   const [rendered3dSculptureCount, setRendered3dSculptureCount] = useState(0);
   const [loadedThree3dCount, setLoadedThree3dCount] = useState(0);
+  const [edgeTags, setEdgeTags] = useState([]);
+  const [edgeStageDims, setEdgeStageDims] = useState({ width: 0, height: 0 });
+  const edgeTagsSigRef = useRef('');
+  const mapHudRectsCacheRef = useRef({ w: 0, h: 0, ts: 0, rects: [] });
   const threeLayerRef = useRef(null);
+  const { unitSystem } = useMeasurementUnits(userLocation);
+  const unitSystemRef = useRef(unitSystem);
+  useEffect(() => {
+    unitSystemRef.current = unitSystem;
+  }, [unitSystem]);
 
   // Dynamic Location Search state (intersections, businesses, landmarks, addresses, coords, parcels)
   const [searchQuery, setSearchQuery] = useState('');
@@ -555,6 +572,8 @@ export default function MapView3D({
   const showTerrainRef = useRef(showTerrain);
   const onSelectSculptureRef = useRef(onSelectSculpture);
   const onSelectParcelRef = useRef(onSelectParcel);
+  const onNavigateParcelRef = useRef(onNavigateParcel);
+  const onNavigateSculptureRef = useRef(onNavigateSculpture);
   const onSelectDraftRef = useRef(onSelectDraft);
   const onAddDraftRef = useRef(onAddDraftRectangle);
   const onUpdateDraftRef = useRef(onUpdateDraft);
@@ -636,6 +655,12 @@ export default function MapView3D({
   useEffect(() => {
     onSelectParcelRef.current = onSelectParcel;
   }, [onSelectParcel]);
+  useEffect(() => {
+    onNavigateParcelRef.current = onNavigateParcel;
+  }, [onNavigateParcel]);
+  useEffect(() => {
+    onNavigateSculptureRef.current = onNavigateSculpture;
+  }, [onNavigateSculpture]);
   useEffect(() => {
     onSelectDraftRef.current = onSelectDraft;
   }, [onSelectDraft]);
@@ -919,10 +944,10 @@ export default function MapView3D({
       if (
         !anchor ||
         !anchor.visible ||
-        anchor.roofCenter.x < -80 ||
-        anchor.roofCenter.x > w + 80 ||
-        anchor.highestTopY < -60 ||
-        anchor.roofCenter.y > h + 80
+        anchor.roofCenter.x < 14 ||
+        anchor.roofCenter.x > w - 14 ||
+        anchor.roofCenter.y < 14 ||
+        anchor.roofCenter.y > h - 14
       ) {
         el.style.display = 'none';
         continue;
@@ -939,6 +964,11 @@ export default function MapView3D({
 
     for (const { el, entry, anchor } of landPinEntries) {
       el.style.display = 'flex';
+      if (el.dataset.landAccent !== entry.outerColor) {
+        el.dataset.landAccent = entry.outerColor;
+        el.style.setProperty('--land-tag-accent', entry.outerColor);
+        el.style.setProperty('--land-tag-text', entry.innerColor);
+      }
       const pinW = el.offsetWidth || 132;
       const pinH = el.offsetHeight || 52;
       let pinBottomY = Math.max(46, Math.min(anchor.highestTopY, anchor.roofCenter.y) - 22);
@@ -1041,10 +1071,10 @@ export default function MapView3D({
         !pt.visible ||
         !Number.isFinite(pt.x) ||
         !Number.isFinite(pt.y) ||
-        pt.x < -80 ||
-        pt.x > w + 80 ||
-        pt.y < -60 ||
-        pt.y > h + 80
+        pt.x < 14 ||
+        pt.x > w - 14 ||
+        pt.y < 14 ||
+        pt.y > h - 14
       ) {
         el.style.display = 'none';
         continue;
@@ -1053,13 +1083,14 @@ export default function MapView3D({
         scId,
         el,
         isSelected: scId === selectedSculptureIdRef.current,
+        isPendingPreview: Boolean(sc.isPendingPreview),
         pt
       });
     }
     artworkEntries.sort((a, b) => (b.pt.depth || 0) - (a.pt.depth || 0));
 
     for (const item of artworkEntries) {
-      const { el, pt, isSelected } = item;
+      const { el, pt, isSelected, isPendingPreview } = item;
       el.style.display = 'inline-flex';
       const elW = el.offsetWidth || 124;
       const elH = el.offsetHeight || 28;
@@ -1117,14 +1148,185 @@ export default function MapView3D({
       )}px, 0) translate(-50%, -100%)`;
 
       const stemFromY = chosen.by < pt.y ? chosen.by : chosen.by - elH;
+      const artLineColor = isSelected || isPendingPreview ? '#ffd166' : '#00f5d4';
+      const artDotColor = isSelected || isPendingPreview ? '#fff8dc' : '#eafffc';
       drawFloatingCenterArrow(ctx, {
         fromX: chosen.cx,
         fromY: stemFromY,
         toX: pt.x,
         toY: pt.y,
-        color: isSelected ? '#ffd166' : '#00f5d4',
-        dotColor: isSelected ? '#fff8dc' : '#eafffc'
+        color: artLineColor,
+        dotColor: artDotColor
       });
+    }
+
+    // PASS 2c: Off-screen clickable edge tags so lands & sculptures outside the viewport stay reachable on the edges
+    if (drawModeRef.current || (draftsRef.current || []).length > 0) {
+      if (edgeTagsSigRef.current !== '') {
+        edgeTagsSigRef.current = '';
+        setEdgeTags([]);
+      }
+    } else {
+      const onScreenParcelIds = new Set(
+        landPinEntries
+          .filter(
+            (lp) =>
+              lp.anchor.roofCenter.x >= 14 &&
+              lp.anchor.roofCenter.x <= w - 14 &&
+              lp.anchor.roofCenter.y >= 14 &&
+              lp.anchor.roofCenter.y <= h - 14
+          )
+          .map((lp) => lp.pid)
+      );
+      const onScreenSculptureIds = new Set(
+        artworkEntries
+          .filter(
+            (a) =>
+              a.pt.x >= 14 &&
+              a.pt.x <= w - 14 &&
+              a.pt.y >= 14 &&
+              a.pt.y <= h - 14
+          )
+          .map((a) => a.scId)
+      );
+
+      const selPidUpper = String(selectedParcelIdRef.current || '').toUpperCase();
+      const selScId = String(selectedSculptureIdRef.current || '');
+      let focusedOnScreenEntry = null;
+      const offScreenLandEntries = [];
+
+      for (const p of parcelsRef.current || []) {
+        const pidUpper = String(p?.parcelId || '').toUpperCase();
+        if (!pidUpper) continue;
+        const vol =
+          parcelGeomMap.get(pidUpper)?.vol ||
+          p?.volume ||
+          (p?.bounds ? buildDefaultVolumeFromBounds(p.bounds, p.parcelId, p.geohash) : null);
+        if (!vol) continue;
+        const isSel = Boolean(selPidUpper && pidUpper === selPidUpper);
+        if (onScreenParcelIds.has(pidUpper)) {
+          if (isSel) {
+            focusedOnScreenEntry = { parcel: p, volume: vol };
+          }
+          continue;
+        }
+        offScreenLandEntries.push({
+          parcel: p,
+          volume: vol,
+          isSelected: isSel
+        });
+      }
+
+      const offScreenSculptureCandidates = [];
+      for (const sc of sculpturesRef.current || []) {
+        if (!sc?.id || sc.hidden) continue;
+        if (onScreenSculptureIds.has(sc.id)) continue;
+        const scLat = Number(sc.lat);
+        const scLng = Number(sc.lng);
+        if (!Number.isFinite(scLat) || !Number.isFinite(scLng)) continue;
+        const scPidUpper = String(sc.parcelId || '').toUpperCase();
+        const isSel = Boolean(selScId && sc.id === selScId);
+        const isPending = Boolean(sc.isPendingPreview);
+        const belongsToOnScreenLand = Boolean(scPidUpper && onScreenParcelIds.has(scPidUpper));
+        const isStandalone = !scPidUpper;
+        if (
+          isSel ||
+          isPending ||
+          belongsToOnScreenLand ||
+          isStandalone ||
+          offScreenLandEntries.length < 4
+        ) {
+          offScreenSculptureCandidates.push({
+            id: sc.id,
+            sculpture: sc,
+            title: sc.title || '3D Artwork',
+            lat: scLat,
+            lng: scLng,
+            alt: 0,
+            isSelected: isSel,
+            isPendingPreview: isPending
+          });
+        }
+      }
+
+      const mapCenter = typeof map.getCenter === 'function' ? map.getCenter() : null;
+      const originCoords =
+        mapCenter && Number.isFinite(mapCenter.lat) && Number.isFinite(mapCenter.lng)
+          ? { lat: mapCenter.lat, lng: mapCenter.lng }
+          : null;
+
+      const nowMs = performance.now();
+      const hudCache = mapHudRectsCacheRef.current;
+      let measuredMapHudRects = hudCache.rects;
+      if (hudCache.w !== w || hudCache.h !== h || nowMs - hudCache.ts > 500) {
+        measuredMapHudRects = [];
+        const containerEl = mapHostRef.current?.parentElement;
+        if (containerEl && typeof containerEl.getBoundingClientRect === 'function') {
+          const containerRect = containerEl.getBoundingClientRect();
+          containerEl
+            .querySelectorAll(
+              '.map3d-search-box, .map3d-legend, .map3d-gizmo-pill, .map3d-auto3d-pill, .maplibregl-ctrl-top-right, .maplibregl-ctrl-bottom-right'
+            )
+            .forEach((node) => {
+              const r = node.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                measuredMapHudRects.push({
+                  x: r.left - containerRect.left,
+                  y: r.top - containerRect.top,
+                  w: r.width,
+                  h: r.height
+                });
+              }
+            });
+        }
+        mapHudRectsCacheRef.current = { w, h, ts: nowMs, rects: measuredMapHudRects };
+      }
+      const mapEdgeReservedRects = buildDefaultHudReservedRects({
+        stageWidth: w,
+        stageHeight: h,
+        topLeftWidth: 260,
+        topRightWidth: 96,
+        topHeight: 54,
+        bottomLeftWidth: 200,
+        bottomRightWidth: 120,
+        bottomHeight: 48,
+        measuredRects: measuredMapHudRects
+      });
+
+      const nextEdgeTags =
+        (focusedOnScreenEntry || originCoords) &&
+        (offScreenLandEntries.length > 0 || offScreenSculptureCandidates.length > 0)
+          ? computeNeighborEdgeArrows({
+              focusedEntry: focusedOnScreenEntry,
+              originCoords,
+              otherEntries: offScreenLandEntries,
+              otherSculptures: offScreenSculptureCandidates,
+              projectLngLat: (lng, lat, alt = 0) =>
+                projectLngLatAltToScreen(map, maplibregl, lng, lat, alt),
+              viewportWidth: w,
+              viewportHeight: h,
+              bearingDeg: typeof map.getBearing === 'function' ? map.getBearing() : 0,
+              reservedRects: [...mapEdgeReservedRects, ...placedOverlayRects],
+              maxArrows: 6,
+              edgeInsetX: 10,
+              topInsetY: 12,
+              bottomInsetY: 12,
+              edgeOnly: true,
+              defaultLandColor: '#ff1f8f',
+              unitSystem: unitSystemRef.current
+            })
+          : [];
+
+      const nextEdgeSig = buildNeighborArrowsSignature(nextEdgeTags);
+      if (nextEdgeSig !== edgeTagsSigRef.current) {
+        edgeTagsSigRef.current = nextEdgeSig;
+        setEdgeTags(nextEdgeTags);
+        setEdgeStageDims((prev) =>
+          prev.width === Math.round(w) && prev.height === Math.round(h)
+            ? prev
+            : { width: Math.round(w), height: Math.round(h) }
+        );
+      }
     }
 
     const desktopReservedRects = buildDefaultHudReservedRects({
@@ -3516,6 +3718,20 @@ export default function MapView3D({
         <canvas ref={wireCanvasRef} className="map3d-wireframe-canvas" aria-hidden="true" />
         <div ref={floatingPinsLayerRef} className="map3d-floating-pins-layer" />
         <div ref={floatingArtworkLayerRef} className="map3d-floating-artwork-layer" />
+        <NeighborEdgeArrowsOverlay
+          arrows={edgeTags}
+          viewportWidth={edgeStageDims.width}
+          viewportHeight={edgeStageDims.height}
+          className="is-map3d-layer"
+          onSelectParcel={(parcel) => {
+            if (onNavigateParcelRef.current) onNavigateParcelRef.current(parcel);
+            else onSelectParcelRef.current?.(parcel);
+          }}
+          onSelectSculpture={(sc) => {
+            if (onNavigateSculptureRef.current) onNavigateSculptureRef.current(sc);
+            else onSelectSculptureRef.current?.(sc);
+          }}
+        />
 
         {/* Dynamic Live Intersection / Business / Address / Parcel Search */}
         <div ref={searchBoxRef} className="map3d-search-box map3d-ui-stop">
