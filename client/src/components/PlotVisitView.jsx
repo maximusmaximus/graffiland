@@ -148,6 +148,14 @@ export default function PlotVisitView({
   // Inline land management states
   const [editingLand, setEditingLand] = useState(false);
   const [landNameDraft, setLandNameDraft] = useState('');
+  const [labelLinkCopied, setLabelLinkCopied] = useState(false);
+  const labelLinkCopyTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (labelLinkCopyTimerRef.current) clearTimeout(labelLinkCopyTimerRef.current);
+    };
+  }, []);
   const [landDescDraft, setLandDescDraft] = useState('');
   const [landBusy, setLandBusy] = useState('');
 
@@ -932,7 +940,7 @@ export default function PlotVisitView({
   ]);
 
   async function handleCopyShareLink() {
-    if (!activeParcel?.parcelId) return;
+    if (!activeParcel?.parcelId) return false;
     const shareUrl = buildParcelShareUrl({
       origin: window.location.origin,
       pathname: window.location.pathname,
@@ -941,7 +949,13 @@ export default function PlotVisitView({
       compact: true
     });
     const ok = await copyToClipboard(shareUrl);
+    if (ok) {
+      setLabelLinkCopied(true);
+      if (labelLinkCopyTimerRef.current) clearTimeout(labelLinkCopyTimerRef.current);
+      labelLinkCopyTimerRef.current = setTimeout(() => setLabelLinkCopied(false), 1800);
+    }
     flashStatus(ok ? `Copied share link for "${landDisplayName}"!` : shareUrl);
+    return ok;
   }
 
   function startEditLand() {
@@ -1358,6 +1372,7 @@ export default function PlotVisitView({
                 onToggle2D={() => setMapDimensionMode('2d')}
                 onToggleFullMap={() => setIsMapFull((v) => !v)}
                 onSelectLand={handleSelectLandTarget}
+                onCopyLandShareLink={handleCopyShareLink}
                 onSelectParcel={handleSelectNeighborOnMap}
                 onSelectSculpture={handleSelectArtworkTarget}
                 onOpenSculptureView={onSelectSculpture}
@@ -1433,25 +1448,54 @@ export default function PlotVisitView({
                   onTouchStart={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
-                  {map2dOverlay.landTag && (
-                    <button
-                      type="button"
-                      className={`plot-iso-land-label-btn ${
-                        selectedTarget === 'land' ? 'is-selected' : ''
-                      }`}
-                      data-testid="plot-land-label"
-                      style={{
-                        left: `${map2dOverlay.landTag.centerX}px`,
-                        top: `${map2dOverlay.landTag.y}px`,
-                        transform: 'translateX(-50%)'
-                      }}
-                      onClick={handleSelectLandTarget}
-                      title={`Inspect ${landDisplayName}`}
-                    >
-                      <span className="plot-iso-land-dot" aria-hidden="true" />
-                      <span>{landDisplayName}</span>
-                    </button>
-                  )}
+                  {map2dOverlay.landTag && (() => {
+                    const isEmptyLand = visibleSculptures.length === 0;
+                    return (
+                      <div
+                        className={`plot-iso-land-label-pill ${
+                          selectedTarget === 'land' ? 'is-selected' : ''
+                        } ${isEmptyLand ? 'is-empty-land' : ''}`}
+                        data-empty-land={isEmptyLand ? 'true' : 'false'}
+                        style={{
+                          left: `${map2dOverlay.landTag.centerX}px`,
+                          top: `${map2dOverlay.landTag.y}px`,
+                          transform: 'translateX(-50%)'
+                        }}
+                      >
+                        <button
+                          type="button"
+                          className={`plot-iso-land-label-btn ${
+                            selectedTarget === 'land' ? 'is-selected' : ''
+                          }`}
+                          data-testid="plot-land-label"
+                          onClick={handleSelectLandTarget}
+                          title={`Inspect ${landDisplayName}`}
+                        >
+                          <span className="plot-iso-land-dot" aria-hidden="true" />
+                          <span>{landDisplayName}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`plot-iso-land-copy-btn ${labelLinkCopied ? 'is-copied' : ''}`}
+                          data-testid="plot-land-label-copy-btn"
+                          aria-label={`Copy share link for ${landDisplayName}`}
+                          title={`Copy share link for ${landDisplayName}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyShareLink();
+                          }}
+                        >
+                          {labelLinkCopied
+                            ? isEmptyLand
+                              ? '✓ Copied'
+                              : '✓'
+                            : isEmptyLand
+                              ? '🔗 Copy Link'
+                              : '🔗'}
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {map2dOverlay.callouts.map((c) => (
                     <div
                       key={c.sculptureId}

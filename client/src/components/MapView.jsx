@@ -2,7 +2,12 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import xeroemoji from 'xeroemoji';
-import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../shared/landVolume.mjs';
+import { copyToClipboard } from '../utils/clipboard.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
@@ -406,9 +411,10 @@ export default function MapView({
       shape.on('click', handleParcelClick);
       shape.addTo(layer);
 
-      // Permanent simple label directly on each land parcel
+      // Permanent simple label directly on each land parcel (with quick inline Copy Link button)
       if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
         const simpleLabel = formatSimpleLandLabel(p, idx);
+        const isEmptyLand = scCount === 0;
         const stateCls = isSelectedParcel
           ? 'is-selected'
           : isFrozen
@@ -418,16 +424,52 @@ export default function MapView({
           : '';
         const labelIcon = L.divIcon({
           className: 'map-land-simple-label-marker',
-          html: `<span class="map-land-simple-label ${stateCls}" data-testid="map-land-label" data-parcel-id="${escapeHtml(
+          html: `<span class="map-land-simple-label ${stateCls} ${
+            isEmptyLand ? 'is-empty-land' : ''
+          }" data-testid="map-land-label" data-parcel-id="${escapeHtml(
             p.parcelId
-          )}">${escapeHtml(simpleLabel)}</span>`,
+          )}"><span class="map-land-simple-label-text">${escapeHtml(
+            simpleLabel
+          )}</span><button type="button" class="map-land-label-copy-btn" data-testid="map-land-copy-btn" data-parcel-id="${escapeHtml(
+            p.parcelId
+          )}" aria-label="Copy share link for ${escapeHtml(
+            landTitle
+          )}" title="Copy share link">${isEmptyLand ? '🔗 Copy' : '🔗'}</button></span>`,
           iconSize: null
         });
         const labelMarker = L.marker([pLat, pLng], {
           icon: labelIcon,
           zIndexOffset: isSelectedParcel ? 500 : 200
         });
-        labelMarker.on('click', handleParcelClick);
+        labelMarker.on('click', async (ev) => {
+          const copyBtn = ev?.originalEvent?.target?.closest?.('.map-land-label-copy-btn');
+          if (copyBtn) {
+            ev.originalEvent?.stopPropagation?.();
+            const shareUrl = buildParcelShareUrl({
+              origin: typeof window !== 'undefined' ? window.location.origin : 'https://spray.land',
+              pathname: typeof window !== 'undefined' ? window.location.pathname : '/',
+              parcelId: p.parcelId,
+              customName: p.customName || '',
+              compact: true
+            });
+            const ok = await copyToClipboard(shareUrl);
+            if (ok) {
+              const idleTxt = isEmptyLand ? '🔗 Copy' : '🔗';
+              copyBtn.textContent = isEmptyLand ? '✓ Copied' : '✓';
+              copyBtn.classList.add('is-copied');
+              notifySettingsSaved(`Copied share link for "${landTitle}"!`, {
+                tone: 'success',
+                durationMs: 2600
+              });
+              setTimeout(() => {
+                copyBtn.textContent = idleTxt;
+                copyBtn.classList.remove('is-copied');
+              }, 1800);
+            }
+            return;
+          }
+          handleParcelClick();
+        });
         labelMarker.addTo(layer);
       }
     }

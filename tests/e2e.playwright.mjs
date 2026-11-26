@@ -1033,19 +1033,50 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const mintedPromptVal = await mintedPromptBox.inputValue();
     assert.ok(mintedPromptVal.includes('Skyline Studio Plot'));
 
-    // After minting: floating pin layer sits strictly ABOVE wireframes with "+" button on map & minted list!
+    // After minting: floating pin layer sits strictly ABOVE wireframes with "+" button & label Copy Link!
     await page.waitForSelector('.map3d-floating-pins-layer .map3d-owned-plus-btn', { timeout: 6000 });
     await page.waitForSelector('.land-owned-plus-btn', { timeout: 6000 });
+    // Newly minted empty land shows a quick Copy Link button right on the floating land label on top of the land
+    const mapLabelCopyBtn = page
+      .locator('[data-testid="map3d-land-copy-btn"][aria-label*="Skyline Studio Plot"]')
+      .first();
+    await mapLabelCopyBtn.waitFor({ state: 'visible', timeout: 8000 });
+    assert.ok(
+      (await mapLabelCopyBtn.textContent()).includes('Copy'),
+      `Expected empty minted land top label to expose Copy button, got: ${await mapLabelCopyBtn.textContent()}`
+    );
+    await mapLabelCopyBtn.click();
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="map3d-land-copy-btn"][aria-label*="Skyline Studio Plot"]')
+          ?.textContent?.includes('Copied'),
+      null,
+      { timeout: 4000 }
+    );
+
     await page.locator('.map3d-owned-plus-btn').first().click();
     await page.waitForSelector('.add-item-modal-card');
-    await page.getByRole('radio', { name: /\.GLB 3D Model/i }).click();
+    // AI Agent Prompt appears strictly ABOVE the collapsed Add Manually fold-down
+    const agentBox = await page.getByTestId('add-item-agent-section').boundingBox();
+    const manualToggleLoc = page.getByTestId('add-item-manual-toggle');
+    const manualBox = await manualToggleLoc.boundingBox();
+    assert.ok(agentBox && manualBox && agentBox.y < manualBox.y, 'Expected Agent Prompt above Add Manually fold-down');
+    assert.equal(await manualToggleLoc.getAttribute('aria-expanded'), 'false');
+
     const itemPromptVal = await page.getByLabel('Add 3D item agent prompt preview').inputValue();
     assert.ok(itemPromptVal.includes('load_3d_model_on_land'));
     assert.ok(itemPromptVal.includes('update_land_sculpture'));
     assert.ok(itemPromptVal.includes('set_sculpture_visibility'));
     assert.ok(itemPromptVal.includes('update_land_settings'));
     await page.getByRole('button', { name: /Copy 3D Item Agent Prompt/i }).click();
+    await page.waitForSelector('[data-testid="copy-validation-confirmed"]');
     await page.waitForSelector('text=/Copied 3D item agent prompt/i');
+
+    // Expand Add Manually fold-down -> format radio & URL uploader appear
+    await manualToggleLoc.click();
+    assert.equal(await manualToggleLoc.getAttribute('aria-expanded'), 'true');
+    await page.getByRole('radio', { name: /\.GLB 3D Model/i }).click();
 
     // Freeze the newly minted land directly from the modal -> button updates to Unfreeze Land
     await page.locator('.add-item-modal-card').getByRole('button', { name: /Freeze Land/i }).click();

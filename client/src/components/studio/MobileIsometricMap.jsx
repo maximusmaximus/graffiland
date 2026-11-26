@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
+import {
+  buildParcelShareUrl,
+  resolveLandDisplayName
+} from '../../../../shared/landVolume.mjs';
 import { api, resolveApiUrl } from '../../utils/api.js';
-import { buildSculptureShareUrl } from '../../utils/clipboard.js';
+import { buildSculptureShareUrl, copyToClipboard } from '../../utils/clipboard.js';
 import {
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
@@ -115,7 +118,9 @@ function MobileIsoSvgFallback({
   sculptures = [],
   selectedSculptureId = '',
   landSelected = false,
+  landLabelCopied = false,
   onSelectLand = null,
+  onCopyLandShareLink = null,
   onSelectSculpture = null,
   onOpenSculptureView = null,
   unitSystem = 'metric'
@@ -328,18 +333,48 @@ function MobileIsoSvgFallback({
 
       {(showcaseMode || fallbackCallouts.length > 0) && (
         <div className="plot-iso-callout-layer" data-testid="plot-iso-callout-layer">
-          {showcaseMode && primaryEntry && (
-            <button
-              type="button"
-              className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
-              data-testid="plot-land-label"
-              style={{ left: '50%', top: 12, transform: 'translateX(-50%)' }}
-              onClick={() => onSelectLand?.(primaryEntry.parcel)}
-            >
-              <span className="plot-iso-land-dot" aria-hidden="true" />
-              <span>{landName}</span>
-            </button>
-          )}
+          {showcaseMode && primaryEntry && (() => {
+            const isEmptyLand = Number(sculptureCount || 0) === 0;
+            return (
+              <div
+                className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
+                  isEmptyLand ? 'is-empty-land' : ''
+                }`}
+                data-empty-land={isEmptyLand ? 'true' : 'false'}
+                style={{ left: '50%', top: 12, transform: 'translateX(-50%)' }}
+              >
+                <button
+                  type="button"
+                  className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
+                  data-testid="plot-land-label"
+                  onClick={() => onSelectLand?.(primaryEntry.parcel)}
+                  title={`Inspect ${landName}`}
+                >
+                  <span className="plot-iso-land-dot" aria-hidden="true" />
+                  <span>{landName}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`plot-iso-land-copy-btn ${landLabelCopied ? 'is-copied' : ''}`}
+                  data-testid="plot-land-label-copy-btn"
+                  aria-label={`Copy share link for ${landName}`}
+                  title={`Copy share link for ${landName}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCopyLandShareLink?.(primaryEntry.parcel);
+                  }}
+                >
+                  {landLabelCopied
+                    ? isEmptyLand
+                      ? '✓ Copied'
+                      : '✓'
+                    : isEmptyLand
+                      ? '🔗 Copy Link'
+                      : '🔗'}
+                </button>
+              </div>
+            );
+          })()}
           {fallbackCallouts.map((c) => (
             <div
               key={c.sculptureId}
@@ -446,6 +481,7 @@ export default function MobileIsometricMap({
   onToggleFullMap = null,
   onSelectParcel = null,
   onSelectLand = null,
+  onCopyLandShareLink = null,
   onSelectSculpture = null,
   onOpenSculptureView = null
 }) {
@@ -1722,8 +1758,49 @@ export default function MobileIsometricMap({
 
   const primarySculptureCount = useMemo(() => {
     if (!primaryEntry?.parcel?.parcelId) return sculptures.length;
-    return sculptures.filter((s) => s?.parcelId === primaryEntry.parcel.parcelId).length;
-  }, [primaryEntry?.parcel?.parcelId, sculptures]);
+    const realSculptures = sculptures.filter(
+      (s) => s && !s.isPendingPreview && !s.hidden && s.parcelId === primaryEntry.parcel.parcelId
+    ).length;
+    const declaredCount = Number(primaryEntry.parcel?.sculptureCount ?? 0);
+    return Math.max(realSculptures, Number.isFinite(declaredCount) ? declaredCount : 0);
+  }, [primaryEntry?.parcel?.parcelId, primaryEntry?.parcel?.sculptureCount, sculptures]);
+
+  const isEmptyPrimaryLand = primarySculptureCount === 0;
+  const [landLabelCopied, setLandLabelCopied] = useState(false);
+  const landLabelCopyTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (landLabelCopyTimerRef.current) clearTimeout(landLabelCopyTimerRef.current);
+    };
+  }, []);
+
+  const handleCopyPrimaryLandLink = useCallback(
+    async (parcelArg) => {
+      const targetParcel = parcelArg || primaryEntry?.parcel;
+      if (!targetParcel?.parcelId) return;
+      let ok = false;
+      if (typeof onCopyLandShareLink === 'function') {
+        const res = await onCopyLandShareLink(targetParcel);
+        ok = res !== false;
+      } else {
+        const shareUrl = buildParcelShareUrl({
+          origin: typeof window !== 'undefined' ? window.location.origin : 'https://spray.land',
+          pathname: typeof window !== 'undefined' ? window.location.pathname : '/',
+          parcelId: targetParcel.parcelId,
+          customName: targetParcel.customName || '',
+          compact: true
+        });
+        ok = await copyToClipboard(shareUrl);
+      }
+      if (ok) {
+        setLandLabelCopied(true);
+        if (landLabelCopyTimerRef.current) clearTimeout(landLabelCopyTimerRef.current);
+        landLabelCopyTimerRef.current = setTimeout(() => setLandLabelCopied(false), 1800);
+      }
+    },
+    [primaryEntry?.parcel, onCopyLandShareLink]
+  );
 
   const visibleShowcaseSculptures = useMemo(() => {
     const focusedPid = primaryEntry?.parcel?.parcelId || '';
@@ -1768,18 +1845,44 @@ export default function MobileIsometricMap({
               onMouseDown={stopMapGestureLeak}
             >
               {showcaseMode && primaryEntry && (
-                <button
+                <div
                   ref={landLabelBtnRef}
-                  type="button"
-                  className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
-                  data-testid="plot-land-label"
+                  className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
+                    isEmptyPrimaryLand ? 'is-empty-land' : ''
+                  }`}
+                  data-empty-land={isEmptyPrimaryLand ? 'true' : 'false'}
                   style={{ display: 'none', transform: 'translateX(-50%)' }}
-                  onClick={() => onSelectLand?.(primaryEntry.parcel)}
-                  title={`Inspect ${primaryLandLabel}`}
                 >
-                  <span className="plot-iso-land-dot" aria-hidden="true" />
-                  <span>{primaryLandLabel}</span>
-                </button>
+                  <button
+                    type="button"
+                    className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
+                    data-testid="plot-land-label"
+                    onClick={() => onSelectLand?.(primaryEntry.parcel)}
+                    title={`Inspect ${primaryLandLabel}`}
+                  >
+                    <span className="plot-iso-land-dot" aria-hidden="true" />
+                    <span>{primaryLandLabel}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`plot-iso-land-copy-btn ${landLabelCopied ? 'is-copied' : ''}`}
+                    data-testid="plot-land-label-copy-btn"
+                    aria-label={`Copy share link for ${primaryLandLabel}`}
+                    title={`Copy share link for ${primaryLandLabel}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCopyPrimaryLandLink(primaryEntry.parcel);
+                    }}
+                  >
+                    {landLabelCopied
+                      ? isEmptyPrimaryLand
+                        ? '✓ Copied'
+                        : '✓'
+                      : isEmptyPrimaryLand
+                        ? '🔗 Copy Link'
+                        : '🔗'}
+                  </button>
+                </div>
               )}
               {visibleShowcaseSculptures.map((sc) => {
                 const isSel = Boolean(selectedSculptureId && selectedSculptureId === sc.id);
@@ -1890,7 +1993,9 @@ export default function MobileIsometricMap({
           sculptures={visibleShowcaseSculptures}
           selectedSculptureId={selectedSculptureId}
           landSelected={landSelected}
+          landLabelCopied={landLabelCopied}
           onSelectLand={onSelectLand}
+          onCopyLandShareLink={handleCopyPrimaryLandLink}
           onSelectSculpture={onSelectSculpture}
           onOpenSculptureView={onOpenSculptureView}
           unitSystem={unitSystem}
