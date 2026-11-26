@@ -812,6 +812,38 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     );
 
     assert.ok(view.getByText(/Add 3D Item to Civic Plaza/i));
+
+    // Agent prompt section is placed ABOVE the Add Manually fold-down, which starts collapsed
+    const agentSection = view.getByTestId('add-item-agent-section');
+    const manualSection = view.getByTestId('add-item-manual-section');
+    const docOrder = agentSection.compareDocumentPosition(manualSection);
+    assert.ok(
+      Boolean(docOrder & globalThis.Node.DOCUMENT_POSITION_FOLLOWING),
+      'Expected AI Agent Prompt section to render strictly above Add Manually fold-down'
+    );
+    const manualToggle = view.getByTestId('add-item-manual-toggle');
+    assert.equal(manualToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(view.queryByTestId('add-item-manual-body'), null);
+
+    // Pre-copy readiness validation strip is visible right away
+    const copyValidation = view.getByTestId('add-item-copy-validation');
+    assert.ok(copyValidation.textContent.includes('Land ID & 3D bounds'));
+    assert.ok(copyValidation.textContent.includes('Pairing code included'));
+
+    // Copy immediately from the top Agent Prompt card -> verified copy validation banner + button state
+    await RTL.act(async () => {
+      RTL.fireEvent.click(view.getByRole('button', { name: /Copy 3D Item Agent Prompt/i }));
+    });
+    assert.equal(copied.length, 1);
+    assert.ok(copied[0].includes('GLP-1111-2222-3333-4444'));
+    assert.ok(view.getByTestId('copy-validation-confirmed').textContent.includes('Copied & verified'));
+    assert.ok(view.getByTestId('copy-agent-prompt-btn').textContent.includes('Copied to Clipboard'));
+
+    // Expand the "Add Manually" fold-down -> reveals formats, title, URL validator & upload controls
+    RTL.fireEvent.click(manualToggle);
+    assert.equal(manualToggle.getAttribute('aria-expanded'), 'true');
+    assert.ok(view.getByTestId('add-item-manual-body'));
+
     RTL.fireEvent.click(view.getByRole('radio', { name: /\.GLB 3D Model/i }));
     RTL.fireEvent.change(view.getByPlaceholderText(/Glowing Cyber Dragon/i), {
       target: { value: 'Neon Dragon Arch' }
@@ -825,11 +857,12 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(promptPreview.value.includes('set_sculpture_visibility'));
     assert.ok(promptPreview.value.includes('update_land_settings'));
 
+    // Copy again after customizing title inside Add Manually -> prompt reflects custom title
     await RTL.act(async () => {
-      RTL.fireEvent.click(view.getByRole('button', { name: /Copy 3D Item Agent Prompt/i }));
+      RTL.fireEvent.click(view.getByTestId('copy-agent-prompt-btn'));
     });
-    assert.equal(copied.length, 1);
-    assert.ok(copied[0].includes('Neon Dragon Arch'));
+    assert.equal(copied.length, 2);
+    assert.ok(copied[1].includes('Neon Dragon Arch'));
 
     await RTL.act(async () => {
       RTL.fireEvent.click(view.getByRole('button', { name: /Freeze Land/i }));
@@ -3097,6 +3130,46 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(guestView.queryByTestId('plot-land-details'), null);
     RTL.fireEvent.click(guestView.getByTestId('plot-details-toggle'));
     assert.ok(guestView.getByTestId('plot-land-details'));
+    cleanup();
+
+    // 1b) Freshly minted land WITHOUT items shows explicit "Copy Link" directly on the floating land label
+    const copiedEmptyLinks = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      value: {
+        writeText: async (text) => {
+          copiedEmptyLinks.push(text);
+        }
+      },
+      configurable: true
+    });
+    const emptyLandView = RTL.render(
+      React.createElement(PlotVisitView, {
+        variant: 'desktop',
+        parcel: { ...parcel, customName: 'VOYAGE', sculptureCount: 0 },
+        sculptures: [],
+        user: null,
+        onRequestLogin: () => {},
+        onSelectSculpture: () => {},
+        onClose: () => {}
+      })
+    );
+    const labelCopyBtn = emptyLandView.getByTestId('plot-land-label-copy-btn');
+    assert.ok(
+      labelCopyBtn.textContent.includes('Copy Link'),
+      `Expected empty minted land top label to show Copy Link button, got: ${labelCopyBtn.textContent}`
+    );
+    await RTL.act(async () => {
+      RTL.fireEvent.click(labelCopyBtn);
+    });
+    assert.equal(copiedEmptyLinks.length, 1);
+    assert.ok(
+      copiedEmptyLinks[0].includes('voyage') || copiedEmptyLinks[0].includes('GLAND-9R1652RD'),
+      `Expected copied share URL to point to the parcel, got: ${copiedEmptyLinks[0]}`
+    );
+    assert.ok(
+      labelCopyBtn.textContent.includes('Copied'),
+      `Expected label copy button to show Copied confirmation, got: ${labelCopyBtn.textContent}`
+    );
     cleanup();
 
     // 2) Logged-in land owner: sees Land Management + Artwork Management and can rename, freeze, edit, hide, and remove inline

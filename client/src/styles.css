@@ -1616,23 +1616,55 @@ select {
 }
 
 .map-land-simple-label {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   transform: translate(-50%, -50%);
-  padding: 2px 7px;
+  padding: 2px 4px 2px 8px;
   border-radius: 999px;
   font-size: 10.5px;
   font-weight: 800;
   line-height: 1.25;
   letter-spacing: 0.01em;
   color: #f8fafc;
-  background: rgba(6, 10, 20, 0.88);
+  background: rgba(6, 10, 20, 0.9);
   border: 1.5px solid rgba(0, 245, 212, 0.72);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
-  max-width: 136px;
+  max-width: 210px;
+  cursor: pointer;
+}
+
+.map-land-simple-label-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 126px;
+}
+
+.map-land-label-copy-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: rgba(0, 245, 212, 0.16);
+  color: #9bfcf0;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1.15;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.map-land-label-copy-btn:hover {
+  background: rgba(0, 245, 212, 0.32);
+  color: #ffffff;
+}
+
+.map-land-label-copy-btn.is-copied {
+  background: #00f5d4;
+  color: #04101a;
 }
 
 .map-land-simple-label.is-dormant {
@@ -3944,29 +3976,84 @@ select {
   box-shadow: 0 0 18px rgba(125, 211, 252, 0.85);
 }
 
+.map3d-land-label-pill {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(6, 10, 20, 0.94);
+  border: 1px solid rgba(255, 183, 3, 0.65);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.map3d-land-label-pill.is-empty-land {
+  border-color: rgba(0, 245, 212, 0.72);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.58), 0 0 12px rgba(0, 245, 212, 0.24);
+}
+
+.map3d-land-label-pill:hover {
+  border-color: #ffd166;
+  box-shadow: 0 0 12px rgba(255, 209, 102, 0.4);
+}
+
 .map3d-owned-plus-tag {
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: rgba(6, 10, 20, 0.92);
-  border: 1px solid rgba(255, 183, 3, 0.6);
+  padding: 3px 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: #fff3c4;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
-  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease, transform 0.12s ease;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 
 .map3d-owned-plus-tag:hover,
 .map3d-owned-plus-tag:focus-visible {
-  background: rgba(16, 24, 44, 0.98);
-  border-color: #ffd166;
+  background: rgba(255, 255, 255, 0.08);
   color: #ffffff;
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.45);
-  transform: translateY(-1px);
   outline: none;
+}
+
+.map3d-land-label-copy-btn {
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 245, 212, 0.12);
+  color: #9bfcf0;
+  padding: 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.map3d-land-label-copy-btn.is-empty-land {
+  background: rgba(0, 245, 212, 0.2);
+  color: #d4fff7;
+}
+
+.map3d-land-label-copy-btn:hover,
+.map3d-land-label-copy-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.34);
+  color: #ffffff;
+  outline: none;
+}
+
+.map3d-land-label-copy-btn.is-copied {
+  background: #00f5d4;
+  color: #04101a;
 }
 
 .land-owned-pill-group {
@@ -4007,6 +4094,188 @@ select {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   font-size: 11.5px;
+}
+
+.btn.is-copy-confirmed {
+  border-color: rgba(0, 245, 212, 0.78) !important;
+  background: rgba(0, 245, 212, 0.18) !important;
+  color: #b7fff4 !important;
+}
+
+.add-item-agent-card {
+  margin-top: 10px;
+  padding: 12px 13px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(0, 245, 212, 0.08), rgba(0, 187, 249, 0.05));
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.add-item-agent-card.is-copied {
+  border-color: rgba(0, 245, 212, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 245, 212, 0.25), 0 8px 22px rgba(0, 245, 212, 0.14);
+}
+
+.add-item-agent-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.add-item-agent-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.add-item-agent-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.add-item-agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.add-item-copy-btn {
+  min-height: 36px;
+  padding: 0 14px !important;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.add-item-copy-btn.is-copied {
+  background: linear-gradient(135deg, #10b981, #00f5d4) !important;
+  color: #031512 !important;
+  border-color: #6ee7b7 !important;
+}
+
+.add-item-copy-validation {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(6, 12, 24, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 11px;
+  color: var(--muted);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.add-item-copy-validation.is-verified {
+  background: rgba(0, 245, 212, 0.14);
+  border-color: rgba(0, 245, 212, 0.55);
+  color: #c7fff6;
+}
+
+.add-item-copy-validation.is-warning {
+  background: rgba(255, 209, 102, 0.14);
+  border-color: rgba(255, 209, 102, 0.55);
+  color: #fff3c4;
+}
+
+.add-item-copy-checks {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+}
+
+.add-item-copy-checks .is-ok {
+  color: #7efce7;
+}
+
+.add-item-copy-size {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.add-item-copy-validation-msg {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.add-item-agent-textarea {
+  min-height: 120px;
+  max-height: 210px;
+}
+
+.add-item-manual-fold {
+  margin-top: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.add-item-manual-fold.is-open {
+  border-color: rgba(0, 187, 249, 0.42);
+  background: rgba(6, 12, 24, 0.45);
+}
+
+.add-item-fold-trigger {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.add-item-fold-trigger:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.add-item-fold-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.add-item-fold-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.add-item-fold-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.add-item-fold-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.add-item-fold-chevron {
+  font-size: 14px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.add-item-manual-body {
+  padding: 10px 13px 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .add-item-format-grid {
@@ -4743,26 +5012,51 @@ select {
   overflow: hidden;
 }
 
-.plot-iso-land-label-btn {
+.plot-iso-land-label-pill {
   position: absolute;
   pointer-events: auto;
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: min(76%, 320px);
-  padding: 5px 11px;
+  align-items: stretch;
+  max-width: min(88%, 370px);
   border-radius: 999px;
+  overflow: hidden;
   border: 1.5px solid rgba(255, 31, 143, 0.85);
   background: rgba(14, 7, 20, 0.92);
   backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52), 0 0 14px rgba(255, 31, 143, 0.28);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.plot-iso-land-label-pill:hover {
+  border-color: #ffffff;
+  background: rgba(24, 10, 32, 0.96);
+}
+
+.plot-iso-land-label-pill.is-selected {
+  border-color: #ff1f8f;
+  background: rgba(28, 8, 24, 0.94);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 31, 143, 0.45);
+}
+
+.plot-iso-land-label-pill.is-empty-land {
+  border-color: rgba(0, 245, 212, 0.8);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.54), 0 0 16px rgba(0, 245, 212, 0.26);
+}
+
+.plot-iso-land-label-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 10px 5px 11px;
+  border: none;
+  background: transparent;
   color: #ffe8f4;
   font-size: 12px;
   font-weight: 800;
   line-height: 1.15;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52), 0 0 14px rgba(255, 31, 143, 0.28);
-  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
 .plot-iso-land-label-btn > span:nth-child(2) {
@@ -4771,15 +5065,41 @@ select {
 }
 
 .plot-iso-land-label-btn:hover {
-  border-color: #ffffff;
-  background: rgba(24, 10, 32, 0.96);
+  color: #ffffff;
 }
 
 .plot-iso-land-label-btn.is-selected {
-  border-color: #ff1f8f;
-  background: rgba(28, 8, 24, 0.94);
   color: #fff0f8;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 31, 143, 0.45);
+}
+
+.plot-iso-land-copy-btn {
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 245, 212, 0.14);
+  color: #9bfcf0;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.plot-iso-land-copy-btn:hover,
+.plot-iso-land-copy-btn:focus-visible {
+  background: rgba(0, 245, 212, 0.3);
+  color: #ffffff;
+  outline: none;
+}
+
+.plot-iso-land-copy-btn.is-copied {
+  background: #00f5d4;
+  color: #04101a;
 }
 
 .plot-iso-land-dot {
@@ -5260,9 +5580,18 @@ select {
 }
 
 @media (max-width: 520px) {
+  .plot-iso-land-label-pill {
+    max-width: min(92%, 340px);
+  }
+
   .plot-iso-land-label-btn {
     font-size: 11px;
-    padding: 4px 9px;
+    padding: 4px 8px 4px 9px;
+  }
+
+  .plot-iso-land-copy-btn {
+    font-size: 10.5px;
+    padding: 4px 8px;
   }
 
   .plot-iso-land-dims {

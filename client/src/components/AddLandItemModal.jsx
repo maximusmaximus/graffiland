@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { buildLandAdd3DItemAgentPrompt } from '../../../shared/landSignatureMessage.mjs';
 import {
   buildParcelShareUrl,
@@ -181,6 +181,19 @@ export default function AddLandItemModal({
   const [statusIsError, setStatusIsError] = useState(false);
   const [serverFitHint, setServerFitHint] = useState(null);
   const [pairingOverride, setPairingOverride] = useState('');
+  const [manualOpen, setManualOpen] = useState(false);
+  const [promptCopyState, setPromptCopyState] = useState(null); // { status: 'copied'|'fallback', verifiedChars, verifiedLines, pairingCode, hasRealPairing }
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const promptTextareaRef = useRef(null);
+  const copyResetTimerRef = useRef(null);
+  const shareResetTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+      if (shareResetTimerRef.current) clearTimeout(shareResetTimerRef.current);
+    };
+  }, []);
 
   const apiOrigin =
     API_BASE ||
@@ -263,6 +276,32 @@ export default function AddLandItemModal({
       existingItems
     });
   }, [validationState, parcel, existingSculptures, modelScale, dx, dy, dz, yaw]);
+
+  const promptValidation = useMemo(() => {
+    const clean = String(promptText || '');
+    const parcelId = String(parcel?.parcelId || '');
+    const hasParcelId = Boolean(parcelId && clean.includes(parcelId));
+    const hasMcpEndpoint = clean.includes('/api/mcp');
+    const hasRealPairing =
+      activePairingCode !== '<YOUR_GLP_PAIRING_CODE>' && clean.includes(activePairingCode);
+    const willAutoPair = Boolean(user?.id && activePairingCode === '<YOUR_GLP_PAIRING_CODE>');
+    const charCount = clean.length;
+    const lineCount = clean ? clean.split('\n').length : 0;
+    return {
+      ready: Boolean(clean.trim().length > 0 && hasParcelId && hasMcpEndpoint),
+      hasParcelId,
+      hasMcpEndpoint,
+      hasRealPairing,
+      willAutoPair,
+      charCount,
+      lineCount
+    };
+  }, [promptText, parcel?.parcelId, activePairingCode, user?.id]);
+
+  // Clear stale "copied" highlight if user customizes prompt fields afterward
+  useEffect(() => {
+    setPromptCopyState((prev) => (prev?.status === 'copied' ? null : prev));
+  }, [promptText]);
 
   if (!parcel) return null;
 
@@ -387,6 +426,11 @@ export default function AddLandItemModal({
       compact: true
     });
     const ok = await copyToClipboard(shareUrl);
+    if (ok) {
+      setShareLinkCopied(true);
+      if (shareResetTimerRef.current) clearTimeout(shareResetTimerRef.current);
+      shareResetTimerRef.current = setTimeout(() => setShareLinkCopied(false), 2000);
+    }
     setStatusIsError(false);
     setStatusMsg(ok ? `Copied share link: ${shareUrl}` : shareUrl);
   }
@@ -395,6 +439,8 @@ export default function AddLandItemModal({
     setBusy(true);
     setStatusMsg('');
     setStatusIsError(false);
+    setPromptCopyState(null);
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
     try {
       let codeToUse = activePairingCode;
       if (user?.id && codeToUse === '<YOUR_GLP_PAIRING_CODE>') {
@@ -426,13 +472,45 @@ export default function AddLandItemModal({
         pairingCode: codeToUse,
         ownerAddress
       });
-      const ok = await copyToClipboard(finalPrompt);
-      const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
-      setStatusMsg(
-        ok
-          ? `Copied 3D item agent prompt for "${landDisplayName}"! Paste into your AI agent.`
-          : 'Prompt ready below — select & copy.'
+      const promptIntact = Boolean(
+        finalPrompt &&
+          finalPrompt.trim().length > 0 &&
+          (!parcel?.parcelId || finalPrompt.includes(parcel.parcelId))
       );
+      const ok = promptIntact ? await copyToClipboard(finalPrompt) : false;
+      const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+      const verifiedLines = finalPrompt ? finalPrompt.split('\n').length : 0;
+      const hasRealPairing = codeToUse !== '<YOUR_GLP_PAIRING_CODE>';
+      if (ok) {
+        setPromptCopyState({
+          status: 'copied',
+          verifiedChars: finalPrompt.length,
+          verifiedLines,
+          pairingCode: codeToUse,
+          hasRealPairing
+        });
+        setStatusIsError(false);
+        setStatusMsg(
+          `Copied 3D item agent prompt for "${landDisplayName}"! Paste into your AI agent.`
+        );
+        copyResetTimerRef.current = setTimeout(() => {
+          setPromptCopyState((prev) => (prev?.status === 'copied' ? null : prev));
+        }, 4500);
+      } else {
+        setPromptCopyState({
+          status: 'fallback',
+          verifiedChars: finalPrompt.length,
+          verifiedLines,
+          pairingCode: codeToUse,
+          hasRealPairing
+        });
+        setStatusIsError(false);
+        setStatusMsg('Prompt ready below — select & copy.');
+        if (promptTextareaRef.current) {
+          promptTextareaRef.current.focus();
+          promptTextareaRef.current.select();
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -475,9 +553,10 @@ export default function AddLandItemModal({
           <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="add-item-plus-badge">+</span>
             <span>Add 3D Item to {landDisplayName}</span>
-            <InfoTip title="Direct 3D Link Upload & Agent Placement">
-              Preview supported 3D formats below, paste a direct model URL (.glb/.gltf/.obj/.stl/.ply)
-              to validate and upload right away, or copy a ready-to-paste prompt for your AI agent.
+            <InfoTip title="AI Agent Prompt & Manual 3D Upload">
+              Copy the ready-to-paste MCP prompt below so your AI agent can build and place 3D
+              artworks directly on this land, or expand Add Manually to upload a 3D model URL
+              (.glb/.gltf/.obj/.stl/.ply) and customize placement.
             </InfoTip>
           </h2>
           <button
@@ -500,12 +579,12 @@ export default function AddLandItemModal({
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               type="button"
-              className="btn btn-xs"
+              className={`btn btn-xs ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
               aria-label={`Copy share link for ${landDisplayName}`}
               title="Copy shareable visit link for this minted parcel"
               onClick={handleCopyShareLink}
             >
-              🔗 Share Link
+              {shareLinkCopied ? '✓ Link Copied' : '🔗 Share Link'}
             </button>
             <span className={`badge ${isFrozen ? 'badge-error' : 'teal'}`}>
               {isFrozen ? '❄️ Frozen (Placements Blocked)' : '✅ Open for 3D Placements'}
@@ -523,225 +602,132 @@ export default function AddLandItemModal({
           </div>
         </div>
 
-        {/* Supported 3D Model Format Preview Cards with Simple Illustrations */}
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
-            Supported 3D Models Preview
-          </div>
-          <div
-            className="add-item-format-grid"
-            role="radiogroup"
-            aria-label="Supported 3D item format"
-          >
-            {SUPPORTED_ITEM_TYPES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="radio"
-                aria-checked={itemFormat === t.id}
-                className={`add-item-format-pill ${itemFormat === t.id ? 'is-selected' : ''}`}
-                onClick={() => {
-                  setItemFormat(t.id);
-                  if (validationState?.status === 'invalid') setValidationState(null);
-                }}
-                title={t.note}
-              >
-                <div className="add-item-format-preview-row">
-                  <ModelFormatMiniIllustration formatId={t.id} />
-                  <div>
-                    <strong>{t.ext}</strong>
-                    <span>{t.label}</span>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-          <div className="add-item-format-caption">
-            <ModelFormatMiniIllustration formatId={activeTypeInfo.id} />
-            <div>
-              <strong>{activeTypeInfo.label}</strong>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{activeTypeInfo.note}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Direct 3D Model Link Validator & One-Click Upload */}
-        <form
-          onSubmit={handleValidateAndUploadLink}
-          className="add-item-url-uploader"
-          data-testid="direct-model-url-uploader"
+        {/* PRIMARY TOP SECTION: Clean AI Agent Prompt (MCP) with Clear Copy Validation */}
+        <section
+          className={`add-item-agent-card ${
+            promptCopyState?.status === 'copied' ? 'is-copied' : ''
+          }`}
+          data-testid="add-item-agent-section"
+          aria-label="AI Agent Prompt"
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <strong style={{ fontSize: 12.5, color: 'var(--accent)' }}>
-              Upload 3D Model by Link (.GLB / .GLTF / .OBJ / .STL / .PLY)
-            </strong>
-            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-              Validates support &amp; uploads directly
+          <div className="add-item-agent-head">
+            <div className="add-item-agent-title-group">
+              <strong style={{ fontSize: 13.5, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <XeroIcon emoji="🤖" size={15} />
+                <span>AI Agent Prompt (MCP)</span>
+              </strong>
+              <span className="add-item-agent-sub">
+                Paste into your AI agent to generate, fit-check &amp; place 3D art on {landDisplayName}
+              </span>
+            </div>
+            <span
+              className={`badge mono ${
+                promptValidation.hasRealPairing ? 'teal' : promptValidation.willAutoPair ? 'gold' : ''
+              }`}
+              style={{ fontSize: 10.5 }}
+              data-testid="add-item-pairing-status"
+            >
+              {promptValidation.hasRealPairing
+                ? `✓ Paired · ${activePairingCode.slice(0, 14)}${activePairingCode.length > 14 ? '…' : ''}`
+                : promptValidation.willAutoPair
+                  ? '⚡ Auto-pairs on copy'
+                  : 'ℹ️ Pairing code needed'}
             </span>
           </div>
 
-          <div className="add-item-url-row">
-            <input
-              type="url"
-              className="input"
-              aria-label="3D Model URL"
-              value={modelUrl}
-              onChange={(e) => {
-                setModelUrl(e.target.value);
-                if (validationState) setValidationState(null);
-              }}
-              placeholder="Paste link: https://.../model.glb or ipfs://..."
-            />
+          <div className="add-item-agent-actions">
             <button
               type="button"
-              className="btn btn-sm"
-              disabled={uploadBusy || validationState?.status === 'checking' || !modelUrl.trim()}
-              onClick={handleValidateModelLink}
+              className={`btn btn-sm btn-primary add-item-copy-btn ${
+                promptCopyState?.status === 'copied' ? 'is-copied' : ''
+              }`}
+              data-testid="copy-agent-prompt-btn"
+              disabled={busy}
+              onClick={handleCopyPrompt}
             >
-              {validationState?.status === 'checking' ? 'Checking…' : 'Validate Link'}
+              {busy ? (
+                <>⏳ Preparing Prompt…</>
+              ) : promptCopyState?.status === 'copied' ? (
+                <>✓ Copied to Clipboard!</>
+              ) : (
+                <>
+                  <XeroIcon emoji="📋" size={13} /> Copy 3D Item Agent Prompt
+                </>
+              )}
             </button>
-            <button
-              type="submit"
-              className="btn btn-sm btn-primary"
-              disabled={uploadBusy || isFrozen || !modelUrl.trim()}
-            >
-              {uploadBusy ? 'Uploading…' : 'Validate & Upload'}
-            </button>
+            {onOpenLandManagement && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  onClose?.();
+                  onOpenLandManagement(parcel.parcelId);
+                }}
+              >
+                ⚙️ Land Settings
+              </button>
+            )}
           </div>
 
-          {validationState?.status === 'valid' && validationState.data && (
-            <div className="add-item-validation-ok" role="status" data-testid="model-url-valid-badge">
-              ✅ Supported <strong>.{String(validationState.data.format).toUpperCase()}</strong> ·{' '}
-              {formatByteSize(validationState.data.byteLength)}
-              {validationState.data.stats?.triangleCount
-                ? ` · ${Number(validationState.data.stats.triangleCount).toLocaleString()} tris`
-                : ''}
-              {validationState.data.stats?.bbox
-                ? ` · ${Number(validationState.data.stats.bbox.width).toFixed(2)}×${Number(
-                    validationState.data.stats.bbox.depth
-                  ).toFixed(2)}×${Number(validationState.data.stats.bbox.height).toFixed(2)}m`
-                : ''}{' '}
-              {liveLandFit && !liveLandFit.fits ? '— Exceeds land bounds at current scale' : '— Ready to upload!'}
-            </div>
-          )}
-          {((liveLandFit && !liveLandFit.fits) || serverFitHint) && (() => {
-            const fitMsg =
-              (liveLandFit && !liveLandFit.fits ? liveLandFit.message : '') ||
-              serverFitHint?.message ||
-              'Model exceeds this land boundary at current scale.';
-            const fitMaxScale =
-              liveLandFit && !liveLandFit.fits
-                ? Number(liveLandFit.maxSafeScale || 0)
-                : Number(serverFitHint?.maxSafeScale || 0);
-            return (
-              <div
-                className="status-banner status-banner-error"
-                role="alert"
-                data-testid="model-land-fit-warning"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}
-              >
-                <span>⚠️ {fitMsg}</span>
-                {fitMaxScale >= 0.001 && (
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-primary"
-                    data-testid="fit-model-to-land-btn"
-                    onClick={() => {
-                      setModelScale(fitMaxScale);
-                      setServerFitHint(null);
-                      setStatusMsg('');
-                      setStatusIsError(false);
-                    }}
-                  >
-                    📐 Fit to Land ({fitMaxScale}×)
-                  </button>
-                )}
+          {/* Copy Validation Strip: Pre-copy readiness + Post-copy verified status */}
+          <div
+            className={`add-item-copy-validation ${
+              promptCopyState?.status === 'copied'
+                ? 'is-verified'
+                : promptCopyState?.status === 'fallback'
+                  ? 'is-warning'
+                  : ''
+            }`}
+            data-testid="add-item-copy-validation"
+            role="status"
+            aria-live="polite"
+          >
+            {promptCopyState?.status === 'copied' ? (
+              <div className="add-item-copy-validation-msg" data-testid="copy-validation-confirmed">
+                <span>
+                  ✅ <strong>Copied &amp; verified</strong> ({promptCopyState.verifiedChars.toLocaleString()} chars ·{' '}
+                  {promptCopyState.verifiedLines} lines
+                  {promptCopyState.hasRealPairing ? ' · MCP pairing included' : ''}) — paste directly into your AI agent.
+                </span>
               </div>
-            );
-          })()}
-          {validationState?.status === 'invalid' && (
-            <div className="status-banner status-banner-error" role="alert">
-              ❌ {validationState.error}
-            </div>
-          )}
-        </form>
+            ) : promptCopyState?.status === 'fallback' ? (
+              <div className="add-item-copy-validation-msg" data-testid="copy-validation-fallback">
+                <span>
+                  ⚠️ Browser blocked automatic clipboard write — prompt is highlighted below. Press{' '}
+                  <strong>Ctrl+C</strong> (or <strong>⌘C</strong>) to copy.
+                </span>
+              </div>
+            ) : (
+              <div className="add-item-copy-checks mono">
+                <span className={promptValidation.hasParcelId ? 'is-ok' : ''}>
+                  {promptValidation.hasParcelId ? '✓' : '○'} Land ID &amp; 3D bounds
+                </span>
+                <span className={promptValidation.hasMcpEndpoint ? 'is-ok' : ''}>
+                  {promptValidation.hasMcpEndpoint ? '✓' : '○'} MCP tools ready
+                </span>
+                <span className={promptValidation.hasRealPairing || promptValidation.willAutoPair ? 'is-ok' : ''}>
+                  {promptValidation.hasRealPairing
+                    ? '✓ Pairing code included'
+                    : promptValidation.willAutoPair
+                      ? '⚡ Pairing auto-added on copy'
+                      : '○ Sign in for pairing code'}
+                </span>
+                <span className="add-item-copy-size">
+                  {promptValidation.charCount.toLocaleString()} chars
+                </span>
+              </div>
+            )}
+          </div>
 
-        {/* Item Title, Description & Placement Controls */}
-        <div className="add-item-form-grid">
-          <label className="land-name-field">
-            <span>3D Item Title</span>
-            <EmojiInput
-              type="text"
-              maxLength={48}
-              value={itemTitle}
-              onChange={(e) => setItemTitle(e.target.value)}
-              placeholder="e.g. Glowing Cyber Dragon (type : for emojis)"
-            />
-          </label>
-
-          {itemFormat === 'voxel' ? (
-            <label className="land-name-field">
-              <span>Voxel Style / Prefab Hint</span>
-              <select
-                className="input"
-                value={stylePreset}
-                onChange={(e) => setStylePreset(e.target.value)}
-              >
-                {VOXEL_STYLES.map((st) => (
-                  <option key={st} value={st}>
-                    {st}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <label className="land-name-field">
-              <span>Model Scale</span>
-              <input
-                type="number"
-                min={0.001}
-                max={60}
-                step={0.01}
-                value={modelScale}
-                onChange={(e) => {
-                  setModelScale(Number(e.target.value || 1));
-                  if (serverFitHint) setServerFitHint(null);
-                }}
-              />
-            </label>
-          )}
-        </div>
-
-        <label className="land-name-field" style={{ marginTop: 8 }}>
-          <span>Description or AI Agent Instructions</span>
-          <EmojiTextarea
-            className="textarea"
-            rows={2}
-            maxLength={240}
-            value={itemDescription}
-            onChange={(e) => setItemDescription(e.target.value)}
-            placeholder="Describe the 3D sculpture, colors, scale, or edits (type : for emojis)..."
+          <textarea
+            ref={promptTextareaRef}
+            readOnly
+            className="land-agent-preview add-item-agent-textarea"
+            aria-label="Add 3D item agent prompt preview"
+            value={promptText}
+            onFocus={(e) => e.target.select()}
           />
-        </label>
-
-        <div className="add-item-offset-row">
-          <label>
-            <span>dx (m)</span>
-            <input type="number" step="0.5" value={dx} onChange={(e) => setDx(e.target.value)} />
-          </label>
-          <label>
-            <span>dy (m)</span>
-            <input type="number" step="0.5" value={dy} onChange={(e) => setDy(e.target.value)} />
-          </label>
-          <label>
-            <span>dz (m)</span>
-            <input type="number" step="0.5" value={dz} onChange={(e) => setDz(e.target.value)} />
-          </label>
-          <label>
-            <span>yaw (°)</span>
-            <input type="number" step="15" value={yaw} onChange={(e) => setYaw(e.target.value)} />
-          </label>
-        </div>
+        </section>
 
         {statusMsg && (
           <div
@@ -753,51 +739,270 @@ export default function AddLandItemModal({
           </div>
         )}
 
-        {/* Copyable AI Agent Prompt */}
-        <div style={{ marginTop: 10 }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 6,
-              flexWrap: 'wrap'
-            }}
+        {/* COLLAPSIBLE FOLD-DOWN: Add Manually (URL Upload, Format Picker, Title, Scale & Position) */}
+        <section
+          className={`add-item-manual-fold ${manualOpen ? 'is-open' : ''}`}
+          data-testid="add-item-manual-section"
+        >
+          <button
+            type="button"
+            className="add-item-fold-trigger"
+            data-testid="add-item-manual-toggle"
+            aria-expanded={manualOpen}
+            aria-controls="add-item-manual-body"
+            onClick={() => setManualOpen((v) => !v)}
           >
-            <strong style={{ fontSize: 12.5 }}>Or Copy AI Agent Prompt (MCP)</strong>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy}
-                onClick={handleCopyPrompt}
-              >
-                <XeroIcon emoji="📋" size={13} />{' '}
-                {busy ? 'Preparing…' : 'Copy 3D Item Agent Prompt'}
-              </button>
-              {onOpenLandManagement && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    onClose?.();
-                    onOpenLandManagement(parcel.parcelId);
-                  }}
+            <span className="add-item-fold-left">
+              <span className="add-item-fold-title">
+                <XeroIcon emoji="🛠️" size={14} />
+                <span>Add Manually</span>
+              </span>
+              <span className="add-item-fold-sub">
+                Upload a 3D model URL (.GLB / .GLTF / .OBJ / .STL / .PLY) or customize title, scale &amp; offsets
+              </span>
+            </span>
+            <span className="add-item-fold-right">
+              <span className="badge mono" style={{ fontSize: 10 }}>
+                .{activeTypeInfo.ext}
+              </span>
+              <span className="add-item-fold-chevron" aria-hidden="true">
+                {manualOpen ? '▾' : '▸'}
+              </span>
+            </span>
+          </button>
+
+          {manualOpen && (
+            <div
+              id="add-item-manual-body"
+              className="add-item-manual-body"
+              data-testid="add-item-manual-body"
+            >
+              {/* Supported 3D Model Format Preview Cards with Simple Illustrations */}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                  Supported 3D Models Preview
+                </div>
+                <div
+                  className="add-item-format-grid"
+                  role="radiogroup"
+                  aria-label="Supported 3D item format"
                 >
-                  ⚙️ Land Settings
-                </button>
-              )}
+                  {SUPPORTED_ITEM_TYPES.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={itemFormat === t.id}
+                      className={`add-item-format-pill ${itemFormat === t.id ? 'is-selected' : ''}`}
+                      onClick={() => {
+                        setItemFormat(t.id);
+                        if (validationState?.status === 'invalid') setValidationState(null);
+                      }}
+                      title={t.note}
+                    >
+                      <div className="add-item-format-preview-row">
+                        <ModelFormatMiniIllustration formatId={t.id} />
+                        <div>
+                          <strong>{t.ext}</strong>
+                          <span>{t.label}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="add-item-format-caption">
+                  <ModelFormatMiniIllustration formatId={activeTypeInfo.id} />
+                  <div>
+                    <strong>{activeTypeInfo.label}</strong>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{activeTypeInfo.note}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Direct 3D Model Link Validator & One-Click Upload */}
+              <form
+                onSubmit={handleValidateAndUploadLink}
+                className="add-item-url-uploader"
+                data-testid="direct-model-url-uploader"
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <strong style={{ fontSize: 12.5, color: 'var(--accent)' }}>
+                    Upload 3D Model by Link (.GLB / .GLTF / .OBJ / .STL / .PLY)
+                  </strong>
+                  <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                    Validates support &amp; uploads directly
+                  </span>
+                </div>
+
+                <div className="add-item-url-row">
+                  <input
+                    type="url"
+                    className="input"
+                    aria-label="3D Model URL"
+                    value={modelUrl}
+                    onChange={(e) => {
+                      setModelUrl(e.target.value);
+                      if (validationState) setValidationState(null);
+                    }}
+                    placeholder="Paste link: https://.../model.glb or ipfs://..."
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={uploadBusy || validationState?.status === 'checking' || !modelUrl.trim()}
+                    onClick={handleValidateModelLink}
+                  >
+                    {validationState?.status === 'checking' ? 'Checking…' : 'Validate Link'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-sm btn-primary"
+                    disabled={uploadBusy || isFrozen || !modelUrl.trim()}
+                  >
+                    {uploadBusy ? 'Uploading…' : 'Validate & Upload'}
+                  </button>
+                </div>
+
+                {validationState?.status === 'valid' && validationState.data && (
+                  <div className="add-item-validation-ok" role="status" data-testid="model-url-valid-badge">
+                    ✅ Supported <strong>.{String(validationState.data.format).toUpperCase()}</strong> ·{' '}
+                    {formatByteSize(validationState.data.byteLength)}
+                    {validationState.data.stats?.triangleCount
+                      ? ` · ${Number(validationState.data.stats.triangleCount).toLocaleString()} tris`
+                      : ''}
+                    {validationState.data.stats?.bbox
+                      ? ` · ${Number(validationState.data.stats.bbox.width).toFixed(2)}×${Number(
+                          validationState.data.stats.bbox.depth
+                        ).toFixed(2)}×${Number(validationState.data.stats.bbox.height).toFixed(2)}m`
+                      : ''}{' '}
+                    {liveLandFit && !liveLandFit.fits ? '— Exceeds land bounds at current scale' : '— Ready to upload!'}
+                  </div>
+                )}
+                {((liveLandFit && !liveLandFit.fits) || serverFitHint) && (() => {
+                  const fitMsg =
+                    (liveLandFit && !liveLandFit.fits ? liveLandFit.message : '') ||
+                    serverFitHint?.message ||
+                    'Model exceeds this land boundary at current scale.';
+                  const fitMaxScale =
+                    liveLandFit && !liveLandFit.fits
+                      ? Number(liveLandFit.maxSafeScale || 0)
+                      : Number(serverFitHint?.maxSafeScale || 0);
+                  return (
+                    <div
+                      className="status-banner status-banner-error"
+                      role="alert"
+                      data-testid="model-land-fit-warning"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}
+                    >
+                      <span>⚠️ {fitMsg}</span>
+                      {fitMaxScale >= 0.001 && (
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          data-testid="fit-model-to-land-btn"
+                          onClick={() => {
+                            setModelScale(fitMaxScale);
+                            setServerFitHint(null);
+                            setStatusMsg('');
+                            setStatusIsError(false);
+                          }}
+                        >
+                          📐 Fit to Land ({fitMaxScale}×)
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+                {validationState?.status === 'invalid' && (
+                  <div className="status-banner status-banner-error" role="alert">
+                    ❌ {validationState.error}
+                  </div>
+                )}
+              </form>
+
+              {/* Item Title, Description & Placement Controls (also sync live with the Agent Prompt above) */}
+              <div className="add-item-form-grid">
+                <label className="land-name-field">
+                  <span>3D Item Title</span>
+                  <EmojiInput
+                    type="text"
+                    maxLength={48}
+                    value={itemTitle}
+                    onChange={(e) => setItemTitle(e.target.value)}
+                    placeholder="e.g. Glowing Cyber Dragon (type : for emojis)"
+                  />
+                </label>
+
+                {itemFormat === 'voxel' ? (
+                  <label className="land-name-field">
+                    <span>Voxel Style / Prefab Hint</span>
+                    <select
+                      className="input"
+                      value={stylePreset}
+                      onChange={(e) => setStylePreset(e.target.value)}
+                    >
+                      {VOXEL_STYLES.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="land-name-field">
+                    <span>Model Scale</span>
+                    <input
+                      type="number"
+                      min={0.001}
+                      max={60}
+                      step={0.01}
+                      value={modelScale}
+                      onChange={(e) => {
+                        setModelScale(Number(e.target.value || 1));
+                        if (serverFitHint) setServerFitHint(null);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <label className="land-name-field" style={{ marginTop: 8 }}>
+                <span>Description or AI Agent Instructions</span>
+                <EmojiTextarea
+                  className="textarea"
+                  rows={2}
+                  maxLength={240}
+                  value={itemDescription}
+                  onChange={(e) => setItemDescription(e.target.value)}
+                  placeholder="Describe the 3D sculpture, colors, scale, or edits (type : for emojis)..."
+                />
+              </label>
+
+              <div className="add-item-offset-row">
+                <label>
+                  <span>dx (m)</span>
+                  <input type="number" step="0.5" value={dx} onChange={(e) => setDx(e.target.value)} />
+                </label>
+                <label>
+                  <span>dy (m)</span>
+                  <input type="number" step="0.5" value={dy} onChange={(e) => setDy(e.target.value)} />
+                </label>
+                <label>
+                  <span>dz (m)</span>
+                  <input type="number" step="0.5" value={dz} onChange={(e) => setDz(e.target.value)} />
+                </label>
+                <label>
+                  <span>yaw (°)</span>
+                  <input type="number" step="15" value={yaw} onChange={(e) => setYaw(e.target.value)} />
+                </label>
+              </div>
+
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                💡 Customizations entered here also update the AI Agent Prompt above live.
+              </div>
             </div>
-          </div>
-          <textarea
-            readOnly
-            className="land-agent-preview"
-            aria-label="Add 3D item agent prompt preview"
-            value={promptText}
-            onFocus={(e) => e.target.select()}
-          />
-        </div>
+          )}
+        </section>
 
         {/* Existing Artworks on This Land (Quick Modify / Hide / Restore) */}
         {existingSculptures.length > 0 && (

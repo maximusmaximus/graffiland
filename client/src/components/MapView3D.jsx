@@ -1998,6 +1998,13 @@ export default function MapView3D({
     pinMap.clear();
 
     const ownedSet = new Set((ownedParcelIds || []).map((id) => String(id).toUpperCase()));
+    const sculptureCountByParcel = new Map();
+    for (const sc of sculptures || []) {
+      if (!sc || sc.hidden || sc.isPendingPreview) continue;
+      const scPid = String(sc.parcelId || '').toUpperCase();
+      if (!scPid) continue;
+      sculptureCountByParcel.set(scPid, (sculptureCountByParcel.get(scPid) || 0) + 1);
+    }
 
     for (const p of parcels || []) {
       const pid = String(p?.parcelId || '').toUpperCase();
@@ -2007,14 +2014,19 @@ export default function MapView3D({
       const lng = Number(p?.volume?.centerLng ?? p?.centerLng ?? p?.bounds?.center?.[1]);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
+      const itemCount = Math.max(
+        Number(p?.sculptureCount ?? 0) || 0,
+        sculptureCountByParcel.get(pid) || 0
+      );
+      const isEmptyLand = itemCount === 0;
       const landName = resolveLandDisplayName(p, { defaultName: 'Virtual Land' });
       const wrap = document.createElement('div');
       wrap.className = 'map3d-owned-action-pin map3d-ui-stop';
 
-      const btnRow = document.createElement('div');
-      btnRow.className = 'map3d-owned-action-row';
-
       if (isOwned) {
+        const btnRow = document.createElement('div');
+        btnRow.className = 'map3d-owned-action-row';
+
         const plusBtn = document.createElement('button');
         plusBtn.type = 'button';
         plusBtn.className = `map3d-owned-plus-btn map3d-ui-stop ${p?.frozen ? 'is-frozen' : ''}`;
@@ -2044,36 +2056,15 @@ export default function MapView3D({
           onTitleParcelRef.current?.(p);
         });
         btnRow.appendChild(titleBtn);
+
+        wrap.appendChild(btnRow);
       }
 
-      const shareBtn = document.createElement('button');
-      shareBtn.type = 'button';
-      shareBtn.className = `map3d-owned-mini-btn map3d-parcel-share-btn map3d-ui-stop ${isOwned ? '' : 'is-public'}`;
-      shareBtn.dataset.parcelId = pid;
-      shareBtn.setAttribute('aria-label', `Copy share link for ${landName}`);
-      shareBtn.title = `Copy shareable visit link for ${landName}`;
-      shareBtn.textContent = '🔗';
-      shareBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-      shareBtn.addEventListener('click', async (ev) => {
-        ev.stopPropagation();
-        if (onCopyParcelShareLinkRef.current) {
-          await onCopyParcelShareLinkRef.current(p);
-        } else {
-          const shareUrl = buildParcelShareUrl({
-            origin: window.location.origin,
-            pathname: window.location.pathname,
-            parcelId: pid,
-            customName: p.customName || '',
-            compact: true
-          });
-          await copyToClipboard(shareUrl);
-        }
-        shareBtn.textContent = '✓';
-        setTimeout(() => {
-          shareBtn.textContent = '🔗';
-        }, 1500);
-      });
-      btnRow.appendChild(shareBtn);
+      const labelPill = document.createElement('div');
+      labelPill.className = `map3d-land-label-pill map3d-ui-stop ${
+        isEmptyLand ? 'is-empty-land' : ''
+      }`;
+      labelPill.dataset.emptyLand = isEmptyLand ? 'true' : 'false';
 
       const badge = document.createElement('button');
       badge.type = 'button';
@@ -2089,7 +2080,43 @@ export default function MapView3D({
         onSelectParcelRef.current?.(p);
       });
 
-      wrap.append(btnRow, badge);
+      const shareBtn = document.createElement('button');
+      shareBtn.type = 'button';
+      shareBtn.className = `map3d-parcel-share-btn map3d-land-label-copy-btn map3d-ui-stop ${
+        isOwned ? '' : 'is-public'
+      } ${isEmptyLand ? 'is-empty-land' : ''}`.trim();
+      shareBtn.dataset.testid = 'map3d-land-copy-btn';
+      shareBtn.dataset.parcelId = pid;
+      shareBtn.setAttribute('aria-label', `Copy share link for ${landName}`);
+      shareBtn.title = `Copy shareable visit link for ${landName}`;
+      const idleCopyText = isEmptyLand ? '🔗 Copy' : '🔗';
+      const copiedText = isEmptyLand ? '✓ Copied' : '✓';
+      shareBtn.textContent = idleCopyText;
+      shareBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      shareBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (onCopyParcelShareLinkRef.current) {
+          await onCopyParcelShareLinkRef.current(p);
+        } else {
+          const shareUrl = buildParcelShareUrl({
+            origin: window.location.origin,
+            pathname: window.location.pathname,
+            parcelId: pid,
+            customName: p.customName || '',
+            compact: true
+          });
+          await copyToClipboard(shareUrl);
+        }
+        shareBtn.textContent = copiedText;
+        shareBtn.classList.add('is-copied');
+        setTimeout(() => {
+          shareBtn.textContent = idleCopyText;
+          shareBtn.classList.remove('is-copied');
+        }, 1800);
+      });
+
+      labelPill.append(badge, shareBtn);
+      wrap.appendChild(labelPill);
       wrap.style.display = 'none';
       pinLayer.appendChild(wrap);
       pinMap.set(pid, { el: wrap, parcel: p });
@@ -2105,7 +2132,7 @@ export default function MapView3D({
       }
       pinMap.clear();
     };
-  }, [parcels, ownedParcelIds, drawWireframes]);
+  }, [parcels, sculptures, ownedParcelIds, drawWireframes]);
 
   // Close search dropdown on outside click
   useEffect(() => {
