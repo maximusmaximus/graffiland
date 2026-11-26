@@ -163,7 +163,7 @@ export async function buildMainnetGenesisSnapshot({
     contributorsByParcel.get(pid).push({
       handle: u?.handle || '',
       walletAddress: normalizeWalletAddress(c.contributor_address || u?.payoutAddress || ''),
-      role: String(c.role || 'contributor'),
+      role: String(c.role || (Number(c.can_edit_sculptures ?? 1) ? 'contributor' : 'viewer')),
       addedAt: String(c.created_at || '')
     });
   }

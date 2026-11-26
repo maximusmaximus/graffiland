@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,13 +32,31 @@ function parseArgs(argv) {
   return args;
 }
 
+function quoteWinArg(arg) {
+  const s = String(arg);
+  if (!/[\s"&|<>^%]/.test(s)) return s;
+  return `"${s.replace(/"/g, '\\"')}"`;
+}
+
 function runWrangler(wranglerArgs) {
-  const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  return execFileSync(cmd, ['wrangler', ...wranglerArgs], {
+  if (process.platform === 'win32') {
+    const cmdLine = ['npx.cmd', 'wrangler', ...wranglerArgs.map(quoteWinArg)].join(' ');
+    return execSync(cmdLine, {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024
+    });
+  }
+  return execFileSync('npx', ['wrangler', ...wranglerArgs], {
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    shell: process.platform === 'win32'
+    maxBuffer: 64 * 1024 * 1024
   });
+}
+
+function parseWranglerJson(raw) {
+  const s = String(raw || '').trim();
+  const idx = s.indexOf('[');
+  if (idx < 0) throw new Error(`Wrangler did not emit JSON array: ${s.slice(0, 200)}`);
+  return JSON.parse(s.slice(idx));
 }
 
 function d1Query(sql, args) {
@@ -53,7 +71,7 @@ function d1Query(sql, args) {
     '--command',
     sql
   ]);
-  const parsed = JSON.parse(raw);
+  const parsed = parseWranglerJson(raw);
   return Array.isArray(parsed) && parsed[0]?.results ? parsed[0].results : [];
 }
 

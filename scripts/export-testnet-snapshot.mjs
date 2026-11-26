@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -30,14 +30,31 @@ function parseArgs(argv) {
   return args;
 }
 
+function quoteWinArg(arg) {
+  const s = String(arg);
+  if (!/[\s"&|<>^%]/.test(s)) return s;
+  return `"${s.replace(/"/g, '\\"')}"`;
+}
+
 function runWrangler(wranglerArgs) {
-  const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const out = execFileSync(cmd, ['wrangler', ...wranglerArgs], {
+  if (process.platform === 'win32') {
+    const cmdLine = ['npx.cmd', 'wrangler', ...wranglerArgs.map(quoteWinArg)].join(' ');
+    return execSync(cmdLine, {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024
+    });
+  }
+  return execFileSync('npx', ['wrangler', ...wranglerArgs], {
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    shell: process.platform === 'win32'
+    maxBuffer: 64 * 1024 * 1024
   });
-  return out;
+}
+
+function parseWranglerJson(raw) {
+  const s = String(raw || '').trim();
+  const idx = s.indexOf('[');
+  if (idx < 0) throw new Error(`Wrangler did not emit JSON array: ${s.slice(0, 200)}`);
+  return JSON.parse(s.slice(idx));
 }
 
 function queryRemoteD1(sql, args) {
@@ -52,7 +69,7 @@ function queryRemoteD1(sql, args) {
     '--command',
     sql
   ]);
-  const parsed = JSON.parse(raw);
+  const parsed = parseWranglerJson(raw);
   return Array.isArray(parsed) && parsed[0]?.results ? parsed[0].results : [];
 }
 
@@ -84,11 +101,11 @@ function queryAllTablesFromRemoteD1(args) {
       args
     ),
     contributors: queryRemoteD1(
-      'SELECT parcel_id, contributor_sub, contributor_address, role, created_at FROM land_contributors;',
+      'SELECT parcel_id, contributor_sub, contributor_address, can_edit_sculptures, created_at FROM land_contributors;',
       args
     ),
     sculptures: queryRemoteD1(
-      'SELECT id, title, description, creator_sub, creator_name, recipient_address, lat, lng, altitude, geohash, place_name, country, voxel_count, pol_score, proof_hash, preview_data_url, ipfs_metadata_cid, ipfs_model_cid, ipfs_image_cid, ipfs_gateway_url, chain_id, chain_name, contract_address, token_id, tx_hash, simulated_chain, royalty_bps, royalty_receiver, hidden, created_at FROM sculptures WHERE hidden = 0;',
+      'SELECT id, parcel_id, title, description, creator_sub, creator_name, recipient_address, lat, lng, altitude, geohash, place_name, country, voxel_count, pol_score, proof_hash, preview_data_url, ipfs_metadata_cid, ipfs_model_cid, ipfs_image_cid, ipfs_gateway_url, chain_id, chain_name, contract_address, token_id, tx_hash, simulated_chain, royalty_bps, royalty_receiver, hidden, created_at FROM sculptures WHERE hidden = 0;',
       args
     ),
     sculptureModels: queryRemoteD1(
@@ -132,10 +149,10 @@ function queryAllTablesFromSqlite(sqlitePath) {
         'SELECT parcel_id, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval FROM land_settings'
       ),
       contributors: safeAll(
-        'SELECT parcel_id, contributor_sub, contributor_address, role, created_at FROM land_contributors'
+        'SELECT parcel_id, contributor_sub, contributor_address, can_edit_sculptures, created_at FROM land_contributors'
       ),
       sculptures: safeAll(
-        'SELECT id, title, description, creator_sub, creator_name, recipient_address, lat, lng, altitude, geohash, place_name, country, voxel_count, pol_score, proof_hash, preview_data_url, ipfs_metadata_cid, ipfs_model_cid, ipfs_image_cid, ipfs_gateway_url, chain_id, chain_name, contract_address, token_id, tx_hash, simulated_chain, royalty_bps, royalty_receiver, hidden, created_at FROM sculptures WHERE hidden = 0'
+        'SELECT id, parcel_id, title, description, creator_sub, creator_name, recipient_address, lat, lng, altitude, geohash, place_name, country, voxel_count, pol_score, proof_hash, preview_data_url, ipfs_metadata_cid, ipfs_model_cid, ipfs_image_cid, ipfs_gateway_url, chain_id, chain_name, contract_address, token_id, tx_hash, simulated_chain, royalty_bps, royalty_receiver, hidden, created_at FROM sculptures WHERE hidden = 0'
       ),
       sculptureModels: safeAll(
         'SELECT sculpture_id, parcel_id, model_format, mime_type, model_url, model_cid, byte_length, scale, rotation_y FROM sculpture_models'
