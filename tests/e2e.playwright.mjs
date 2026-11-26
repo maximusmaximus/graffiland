@@ -2813,4 +2813,116 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     assert.deepEqual(errors, []);
     await mobCtx.close();
   });
+
+  test('Mobile AR holding Brush shows side volumetric remaining-pixels bar, drains live as strokes paint, and hides on release without HUD overlap', async () => {
+    const mobCtx = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+    });
+    await mobCtx.addInitScript(() => {
+      globalThis.localStorage.setItem('graffiland_first_visit_welcome_seen_v1', '1');
+      globalThis.localStorage.setItem('graffiland_studio_tutorial_v1', '1');
+      globalThis.localStorage.setItem('graffiland_spray_brush_guide_seen_v1', '1');
+    });
+    const page = await mobCtx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('[data-testid="key-carousel"]', { timeout: 15000 });
+    await page.waitForSelector('[data-testid="draw-volume-meter"]', { state: 'attached', timeout: 10000 });
+
+    // 1. Meter is hidden while idle
+    const initVisible = await page
+      .getByTestId('draw-volume-meter')
+      .getAttribute('data-visible');
+    assert.equal(initVisible, 'false', 'Volumetric meter should stay hidden until draw tool is held');
+
+    const initRemaining = Number(
+      await page.getByTestId('draw-volume-meter').getAttribute('data-remaining')
+    );
+    assert.equal(initRemaining, 4096);
+
+    // 2. Press and hold center Brush tool -> meter immediately appears on the left side & drains live!
+    const brushBtn = page.locator('.key-slot-btn.is-center').first();
+    const box = await brushBtn.boundingBox();
+    assert.ok(box && box.width > 20, 'Expected center brush button bounding box');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="draw-volume-meter"]')
+          ?.getAttribute('data-visible') === 'true',
+      null,
+      { timeout: 5000 }
+    );
+
+    // Wait briefly for continuous hold delay (~75ms) to place voxel(s)
+    await page.waitForFunction(
+      () =>
+        Number(
+          globalThis.document
+            .querySelector('[data-testid="draw-volume-meter"]')
+            ?.getAttribute('data-remaining') || '4096'
+        ) < 4096,
+      null,
+      { timeout: 5000 }
+    );
+
+    // Wait for slide-in transition to settle before measuring final resting geometry
+    await page.waitForTimeout(280);
+
+    const layoutCheck = await page.evaluate(() => {
+      const meter = globalThis.document.querySelector('[data-testid="draw-volume-meter"]');
+      const carousel = globalThis.document.querySelector('[data-testid="key-carousel"]');
+      const topLeft = globalThis.document.querySelector('.mobile-top-hud-left');
+      const mapBtn = globalThis.document.querySelector('.floating-map-btn');
+      const scanBox = globalThis.document.querySelector('[data-testid="scene-coverage-widget"]');
+      return {
+        remaining: Number(meter?.getAttribute('data-remaining') || 0),
+        text: meter?.querySelector('[data-testid="draw-volume-remaining"]')?.textContent || '',
+        meterRect: meter?.getBoundingClientRect().toJSON(),
+        carouselRect: carousel?.getBoundingClientRect().toJSON(),
+        topLeftRect: topLeft?.getBoundingClientRect().toJSON(),
+        mapBtnRect: mapBtn?.getBoundingClientRect().toJSON(),
+        scanRect: scanBox?.getBoundingClientRect().toJSON()
+      };
+    });
+
+    assert.ok(layoutCheck.remaining < 4096, `Expected remaining pixels to drain, got ${layoutCheck.remaining}`);
+    assert.ok(layoutCheck.meterRect.left >= 0 && layoutCheck.meterRect.right < 120, 'Meter should sit cleanly on the left side');
+    assert.ok(
+      layoutCheck.meterRect.top > (layoutCheck.topLeftRect?.bottom || 0),
+      `Meter must not overlap top HUD (meter top=${layoutCheck.meterRect.top}, topHUD bottom=${layoutCheck.topLeftRect?.bottom})`
+    );
+    assert.ok(
+      layoutCheck.meterRect.bottom < (layoutCheck.mapBtnRect?.top || 844),
+      `Meter must not overlap bottom map button (meter bottom=${layoutCheck.meterRect.bottom}, map top=${layoutCheck.mapBtnRect?.top})`
+    );
+    if (layoutCheck.scanRect && layoutCheck.scanRect.width > 0) {
+      assert.ok(
+        layoutCheck.meterRect.right < layoutCheck.scanRect.left,
+        'Meter on left must never overlap scene scan box on right'
+      );
+    }
+
+    // 3. Release tool -> volumetric bar smoothly fades back out after linger
+    await page.mouse.up();
+    await page.waitForFunction(
+      () =>
+        globalThis.document
+          .querySelector('[data-testid="draw-volume-meter"]')
+          ?.getAttribute('data-visible') === 'false',
+      null,
+      { timeout: 5000 }
+    );
+
+    assert.deepEqual(errors, []);
+    await mobCtx.close();
+  });
 });

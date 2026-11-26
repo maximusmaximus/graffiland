@@ -136,7 +136,8 @@ export function useVoxelBrush({
   editingSculptureIdRef = null,
   refreshLocationNow = null,
   isPublishingRef = null,
-  onAutoEraseStaleDrawing = null
+  onAutoEraseStaleDrawing = null,
+  onResetSpatialOrigin = null
 }) {
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
 
@@ -169,6 +170,7 @@ export function useVoxelBrush({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [occlusionEnabled, setOcclusionEnabled] = useState(false);
   const [painting, setPainting] = useState(false);
+  const [toolHolding, setToolHolding] = useState(false);
   const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
   const [artTransform, setArtTransformState] = useState({
     scale: 1,
@@ -205,6 +207,8 @@ export function useVoxelBrush({
   refreshLocationNowRef.current = refreshLocationNow;
   const onAutoEraseStaleDrawingRef = useRef(onAutoEraseStaleDrawing);
   onAutoEraseStaleDrawingRef.current = onAutoEraseStaleDrawing;
+  const onResetSpatialOriginRef = useRef(onResetSpatialOrigin);
+  onResetSpatialOriginRef.current = onResetSpatialOrigin;
   const modeRef = useRef(mode);
   const toolRef = useRef(tool);
   const blockSizeRef = useRef(blockSize);
@@ -653,13 +657,13 @@ export function useVoxelBrush({
       if (anchor && anchor.locked) {
         const normal = new THREE.Vector3(anchor.nx, anchor.ny, anchor.nz).normalize();
         const denom = normal.dot(dir);
-        if (Math.abs(denom) > 0.08) {
+        if (Math.abs(denom) > 0.045) {
           const t =
             ((anchor.x - origin.x) * normal.x +
               (anchor.y - origin.y) * normal.y +
               (anchor.z - origin.z) * normal.z) /
             denom;
-          if (t >= 0.4 && t <= 6.5) {
+          if (t >= 0.35 && t <= 24.0) {
             const hitPt = origin
               .clone()
               .addScaledVector(dir, t)
@@ -674,7 +678,7 @@ export function useVoxelBrush({
             });
           }
         }
-        const fallbackDepth = Math.min(4.5, Math.max(0.5, anchor.depthM || reachRef.current));
+        const fallbackDepth = Math.min(10.0, Math.max(0.5, anchor.depthM || reachRef.current));
         const fallbackPt = origin.clone().addScaledVector(dir, fallbackDepth);
         return guardAgainstPlacedItems({
           action: 'add',
@@ -1135,6 +1139,7 @@ export function useVoxelBrush({
     canvasSprayingRef.current = false;
     paintingRef.current = false;
     setPainting(false);
+    setToolHolding(false);
     lastPaintPosRef.current = null;
   }, []);
 
@@ -1312,6 +1317,7 @@ export function useVoxelBrush({
     }
     lastErasedKeyRef.current = { key: '', ts: 0 };
     resetArtTransformState();
+    onResetSpatialOriginRef.current?.();
     setVoxels([]);
     if (toolRef.current === 'erase' || toolRef.current === 'stack') {
       setTool('brush');
@@ -1352,6 +1358,7 @@ export function useVoxelBrush({
       setVoxels([]);
       surfaceAnchorRef.current = null;
       setSurfaceAnchor(null);
+      onResetSpatialOriginRef.current?.();
       clearDrawActivity();
       if (toolRef.current === 'erase' || toolRef.current === 'stack') {
         setTool('brush');
@@ -1571,6 +1578,7 @@ export function useVoxelBrush({
       }
       paintingRef.current = true;
       setPainting(true);
+      setToolHolding(true);
       if (holdTool === 'brush') {
         navigator.vibrate?.(6);
       }
@@ -1808,13 +1816,19 @@ export function useVoxelBrush({
       setIsDraggingKey(true);
 
       const curTool = activeKeyToolRef.current;
-      if (targetRel === 0 && (curTool === 'brush' || curTool === 'stack' || curTool === 'erase')) {
-        const holdDelayMs = curTool === 'brush' ? 75 : 135;
-        paintHoldTimerRef.current = setTimeout(() => {
-          if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
-          keyGestureRef.current.holdStarted = true;
-          startContinuousHoldTool(curTool);
-        }, holdDelayMs);
+      if (
+        targetRel === 0 &&
+        (curTool === 'brush' || curTool === 'stack' || curTool === 'pencil' || curTool === 'erase')
+      ) {
+        setToolHolding(true);
+        if (curTool === 'brush' || curTool === 'stack' || curTool === 'erase') {
+          const holdDelayMs = curTool === 'brush' ? 75 : 135;
+          paintHoldTimerRef.current = setTimeout(() => {
+            if (!keyGestureRef.current.active || keyGestureRef.current.swiped) return;
+            keyGestureRef.current.holdStarted = true;
+            startContinuousHoldTool(curTool);
+          }, holdDelayMs);
+        }
       }
     },
     [startContinuousHoldTool, stopBrushPainting]
@@ -1939,7 +1953,7 @@ export function useVoxelBrush({
           .clone()
           .transformDirection(hit.object.matrixWorld)
           .normalize();
-        const depthM = Math.max(0.45, Math.min(4.5, hit.distance));
+        const depthM = Math.max(0.45, Math.min(12.0, hit.distance));
         setReachMeters(Number(depthM.toFixed(2)));
         setSurfaceAnchor({
           x: hit.point.x,
@@ -2340,6 +2354,7 @@ export function useVoxelBrush({
     setOcclusionEnabled,
     occlusionEnabledRef,
     painting,
+    toolHolding,
     paintingRef,
     lastPaintPosRef,
     lastStackAtRef,

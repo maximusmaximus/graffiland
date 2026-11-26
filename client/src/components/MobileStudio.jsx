@@ -46,6 +46,7 @@ import {
 import ARLandGuidanceOverlay from './studio/ARLandGuidanceOverlay.jsx';
 import ARLandInspectorPanel from './studio/ARLandInspectorPanel.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
+import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
 import MobileMapSheet from './studio/MobileMapSheet.jsx';
 import MobileParcelVisitView from './studio/MobileParcelVisitView.jsx';
@@ -288,7 +289,8 @@ export default function MobileStudio({
     editingSculptureIdRef,
     refreshLocationNow: pol.refreshLocationNow,
     isPublishingRef,
-    onAutoEraseStaleDrawing: (info) => onAutoEraseStaleDrawingBridgeRef.current?.(info)
+    onAutoEraseStaleDrawing: (info) => onAutoEraseStaleDrawingBridgeRef.current?.(info),
+    onResetSpatialOrigin: pol.resetSpatialDrawOrigin
   });
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
@@ -902,6 +904,7 @@ export default function MobileStudio({
       drafts.markDraftPublished(drafts.activeDraftIdRef.current);
       setMintReceipt(resultPayload);
       brush.setVoxels([]);
+      pol.resetSpatialDrawOrigin();
       setTitle('');
       setDescription('');
       setCluePrompt('');
@@ -1357,6 +1360,8 @@ export default function MobileStudio({
         draftYawOffsetRef={pol.draftYawOffsetRef}
         orientationFusionRef={pol.orientationFusionRef}
         positionFilterRef={pol.positionFilterRef}
+        spatialDrawTrackerRef={pol.spatialDrawTrackerRef}
+        reachRef={brush.reachRef}
         webxrControllerRef={webxrControllerRef}
         onWebxrStateChange={pol.setWebxrState}
         fallbackEulerRef={pol.fallbackEulerRef}
@@ -1639,6 +1644,17 @@ export default function MobileStudio({
             }
           }}
         />
+
+        {!isInteractingWithLand && !isArViewOnly && brush.mode === 'draw' && (
+          <DrawVolumeMeter
+            active={brush.toolHolding}
+            painting={brush.painting}
+            usedVoxels={brush.voxels.length}
+            maxVoxels={config?.policy?.maxVoxels || 4096}
+            brushColor={brush.color}
+            tool={brush.tool}
+          />
+        )}
 
         {!isInteractingWithLand && (
           <ToolCarouselBar

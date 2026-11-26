@@ -18,6 +18,7 @@ import {
   ArOrientationFusion,
   ArPositionKalmanFilter
 } from '../utils/arSensorFusion.js';
+import { ArSpatialDrawTracker } from '../utils/arSpatialDrawTracker.js';
 import { isWebXrArSupported } from '../utils/webxrArSession.js';
 import { ProofOfLocationTracker } from '../components/ProofOfLocation.js';
 import { computeSolarLightVector } from '../components/VoxelEngine3D.js';
@@ -48,6 +49,7 @@ export function useProofOfLocation({
   const draftYawOffsetRef = useRef(0);
   const orientationFusionRef = useRef(new ArOrientationFusion());
   const positionFilterRef = useRef(new ArPositionKalmanFilter());
+  const spatialDrawTrackerRef = useRef(new ArSpatialDrawTracker());
   const orientationDetachRef = useRef(null);
   const webxrActiveRef = useRef(false);
   const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
@@ -1196,12 +1198,20 @@ export function useProofOfLocation({
     };
 
     const motionHandler = (e) => {
-      orientationFusionRef.current.updateFromDeviceMotion(e, getScreenAngle());
+      const screenAngle = getScreenAngle();
+      orientationFusionRef.current.updateFromDeviceMotion(e, screenAngle);
       if (orientationFusionRef.current.initialized) {
         positionFilterRef.current.updateImuMotion({
           accelWithGravity: e.accelerationIncludingGravity,
           headingDeg: orientationFusionRef.current.getTrueHeadingDeg()
         });
+        if (e.acceleration) {
+          spatialDrawTrackerRef.current.updateFromDeviceMotion({
+            acceleration: e.acceleration,
+            cameraQuat: orientationFusionRef.current.getCameraQuaternion(),
+            screenOrientDeg: screenAngle
+          });
+        }
       }
     };
 
@@ -1284,9 +1294,17 @@ export function useProofOfLocation({
     }
   }, [attachOrientation, enterFullscreen]);
 
-  // Recenter ONLY rotates the local drawing canvas (`draftYawOffsetRef`) so GPS-anchored lands
-  // & sculptures stay strictly locked to True North!
+  const resetSpatialDrawOrigin = useCallback(() => {
+    const pf = positionFilterRef.current;
+    spatialDrawTrackerRef.current.resetOrigin({
+      currentEnu: pf?.initialized ? { east: pf.east, north: pf.north } : null
+    });
+  }, []);
+
+  // Recenter ONLY re-anchors spatial draw origin when no piece is locked, keeping
+  // GPS-anchored lands & existing placed artwork strictly locked in real world space!
   const recenterAim = useCallback(() => {
+    resetSpatialDrawOrigin();
     if (orientationFusionRef.current.initialized) {
       const headingDeg = orientationFusionRef.current.getTrueHeadingDeg();
       draftYawOffsetRef.current = -(headingDeg * Math.PI) / 180;
@@ -1295,7 +1313,7 @@ export function useProofOfLocation({
     } else {
       fallbackEulerRef.current = { yaw: 0, pitch: 0 };
     }
-  }, []);
+  }, [resetSpatialDrawOrigin]);
 
   const adjustCompassNudge = useCallback(
     (deltaDeg) => {
@@ -1503,6 +1521,8 @@ export function useProofOfLocation({
     draftYawOffsetRef,
     orientationFusionRef,
     positionFilterRef,
+    spatialDrawTrackerRef,
+    resetSpatialDrawOrigin,
     fallbackEulerRef,
     sensorStatus,
     adjustCompassNudge,

@@ -170,6 +170,100 @@ export function buildConnectedVoxelPath(
 }
 
 /**
+ * Generates a sophisticated, silky 3D curved voxel ribbon using quadratic midpoint spline
+ * interpolation across recent stroke control points (`prevAnchor -> prevControl -> targetPoint`),
+ * while guaranteeing strict 6-connected face-adjacency and extended line reach (`maxSteps = 256`).
+ *
+ * Unlike straight point-to-point stepping, sweeping the phone smoothly through 3D space
+ * (or walking along a wall/courtyard) produces flowing continuous arcs that extend much further
+ * per frame without stalling, stair-stepping, or breaking apart.
+ */
+export function buildSmoothSplineVoxelPath(
+  fromVoxelPoint,
+  targetPoint,
+  {
+    controlPoint = null,
+    step = VOXEL_STEP,
+    blockScale = 1,
+    maxSteps = 256
+  } = {}
+) {
+  const scale = normalizeBlockScale(blockScale);
+  const cellStep = getVoxelCellStep(step, scale);
+  const totalBudget = Math.max(1, Number(maxSteps) || 256);
+
+  if (!targetPoint || !Number.isFinite(Number(targetPoint.x))) {
+    return { path: [], lastPoint: fromVoxelPoint || null };
+  }
+
+  if (!fromVoxelPoint || !Number.isFinite(Number(fromVoxelPoint.x))) {
+    return buildConnectedVoxelPath(null, targetPoint, {
+      step,
+      blockScale: scale,
+      maxSteps: totalBudget
+    });
+  }
+
+  // If no curve control point or the bend is nearly straight/short, direct Amanatides-Woo stepping is optimal
+  const directDist = Math.hypot(
+    Number(targetPoint.x) - Number(fromVoxelPoint.x),
+    Number(targetPoint.y) - Number(fromVoxelPoint.y),
+    Number(targetPoint.z) - Number(fromVoxelPoint.z)
+  );
+  if (!controlPoint || !Number.isFinite(Number(controlPoint.x)) || directDist < cellStep * 2.2) {
+    return buildConnectedVoxelPath(fromVoxelPoint, targetPoint, {
+      step,
+      blockScale: scale,
+      maxSteps: totalBudget
+    });
+  }
+
+  // Evaluate quadratic Bezier P0 (from) -> P1 (control) -> P2 (target) at adaptive chord subdivisions
+  const p0x = Number(fromVoxelPoint.x);
+  const p0y = Number(fromVoxelPoint.y);
+  const p0z = Number(fromVoxelPoint.z);
+  const p1x = Number(controlPoint.x);
+  const p1y = Number(controlPoint.y);
+  const p1z = Number(controlPoint.z);
+  const p2x = Number(targetPoint.x);
+  const p2y = Number(targetPoint.y);
+  const p2z = Number(targetPoint.z);
+
+  const chordLen =
+    Math.hypot(p1x - p0x, p1y - p0y, p1z - p0z) + Math.hypot(p2x - p1x, p2y - p1y, p2z - p1z);
+  const segments = Math.max(2, Math.min(12, Math.ceil(chordLen / (cellStep * 2.5))));
+
+  let cursor = fromVoxelPoint;
+  const combined = [];
+  let remaining = totalBudget;
+
+  for (let i = 1; i <= segments && remaining > 0; i += 1) {
+    const t = i / segments;
+    const inv = 1 - t;
+    const wp = {
+      x: inv * inv * p0x + 2 * inv * t * p1x + t * t * p2x,
+      y: inv * inv * p0y + 2 * inv * t * p1y + t * t * p2y,
+      z: inv * inv * p0z + 2 * inv * t * p1z + t * t * p2z
+    };
+    const segRes = buildConnectedVoxelPath(cursor, wp, {
+      step,
+      blockScale: scale,
+      maxSteps: remaining
+    });
+    if (segRes.path.length > 0) {
+      for (const v of segRes.path) combined.push(v);
+      remaining -= segRes.path.length;
+    }
+    cursor = segRes.lastPoint || cursor;
+  }
+
+  return {
+    path: combined,
+    lastPoint: cursor
+  };
+}
+
+/**
  * Verifies that two voxel positions are strictly face-adjacent (Manhattan distance === 1 cell).
  */
 export function areVoxelsFaceConnected(a, b, { step = VOXEL_STEP, blockScale = 1 } = {}) {
