@@ -40,6 +40,154 @@ import {
   notifyPendingLandApproval
 } from '../notificationService.mjs';
 
+export const STAGED_BLOB_TTL_SECONDS = 7200; // 2 hours (1h signature request expiry + 1h safety buffer)
+const COMPACT_PAYLOAD_THRESHOLD_BYTES = 8192;
+const COMPACT_RESULT_THRESHOLD_BYTES = 16384;
+
+function extractHeavyBlobFields(payload) {
+  const p = payload && typeof payload === 'object' ? { ...payload } : {};
+  const heavy = {};
+  let hasHeavyBlob = false;
+  let hasAttachedModel = false;
+  let heavyBytes = 0;
+
+  if (typeof p.modelBase64 === 'string' && p.modelBase64.trim().length > 0) {
+    heavy.modelBase64 = p.modelBase64;
+    heavyBytes += p.modelBase64.length;
+    delete p.modelBase64;
+    hasHeavyBlob = true;
+    hasAttachedModel = true;
+  }
+  if (typeof p.modelData === 'string' && p.modelData.trim().length > 0) {
+    heavy.modelData = p.modelData;
+    heavyBytes += p.modelData.length;
+    delete p.modelData;
+    hasHeavyBlob = true;
+    hasAttachedModel = true;
+  }
+  if (p.model && typeof p.model === 'object') {
+    const cleanModel = { ...p.model };
+    const heavyModel = {};
+    for (const key of ['dataBase64', 'data', 'dataText']) {
+      if (typeof cleanModel[key] === 'string' && cleanModel[key].trim().length > 0) {
+        heavyModel[key] = cleanModel[key];
+        heavyBytes += cleanModel[key].length;
+        delete cleanModel[key];
+        hasHeavyBlob = true;
+        hasAttachedModel = true;
+      }
+    }
+    if (Object.keys(heavyModel).length > 0) {
+      heavy.model = heavyModel;
+      p.model = cleanModel;
+    }
+  }
+  if (typeof p.previewDataUrl === 'string' && p.previewDataUrl.length > 16384) {
+    heavy.previewDataUrl = p.previewDataUrl;
+    heavyBytes += p.previewDataUrl.length;
+    delete p.previewDataUrl;
+    hasHeavyBlob = true;
+  }
+
+  if (hasAttachedModel) {
+    p.hasAttachedModel = true;
+    if (!p.modelFormat && p.model?.format) {
+      p.modelFormat = p.model.format;
+    }
+  }
+
+  return {
+    hasHeavyBlob,
+    hasAttachedModel,
+    heavyBytes,
+    heavyBlob: heavy,
+    lightPayload: p
+  };
+}
+
+export function compactSignaturePayload(payload, { stripVoxels = true } = {}) {
+  const { lightPayload } = extractHeavyBlobFields(payload);
+  delete lightPayload._stagedBlobKey;
+  if (typeof lightPayload.previewDataUrl === 'string' && lightPayload.previewDataUrl.length > 1024) {
+    delete lightPayload.previewDataUrl;
+  }
+  if (stripVoxels) {
+    if (Array.isArray(lightPayload.voxels)) {
+      lightPayload.voxelCount = lightPayload.voxels.length;
+      delete lightPayload.voxels;
+    }
+    if (Array.isArray(lightPayload.cleanVoxels)) {
+      lightPayload.voxelCount = lightPayload.cleanVoxels.length;
+      delete lightPayload.cleanVoxels;
+    }
+  }
+  return lightPayload;
+}
+
+export function compactSignatureResult(result) {
+  if (!result || typeof result !== 'object') return result || {};
+  const copy = { ...result };
+  if (copy.sculpture && typeof copy.sculpture === 'object') {
+    const sc = { ...copy.sculpture };
+    if (Array.isArray(sc.voxels)) {
+      sc.voxelCount = Number(sc.voxelCount || sc.voxels.length);
+      delete sc.voxels;
+    }
+    if (typeof sc.previewDataUrl === 'string' && sc.previewDataUrl.length > 2048) {
+      delete sc.previewDataUrl;
+    }
+    if (sc.customModel && typeof sc.customModel === 'object') {
+      const cm = { ...sc.customModel };
+      delete cm.inlineB64;
+      delete cm.inlineBase64;
+      delete cm.inlineText;
+      sc.customModel = cm;
+    }
+    copy.sculpture = sc;
+  }
+  return copy;
+}
+
+function sanitizePayloadForResponse(payload) {
+  const { lightPayload } = extractHeavyBlobFields(payload);
+  delete lightPayload._stagedBlobKey;
+  return lightPayload;
+}
+
+async function hydrateSignaturePayload(rawPayload, stagedBlobStore = null) {
+  const payload = rawPayload && typeof rawPayload === 'object' ? { ...rawPayload } : {};
+  const blobKey = String(payload._stagedBlobKey || '').trim();
+  if (!blobKey) return payload;
+  if (!stagedBlobStore || typeof stagedBlobStore.get !== 'function') {
+    throw new McpServiceError(
+      'Staged 3D model storage is unavailable for this signature request.',
+      503
+    );
+  }
+  const rawBlob = await stagedBlobStore.get(blobKey);
+  if (!rawBlob) {
+    throw new McpServiceError(
+      'Staged 3D model payload has expired. Ask your agent to re-submit the request.',
+      410
+    );
+  }
+  const parsed = typeof rawBlob === 'string' ? JSON.parse(rawBlob) : rawBlob;
+  delete payload._stagedBlobKey;
+  delete payload._stagedModelBytes;
+  if (parsed && typeof parsed === 'object') {
+    if (parsed.modelBase64) payload.modelBase64 = parsed.modelBase64;
+    if (parsed.modelData) payload.modelData = parsed.modelData;
+    if (parsed.previewDataUrl) payload.previewDataUrl = parsed.previewDataUrl;
+    if (parsed.model && typeof parsed.model === 'object') {
+      payload.model = {
+        ...(payload.model && typeof payload.model === 'object' ? payload.model : {}),
+        ...parsed.model
+      };
+    }
+  }
+  return payload;
+}
+
 export function describeSignatureAction({
   action,
   parcelId = '',
@@ -61,8 +209,16 @@ export function describeSignatureAction({
   if (action === 'create_sculpture') {
     const title = clip(p.title || 'Untitled Artwork', 56);
     const fmt = String(p.modelFormat || '').trim().toUpperCase();
-    const voxelCount = Array.isArray(p.voxels) ? p.voxels.length : 0;
-    const kind = fmt ? `${fmt} 3D model` : voxelCount > 0 ? `${voxelCount}-block voxel sculpture` : '3D artwork';
+    const voxelCount = Array.isArray(p.voxels)
+      ? p.voxels.length
+      : Number(p.voxelCount || 0);
+    const kind = fmt
+      ? `${fmt} 3D model`
+      : p.hasAttachedModel || p._stagedBlobKey
+        ? '3D model'
+        : voxelCount > 0
+          ? `${voxelCount}-block voxel sculpture`
+          : '3D artwork';
     const desc = clip(p.description || '');
     return {
       summaryTitle: `Place "${title}"`,
@@ -73,8 +229,18 @@ export function describeSignatureAction({
     const changes = [];
     if (p.title) changes.push(`rename to "${clip(p.title, 40)}"`);
     if (p.description) changes.push('update description');
-    if (p.modelFormat || p.modelUrl || p.modelBase64 || p.modelData) changes.push('replace 3D model');
-    else if (Array.isArray(p.voxels)) changes.push(`replace ${p.voxels.length} voxels`);
+    if (
+      p.modelFormat ||
+      p.modelUrl ||
+      p.modelBase64 ||
+      p.modelData ||
+      p.hasAttachedModel ||
+      p._stagedBlobKey
+    ) {
+      changes.push('replace 3D model');
+    } else if (Array.isArray(p.voxels) || Number(p.voxelCount || 0) > 0) {
+      changes.push(`replace ${Array.isArray(p.voxels) ? p.voxels.length : Number(p.voxelCount)} voxels`);
+    }
     if (p.anchorOffset) changes.push('adjust placement offset');
     const detail = changes.length ? changes.join(', ') : 'modify sculpture metadata';
     return {
@@ -164,7 +330,8 @@ export function describeSignatureAction({
 export function formatSignatureRequestRow(row) {
   if (!row) return null;
   const expired = new Date(row.expires_at).getTime() < Date.now();
-  const payload = JSON.parse(row.payload_json || '{}');
+  const rawPayload = JSON.parse(row.payload_json || '{}');
+  const payload = sanitizePayloadForResponse(rawPayload);
   const parcelName = String(row.parcel_custom_name || '').trim();
   const landDisplayName = resolveLandDisplayName({
     customName: parcelName || payload?.customName || ''
@@ -217,7 +384,8 @@ export async function enqueueSignatureRequest(
     sculptureId = '',
     payload,
     requestedBy = 'agent',
-    agentName = ''
+    agentName = '',
+    stagedBlobStore = null
   }
 ) {
   const requestId = customRequestId
@@ -256,6 +424,24 @@ export async function enqueueSignatureRequest(
           expiresAt
         });
 
+  let payloadForDb = payload;
+  if (stagedBlobStore && typeof stagedBlobStore.put === 'function') {
+    const extracted = extractHeavyBlobFields(payload);
+    if (extracted.hasHeavyBlob) {
+      const stagedKey = `sigblob:${requestId}`;
+      await stagedBlobStore.put(
+        stagedKey,
+        JSON.stringify(extracted.heavyBlob),
+        STAGED_BLOB_TTL_SECONDS
+      );
+      payloadForDb = {
+        ...extracted.lightPayload,
+        _stagedBlobKey: stagedKey,
+        _stagedModelBytes: extracted.heavyBytes
+      };
+    }
+  }
+
   await db.run(
     `INSERT INTO land_signature_requests (
       id, pairing_code, owner_sub, owner_address, action, parcel_id, sculpture_id,
@@ -271,7 +457,7 @@ export async function enqueueSignatureRequest(
       action,
       normalizeParcelId(parcelId),
       sculptureId || '',
-      JSON.stringify(payload),
+      JSON.stringify(payloadForDb),
       payloadHash,
       canonicalMessage,
       nonce,
@@ -298,10 +484,15 @@ export async function executeValidatedSignatureRow(
     txHash = '',
     pinSculptureFn,
     mintSculptureFn,
-    emitMetadataUpdateFn = null
+    emitMetadataUpdateFn = null,
+    stagedBlobStore = null
   }
 ) {
-  const payload = JSON.parse(reqRow.payload_json || '{}');
+  const rawPayload = JSON.parse(reqRow.payload_json || '{}');
+  const stagedBlobKey = String(
+    rawPayload?._stagedBlobKey || reqRow._cleanupStagedBlobKey || ''
+  ).trim();
+  const payload = await hydrateSignaturePayload(rawPayload, stagedBlobStore);
   const suppliedTxHash = String(txHash || payload?.txHash || '').trim();
   const isAgentOwner =
     String(ownerUser?.id || '').startsWith('agent:') || ownerUser?.actorType === 'agent';
@@ -439,6 +630,10 @@ export async function executeValidatedSignatureRow(
     ethers.keccak256(ethers.toUtf8Bytes(`signed:${reqRow.id}:${signerAddress}:${Date.now()}`));
 
   const now = new Date().toISOString();
+  const compactedPayloadJson = JSON.stringify(
+    compactSignaturePayload(rawPayload, { stripVoxels: true })
+  );
+  const compactedResultJson = JSON.stringify(compactSignatureResult(result));
   await db.run(
     `UPDATE land_signature_requests
      SET status = 'executed',
@@ -453,18 +648,22 @@ export async function executeValidatedSignatureRow(
          updated_at = ?
      WHERE id = ? AND status = 'pending'`,
     [
-      reqRow.payload_json,
+      compactedPayloadJson,
       reqRow.payload_hash,
       reqRow.canonical_message,
       signedBy,
       signerAddress,
       signature,
       finalTxHash,
-      JSON.stringify(result),
+      compactedResultJson,
       now,
       reqRow.id
     ]
   );
+
+  if (stagedBlobKey && stagedBlobStore && typeof stagedBlobStore.delete === 'function') {
+    await stagedBlobStore.delete(stagedBlobKey).catch(() => {});
+  }
 
   const updatedRow = await db.get(
     `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
@@ -489,7 +688,7 @@ export async function executeValidatedSignatureRow(
 
 export async function createPublishSignatureRequestForMobile(
   db,
-  { user, body, pairingCode = '', isMobileRequest = false, apiOrigin = '' }
+  { user, body, pairingCode = '', isMobileRequest = false, apiOrigin = '', stagedBlobStore = null }
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   if (!isMobileRequest) {
@@ -556,7 +755,8 @@ export async function createPublishSignatureRequestForMobile(
       locationBundle
     },
     requestedBy: 'mobile',
-    agentName: 'mobile-delegated-publish'
+    agentName: 'mobile-delegated-publish',
+    stagedBlobStore
   });
 
   return {
@@ -579,22 +779,40 @@ export async function listPendingSignaturesForUser(
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const wallets = resolveUserWalletAddresses(user);
-  const ownerWhere =
-    wallets.length > 0
-      ? `(sr.owner_sub = ? OR LOWER(sr.owner_address) IN (${wallets.map(() => '?').join(', ')}))`
-      : 'sr.owner_sub = ?';
-  const ownerParams = wallets.length > 0 ? [user.id, ...wallets] : [user.id];
 
   if (includeHistory) {
     const safeLimit = Math.max(1, Math.min(100, Number(historyLimit) || 30));
-    const allRows = await db.all(
-      `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
-       FROM land_signature_requests sr
-       LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
-       WHERE ${ownerWhere}
-       ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
-      [...ownerParams, safeLimit + 25]
-    );
+    const fetchLimit = safeLimit + 25;
+    const allRows =
+      wallets.length > 0
+        ? await db.all(
+            `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+             FROM land_signature_requests sr
+             LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+             WHERE sr.id IN (
+               SELECT id FROM (
+                 SELECT id FROM land_signature_requests
+                 WHERE owner_sub = ?
+                 ORDER BY updated_at DESC, created_at DESC LIMIT ?
+               )
+               UNION
+               SELECT id FROM (
+                 SELECT id FROM land_signature_requests
+                 WHERE LOWER(owner_address) IN (${wallets.map(() => '?').join(', ')})
+                 ORDER BY updated_at DESC, created_at DESC LIMIT ?
+               )
+             )
+             ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
+            [user.id, fetchLimit, ...wallets, fetchLimit, fetchLimit]
+          )
+        : await db.all(
+            `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+             FROM land_signature_requests sr
+             LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+             WHERE sr.owner_sub = ?
+             ORDER BY sr.updated_at DESC, sr.created_at DESC LIMIT ?`,
+            [user.id, fetchLimit]
+          );
     const formatted = (allRows || []).map(formatSignatureRequestRow);
     const pending = formatted.filter((r) => r.status === 'pending').slice(0, 25);
     const history = formatted.filter((r) => r.status !== 'pending').slice(0, safeLimit);
@@ -603,14 +821,31 @@ export async function listPendingSignaturesForUser(
       history
     };
   }
-  const rows = await db.all(
-    `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
-     FROM land_signature_requests sr
-     LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
-     WHERE ${ownerWhere} AND sr.status = 'pending'
-     ORDER BY sr.created_at DESC LIMIT 25`,
-    ownerParams
-  );
+
+  const rows =
+    wallets.length > 0
+      ? await db.all(
+          `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+           FROM land_signature_requests sr
+           LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+           WHERE sr.id IN (
+             SELECT id FROM land_signature_requests
+             WHERE owner_sub = ? AND status = 'pending'
+             UNION
+             SELECT id FROM land_signature_requests
+             WHERE LOWER(owner_address) IN (${wallets.map(() => '?').join(', ')}) AND status = 'pending'
+           )
+           ORDER BY sr.created_at DESC LIMIT 25`,
+          [user.id, ...wallets]
+        )
+      : await db.all(
+          `SELECT sr.*, COALESCE(pc.custom_name, '') AS parcel_custom_name
+           FROM land_signature_requests sr
+           LEFT JOIN parcel_curations pc ON pc.parcel_id = sr.parcel_id
+           WHERE sr.owner_sub = ? AND sr.status = 'pending'
+           ORDER BY sr.created_at DESC LIMIT 25`,
+          [user.id]
+        );
   return {
     requests: (rows || [])
       .map(formatSignatureRequestRow)
@@ -658,7 +893,10 @@ export async function getSignatureRequest(db, { requestId, user = null, pairingC
   return { request: formatSignatureRequestRow(row) };
 }
 
-export async function getSignatureRequestPreviewModel(db, { requestId, user }) {
+export async function getSignatureRequestPreviewModel(
+  db,
+  { requestId, user, stagedBlobStore = null }
+) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
   if (!row) throw new McpServiceError('Signature request not found.', 404);
@@ -669,7 +907,8 @@ export async function getSignatureRequestPreviewModel(db, { requestId, user }) {
   if (!ownsRequest) {
     throw new McpServiceError('Only the property owner can preview this request.', 403);
   }
-  const payload = JSON.parse(row.payload_json || '{}');
+  const rawPayload = JSON.parse(row.payload_json || '{}');
+  const payload = await hydrateSignaturePayload(rawPayload, stagedBlobStore);
   const extracted = extractCustomModelInput(payload);
   if (!extracted.provided || extracted.error || !extracted.customModel) {
     throw new McpServiceError(extracted.error || 'No 3D model file attached to this request.', 404);
@@ -707,7 +946,8 @@ export async function signRequestByMobile(
     decryptEmbeddedPrivateKey,
     pinSculptureFn,
     mintSculptureFn,
-    emitMetadataUpdateFn = null
+    emitMetadataUpdateFn = null,
+    stagedBlobStore = null
   }
 ) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
@@ -747,7 +987,8 @@ export async function signRequestByMobile(
         400
       );
     }
-    const parsedPayload = JSON.parse(row.payload_json || '{}');
+    const rawParsedPayload = JSON.parse(row.payload_json || '{}');
+    const parsedPayload = await hydrateSignaturePayload(rawParsedPayload, stagedBlobStore);
     let nextScale = Number.isFinite(requestedOverrideScale) && requestedOverrideScale > 0
       ? requestedOverrideScale
       : null;
@@ -809,7 +1050,8 @@ export async function signRequestByMobile(
         ...row,
         payload_json: JSON.stringify(adjustedPayload),
         payload_hash: nextPayloadHash,
-        canonical_message: nextCanonicalMessage
+        canonical_message: nextCanonicalMessage,
+        _cleanupStagedBlobKey: String(rawParsedPayload?._stagedBlobKey || '').trim()
       };
       appliedAutoFitScale = nextScale;
     }
@@ -845,7 +1087,8 @@ export async function signRequestByMobile(
     signature: finalSig,
     pinSculptureFn,
     mintSculptureFn,
-    emitMetadataUpdateFn
+    emitMetadataUpdateFn,
+    stagedBlobStore
   });
   return appliedAutoFitScale !== null
     ? { ...execOut, autoFittedScale: appliedAutoFitScale }
@@ -862,7 +1105,8 @@ export async function signRequestByAgent(
     agentName = '',
     pinSculptureFn,
     mintSculptureFn,
-    emitMetadataUpdateFn = null
+    emitMetadataUpdateFn = null,
+    stagedBlobStore = null
   }
 ) {
   const { pairing, ownerUser } = await requireActiveMcpPairing(db, { pairingCode });
@@ -912,11 +1156,12 @@ export async function signRequestByAgent(
     txHash: String(txHash || '').trim(),
     pinSculptureFn,
     mintSculptureFn,
-    emitMetadataUpdateFn
+    emitMetadataUpdateFn,
+    stagedBlobStore
   });
 }
 
-export async function rejectSignatureRequest(db, { requestId, user }) {
+export async function rejectSignatureRequest(db, { requestId, user, stagedBlobStore = null }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const row = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
   if (!row) throw new McpServiceError('Signature request not found.', 404);
@@ -930,12 +1175,102 @@ export async function rejectSignatureRequest(db, { requestId, user }) {
   if (row.status !== 'pending') {
     throw new McpServiceError(`Signature request is already ${row.status}.`, 409);
   }
-  await db.run(
-    `UPDATE land_signature_requests SET status = 'rejected', updated_at = ? WHERE id = ?`,
-    [new Date().toISOString(), requestId]
+  const rawPayload = JSON.parse(row.payload_json || '{}');
+  const stagedBlobKey = String(rawPayload?._stagedBlobKey || '').trim();
+  const compactedPayloadJson = JSON.stringify(
+    compactSignaturePayload(rawPayload, { stripVoxels: true })
   );
+  await db.run(
+    `UPDATE land_signature_requests
+     SET status = 'rejected', payload_json = ?, updated_at = ?
+     WHERE id = ?`,
+    [compactedPayloadJson, new Date().toISOString(), requestId]
+  );
+  if (stagedBlobKey && stagedBlobStore && typeof stagedBlobStore.delete === 'function') {
+    await stagedBlobStore.delete(stagedBlobKey).catch(() => {});
+  }
   const updated = await db.get('SELECT * FROM land_signature_requests WHERE id = ?', [requestId]);
   return { ok: true, request: formatSignatureRequestRow(updated) };
+}
+
+export async function compactSignatureRequestsMaintenance(
+  db,
+  { stagedBlobStore = null, nowMs = Date.now(), maxRowsPerRun = 50 } = {}
+) {
+  const nowIso = new Date(nowMs).toISOString();
+  let expiredMarked = 0;
+  try {
+    const expRes = await db.run(
+      `UPDATE land_signature_requests
+       SET status = 'expired', updated_at = ?
+       WHERE status = 'pending' AND expires_at < ?`,
+      [nowIso, nowIso]
+    );
+    expiredMarked = Number(expRes?.meta?.changes ?? expRes?.changes ?? 0);
+  } catch {
+    expiredMarked = 0;
+  }
+
+  const bloatedRows = await db
+    .all(
+      `SELECT id, payload_json, result_json
+       FROM land_signature_requests
+       WHERE status != 'pending'
+         AND (LENGTH(payload_json) > ? OR LENGTH(result_json) > ?)
+       ORDER BY updated_at ASC
+       LIMIT ?`,
+      [COMPACT_PAYLOAD_THRESHOLD_BYTES, COMPACT_RESULT_THRESHOLD_BYTES, maxRowsPerRun]
+    )
+    .catch(() => []);
+
+  let rowsCompacted = 0;
+  let bytesFreed = 0;
+  for (const row of bloatedRows || []) {
+    try {
+      const origPayload = String(row.payload_json || '{}');
+      const origResult = String(row.result_json || '{}');
+      const parsedPayload = JSON.parse(origPayload);
+      const parsedResult = JSON.parse(origResult);
+      const stagedKey = String(parsedPayload?._stagedBlobKey || '').trim();
+      const nextPayload = JSON.stringify(compactSignaturePayload(parsedPayload, { stripVoxels: true }));
+      const nextResult = JSON.stringify(compactSignatureResult(parsedResult));
+      if (nextPayload.length < origPayload.length || nextResult.length < origResult.length) {
+        await db.run(
+          `UPDATE land_signature_requests
+           SET payload_json = ?, result_json = ?
+           WHERE id = ?`,
+          [nextPayload, nextResult, row.id]
+        );
+        rowsCompacted += 1;
+        bytesFreed += Math.max(0, origPayload.length - nextPayload.length) +
+          Math.max(0, origResult.length - nextResult.length);
+      }
+      if (stagedKey && stagedBlobStore && typeof stagedBlobStore.delete === 'function') {
+        await stagedBlobStore.delete(stagedKey).catch(() => {});
+      }
+    } catch {
+      // Ignore malformed row and continue compacting remaining rows
+    }
+  }
+
+  // Periodic housekeeping: prune expired ephemeral challenges, agent sessions & old rate-limit buckets
+  const cutoff24hIso = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+  const cutoff24hSec = Math.floor((nowMs - 24 * 60 * 60 * 1000) / 1000);
+  let housekeepingDeleted = 0;
+  for (const [sql, params] of [
+    ['DELETE FROM parcel_presence_challenges WHERE expires_at < ?', [cutoff24hIso]],
+    ['DELETE FROM agent_sessions WHERE expires_at < ?', [cutoff24hIso]],
+    ['DELETE FROM rate_limit_buckets WHERE window_start < ?', [cutoff24hSec]]
+  ]) {
+    try {
+      const r = await db.run(sql, params);
+      housekeepingDeleted += Number(r?.meta?.changes ?? r?.changes ?? 0);
+    } catch {
+      // Optional table may not exist in older fixtures
+    }
+  }
+
+  return { expiredMarked, rowsCompacted, bytesFreed, housekeepingDeleted };
 }
 
 export async function handlePairedLandMutationViaMcp(
@@ -953,7 +1288,8 @@ export async function handlePairedLandMutationViaMcp(
     pinSculptureFn,
     mintSculptureFn,
     notifyMobileFn,
-    emitMetadataUpdateFn = null
+    emitMetadataUpdateFn = null,
+    stagedBlobStore = null
   }
 ) {
   const ownerAddress = resolvePreferredOwnerWallet(ownerUser);
@@ -969,7 +1305,8 @@ export async function handlePairedLandMutationViaMcp(
     sculptureId,
     payload,
     requestedBy: 'agent',
-    agentName: pairing.agentName || 'paired-agent'
+    agentName: pairing.agentName || 'paired-agent',
+    stagedBlobStore
   });
 
   if (suppliedSig) {
@@ -1004,7 +1341,8 @@ export async function handlePairedLandMutationViaMcp(
       txHash: String(txHash || auth?.txHash || '').trim(),
       pinSculptureFn,
       mintSculptureFn,
-      emitMetadataUpdateFn
+      emitMetadataUpdateFn,
+      stagedBlobStore
     });
 
     if (typeof notifyMobileFn === 'function') {
@@ -1038,7 +1376,8 @@ export async function handlePairedLandMutationViaMcp(
       txHash: String(txHash || auth?.txHash || '').trim(),
       pinSculptureFn,
       mintSculptureFn,
-      emitMetadataUpdateFn
+      emitMetadataUpdateFn,
+      stagedBlobStore
     });
     return {
       status: 'executed_by_agent',

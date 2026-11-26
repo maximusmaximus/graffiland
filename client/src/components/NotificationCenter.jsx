@@ -180,9 +180,12 @@ export default function NotificationCenter({
       }
       if (!silent) setLoading(true);
       try {
+        const shouldFetchPending =
+          !Array.isArray(pendingApprovalsRef.current) &&
+          typeof api.listPendingSignatures === 'function';
         const [res, sigRes] = await Promise.all([
           api.getNotifications(40),
-          typeof api.listPendingSignatures === 'function'
+          shouldFetchPending
             ? api.listPendingSignatures().catch(() => null)
             : Promise.resolve(null)
         ]);
@@ -261,6 +264,7 @@ export default function NotificationCenter({
     }
     loadNotificationsRef.current({ silent: false });
     const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadNotificationsRef.current({ silent: true });
     }, 30000);
     return () => window.clearInterval(timer);

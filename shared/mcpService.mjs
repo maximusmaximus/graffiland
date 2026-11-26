@@ -59,6 +59,9 @@ import {
   updateLandSettings
 } from './mcp/landMutations.mjs';
 import {
+  compactSignaturePayload,
+  compactSignatureRequestsMaintenance,
+  compactSignatureResult,
   createPublishSignatureRequestForMobile,
   getSignatureRequest,
   getSignatureRequestPreviewModel,
@@ -79,6 +82,9 @@ export {
   checkSculptureEditPermission,
   checkSculptureOrLandOwnership,
   checkSculptureOwnership,
+  compactSignaturePayload,
+  compactSignatureRequestsMaintenance,
+  compactSignatureResult,
   connectMcpPairing,
   createMcpPairing,
   createPublishSignatureRequestForMobile,
@@ -125,7 +131,8 @@ export async function handleMcpJsonRpc(
     pinSculptureFn,
     mintSculptureFn,
     notifyMobileFn,
-    emitMetadataUpdateFn = null
+    emitMetadataUpdateFn = null,
+    stagedBlobStore = null
   }
 ) {
   const id = rpcBody?.id ?? null;
@@ -349,7 +356,8 @@ export async function handleMcpJsonRpc(
           pinSculptureFn,
           mintSculptureFn,
           notifyMobileFn,
-          emitMetadataUpdateFn
+          emitMetadataUpdateFn,
+          stagedBlobStore
         });
       } else {
         let createPayload;
@@ -403,7 +411,8 @@ export async function handleMcpJsonRpc(
           txHash: args.txHash || '',
           pinSculptureFn,
           mintSculptureFn,
-          notifyMobileFn
+          notifyMobileFn,
+          stagedBlobStore
         });
       }
     } else if (toolName === 'update_land_sculpture') {
@@ -463,7 +472,8 @@ export async function handleMcpJsonRpc(
         pinSculptureFn,
         mintSculptureFn,
         notifyMobileFn,
-        emitMetadataUpdateFn
+        emitMetadataUpdateFn,
+        stagedBlobStore
       });
     } else if (toolName === 'update_land_parcel') {
       const parcelCtx = await checkParcelOwnership(db, { parcelId: args.parcelId, user: ownerUser });
@@ -636,7 +646,8 @@ export async function handleMcpJsonRpc(
         agentName: pairing.agentName,
         pinSculptureFn,
         mintSculptureFn,
-        emitMetadataUpdateFn
+        emitMetadataUpdateFn,
+        stagedBlobStore
       });
     } else if (toolName === 'agent_profile') {
       toolResult =

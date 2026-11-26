@@ -533,8 +533,25 @@ export default function DesktopHub({
   useEffect(() => {
     refreshPairingAndApprovals();
     if (!user?.id) return undefined;
-    const timer = setInterval(refreshPairingAndApprovals, 12000);
-    return () => clearInterval(timer);
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      refreshPairingAndApprovals();
+    };
+    const timer = setInterval(tick, 15000);
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        refreshPairingAndApprovals();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
   }, [user?.id, pairOpen, refreshPairingAndApprovals]);
 
   useEffect(() => {

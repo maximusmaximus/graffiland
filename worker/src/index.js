@@ -109,6 +109,7 @@ import {
   DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
   addLandContributor,
+  compactSignatureRequestsMaintenance,
   connectMcpPairing,
   createMcpPairing,
   createPublishSignatureRequestForMobile,
@@ -190,6 +191,78 @@ import {
   signJwt,
   verifyJwt
 } from './crypto.js';
+
+function isTransientD1OverloadError(err) {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    msg.includes('d1 db is overloaded') ||
+    msg.includes('too many resources consumed') ||
+    msg.includes('d1_reset_do') ||
+    msg.includes('sqlite_busy') ||
+    msg.includes('database is locked') ||
+    msg.includes('network connection lost')
+  );
+}
+
+function createFriendlyD1BusyError(cause) {
+  const err = new Error(
+    'Database is briefly busy processing recent 3D placements — please tap Retry in a few seconds.'
+  );
+  err.statusCode = 503;
+  err.extra = { code: 'DB_BUSY', retryable: true };
+  err.cause = cause;
+  return err;
+}
+
+async function runD1WithBackoff(fn, { maxRetries = 2, baseDelayMs = 180 } = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransientD1OverloadError(err)) throw err;
+      if (attempt >= maxRetries) {
+        throw createFriendlyD1BusyError(err);
+      }
+      const jitter = Math.floor(Math.random() * 120);
+      const delay = baseDelayMs * Math.pow(2.2, attempt) + jitter;
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+function createResilientD1Adapter(db) {
+  return {
+    get: (sql, params = []) =>
+      runD1WithBackoff(() => db.prepare(sql).bind(...params).first(), {
+        maxRetries: 3,
+        baseDelayMs: 160
+      }),
+    all: async (sql, params = []) => {
+      const res = await runD1WithBackoff(() => db.prepare(sql).bind(...params).all(), {
+        maxRetries: 3,
+        baseDelayMs: 160
+      });
+      return res.results || [];
+    },
+    run: (sql, params = []) =>
+      runD1WithBackoff(() => db.prepare(sql).bind(...params).run(), {
+        maxRetries: 2,
+        baseDelayMs: 220
+      })
+  };
+}
+
+function createWorkerStagedBlobStore(env) {
+  if (!env?.IPFS_KV) return null;
+  return {
+    put: (key, value, ttlSec = 7200) =>
+      env.IPFS_KV.put(key, value, { expirationTtl: Math.max(60, Number(ttlSec) || 7200) }),
+    get: (key) => env.IPFS_KV.get(key),
+    delete: (key) => env.IPFS_KV.delete(key)
+  };
+}
 
 const NFT_ABI = [
   'function mintSculpture(address recipient, string calldata metadataURI, bytes32 landParcelId, bytes32 proofOfLocationHash, int32 latE6, int32 lngE6) external returns (uint256)',
@@ -1196,14 +1269,8 @@ export default {
       );
     }
 
-    const d1Adapter = {
-      get: (sql, params = []) => env.DB.prepare(sql).bind(...params).first(),
-      all: async (sql, params = []) => {
-        const res = await env.DB.prepare(sql).bind(...params).all();
-        return res.results || [];
-      },
-      run: (sql, params = []) => env.DB.prepare(sql).bind(...params).run()
-    };
+    const d1Adapter = createResilientD1Adapter(env.DB);
+    const stagedBlobStore = createWorkerStagedBlobStore(env);
 
     // Agent Sculpture Handoff Spec & Location-Anchored Session Routes
     if (pathname === '/api/agent/spec' && request.method === 'GET') {
@@ -2253,7 +2320,8 @@ export default {
           pinSculptureFn: makeWorkerPinHook(),
           mintSculptureFn: makeWorkerMintHook(),
           notifyMobileFn: notifyWorkerMobile,
-          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
+          emitMetadataUpdateFn: makeWorkerMetadataUpdateHook(),
+          stagedBlobStore
         });
         return jsonResponse(out, 200, request);
       } catch (err) {
@@ -2733,7 +2801,8 @@ export default {
           body,
           pairingCode: extractPairingCode(request, body),
           isMobileRequest: isMobile,
-          apiOrigin: url.origin
+          apiOrigin: url.origin,
+          stagedBlobStore
         });
         return jsonResponse(out, 201, request);
       } catch (err) {
@@ -2766,7 +2835,8 @@ export default {
               decryptWalletPrivateKey(u.encrypted_wallet_json, cfg.walletEncryptionKey),
             pinSculptureFn: makeWorkerPinHook(),
             mintSculptureFn: makeWorkerMintHook(),
-            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
+            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook(),
+            stagedBlobStore
           });
           return jsonResponse(out, 200, request);
         }
@@ -2779,19 +2849,25 @@ export default {
             agentName: body?.agentName || '',
             pinSculptureFn: makeWorkerPinHook(),
             mintSculptureFn: makeWorkerMintHook(),
-            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook()
+            emitMetadataUpdateFn: makeWorkerMetadataUpdateHook(),
+            stagedBlobStore
           });
           return jsonResponse(out, 200, request);
         }
         const user = await getAuthUser(request, env, cfg);
         if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
         return jsonResponse(
-          await rejectSignatureRequest(d1Adapter, { requestId: reqId, user }),
+          await rejectSignatureRequest(d1Adapter, { requestId: reqId, user, stagedBlobStore }),
           200,
           request
         );
       } catch (err) {
-        const safeErr = formatChainRpcError(err, cfg.network.name);
+        const safeErr =
+          err?.statusCode === 503 || isTransientD1OverloadError(err)
+            ? err?.statusCode === 503
+              ? err
+              : createFriendlyD1BusyError(err)
+            : formatChainRpcError(err, cfg.network.name);
         return jsonResponse(
           { error: safeErr.message || 'Signature action failed', ...(safeErr?.extra || {}) },
           safeErr?.statusCode || 400,
@@ -2807,7 +2883,8 @@ export default {
       try {
         const out = await getSignatureRequestPreviewModel(d1Adapter, {
           requestId: decodeURIComponent(sigPreviewMatch[1]),
-          user
+          user,
+          stagedBlobStore
         });
         return new Response(out.bytes, {
           status: 200,
@@ -3724,14 +3801,9 @@ export default {
 
   async scheduled(_event, env) {
     if (!env?.DB) return;
-    const d1Adapter = {
-      get: (sql, params = []) => env.DB.prepare(sql).bind(...params).first(),
-      all: async (sql, params = []) => {
-        const res = await env.DB.prepare(sql).bind(...params).all();
-        return res.results || [];
-      },
-      run: (sql, params = []) => env.DB.prepare(sql).bind(...params).run()
-    };
+    const d1Adapter = createResilientD1Adapter(env.DB);
+    const stagedBlobStore = createWorkerStagedBlobStore(env);
     await reapAndArchiveExpiredLands(d1Adapter).catch(() => {});
+    await compactSignatureRequestsMaintenance(d1Adapter, { stagedBlobStore }).catch(() => {});
   }
 };
