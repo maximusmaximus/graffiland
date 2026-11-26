@@ -19,6 +19,10 @@ database_id = "5f48edef-dde6-4412-ba81-0c6016b9c320"
 binding = "IPFS_KV"
 id = "11c207aac8364895a0e5d927738a75c7"
 
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "graffiland-media"
+
 [[durable_objects.bindings]]
 name = "PAIR_COORDINATOR"
 class_name = "PairCoordinator"

@@ -12,3 +12,4 @@ contracts/build/
 *.sqlite-shm
 *.log
 .DS_Store
+snapshots/

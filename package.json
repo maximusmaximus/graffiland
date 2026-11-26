@@ -24,6 +24,10 @@
     "contract:deploy": "node contracts/deploy.mjs",
     "deploy:worker": "npx wrangler deploy --config worker/wrangler.toml",
     "deploy:worker:db": "npx wrangler d1 execute graffiland-db --remote --config worker/wrangler.toml --file=worker/schema.sql --yes",
+    "media:backfill:r2": "node scripts/backfill-r2-media.mjs",
+    "snapshot:testnet": "node scripts/export-testnet-snapshot.mjs",
+    "snapshot:testnet:r2": "node scripts/export-testnet-snapshot.mjs --upload-r2",
+    "mainnet:replay:dry": "node scripts/replay-mainnet-genesis.mjs --dry-run",
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "node tests/e2e.playwright.mjs",
     "test:ux": "node --test tests/ui.test.mjs && node tests/e2e.playwright.mjs"
