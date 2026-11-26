@@ -6,7 +6,7 @@ import {
 } from '../../../../shared/voxelStroke.mjs';
 import XeroIcon from '../XeroIcon.jsx';
 
-const REACH_PRESETS = [1.2, 1.8, 2.4, 4.5, 8.0];
+const REACH_PRESETS = [0.8, 1.2, 1.8, 2.4, 3.0];
 
 /**
  * Paint & Brush Kit Palette (Block Size, Preset Colors, Finish & Reach).

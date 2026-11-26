@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
+import { MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS } from '../../../../shared/constants.mjs';
 import {
   advanceFluidSprayPoint,
   buildConnectedVoxelPath,
   buildSmoothSplineVoxelPath,
+  filterStrokeByOriginRadius,
   getVoxelCellStep,
   normalizeBlockScale,
+  resolveDrawOriginPoint,
   snapPointToVoxelLattice
 } from '../../../../shared/voxelStroke.mjs';
 import SceneErrorBoundary from '../SceneErrorBoundary.jsx';
@@ -90,6 +93,7 @@ function ARViewportCanvasInner({
   colorRef,
   voxelsRef,
   paintingRef,
+  strokeDeviceOriginRef = null,
   lastPaintPosRef,
   lastStackAtRef,
   surfaceAnchorRef,
@@ -112,6 +116,7 @@ function ARViewportCanvasInner({
   atmosphericTintRef = null,
   getActivePlacedItemColliders = null,
   notifyBlockedByPlacedItem = null,
+  notifyOutOfDrawRange = null,
   computeTargetVoxel,
   applyVoxelBatch,
   applyVoxelAction,
@@ -609,7 +614,17 @@ function ARViewportCanvasInner({
           }
         }
 
-        if (target && target.action === 'blocked') {
+        if (target && target.action === 'out_of_range') {
+          ghost.position.set(target.x, target.y, target.z);
+          ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
+          ghost.material.color.set(0xff6b35);
+          spraySmoothPos = null;
+          strokeControlPos = null;
+          lastPaintPosRef.current = null;
+          if (paintingRef.current) {
+            notifyOutOfDrawRange?.(target.originSource);
+          }
+        } else if (target && target.action === 'blocked') {
           ghost.position.set(target.x, target.y, target.z);
           ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
           ghost.material.color.set(0xff2d55);
@@ -711,6 +726,11 @@ function ARViewportCanvasInner({
 
             if (!selfStackBlocked) {
               const placedColliders = getActivePlacedItemColliders ? getActivePlacedItemColliders() : [];
+              const activeOrigin = resolveDrawOriginPoint({
+                surfaceAnchor: surfaceAnchorRef.current,
+                strokeDeviceOrigin: strokeDeviceOriginRef?.current || null,
+                cameraPosition: camera.position
+              });
               if (!prev) {
                 const startStep = buildConnectedVoxelPath(null, strokeTarget, {
                   step: VOXEL_STEP,
@@ -723,17 +743,37 @@ function ARViewportCanvasInner({
                   rayOrigin: camera.position,
                   colliders: placedColliders
                 });
-                if (filtered.allowed.length > 0) {
-                  lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
-                  strokeControlPos = filtered.blocked ? null : { x: strokeTarget.x, y: strokeTarget.y, z: strokeTarget.z };
+                const originClipped = filterStrokeByOriginRadius({
+                  pathPoints: filtered.allowed,
+                  originPoint: activeOrigin,
+                  maxRadiusMeters: MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+                });
+                const hitOriginCap = Boolean(
+                  originClipped.limitReached || target.clampedToOriginLimit
+                );
+                if (originClipped.allowed.length > 0) {
+                  lastPaintPosRef.current =
+                    filtered.blocked || hitOriginCap ? null : originClipped.lastAllowedPoint;
+                  strokeControlPos =
+                    filtered.blocked || hitOriginCap
+                      ? null
+                      : { x: strokeTarget.x, y: strokeTarget.y, z: strokeTarget.z };
                   lastStackAtRef.current = now;
-                  applyVoxelBatch(filtered.allowed);
+                  applyVoxelBatch(originClipped.allowed, {
+                    enforceOriginLimit: true,
+                    originPoint: activeOrigin
+                  });
                 }
                 if (filtered.blocked) {
                   lastPaintPosRef.current = null;
                   spraySmoothPos = null;
                   strokeControlPos = null;
                   notifyBlockedByPlacedItem?.(filtered.blockedBy);
+                } else if (hitOriginCap) {
+                  lastPaintPosRef.current = null;
+                  spraySmoothPos = null;
+                  strokeControlPos = null;
+                  notifyOutOfDrawRange?.(activeOrigin?.source);
                 }
               } else {
                 const stroke =
@@ -756,23 +796,41 @@ function ARViewportCanvasInner({
                   rayOrigin: camera.position,
                   colliders: placedColliders
                 });
-                if (filtered.allowed.length > 0) {
-                  lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
-                  strokeControlPos = filtered.blocked
-                    ? null
-                    : {
-                        x: (prev.x + strokeTarget.x) * 0.5,
-                        y: (prev.y + strokeTarget.y) * 0.5,
-                        z: (prev.z + strokeTarget.z) * 0.5
-                      };
+                const originClipped = filterStrokeByOriginRadius({
+                  pathPoints: filtered.allowed,
+                  originPoint: activeOrigin,
+                  maxRadiusMeters: MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+                });
+                const hitOriginCap = Boolean(
+                  originClipped.limitReached || target.clampedToOriginLimit
+                );
+                if (originClipped.allowed.length > 0) {
+                  lastPaintPosRef.current =
+                    filtered.blocked || hitOriginCap ? null : originClipped.lastAllowedPoint;
+                  strokeControlPos =
+                    filtered.blocked || hitOriginCap
+                      ? null
+                      : {
+                          x: (prev.x + strokeTarget.x) * 0.5,
+                          y: (prev.y + strokeTarget.y) * 0.5,
+                          z: (prev.z + strokeTarget.z) * 0.5
+                        };
                   lastStackAtRef.current = now;
-                  applyVoxelBatch(filtered.allowed);
+                  applyVoxelBatch(originClipped.allowed, {
+                    enforceOriginLimit: true,
+                    originPoint: activeOrigin
+                  });
                 }
                 if (filtered.blocked) {
                   lastPaintPosRef.current = null;
                   spraySmoothPos = null;
                   strokeControlPos = null;
                   notifyBlockedByPlacedItem?.(filtered.blockedBy);
+                } else if (hitOriginCap) {
+                  lastPaintPosRef.current = null;
+                  spraySmoothPos = null;
+                  strokeControlPos = null;
+                  notifyOutOfDrawRange?.(activeOrigin?.source);
                 }
               }
             }
@@ -1387,6 +1445,7 @@ function ARViewportCanvasInner({
     modeRef,
     nearbyGroupRef,
     notifyBlockedByPlacedItem,
+    notifyOutOfDrawRange,
     occlusionCanvasRef,
     occlusionEnabledRef,
     occlusionRef,
@@ -1397,6 +1456,7 @@ function ARViewportCanvasInner({
     originBeaconMatRef,
     originStatusRef,
     paintingRef,
+    strokeDeviceOriginRef,
     polRef,
     positionFilterRef,
     spatialDrawTrackerRef,

@@ -1555,6 +1555,7 @@ export default function MobileStudio({
         colorRef={brush.colorRef}
         voxelsRef={brush.voxelsRef}
         paintingRef={brush.paintingRef}
+        strokeDeviceOriginRef={brush.strokeDeviceOriginRef}
         lastPaintPosRef={brush.lastPaintPosRef}
         lastStackAtRef={brush.lastStackAtRef}
         surfaceAnchorRef={brush.surfaceAnchorRef}
@@ -1577,6 +1578,7 @@ export default function MobileStudio({
         atmosphericTintRef={atmosphericTintRef}
         getActivePlacedItemColliders={brush.getActivePlacedItemColliders}
         notifyBlockedByPlacedItem={brush.notifyBlockedByPlacedItem}
+        notifyOutOfDrawRange={brush.notifyOutOfDrawRange}
         computeTargetVoxel={brush.computeTargetVoxel}
         applyVoxelBatch={brush.applyVoxelBatch}
         applyVoxelAction={brush.applyVoxelAction}

@@ -377,6 +377,6 @@ describe('Side Volumetric Remaining-Pixels Bar (DrawVolumeMeter React + jsdom)',
     assert.match(canvasSrc, /buildSmoothSplineVoxelPath/);
     assert.match(canvasSrc, /getWorldCameraPosition/);
     assert.match(canvasSrc, /getNearbyGroupPosition/);
-    assert.match(dockSrc, /REACH_PRESETS\s*=\s*\[1\.2,\s*1\.8,\s*2\.4,\s*4\.5,\s*8\.0\]/);
+    assert.match(dockSrc, /REACH_PRESETS\s*=\s*\[0\.8,\s*1\.2,\s*1\.8,\s*2\.4,\s*3\.0\]/);
   });
 });
