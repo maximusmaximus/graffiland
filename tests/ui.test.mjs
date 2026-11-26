@@ -104,6 +104,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(view.getByTestId('brand-logo-lockup'));
     assert.equal(/welcome/i.test(view.container.textContent || ''), false);
     assert.equal(/quick sculpt|pro hud|simple studio/i.test(view.container.textContent || ''), false);
+    assert.equal(Boolean(view.queryByRole('checkbox')), false);
     assert.ok(view.getByText(/1\. Aim & Lock Your Starting Surface/i));
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: Surface Scan & Anchor Details/i }));
     assert.ok(view.getByText(/Proof of Location locks your real-world spot/i));
@@ -435,7 +436,6 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     );
     const exploreCalls = [];
     let agentConnected = false;
-    let guideOpened = false;
     const view = RTL.render(
       React.createElement(FirstVisitWelcomeOverlay, {
         isMobile: false,
@@ -444,9 +444,6 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         },
         onConnectAgent: () => {
           agentConnected = true;
-        },
-        onOpenGuide: () => {
-          guideOpened = true;
         }
       })
     );
@@ -531,23 +528,20 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.click(backdrop);
     assert.equal(exploreCalls.length, 0);
 
-    // Uncheck dontShowAgain and click genuinely on the backdrop -> calls onExplore(false)
-    const checkbox = view.getByRole('checkbox');
-    RTL.fireEvent.click(checkbox);
+    // Onboarding no longer shows "Don't show again" checkbox or Guide & Help button
+    assert.equal(Boolean(view.queryByRole('checkbox')), false);
+    assert.equal(Boolean(view.queryByRole('button', { name: /Guide & Help/i })), false);
+
+    // Clicking genuinely on the backdrop dismisses and saves seen preference (true)
     RTL.fireEvent.pointerDown(backdrop);
     RTL.fireEvent.click(backdrop);
     assert.equal(exploreCalls.length, 1);
-    assert.equal(exploreCalls[0], false);
+    assert.equal(exploreCalls[0], true);
 
-    // Pressing Escape dismisses cleanly with current dontShowAgain flag
+    // Pressing Escape dismisses cleanly with true
     RTL.fireEvent.keyDown(globalThis.window, { key: 'Escape' });
     assert.equal(exploreCalls.length, 2);
-    assert.equal(exploreCalls[1], false);
-
-    // Re-check dontShowAgain -> action buttons pass true
-    RTL.fireEvent.click(checkbox);
-    RTL.fireEvent.click(view.getByRole('button', { name: /Guide & Help/i }));
-    assert.equal(guideOpened, true);
+    assert.equal(exploreCalls[1], true);
 
     RTL.fireEvent.click(view.getByRole('button', { name: /Connect AI/i }));
     assert.equal(agentConnected, true);
@@ -557,20 +551,27 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(exploreCalls[2], true);
     cleanup();
 
-    let skippedCamera = false;
+    // Mobile onboarding omits Quick Camera Guide, Skip to Camera, Guide & Help, and Don't show again checkbox,
+    // and finishes cleanly via Next Step -> Next Step -> Get Started
+    const mobileExploreCalls = [];
     const mobileView = RTL.render(
       React.createElement(FirstVisitWelcomeOverlay, {
         isMobile: true,
-        onExplore: () => {},
-        onSkipToCamera: () => {
-          skippedCamera = true;
+        onExplore: (dontShow) => {
+          mobileExploreCalls.push(dontShow);
         }
       })
     );
-    const mobileQuickBtn = mobileView.getByRole('button', { name: /Next: Quick Camera Guide/i });
-    assert.ok(mobileQuickBtn.className.includes('btn-magenta'));
-    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Skip to Camera/i }));
-    assert.equal(skippedCamera, true);
+    assert.equal(Boolean(mobileView.queryByRole('checkbox')), false);
+    assert.equal(Boolean(mobileView.queryByRole('button', { name: /Quick Camera Guide/i })), false);
+    assert.equal(Boolean(mobileView.queryByRole('button', { name: /Skip to Camera/i })), false);
+    assert.equal(Boolean(mobileView.queryByRole('button', { name: /Guide & Help/i })), false);
+    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Next Step \(2\/3\)/i }));
+    RTL.fireEvent.click(mobileView.getByRole('button', { name: /Next Step \(3\/3\)/i }));
+    const getStartedBtn = mobileView.getByTestId('welcome-get-started-btn');
+    assert.ok(getStartedBtn.className.includes('btn-magenta'));
+    RTL.fireEvent.click(getStartedBtn);
+    assert.deepEqual(mobileExploreCalls, [true]);
     cleanup();
   });
 

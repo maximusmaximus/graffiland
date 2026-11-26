@@ -276,34 +276,29 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForTimeout(250);
     assert.equal(await page.isVisible(welcomeSelector), true);
 
-    // Uncheck "Don't show automatically again" and click off card onto the dark backdrop
-    await page.getByRole('checkbox').uncheck();
+    // Onboarding omits "Don't show again" checkbox and "Guide & Help" button
+    assert.equal(await page.getByRole('checkbox').count(), 0);
+    assert.equal(await page.getByRole('button', { name: /Guide & Help/i }).count(), 0);
+
+    // Clicking off card onto the dark backdrop dismisses and persists seen preference
     await page.mouse.click(layerAudit.backdropClickCoord.x, layerAudit.backdropClickCoord.y);
     await page.waitForSelector(welcomeSelector, { state: 'detached' });
-    const afterUncheckedClose = await page.evaluate(() =>
+    const afterBackdropClose = await page.evaluate(() =>
       globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
     );
-    assert.equal(afterUncheckedClose, null);
-
-    // Reloading shows the banner again because checkbox was unchecked
-    await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForSelector('.maplibregl-ctrl-top-right');
-    await page.waitForTimeout(1000);
-    assert.equal(await page.isVisible(welcomeSelector), true);
-
-    // Pressing Escape with default checked "Don't show again" persists preference and closes banner
-    await page.keyboard.press('Escape');
-    await page.waitForSelector(welcomeSelector, { state: 'detached' });
-    const afterEscape = await page.evaluate(() =>
-      globalThis.localStorage.getItem('graffiland_first_visit_welcome_seen_v1')
-    );
-    assert.equal(afterEscape, '1');
+    assert.equal(afterBackdropClose, '1');
 
     // Returning visitor does not automatically see the welcome overlay on reload
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForSelector('.maplibregl-ctrl-top-right');
     await page.waitForTimeout(800);
     assert.equal(await page.locator(welcomeSelector).count(), 0);
+
+    // Reopen via Intro button and test Escape dismissal
+    await page.getByRole('button', { name: /^Intro$/i }).click();
+    await page.waitForSelector(welcomeSelector);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(welcomeSelector, { state: 'detached' });
 
     // Reopen via Intro button and test "Connect AI" CTA
     await page.getByRole('button', { name: /^Intro$/i }).click();
@@ -314,11 +309,8 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     const selectedTabText = await page.textContent('.desktop-intro-tabs [role="tab"][aria-selected="true"]');
     assert.ok(selectedTabText.includes('AI Agents'));
 
-    // Reopen via Intro button and test "Guide & Help" CTA opening viewport-tabbed Info modal above MapLibre
-    await page.getByRole('button', { name: /^Intro$/i }).click();
-    await page.waitForSelector(welcomeSelector);
-    await page.getByRole('button', { name: /Guide & Help/i }).click();
-    await page.waitForSelector(welcomeSelector, { state: 'detached' });
+    // Open viewport-tabbed Info modal above MapLibre via header Info button
+    await page.getByRole('button', { name: /^Info$/i }).click();
     await page.waitForSelector('[data-testid="info-guide-desktop"]');
     await page.waitForSelector('[data-testid="info-guide-tip-callout"]');
     await page.getByRole('tab', { name: /Mobile AR Studio/i }).click();
@@ -582,14 +574,20 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     assert.equal(await page1.isVisible('[aria-label="SPRAY.LAND first-visit overview"]'), true);
     assert.equal(await page1.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
+    assert.equal(await page1.getByRole('button', { name: /Quick Camera Guide/i }).count(), 0);
+    assert.equal(await page1.getByRole('button', { name: /Skip to Camera/i }).count(), 0);
+    assert.equal(await page1.getByRole('button', { name: /Guide & Help/i }).count(), 0);
+    assert.equal(await page1.getByRole('checkbox').count(), 0);
     const scrollW = await page1.evaluate(() => globalThis.document.documentElement.scrollWidth);
     assert.ok(scrollW <= 391, `Expected mobile overlay width <= 391px, got ${scrollW}`);
 
-    await page1.getByRole('button', { name: /Next: Quick Camera Guide/i }).click();
+    await page1.getByRole('button', { name: /Next Step \(2\/3\)/i }).click();
+    await page1.getByRole('button', { name: /Next Step \(3\/3\)/i }).click();
+    await page1.getByTestId('welcome-get-started-btn').click();
     await page1.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
-    await page1.waitForSelector('[aria-label="SPRAY.LAND Quick Start Guide"]');
+    assert.equal(await page1.locator('[aria-label="SPRAY.LAND Quick Start Guide"]').count(), 0);
     assert.deepEqual(errors1, []);
     await ctx1.close();
 
@@ -600,7 +598,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
 
     await page2.goto(baseUrl, { waitUntil: 'networkidle' });
     await page2.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]');
-    await page2.getByRole('button', { name: /Skip to Camera/i }).click();
+    await page2.getByRole('button', { name: /Close intro/i }).click();
     await page2.waitForSelector('[aria-label="SPRAY.LAND first-visit overview"]', {
       state: 'detached'
     });
