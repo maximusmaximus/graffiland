@@ -417,7 +417,9 @@ async function resolveCustomModelBytes(customModel) {
 async function upsertSculptureModelRow(db, { sculptureId, parcelId, customModel, ipfsResult }) {
   const now = new Date().toISOString();
   const inlineB64 =
-    customModel.bytes && customModel.bytes.length <= INLINE_MODEL_DB_MAX_BYTES
+    !ipfsResult?.modelCachedInR2 &&
+    customModel.bytes &&
+    customModel.bytes.length <= INLINE_MODEL_DB_MAX_BYTES
       ? modelBytesToB64(customModel.bytes)
       : '';
   await db.run(
@@ -1381,7 +1383,7 @@ export async function applyUpdateSculpture(
   let ipfsModelCid = sculptureRow.ipfs_model_cid;
   let ipfsImageCid = sculptureRow.ipfs_image_cid;
   let ipfsGatewayUrl = sculptureRow.ipfs_gateway_url;
-  const nextPreview =
+  let nextPreview =
     typeof payload.previewDataUrl === 'string' && payload.previewDataUrl
       ? payload.previewDataUrl.slice(0, 450000)
       : sculptureRow.preview_data_url;
@@ -1431,6 +1433,9 @@ export async function applyUpdateSculpture(
     ipfsModelCid = ipfsRes.modelCid;
     ipfsImageCid = ipfsRes.imageCid;
     ipfsGatewayUrl = ipfsRes.gatewayUrl;
+    if (ipfsRes.previewMediaUrl) {
+      nextPreview = ipfsRes.previewMediaUrl;
+    }
     if (activeCustomModel) {
       await upsertSculptureModelRow(db, {
         sculptureId: sculptureRow.id,
@@ -1965,7 +1970,7 @@ export async function applyCreateSculptureOnLand(
       locationBundle.score,
       JSON.stringify(locationBundle.proofBundle),
       proofHash,
-      String(payload.previewDataUrl || '').slice(0, 450000),
+      ipfsResult?.previewMediaUrl || String(payload.previewDataUrl || '').slice(0, 450000),
       ipfsResult.metadataCid,
       ipfsResult.modelCid,
       ipfsResult.imageCid,
@@ -2513,7 +2518,7 @@ export async function applyPublishOnBehalf(
       locBundle.score,
       polJson,
       locBundle.proofHash,
-      String(payload.previewDataUrl || '').slice(0, 450000),
+      ipfsResult?.previewMediaUrl || String(payload.previewDataUrl || '').slice(0, 450000),
       ipfsResult.metadataCid,
       ipfsResult.modelCid,
       ipfsResult.imageCid,

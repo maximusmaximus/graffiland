@@ -41,6 +41,18 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../../shared/notificationService.mjs';
+import { validateProfileImage } from '../../shared/profileRules.mjs';
+import {
+  createWorkerStagedBlobStore,
+  getIpfsObjectFromMedia,
+  getModelBinaryFromMedia,
+  offloadDataUrlToR2,
+  offloadLegacyD1MediaBatch,
+  pruneExpiredStagedBlobs,
+  putIpfsObjectToMedia,
+  putModelBinaryToMedia,
+  serveR2MediaResponse
+} from './mediaStore.js';
 import {
   buildObjectFittedLandVolume,
   centerVoxelsHorizontally,
@@ -252,16 +264,6 @@ function createResilientD1Adapter(db) {
         maxRetries: 2,
         baseDelayMs: 220
       })
-  };
-}
-
-function createWorkerStagedBlobStore(env) {
-  if (!env?.IPFS_KV) return null;
-  return {
-    put: (key, value, ttlSec = 7200) =>
-      env.IPFS_KV.put(key, value, { expirationTtl: Math.max(60, Number(ttlSec) || 7200) }),
-    get: (key) => env.IPFS_KV.get(key),
-    delete: (key) => env.IPFS_KV.delete(key)
   };
 }
 
@@ -577,6 +579,15 @@ async function computeCid(bytes) {
 
 async function pinToKv(bytes, contentType, origin, env) {
   const cid = await computeCid(bytes);
+  if (env.MEDIA_BUCKET) {
+    await putIpfsObjectToMedia(env, { cid, bytes, contentType });
+    return {
+      cid,
+      uri: `ipfs://${cid}`,
+      gatewayUrl: `${origin}/ipfs/${cid}`,
+      provider: 'cloudflare-r2'
+    };
+  }
   let b64 = '';
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
@@ -650,6 +661,7 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
 
   let imagePin;
   let modelPin;
+  let modelCachedInR2 = false;
   if (env.PINATA_JWT) {
     imagePin = await pinToPinataFile(
       preview.bytes,
@@ -665,16 +677,44 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
       env,
       cfg
     );
-    // Mirror custom 3D model binaries (up to 4 MB) into edge KV so /api/sculptures/:id/model
-    // serves every format (.glb/.gltf/.obj/.stl/.ply) instantly without waiting on external IPFS gateways.
-    if (hasCustomBytes && modelPin?.cid && env.IPFS_KV && glbBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
-      await env.IPFS_KV.put(`cid:${modelPin.cid}`, modelBytesToB64(glbBytes), {
-        metadata: { contentType: modelMime }
-      }).catch(() => {});
+    // Mirror custom 3D model binaries (up to 4 MB) directly into R2 (raw binary, zero base64 bloat)
+    // with KV fallback when MEDIA_BUCKET is not bound.
+    if (hasCustomBytes && modelPin?.cid && glbBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+      if (env.MEDIA_BUCKET) {
+        modelCachedInR2 = await putModelBinaryToMedia(env, {
+          cid: modelPin.cid,
+          bytes: glbBytes,
+          contentType: modelMime
+        }).catch(() => false);
+      } else if (env.IPFS_KV) {
+        await env.IPFS_KV.put(`cid:${modelPin.cid}`, modelBytesToB64(glbBytes), {
+          metadata: { contentType: modelMime }
+        }).catch(() => {});
+      }
     }
   } else {
     imagePin = await pinToKv(preview.bytes, preview.mime, requestOrigin, env);
     modelPin = await pinToKv(glbBytes, modelMime, requestOrigin, env);
+    if (hasCustomBytes && modelPin?.cid && env.MEDIA_BUCKET && glbBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+      modelCachedInR2 = await putModelBinaryToMedia(env, {
+        cid: modelPin.cid,
+        bytes: glbBytes,
+        contentType: modelMime
+      }).catch(() => false);
+    }
+  }
+
+  let previewMediaUrl = '';
+  if (env.MEDIA_BUCKET && params.previewDataUrl && String(params.previewDataUrl).startsWith('data:image/')) {
+    const offloaded = await offloadDataUrlToR2(env, {
+      dataUrl: params.previewDataUrl,
+      prefix: 'previews',
+      id: `sc-${params.sculptureId}`,
+      origin: requestOrigin
+    }).catch(() => ({ offloaded: false, url: '' }));
+    if (offloaded.offloaded && offloaded.url) {
+      previewMediaUrl = offloaded.url;
+    }
   }
 
   const publicIpfsAvailable = Boolean(env.PINATA_JWT);
@@ -715,6 +755,8 @@ async function pinSculptureBundle(params, requestOrigin, env, cfg) {
     modelUri: modelPin.uri,
     imageCid: imagePin.cid,
     imageUri: imagePin.uri,
+    modelCachedInR2,
+    previewMediaUrl,
     metadata
   };
 }
@@ -1428,12 +1470,38 @@ export default {
         const user = await getAuthUser(request, env, cfg);
         if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
         const body = await request.json().catch(() => ({}));
+        let nextAvatar = body?.avatarImage;
+        let nextHeader = body?.headerImage;
+        if (env.MEDIA_BUCKET && typeof nextAvatar === 'string' && nextAvatar.trim().startsWith('data:image/')) {
+          const chk = validateProfileImage(nextAvatar, { kind: 'avatar' });
+          if (chk.ok) {
+            const off = await offloadDataUrlToR2(env, {
+              dataUrl: chk.value,
+              prefix: 'profiles',
+              id: `av-${user.id}`,
+              origin: url.origin
+            }).catch(() => ({ offloaded: false }));
+            if (off.offloaded && off.url) nextAvatar = off.url;
+          }
+        }
+        if (env.MEDIA_BUCKET && typeof nextHeader === 'string' && nextHeader.trim().startsWith('data:image/')) {
+          const chk = validateProfileImage(nextHeader, { kind: 'header' });
+          if (chk.ok) {
+            const off = await offloadDataUrlToR2(env, {
+              dataUrl: chk.value,
+              prefix: 'profiles',
+              id: `hdr-${user.id}`,
+              origin: url.origin
+            }).catch(() => ({ offloaded: false }));
+            if (off.offloaded && off.url) nextHeader = off.url;
+          }
+        }
         const updated = await updateUserProfile(d1Adapter, {
           user,
           username: body?.username,
           bio: body?.bio,
-          avatarImage: body?.avatarImage,
-          headerImage: body?.headerImage
+          avatarImage: nextAvatar,
+          headerImage: nextHeader
         });
         const pub = await getPublicProfile(d1Adapter, {
           identifier: updated.id,
@@ -1470,7 +1538,23 @@ export default {
         }
         if (request.method === 'POST') {
           const body = await request.json().catch(() => ({}));
-          return jsonResponse(await saveUserDraft(d1Adapter, { user, body }), 200, request);
+          let nextBody = body;
+          if (
+            env.MEDIA_BUCKET &&
+            typeof body?.previewDataUrl === 'string' &&
+            body.previewDataUrl.startsWith('data:image/')
+          ) {
+            const off = await offloadDataUrlToR2(env, {
+              dataUrl: body.previewDataUrl,
+              prefix: 'previews',
+              id: `draft-${body.id || user.id}`,
+              origin: url.origin
+            }).catch(() => ({ offloaded: false }));
+            if (off.offloaded && off.url) {
+              nextBody = { ...body, previewDataUrl: off.url };
+            }
+          }
+          return jsonResponse(await saveUserDraft(d1Adapter, { user, body: nextBody }), 200, request);
         }
         return jsonResponse({ error: 'Method not allowed' }, 405, request);
       } catch (err) {
@@ -3169,7 +3253,7 @@ export default {
             locationBundle.score,
             JSON.stringify(locationBundle.proofBundle),
             locationBundle.proofHash,
-            String(body?.previewDataUrl || '').slice(0, 450000),
+            ipfsResult.previewMediaUrl || String(body?.previewDataUrl || '').slice(0, 450000),
             ipfsResult.metadataCid,
             ipfsResult.modelCid,
             ipfsResult.imageCid,
@@ -3329,9 +3413,23 @@ export default {
       if (!user.is_admin) return jsonResponse({ error: 'Admin access required' }, 403, request);
       const report = await getOperationalHealthReport(d1Adapter, {
         chain: { network: cfg.network, contractAddress: cfg.contractAddress, liveReady: cfg.liveChainReady },
-        ipfsProvider: env.PINATA_JWT ? 'pinata' : 'cloudflare-cid'
+        ipfsProvider: env.PINATA_JWT ? 'pinata' : env.MEDIA_BUCKET ? 'cloudflare-r2' : 'cloudflare-cid'
       });
-      return jsonResponse(report, 200, request);
+      return jsonResponse({ ...report, r2MediaEnabled: Boolean(env.MEDIA_BUCKET) }, 200, request);
+    }
+
+    // Admin R2 media migration trigger (offloads legacy inline previews/models/profiles from D1 to R2)
+    if (pathname === '/api/admin/media/offload-batch' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      if (!user.is_admin) return jsonResponse({ error: 'Admin access required' }, 403, request);
+      const body = await request.json().catch(() => ({}));
+      const maxRows = Math.max(1, Math.min(50, Number(body?.maxRows || 25)));
+      const [offload, pruned] = await Promise.all([
+        offloadLegacyD1MediaBatch(d1Adapter, env, { origin: url.origin, maxRows }),
+        pruneExpiredStagedBlobs(env, { maxDeletes: 100 })
+      ]);
+      return jsonResponse({ ok: true, r2MediaEnabled: Boolean(env.MEDIA_BUCKET), offload, pruned }, 200, request);
     }
 
     // Admin list
@@ -3449,8 +3547,13 @@ export default {
       const action = pinMatch[2];
       const userAgent = request.headers.get('User-Agent') || '';
       const readWorkerIpfsJson = async (cid) => {
-        if (!env.IPFS_KV) return null;
         try {
+          const r2Obj = await getIpfsObjectFromMedia(env, cid);
+          if (r2Obj) {
+            const buf = await r2Obj.arrayBuffer();
+            return JSON.parse(new TextDecoder().decode(new Uint8Array(buf)));
+          }
+          if (!env.IPFS_KV) return null;
           const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
           if (!value) return null;
           const bin = atob(value);
@@ -3547,15 +3650,38 @@ export default {
         const resolvedMime =
           custom.mime_type || FORMAT_MIME_TYPES[fmt] || 'application/octet-stream';
 
-        if (custom.inline_b64) {
+        if (cid && env.MEDIA_BUCKET) {
+          const r2Model = await getModelBinaryFromMedia(env, cid).catch(() => null);
+          if (r2Model?.bytes && r2Model.bytes.length > 0) {
+            modelBytes = r2Model.bytes;
+            modelSource = 'r2-cache';
+          }
+        }
+        if (!modelBytes && custom.inline_b64) {
           modelBytes = b64ToModelBytes(custom.inline_b64);
           modelSource = 'db-inline';
+          if (cid && env.MEDIA_BUCKET && modelBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+            const r2Backfill = putModelBinaryToMedia(env, {
+              cid,
+              bytes: modelBytes,
+              contentType: resolvedMime
+            }).catch(() => {});
+            if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(r2Backfill);
+          }
         }
         if (!modelBytes && cid && env.IPFS_KV) {
           const { value } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
           if (value) {
             modelBytes = b64ToModelBytes(value);
             modelSource = 'kv-cache';
+            if (env.MEDIA_BUCKET && modelBytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+              const r2Backfill = putModelBinaryToMedia(env, {
+                cid,
+                bytes: modelBytes,
+                contentType: resolvedMime
+              }).catch(() => {});
+              if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(r2Backfill);
+            }
           }
         }
         if (!modelBytes && (cid || custom.model_url)) {
@@ -3570,13 +3696,21 @@ export default {
           if (fetched?.bytes && fetched.bytes.length > 0) {
             modelBytes = fetched.bytes;
             modelSource = 'ipfs-gateway';
-            // Backfill edge KV cache so subsequent loads are instant and never hit gateway rate limits
-            if (cid && env.IPFS_KV && fetched.bytes.length <= CUSTOM_MODEL_MAX_BYTES) {
-              const cacheWrite = env.IPFS_KV.put(
-                `cid:${cid}`,
-                modelBytesToB64(fetched.bytes),
-                { metadata: { contentType: resolvedMime } }
-              ).catch(() => {});
+            // Backfill edge R2 (preferred) or KV cache so subsequent loads are instant and never hit gateway rate limits
+            if (cid && fetched.bytes.length <= CUSTOM_MODEL_MAX_BYTES) {
+              const cacheWrite = env.MEDIA_BUCKET
+                ? putModelBinaryToMedia(env, {
+                    cid,
+                    bytes: fetched.bytes,
+                    contentType: resolvedMime
+                  }).catch(() => {})
+                : env.IPFS_KV
+                  ? env.IPFS_KV.put(
+                      `cid:${cid}`,
+                      modelBytesToB64(fetched.bytes),
+                      { metadata: { contentType: resolvedMime } }
+                    ).catch(() => {})
+                  : Promise.resolve();
               if (ctx && typeof ctx.waitUntil === 'function') {
                 ctx.waitUntil(cacheWrite);
               } else {
@@ -3797,10 +3931,33 @@ export default {
       );
     }
 
-    // KV IPFS CID gateway
+    // Public R2 Media CDN proxy (previews/, profiles/, models/ only; staged/ & snapshots/ strictly blocked)
+    const mediaMatch = pathname.match(/^\/api\/media\/(.+)$/);
+    if (mediaMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+      const mediaKey = decodeURIComponent(mediaMatch[1]);
+      return serveR2MediaResponse(env, mediaKey, request, corsHeaders);
+    }
+
+    // R2-first + KV-fallback IPFS CID gateway
     const ipfsMatch = pathname.match(/^\/ipfs\/([a-zA-Z0-9_-]{10,128})$/);
     if (ipfsMatch && request.method === 'GET') {
       const cid = ipfsMatch[1];
+      const r2Obj = await getIpfsObjectFromMedia(env, cid).catch(() => null);
+      if (r2Obj) {
+        const storedType = String(r2Obj.contentType || '').toLowerCase();
+        return new Response(r2Obj.body, {
+          status: 200,
+          headers: {
+            'Content-Type': SAFE_GATEWAY_MIME.has(storedType) ? storedType : 'application/octet-stream',
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+            'X-Ipfs-Source': 'r2',
+            ...corsHeaders(request)
+          }
+        });
+      }
+      if (!env.IPFS_KV) return jsonResponse({ error: 'CID not found' }, 404, request);
       const { value, metadata } = await env.IPFS_KV.getWithMetadata(`cid:${cid}`);
       if (!value) return jsonResponse({ error: 'CID not found' }, 404, request);
       const bin = atob(value);
@@ -3814,6 +3971,7 @@ export default {
           'Cache-Control': 'public, max-age=31536000, immutable',
           'X-Content-Type-Options': 'nosniff',
           'Content-Security-Policy': "default-src 'none'; sandbox",
+          'X-Ipfs-Source': 'kv',
           ...corsHeaders(request)
         }
       });
@@ -3828,5 +3986,12 @@ export default {
     const stagedBlobStore = createWorkerStagedBlobStore(env);
     await reapAndArchiveExpiredLands(d1Adapter).catch(() => {});
     await compactSignatureRequestsMaintenance(d1Adapter, { stagedBlobStore }).catch(() => {});
+    await pruneExpiredStagedBlobs(env, { maxDeletes: 100 }).catch(() => {});
+    const workerOrigin = String(
+      env.WORKER_ORIGIN || 'https://graffiland-api.maxinfeld-artshow.workers.dev'
+    ).replace(/\/+$/, '');
+    await offloadLegacyD1MediaBatch(d1Adapter, env, { origin: workerOrigin, maxRows: 12 }).catch(
+      () => {}
+    );
   }
 };
