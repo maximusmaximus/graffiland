@@ -5,6 +5,7 @@ import DirectLinkIntroOverlay from './components/DirectLinkIntroOverlay.jsx';
 import FirstVisitWelcomeOverlay from './components/FirstVisitWelcomeOverlay.jsx';
 import GoogleLoginGate from './components/GoogleLoginGate.jsx';
 import LaunchSplashOverlay from './components/LaunchSplashOverlay.jsx';
+import MobilePortraitLockOverlay from './components/MobilePortraitLockOverlay.jsx';
 import SettingsSavedToast from './components/SettingsSavedToast.jsx';
 import UsernameOnboardingModal from './components/UsernameOnboardingModal.jsx';
 import { api, getStoredToken, setStoredToken } from './utils/api.js';
@@ -16,6 +17,10 @@ import {
   WELCOME_OVERLAY_SEEN_KEY
 } from './utils/clipboard.js';
 import { isMobileDevice } from './utils/device.js';
+import {
+  installMobileViewportLock,
+  isMobileLandscapeOrientation
+} from './utils/mobilePortraitLock.js';
 
 const DesktopHub = lazy(() => import('./components/DesktopHub.jsx'));
 const MobileStudio = lazy(() => import('./components/MobileStudio.jsx'));
@@ -41,6 +46,9 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(() => isMobileDevice());
+  const [isLandscapeLocked, setIsLandscapeLocked] = useState(() =>
+    isMobileDevice() ? isMobileLandscapeOrientation() : false
+  );
   const [welcomeOpen, setWelcomeOpen] = useState(() => {
     if (isDirectLinkLocation()) {
       return false;
@@ -55,10 +63,27 @@ export default function App() {
   const [skipTutorialSignal, setSkipTutorialSignal] = useState(0);
 
   useEffect(() => {
-    const onResize = () => setIsMobile(isMobileDevice());
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    const syncViewportState = () => {
+      const mobile = isMobileDevice();
+      setIsMobile(mobile);
+      setIsLandscapeLocked(mobile ? isMobileLandscapeOrientation() : false);
+    };
+    syncViewportState();
+    window.addEventListener('resize', syncViewportState);
+    window.addEventListener('orientationchange', syncViewportState);
+    const screenOrient = window.screen?.orientation;
+    screenOrient?.addEventListener?.('change', syncViewportState);
+    return () => {
+      window.removeEventListener('resize', syncViewportState);
+      window.removeEventListener('orientationchange', syncViewportState);
+      screenOrient?.removeEventListener?.('change', syncViewportState);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    return installMobileViewportLock();
+  }, [isMobile]);
 
   useEffect(() => {
     let active = true;
@@ -208,6 +233,7 @@ export default function App() {
       {!loading && directLinkIntroOverlay}
       {!loading && directLoginModal}
       {!loading && onboardingModal}
+      {isMobile && isLandscapeLocked && <MobilePortraitLockOverlay />}
       <LaunchSplashOverlay appReady={!loading} />
       <SettingsSavedToast />
     </>

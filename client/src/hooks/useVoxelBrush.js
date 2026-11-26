@@ -37,6 +37,10 @@ import {
   normalizeDrawLocation,
   resolveInitialDrawActivity
 } from '../utils/staleDrawGuard.js';
+import {
+  describeCameraNeededAction,
+  describeLocationNeededAction
+} from '../utils/permissionMessages.js';
 
 export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can' },
@@ -201,6 +205,8 @@ export function useVoxelBrush({
   const activeKeyToolRef = useRef('brush');
   const originStatusRef = useRef(originStatus);
   const voxelsRef = useRef(voxels);
+  const userRef = useRef(user);
+  userRef.current = user;
   const lastDrawAtRef = useRef(drawActivity.lastDrawAt);
   const drawLocationRef = useRef(drawActivity.drawLocation);
   const refreshLocationNowRef = useRef(refreshLocationNow);
@@ -322,22 +328,25 @@ export function useVoxelBrush({
     const originBlocked = Boolean(originStatus.originBlocked);
     const originMsg =
       originStatus.reason ||
-      'Origin is blocked — clear whatever is in front of the drawing origin first.';
+      'View blocked. Move object away from camera.';
     const hasLoc = Boolean(location);
-    const needBlocksFor = (verb) =>
-      `Place at least 1 block with Brush (🖌️) or + Seed first before ${verb}.`;
+    const needBlocksMsg = 'Draw at least 1 block first.';
+    const locationNeededMsg = describeLocationNeededAction();
+    const cameraNeededMsg = describeCameraNeededAction();
 
     let publishReason = '';
+    const publishNeedsAuth = hasVoxels && !user;
     if (!hasVoxels) {
-      publishReason = needBlocksFor('publishing your 3D sculpture');
-    } else if (!hasLoc) {
-      publishReason = 'Wait for a GPS location fix first before publishing on-chain.';
-    } else if (!cameraReady) {
-      publishReason = 'Enable live camera access first for Proof of Location before publishing.';
-    } else if (!sceneScan.optimal) {
-      publishReason = `Move your phone around to finish mapping this space (${sceneScan.scannedCount}/${sceneScan.targetCount} angles for 100% lock) before publishing.`;
+      publishReason = needBlocksMsg;
     } else if (!user) {
-      publishReason = 'Sign in with Google first before publishing & minting on-chain.';
+      // Allow tapping/selecting Publish when drawn & logged out so Google Sign-In pops up immediately
+      publishReason = '';
+    } else if (!hasLoc) {
+      publishReason = locationNeededMsg;
+    } else if (!cameraReady) {
+      publishReason = cameraNeededMsg;
+    } else if (!sceneScan.optimal) {
+      publishReason = `Scan space to 100% (${sceneScan.scannedCount}/${sceneScan.targetCount}). Pan phone around.`;
     }
 
     return {
@@ -345,7 +354,7 @@ export function useVoxelBrush({
       pencil: { usable: !originBlocked, reason: originBlocked ? originMsg : '' },
       stack: {
         usable: !originBlocked && hasVoxels,
-        reason: originBlocked ? originMsg : !hasVoxels ? needBlocksFor('stacking onto block faces') : ''
+        reason: originBlocked ? originMsg : !hasVoxels ? needBlocksMsg : ''
       },
       erase: {
         usable: true,
@@ -353,35 +362,36 @@ export function useVoxelBrush({
       },
       clear: {
         usable: hasVoxels,
-        reason: !hasVoxels ? 'Canvas is already empty — draw blocks first before clearing.' : ''
+        reason: !hasVoxels ? 'Nothing to clear yet.' : ''
       },
       transform: {
         usable: hasVoxels || mode === 'transform',
-        reason: !hasVoxels && mode !== 'transform' ? needBlocksFor('locking and scaling your art piece') : ''
+        reason: !hasVoxels && mode !== 'transform' ? needBlocksMsg : ''
       },
       undo: {
         usable: hasVoxels || hasClearedBackup,
-        reason: !hasVoxels && !hasClearedBackup ? 'Nothing to undo yet — place or clear blocks first.' : ''
+        reason: !hasVoxels && !hasClearedBackup ? 'Nothing to undo yet.' : ''
       },
       palette: {
         usable: mode === 'draw',
-        reason: mode !== 'draw' ? 'Return to drawing mode (🖌️) first to pick colors and block finishes.' : ''
+        reason: mode !== 'draw' ? 'Switch to Draw mode for colors.' : ''
       },
       occlusion: {
         usable: cameraReady,
-        reason: !cameraReady ? 'Enable live camera access first to toggle live foreground occlusion.' : ''
+        reason: !cameraReady ? cameraNeededMsg : ''
       },
       preview: {
         usable: hasLoc,
-        reason: !hasLoc ? 'Wait for a GPS location fix first to view nearby AR sculptures.' : ''
+        reason: !hasLoc ? locationNeededMsg : ''
       },
       agent: {
         usable: hasLoc,
-        reason: !hasLoc ? 'Enable GPS location permission first so the Agent Code locks onto your spot.' : ''
+        reason: !hasLoc ? locationNeededMsg : ''
       },
       publish: {
         usable: !publishReason,
-        reason: publishReason
+        reason: publishReason,
+        needsAuth: publishNeedsAuth
       },
       recenter: { usable: true, reason: '' },
       drafts: { usable: true, reason: '' },
@@ -1550,7 +1560,7 @@ export function useVoxelBrush({
     if (originStatusRef.current?.originBlocked) {
       const msg =
         originStatusRef.current.reason ||
-        'Origin is blocked — clear whatever is in front of the drawing origin to start painting.';
+        'View blocked. Move object away from camera.';
       showTemporaryHint(msg);
       setSensorBanner(msg);
       return false;
@@ -1685,9 +1695,17 @@ export function useVoxelBrush({
         } else {
           setMode('draw');
         }
+        if (
+          toolId === 'publish' &&
+          !silent &&
+          voxelsRef.current.length > 0 &&
+          !userRef.current
+        ) {
+          openPublishSheetRef?.current?.();
+        }
       }
     },
-    [commitTransformAndExit, enterTransformMode, notifyToolUnavailable]
+    [commitTransformAndExit, enterTransformMode, notifyToolUnavailable, openPublishSheetRef]
   );
 
   const stepKeyTool = useCallback(
@@ -1901,9 +1919,16 @@ export function useVoxelBrush({
             stepKeyTool(residualDx < 0 ? 1 : -1, { visibleTools });
             navigator.vibrate?.(8);
           } else {
-            const landedAvail = toolAvailabilityRef.current?.[activeKeyToolRef.current];
+            const landedTool = activeKeyToolRef.current;
+            const landedAvail = toolAvailabilityRef.current?.[landedTool];
             if (landedAvail && !landedAvail.usable) {
-              notifyToolUnavailable(activeKeyToolRef.current, landedAvail.reason);
+              notifyToolUnavailable(landedTool, landedAvail.reason);
+            } else if (
+              landedTool === 'publish' &&
+              voxelsRef.current.length > 0 &&
+              !userRef.current
+            ) {
+              openPublishSheetRef?.current?.();
             }
           }
         } else if (movedPx < 8) {
@@ -1915,7 +1940,7 @@ export function useVoxelBrush({
         }
       }
     },
-    [notifyToolUnavailable, stepKeyTool, stopBrushPainting, triggerActiveKeyTool]
+    [notifyToolUnavailable, openPublishSheetRef, stepKeyTool, stopBrushPainting, triggerActiveKeyTool]
   );
 
   const handleKeyPointerCancel = useCallback(() => {

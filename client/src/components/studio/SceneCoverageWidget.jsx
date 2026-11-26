@@ -76,7 +76,7 @@ export default function SceneCoverageWidget({
           {needsRestart ? (
             <div className="scene-scan-restart-banner" data-testid="scene-scan-restart-banner" role="alert">
               <div className="scene-scan-restart-msg">
-                {mappingRestartPrompt?.summary || 'Device moved substantially — restart mapping for accurate AR alignment.'}
+                {mappingRestartPrompt?.summary || 'Moved spots — tap Restart to rescan.'}
               </div>
               {onRestartMapping && (
                 <button

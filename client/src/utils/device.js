@@ -3,7 +3,8 @@ export function isMobileDevice() {
   const ua = navigator.userAgent || '';
   const mobileUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
   const coarsePointer = window.matchMedia?.('(pointer: coarse)')?.matches;
-  const narrowTouch = navigator.maxTouchPoints > 0 && window.innerWidth <= 1024;
+  const shortestSide = Math.min(window.innerWidth || 0, window.innerHeight || window.innerWidth || 0);
+  const narrowTouch = navigator.maxTouchPoints > 0 && shortestSide <= 1024;
   return Boolean(mobileUa || (coarsePointer && narrowTouch));
 }
 

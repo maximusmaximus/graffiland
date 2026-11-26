@@ -47,6 +47,7 @@ export default function PublishSculptureModal({
   onOpenPair,
   onOpenManageLand,
   onViewInARPreview,
+  onRequestLogin = null,
   onShowHint,
   onClose
 }) {
@@ -340,15 +341,26 @@ export default function PublishSculptureModal({
             )}
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="submit"
-                className="btn btn-pink"
-                style={{ flex: '1 1 180px' }}
-                disabled={publishing || voxels.length === 0}
-              >
-                <XeroIcon emoji="🚀" size={16} />
-                {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
-              </button>
+              {!user && typeof onRequestLogin === 'function' ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: '1 1 180px' }}
+                  onClick={onRequestLogin}
+                >
+                  <XeroIcon emoji="🔐" size={16} /> Sign in with Google to Publish
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="btn btn-pink"
+                  style={{ flex: '1 1 180px' }}
+                  disabled={publishing || voxels.length === 0}
+                >
+                  <XeroIcon emoji="🚀" size={16} />
+                  {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
+                </button>
+              )}
               {mcpPairingsState.mcpActive && (
                 <button
                   type="button"
