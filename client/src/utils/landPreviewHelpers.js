@@ -7,6 +7,7 @@ import {
   normalizeRotationDeg,
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
+import { parcelLocalOffsetToWorldLatLng } from '../../../shared/sculpturePlacement.mjs';
 import {
   buildGoogleMapsLandUrl,
   formatDistanceMeters,
@@ -606,5 +607,123 @@ export function buildParcelGeoSummary(
     nearestOwnedLand,
     placePrimary,
     expiration
+  };
+}
+
+/**
+ * Resolves the authoritative oriented land boundary polygon (Leaflet [lat, lng] corners),
+ * SW/NE extent, center, and world-offset sculpture pin for the "Location & Virtual Land" mini-map.
+ * Always prefers the actual parcel volume footprint over legacy geohash parcelBounds.
+ */
+export function resolveMiniMapLandBoundary({
+  parcelDetail = null,
+  allParcels = [],
+  sculpture = null
+} = {}) {
+  const pidUpper = String(parcelDetail?.parcelId || sculpture?.parcelId || '').trim().toUpperCase();
+  const matchedFromList = pidUpper
+    ? (allParcels || []).find(
+        (p) => p?.parcelId && String(p.parcelId).trim().toUpperCase() === pidUpper
+      ) || null
+    : null;
+
+  const volumeCandidates = [
+    parcelDetail,
+    matchedFromList,
+    sculpture?.parcelVolume
+      ? { parcelId: pidUpper, geohash: sculpture?.geohash, volume: sculpture.parcelVolume }
+      : null,
+    sculpture?.volume
+      ? { parcelId: pidUpper, geohash: sculpture?.geohash, volume: sculpture.volume }
+      : null
+  ].filter(Boolean);
+
+  let resolvedVol = null;
+  for (const cand of volumeCandidates) {
+    const vol = resolveParcelVolume(cand);
+    if (vol && Array.isArray(vol.corners) && vol.corners.length >= 4) {
+      resolvedVol = vol;
+      break;
+    }
+  }
+
+  let latLngCorners = [];
+  let sw = null;
+  let ne = null;
+  let center = null;
+  let rotationDeg = 0;
+  let hasVolumeBoundary = false;
+
+  if (resolvedVol) {
+    latLngCorners = resolvedVol.corners
+      .slice(0, 4)
+      .map(([lng, lat]) => [Number(lat), Number(lng)])
+      .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+    if (latLngCorners.length >= 4) {
+      const lats = latLngCorners.map((p) => p[0]);
+      const lngs = latLngCorners.map((p) => p[1]);
+      sw = [Math.min(...lats), Math.min(...lngs)];
+      ne = [Math.max(...lats), Math.max(...lngs)];
+      center = [Number(resolvedVol.centerLat), Number(resolvedVol.centerLng)];
+      rotationDeg = Number(resolvedVol.rotationDeg || 0);
+      hasVolumeBoundary = true;
+    }
+  }
+
+  if (!hasVolumeBoundary) {
+    const rawBounds = parcelDetail?.bounds || matchedFromList?.bounds || sculpture?.parcelBounds;
+    if (
+      rawBounds?.sw &&
+      rawBounds?.ne &&
+      Number.isFinite(Number(rawBounds.sw[0])) &&
+      Number.isFinite(Number(rawBounds.sw[1])) &&
+      Number.isFinite(Number(rawBounds.ne[0])) &&
+      Number.isFinite(Number(rawBounds.ne[1]))
+    ) {
+      const swLat = Number(rawBounds.sw[0]);
+      const swLng = Number(rawBounds.sw[1]);
+      const neLat = Number(rawBounds.ne[0]);
+      const neLng = Number(rawBounds.ne[1]);
+      sw = [Math.min(swLat, neLat), Math.min(swLng, neLng)];
+      ne = [Math.max(swLat, neLat), Math.max(swLng, neLng)];
+      latLngCorners = [
+        [sw[0], sw[1]],
+        [sw[0], ne[1]],
+        [ne[0], ne[1]],
+        [ne[0], sw[1]]
+      ];
+      center = [(sw[0] + ne[0]) / 2, (sw[1] + ne[1]) / 2];
+    }
+  }
+
+  let pinLatLng = null;
+  const scLat = Number(sculpture?.lat);
+  const scLng = Number(sculpture?.lng);
+  if (Number.isFinite(scLat) && Number.isFinite(scLng)) {
+    const dx = Number(sculpture?.anchorOffset?.dx || 0);
+    const dz = Number(sculpture?.anchorOffset?.dz || 0);
+    const wPos =
+      Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6
+        ? parcelLocalOffsetToWorldLatLng(scLat, scLng, dx, dz, rotationDeg)
+        : { lat: scLat, lng: scLng };
+    pinLatLng = [Number(wPos.lat), Number(wPos.lng)];
+    if (!center) center = pinLatLng;
+  }
+
+  const signature = [
+    hasVolumeBoundary ? 'v' : 'b',
+    latLngCorners.map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`).join(';'),
+    pinLatLng ? `${pinLatLng[0].toFixed(6)},${pinLatLng[1].toFixed(6)}` : ''
+  ].join('|');
+
+  return {
+    latLngCorners,
+    sw,
+    ne,
+    center,
+    rotationDeg,
+    pinLatLng,
+    hasVolumeBoundary,
+    signature
   };
 }

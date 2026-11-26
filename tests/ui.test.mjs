@@ -8435,4 +8435,111 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(Boolean(otherView.queryByTestId('profile-mint-allowance')), false);
     cleanup();
   });
+
+  test('SculptureModal Location & Virtual Land mini-map uses the real oriented land boundary and renders no neighbor tags', async () => {
+    const { resolveMiniMapLandBoundary } = await import(
+      '../client/src/utils/landPreviewHelpers.js'
+    );
+    const { default: SculptureModal } = await loadJsxModule(
+      'client/src/components/SculptureModal.jsx'
+    );
+
+    // Real custom land centered on roundabout (rotated 25°), while legacy sculpture.parcelBounds is shifted far off
+    const realParcel = {
+      parcelId: 'GLAND-CIRCLE1',
+      customName: 'CIRCLE LAND',
+      volume: {
+        parcelId: 'GLAND-CIRCLE1',
+        centerLat: 39.73322,
+        centerLng: -121.84035,
+        widthMeters: 26,
+        depthMeters: 26,
+        heightMeters: 18,
+        rotationDeg: 25
+      }
+    };
+    const neighborParcel = {
+      parcelId: 'GLAND-BARK1',
+      customName: 'BARKINGLOT',
+      volume: {
+        parcelId: 'GLAND-BARK1',
+        centerLat: 39.7305,
+        centerLng: -121.8412,
+        widthMeters: 20,
+        depthMeters: 20,
+        heightMeters: 14,
+        rotationDeg: 0
+      }
+    };
+    const sculpture = {
+      id: 'sc-circle-1',
+      title: 'Roundabout Totem',
+      description: 'Centered on CIRCLE LAND.',
+      parcelId: 'GLAND-CIRCLE1',
+      parcelName: 'CIRCLE LAND',
+      lat: 39.73322,
+      lng: -121.84035,
+      // Deliberately stale/wrong geohash cell shifted northwest of the real land
+      parcelBounds: {
+        sw: [39.73343, -121.84078],
+        ne: [39.73378, -121.84021]
+      },
+      voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }]
+    };
+
+    // 1) Pure resolver prefers the real oriented parcel volume over legacy sculpture.parcelBounds
+    const boundary = resolveMiniMapLandBoundary({
+      parcelDetail: realParcel,
+      allParcels: [realParcel, neighborParcel],
+      sculpture
+    });
+    assert.equal(boundary.hasVolumeBoundary, true);
+    assert.equal(boundary.latLngCorners.length, 4);
+    // Real rotated corners are NOT axis-aligned (distinct latitudes on adjacent corners)
+    const uniqueLats = new Set(boundary.latLngCorners.map((p) => p[0].toFixed(6)));
+    assert.ok(uniqueLats.size >= 3, 'Rotated land volume should preserve its oriented polygon corners');
+    // SW coordinate comes from the real land volume, NOT the shifted legacy parcelBounds.sw (39.73343)
+    assert.ok(boundary.sw[0] < 39.73322, 'SW latitude should sit south of the real land center');
+    assert.notEqual(boundary.sw[0].toFixed(5), '39.73343');
+
+    // 2) Rendered SculptureModal mini-map uses volume boundary SW caption and shows ZERO neighbor arrow tags
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/GLAND-CIRCLE1')) {
+        return { ok: true, status: 200, json: async () => ({ parcel: realParcel, sculptures: [sculpture] }) };
+      }
+      if (u.includes('/api/sculptures/sc-circle-1')) {
+        return { ok: true, status: 200, json: async () => ({ sculpture, transfers: [] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture,
+          user: null,
+          config: {},
+          isDesktop: true,
+          allParcels: [realParcel, neighborParcel],
+          onClose: () => {}
+        })
+      );
+
+      const mapWrap = view.getByTestId('mini-land-map-wrap');
+      assert.equal(mapWrap.getAttribute('data-boundary-source'), 'volume');
+      const swText = view.getByTestId('mini-land-map-sw').textContent || '';
+      assert.ok(swText.includes(boundary.sw[0].toFixed(5)));
+      assert.equal(swText.includes('39.73343'), false);
+
+      // No neighbor arrow tags rendered on the mini-map view
+      assert.equal(Boolean(view.container.querySelector('.neighbor-edge-arrows-layer')), false);
+      assert.equal(Boolean(view.queryByText(/BARKINGLOT/i)), false);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });
