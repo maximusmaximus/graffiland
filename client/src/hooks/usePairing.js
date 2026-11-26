@@ -76,6 +76,7 @@ export function usePairing({
   const [repairNotice, setRepairNotice] = useState(null);
   const notifiedRepairKeysRef = useRef(new Set());
   const [pendingSignatures, setPendingSignatures] = useState([]);
+  const [pendingSignaturesLoaded, setPendingSignaturesLoaded] = useState(false);
   const [signatureHistory, setSignatureHistory] = useState([]);
   const [pendingSigBusyId, setPendingSigBusyId] = useState('');
   const [pendingSigErrors, setPendingSigErrors] = useState({});
@@ -137,12 +138,14 @@ export function usePairing({
       if (!user?.id) {
         setPendingSignatures([]);
         setSignatureHistory([]);
+        setPendingSignaturesLoaded(true);
         return [];
       }
       try {
         const res = await api.listPendingSignatures({ includeHistory });
         const list = res.requests || [];
         setPendingSignatures(list);
+        setPendingSignaturesLoaded(true);
         if (Array.isArray(res.history)) {
           setSignatureHistory(res.history);
         }
@@ -153,6 +156,10 @@ export function usePairing({
     },
     [user?.id]
   );
+
+  useEffect(() => {
+    setPendingSignaturesLoaded(false);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -765,6 +772,7 @@ export function usePairing({
     handleCreateMcpPairing,
     handleDisconnectMcpPairing,
     pendingSignatures,
+    pendingSignaturesLoaded,
     signatureHistory,
     pendingSigBusyId,
     pendingSigErrors,

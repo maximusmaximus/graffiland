@@ -56,7 +56,7 @@ function normalizeAnchorOffset(rawOffset = null, fallbackOffset = null) {
  */
 export function buildPendingPreviewSculpture(
   req,
-  { parcels = [], existingSculptures = [] } = {}
+  { parcels = [], existingSculptures = [], allowFallbackCoords = false } = {}
 ) {
   if (!req || req.status !== 'pending' || !isPendingSculptureAction(req.action)) {
     return null;
@@ -83,8 +83,9 @@ export function buildPendingPreviewSculpture(
   );
   const modelUrl = String(payload.modelUrl || payload.model?.url || '').trim();
   const inferredFormat = inferModelFormatFromPayload(payload);
+  const hasAttachedModel = Boolean(payload.hasAttachedModel || payload.model?.hasAttachedModel);
   const payloadHasCustomModel = Boolean(
-    inferredFormat || inlineBase64 || inlineText.trim() || modelUrl
+    inferredFormat || inlineBase64 || inlineText.trim() || modelUrl || hasAttachedModel
   );
 
   let modelType = 'voxel';
@@ -139,12 +140,14 @@ export function buildPendingPreviewSculpture(
     locBundle?.lng,
     existing?.lng
   ];
-  const lat = latCandidates.map(Number).find((v) => Number.isFinite(v));
-  const lng = lngCandidates.map(Number).find((v) => Number.isFinite(v));
+  const rawLat = latCandidates.map(Number).find((v) => Number.isFinite(v));
+  const rawLng = lngCandidates.map(Number).find((v) => Number.isFinite(v));
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+  if ((!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) && !allowFallbackCoords) {
     return null;
   }
+  const lat = Number.isFinite(rawLat) ? rawLat : 0;
+  const lng = Number.isFinite(rawLng) ? rawLng : 0;
 
   const landDisplayName = resolveLandDisplayName(
     {

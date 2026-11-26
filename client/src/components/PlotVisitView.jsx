@@ -570,6 +570,11 @@ export default function PlotVisitView({
   const handleSelectArtworkTarget = useCallback(
     (sc) => {
       if (!sc?.id) return;
+      // Pending approval previews open straight into the zoomed-in isometric 3D approval modal
+      if (sc.isPendingPreview && typeof onSelectSculpture === 'function') {
+        onSelectSculpture(sc);
+        return;
+      }
       // If this artwork label is already selected, clicking it again goes straight to the full 3D art view
       if (
         selectedTarget === 'artwork' &&
@@ -1635,10 +1640,16 @@ export default function PlotVisitView({
                         data-testid={c.isPendingPreview ? 'plot-preview-label' : 'plot-artwork-label'}
                         data-sculpture-id={c.sculptureId}
                         data-callout-side={c.side}
-                        onClick={() => handleSelectArtworkTarget(c.sculpture)}
+                        onClick={() => {
+                          if (c.isPendingPreview && typeof onSelectSculpture === 'function') {
+                            onSelectSculpture(c.sculpture);
+                            return;
+                          }
+                          handleSelectArtworkTarget(c.sculpture);
+                        }}
                         title={
                           c.isPendingPreview
-                            ? `Preview (Pending Approval) — "${c.title}"`
+                            ? `Preview (Pending Approval) — "${c.title}". Click to inspect & approve.`
                             : `Inspect "${c.title}"`
                         }
                       >
@@ -1813,7 +1824,13 @@ export default function PlotVisitView({
                         data-testid="plot-tab-preview"
                         data-sculpture-id={sc.id}
                         data-request-id={sc.pendingRequestId}
-                        onClick={() => handleSelectArtworkTarget(sc)}
+                        onClick={() => {
+                          if (typeof onSelectSculpture === 'function') {
+                            onSelectSculpture(sc);
+                            return;
+                          }
+                          handleSelectArtworkTarget(sc);
+                        }}
                       >
                         <span className="map-preview-pill">Preview</span>
                         <span>{sc.title || 'Pending Artwork'}</span>

@@ -121,6 +121,8 @@ function useNotificationEngine({
   variant = 'desktop',
   refreshSignal = 0,
   pendingApprovals = null,
+  pendingApprovalsLoaded = true,
+  onRequestPendingRefresh = null,
   onApprovalResolved = null,
   onAction = null,
   onOpenSettingsExternal = null,
@@ -128,14 +130,15 @@ function useNotificationEngine({
 }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('inbox');
-  const [notifications, setNotifications] = useState([]);
-  const [allNotifications, setAllNotifications] = useState([]);
+  const [rawNotifications, setRawNotifications] = useState([]);
+  const [serverUnreadCount, setServerUnreadCount] = useState(0);
   const [fetchedPending, setFetchedPending] = useState([]);
+  const [fetchedPendingLoaded, setFetchedPendingLoaded] = useState(false);
   const [resolvedRequestIds, setResolvedRequestIds] = useState(() => new Set());
+  const [viewedWhileOpenIds, setViewedWhileOpenIds] = useState(() => new Set());
   const [approvalBusyId, setApprovalBusyId] = useState('');
   const [approvalErrors, setApprovalErrors] = useState({});
   const [approvalNotice, setApprovalNotice] = useState(null);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
   const [mintStatus, setMintStatus] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -167,12 +170,18 @@ function useNotificationEngine({
   const popoverRef = useRef(null);
   const seenIdsRef = useRef(new Set());
   const viewedWhileOpenIdsRef = useRef(new Set());
+  const requestedPendingSyncIdsRef = useRef(new Set());
   const openRef = useRef(false);
   const initializedRef = useRef(false);
   const pendingApprovalsRef = useRef(pendingApprovals);
   pendingApprovalsRef.current = pendingApprovals;
+  const onRequestPendingRefreshRef = useRef(onRequestPendingRefresh);
+  onRequestPendingRefreshRef.current = onRequestPendingRefresh;
 
   const isMobile = variant === 'mobile';
+  const hasPendingSync = Array.isArray(pendingApprovals)
+    ? pendingApprovalsLoaded !== false
+    : fetchedPendingLoaded;
 
   const livePendingList = useMemo(() => {
     const source = Array.isArray(pendingApprovals) ? pendingApprovals : fetchedPending;
@@ -189,6 +198,34 @@ function useNotificationEngine({
     return map;
   }, [livePendingList]);
 
+  // Reactively derive history & inbox lists so async pendingApprovals updates NEVER drop alerts
+  const allNotifications = useMemo(
+    () =>
+      rawNotifications.filter((n) => {
+        if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
+          if (resolvedRequestIds.has(n.meta.requestId)) return false;
+          if (pendingById.has(n.meta.requestId)) return true;
+          // While parent pending list is still loading, preserve unread approval alerts (no 0 flicker)
+          return !hasPendingSync && !n.read;
+        }
+        return true;
+      }),
+    [rawNotifications, resolvedRequestIds, pendingById, hasPendingSync]
+  );
+
+  const notifications = useMemo(
+    () =>
+      allNotifications.filter((n) => {
+        if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
+          if (resolvedRequestIds.has(n.meta.requestId)) return false;
+          if (pendingById.has(n.meta.requestId)) return true;
+          return !hasPendingSync && !n.read;
+        }
+        return !n.read || (open && viewedWhileOpenIds.has(n.id));
+      }),
+    [allNotifications, resolvedRequestIds, pendingById, hasPendingSync, open, viewedWhileOpenIds]
+  );
+
   const closePopover = useCallback(() => {
     openRef.current = false;
     setOpen(false);
@@ -196,19 +233,13 @@ function useNotificationEngine({
     if (viewedWhileOpenIdsRef.current.size > 0) {
       const dismissedIds = new Set(viewedWhileOpenIdsRef.current);
       viewedWhileOpenIdsRef.current.clear();
-      setNotifications((prev) =>
-        prev.filter((n) => {
-          const pendingReqId = n.actionType === 'open_land_approval' ? n.meta?.requestId : '';
-          if (pendingReqId && pendingById.has(pendingReqId)) return true;
-          return !dismissedIds.has(n.id);
-        })
-      );
-      setAllNotifications((prev) =>
+      setViewedWhileOpenIds(new Set());
+      setRawNotifications((prev) =>
         prev.map((n) => (dismissedIds.has(n.id) ? { ...n, read: true } : n))
       );
-      setUnreadCount(0);
+      setServerUnreadCount((c) => Math.max(0, c - dismissedIds.size));
     }
-  }, [pendingById]);
+  }, []);
 
   const fireBrowserNotification = useCallback((title, body, tag = '') => {
     try {
@@ -227,11 +258,12 @@ function useNotificationEngine({
   const loadNotifications = useCallback(
     async ({ silent = false } = {}) => {
       if (!user) {
-        setNotifications([]);
-        setAllNotifications([]);
+        setRawNotifications([]);
+        setServerUnreadCount(0);
         setFetchedPending([]);
+        setFetchedPendingLoaded(false);
         setResolvedRequestIds(new Set());
-        setUnreadCount(0);
+        setViewedWhileOpenIds(new Set());
         setMintStatus(null);
         return;
       }
@@ -248,11 +280,10 @@ function useNotificationEngine({
         ]);
         const list = Array.isArray(res?.notifications) ? res.notifications : [];
         const prefs = res?.preferences ? { ...DEFAULT_PREFS, ...res.preferences } : DEFAULT_PREFS;
-        const freshPending = Array.isArray(sigRes?.requests)
-          ? sigRes.requests.filter((r) => r && r.id && r.status === 'pending')
-          : [];
         if (sigRes && Array.isArray(sigRes.requests)) {
+          const freshPending = sigRes.requests.filter((r) => r && r.id && r.status === 'pending');
           setFetchedPending(freshPending);
+          setFetchedPendingLoaded(true);
           const freshIds = new Set(freshPending.map((r) => r.id));
           setResolvedRequestIds((prev) => {
             if (prev.size === 0) return prev;
@@ -263,33 +294,12 @@ function useNotificationEngine({
             return next;
           });
         }
-        const currentPendingProp = pendingApprovalsRef.current;
-        const activePendingIds = new Set(
-          (Array.isArray(currentPendingProp) ? currentPendingProp : freshPending)
-            .filter((r) => r && r.id && r.status === 'pending')
-            .map((r) => r.id)
-        );
-        // Keep history clean: drop stale approval prompts whose request is no longer pending
-        const filteredHistory = list.filter((n) => {
-          if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
-            return activePendingIds.has(n.meta.requestId);
-          }
-          return true;
-        });
-        // Seen/read notifications are automatically dismissed from Inbox and stay in History;
-        // keep items seen during the current open session visible, and ONLY show pending-approval alerts while still pending.
-        const visibleList = filteredHistory.filter((n) => {
-          if (n.actionType === 'open_land_approval' && n.meta?.requestId) {
-            return activePendingIds.has(n.meta.requestId);
-          }
-          return !n.read || (openRef.current && viewedWhileOpenIdsRef.current.has(n.id));
-        });
-        const unseenCount = visibleList.filter(
-          (n) => !n.read && !viewedWhileOpenIdsRef.current.has(n.id)
-        ).length;
-        setAllNotifications(filteredHistory);
-        setNotifications(visibleList);
-        setUnreadCount(openRef.current ? 0 : unseenCount);
+        const computedPageUnread = list.filter((n) => n && !n.read).length;
+        const reportedUnread = Number.isFinite(Number(res?.unreadCount))
+          ? Number(res.unreadCount)
+          : computedPageUnread;
+        setRawNotifications(list);
+        setServerUnreadCount(Math.max(0, reportedUnread));
         setPreferences(prefs);
         if (res?.mintStatus) setMintStatus(res.mintStatus);
 
@@ -312,19 +322,42 @@ function useNotificationEngine({
     [user, fireBrowserNotification]
   );
 
+  // If /api/notifications discovers a brand-new unread approval before parent's next poll, request immediate sync
+  useEffect(() => {
+    if (!user || !hasPendingSync || typeof onRequestPendingRefreshRef.current !== 'function') {
+      return;
+    }
+    const missingReqIds = [];
+    for (const n of rawNotifications) {
+      if (n.actionType !== 'open_land_approval' || n.read) continue;
+      const reqId = String(n.meta?.requestId || '').trim();
+      if (!reqId) continue;
+      if (pendingById.has(reqId) || resolvedRequestIds.has(reqId)) continue;
+      if (requestedPendingSyncIdsRef.current.has(reqId)) continue;
+      requestedPendingSyncIdsRef.current.add(reqId);
+      missingReqIds.push(reqId);
+    }
+    if (missingReqIds.length > 0) {
+      onRequestPendingRefreshRef.current();
+    }
+  }, [user, hasPendingSync, rawNotifications, pendingById, resolvedRequestIds]);
+
   const userId = user?.id || '';
   const loadNotificationsRef = useRef(loadNotifications);
   loadNotificationsRef.current = loadNotifications;
   useEffect(() => {
     seenIdsRef.current = new Set();
     viewedWhileOpenIdsRef.current = new Set();
+    requestedPendingSyncIdsRef.current = new Set();
     openRef.current = false;
     initializedRef.current = false;
+    setViewedWhileOpenIds(new Set());
     if (!userId) {
       setOpen(false);
-      setNotifications([]);
-      setAllNotifications([]);
-      setUnreadCount(0);
+      setRawNotifications([]);
+      setServerUnreadCount(0);
+      setFetchedPending([]);
+      setFetchedPendingLoaded(false);
       setMintStatus(null);
       return;
     }
@@ -332,8 +365,26 @@ function useNotificationEngine({
     const timer = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadNotificationsRef.current({ silent: true });
-    }, 30000);
-    return () => window.clearInterval(timer);
+    }, 15000);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        loadNotificationsRef.current({ silent: true });
+      }
+    };
+    const onFocus = () => {
+      loadNotificationsRef.current({ silent: true });
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible);
+    }
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible);
+      }
+      window.removeEventListener('focus', onFocus);
+    };
   }, [userId]);
 
   useEffect(() => {
@@ -342,19 +393,25 @@ function useNotificationEngine({
     }
   }, [user, refreshSignal]);
 
-  // Automatically mark displayed inbox notifications as seen/read the moment the user views the inbox
+  // Automatically mark displayed non-approval inbox notifications as seen/read when the user opens Inbox
+  // (Pending approvals stay actionable & keep their bell badge count until approved or rejected!)
   useEffect(() => {
     if (!open || activeTab !== 'inbox' || !user) return;
     const newlyViewedIds = notifications
-      .filter((n) => !viewedWhileOpenIdsRef.current.has(n.id))
+      .filter((n) => {
+        if (viewedWhileOpenIdsRef.current.has(n.id)) return false;
+        const pendingReqId = n.actionType === 'open_land_approval' ? n.meta?.requestId : '';
+        if (pendingReqId && pendingById.has(pendingReqId)) return false;
+        return !n.read;
+      })
       .map((n) => n.id);
     if (newlyViewedIds.length === 0) return;
     for (const id of newlyViewedIds) {
       viewedWhileOpenIdsRef.current.add(id);
     }
-    setUnreadCount(0);
+    setViewedWhileOpenIds(new Set(viewedWhileOpenIdsRef.current));
     api.markNotificationsRead({ ids: newlyViewedIds }).catch(() => {});
-  }, [open, activeTab, notifications, user]);
+  }, [open, activeTab, notifications, pendingById, user]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -407,8 +464,11 @@ function useNotificationEngine({
 
   const handleNotificationAction = async (item, overrideAction = null) => {
     const effective = overrideAction ? { ...item, ...overrideAction } : item;
-    if (item?.id && !item.isSyntheticPending) {
+    const pendingReqId = item?.actionType === 'open_land_approval' ? item?.meta?.requestId : '';
+    const isStillPendingApproval = Boolean(pendingReqId && pendingById.has(pendingReqId));
+    if (item?.id && !item.isSyntheticPending && !isStillPendingApproval) {
       viewedWhileOpenIdsRef.current.add(item.id);
+      setViewedWhileOpenIds(new Set(viewedWhileOpenIdsRef.current));
       api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
     }
     if (onAction) {
@@ -473,7 +533,7 @@ function useNotificationEngine({
 
       setResolvedRequestIds((prev) => new Set([...prev, requestId]));
       setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
-      const updateList = (prev) => {
+      setRawNotifications((prev) => {
         const filtered = prev.filter(
           (n) =>
             n.id !== item?.id &&
@@ -481,9 +541,7 @@ function useNotificationEngine({
             (!executedNotif || n.id !== executedNotif.id)
         );
         return executedNotif ? [executedNotif, ...filtered] : filtered;
-      };
-      setNotifications(updateList);
-      setAllNotifications(updateList);
+      });
       if (item?.id && !item.isSyntheticPending) {
         api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
       }
@@ -567,10 +625,9 @@ function useNotificationEngine({
       await api.rejectSignatureRequest(requestId);
       setResolvedRequestIds((prev) => new Set([...prev, requestId]));
       setFetchedPending((prev) => prev.filter((r) => r.id !== requestId));
-      const stripRejected = (prev) =>
-        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId);
-      setNotifications(stripRejected);
-      setAllNotifications(stripRejected);
+      setRawNotifications((prev) =>
+        prev.filter((n) => n.id !== item?.id && n.meta?.requestId !== requestId)
+      );
       if (item?.id && !item.isSyntheticPending) {
         api.markNotificationsRead({ ids: [item.id] }).catch(() => {});
       }
@@ -604,10 +661,9 @@ function useNotificationEngine({
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();
-    const target = notifications.find((n) => n.id === id);
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-    setAllNotifications((prev) => prev.filter((n) => n.id !== id));
-    if (target && !target.read) setUnreadCount((c) => Math.max(0, c - 1));
+    const target = rawNotifications.find((n) => n.id === id);
+    setRawNotifications((prev) => prev.filter((n) => n.id !== id));
+    if (target && !target.read) setServerUnreadCount((c) => Math.max(0, c - 1));
     api.deleteNotification(id).catch(() => {});
   };
 
@@ -619,10 +675,10 @@ function useNotificationEngine({
       if (typeof api.clearNotifications === 'function') {
         await api.clearNotifications('all');
       }
-      setNotifications([]);
-      setAllNotifications([]);
-      setUnreadCount(0);
+      setRawNotifications([]);
+      setServerUnreadCount(0);
       viewedWhileOpenIdsRef.current.clear();
+      setViewedWhileOpenIds(new Set());
       notifySettingsSaved('Cleared notification history.');
     } catch {
       notifySettingsSaved('Could not clear notification history.', { tone: 'error' });
@@ -750,7 +806,30 @@ function useNotificationEngine({
     return !(reqId && resolvedRequestIds.has(reqId));
   });
 
-  const badgeCount = open ? 0 : unreadCount + syntheticPendingNotifs.length;
+  const unreadRegularCount = useMemo(() => {
+    const visibleUnreadRegular = notifications.filter((n) => {
+      if (n.read || viewedWhileOpenIds.has(n.id)) return false;
+      const pendingReqId = n.actionType === 'open_land_approval' ? n.meta?.requestId : '';
+      if (pendingReqId && pendingById.has(pendingReqId)) return false; // counted via livePendingList
+      return true;
+    }).length;
+    if (open && activeTab === 'inbox') return 0;
+    const rawUnreadInPage = rawNotifications.filter((n) => !n.read).length;
+    const extraBeyondPage =
+      viewedWhileOpenIds.size === 0 ? Math.max(0, serverUnreadCount - rawUnreadInPage) : 0;
+    return visibleUnreadRegular + extraBeyondPage;
+  }, [
+    notifications,
+    viewedWhileOpenIds,
+    pendingById,
+    open,
+    activeTab,
+    rawNotifications,
+    serverUnreadCount
+  ]);
+
+  // Bell badge ALWAYS reflects every unread notification + every unresolved pending approval
+  const badgeCount = unreadRegularCount + livePendingList.length;
 
   const renderNotificationList = (items) => (
     <div className="notif-list">
@@ -799,7 +878,14 @@ function useNotificationEngine({
               item.read ? 'is-read' : 'is-unread'
             }`}
             data-request-id={requestId || undefined}
-            onClick={() => handleNotificationAction(item)}
+            onClick={() =>
+              hasSculpturePreview && effectiveReq
+                ? handleNotificationAction(item, {
+                    actionType: 'preview_pending_sculpture',
+                    pendingRequest: liveReq || effectiveReq
+                  })
+                : handleNotificationAction(item)
+            }
           >
             <div className="notif-item-icon" aria-hidden="true">
               {isApprovalLink
@@ -1025,7 +1111,11 @@ function useNotificationEngine({
         <div className="notif-header">
           <div className="notif-header-title">
             <strong>🔔 Notifications</strong>
-            {badgeCount > 0 && <span className="notif-pill-unread">{badgeCount} new</span>}
+            {badgeCount > 0 && (
+              <span className="notif-pill-unread">
+                {badgeCount} {unreadRegularCount > 0 ? 'new' : 'pending'}
+              </span>
+            )}
           </div>
           <div className="notif-header-actions">
             <div className="notif-tabs" role="tablist">
@@ -1353,7 +1443,7 @@ function useNotificationEngine({
       open,
       activeTab,
       badgeCount,
-      unreadCount,
+      unreadCount: unreadRegularCount,
       pendingCount: livePendingList.length,
       historyCount: historyDisplayNotifications.length,
       openNotifications,
@@ -1367,7 +1457,7 @@ function useNotificationEngine({
       open,
       activeTab,
       badgeCount,
-      unreadCount,
+      unreadRegularCount,
       livePendingList.length,
       historyDisplayNotifications.length,
       openNotifications,
@@ -1393,6 +1483,8 @@ export function NotificationProvider({
   variant = 'desktop',
   refreshSignal = 0,
   pendingApprovals = null,
+  pendingApprovalsLoaded = true,
+  onRequestPendingRefresh = null,
   onApprovalResolved = null,
   onAction = null,
   onOpenSettingsExternal = null,
@@ -1403,6 +1495,8 @@ export function NotificationProvider({
     variant,
     refreshSignal,
     pendingApprovals,
+    pendingApprovalsLoaded,
+    onRequestPendingRefresh,
     onApprovalResolved,
     onAction,
     onOpenSettingsExternal,

@@ -1383,25 +1383,48 @@ export default function MobileStudio({
     }
     if (item.actionType === 'preview_pending_sculpture') {
       dismissMobileOverlaysForNotification({ keepParcelVisit: true });
+      const reqId = item.pendingRequest?.id || item.meta?.requestId || '';
+      const allKnownParcels = [
+        ...(ar.mapParcels || []),
+        ...(ar.nearbyParcels || []),
+        ...(lands.myLands?.parcels || [])
+      ];
+      const allKnownSculptures = [
+        ...(ar.mapSculptures || []),
+        ...(ar.nearbySculptures || [])
+      ];
       const reqObj =
         item.pendingRequest ||
-        (pairing.pendingSignatures || []).find((r) => r.id === item.meta?.requestId) ||
+        (pairing.pendingSignatures || []).find((r) => r.id === reqId) ||
         null;
-      const previewSc = reqObj
+      let previewSc = reqObj
         ? buildPendingPreviewSculpture(reqObj, {
-            parcels: [
-              ...(ar.mapParcels || []),
-              ...(ar.nearbyParcels || []),
-              ...(lands.myLands?.parcels || [])
-            ],
-            existingSculptures: [
-              ...(ar.mapSculptures || []),
-              ...(ar.nearbySculptures || [])
-            ]
+            parcels: allKnownParcels,
+            existingSculptures: allKnownSculptures,
+            allowFallbackCoords: true
           })
         : null;
+      if (!previewSc && reqId && typeof api.getSignatureRequest === 'function') {
+        try {
+          const sigRes = await api.getSignatureRequest(reqId);
+          const fullReq = sigRes?.request || sigRes;
+          if (fullReq?.id) {
+            previewSc = buildPendingPreviewSculpture(fullReq, {
+              parcels: allKnownParcels,
+              existingSculptures: allKnownSculptures,
+              allowFallbackCoords: true
+            });
+          }
+        } catch {
+          // Fall back to opening the land if hydration fails
+        }
+      }
       if (previewSc) {
         ar.setMapSelectedSculpture(previewSc);
+        return;
+      }
+      if (item.parcelId) {
+        await navigateToLandById(item.parcelId);
         return;
       }
     }
@@ -1455,6 +1478,8 @@ export default function MobileStudio({
       variant="mobile"
       refreshSignal={lands.ownedLandCount + notifRefreshBump}
       pendingApprovals={pairing.pendingSignatures}
+      pendingApprovalsLoaded={pairing.pendingSignaturesLoaded}
+      onRequestPendingRefresh={() => pairing.refreshPendingSignatures({ includeHistory: false })}
       onApprovalResolved={handleMobileApprovalResolved}
       onAction={handleMobileNotificationAction}
     >
@@ -1668,7 +1693,8 @@ export default function MobileStudio({
                 ...(ar.nearbyParcels || []),
                 ...(lands.myLands?.parcels || [])
               ],
-              existingSculptures: [...(ar.mapSculptures || []), ...(ar.nearbySculptures || [])]
+              existingSculptures: [...(ar.mapSculptures || []), ...(ar.nearbySculptures || [])],
+              allowFallbackCoords: true
             });
             if (previewSc) {
               ar.setMapSelectedSculpture(previewSc);
@@ -2227,6 +2253,12 @@ export default function MobileStudio({
           user={user}
           config={config}
           userLocation={pol.location}
+          allParcels={ar.mapParcels}
+          onSelectParcel={(parcelObj) => {
+            if (parcelObj?.parcelId) {
+              navigateToLandById(parcelObj.parcelId);
+            }
+          }}
           onRequestLogin={() => setLoginOpen(true)}
           onSculptureUpdated={(updated, extra = {}) => {
             ar.setMapSelectedSculpture(updated);
@@ -2283,18 +2315,17 @@ export default function MobileStudio({
           }}
           onApprovePending={async (reqItem, options = {}) => {
             if (!reqItem?.id) return;
-            await pairing.handleMobileSignPending(reqItem, options);
-            const stillPending = (pairing.pendingSignatures || []).some(
-              (r) => r.id === reqItem.id
-            );
-            if (!stillPending && !pairing.pendingSigErrors?.[reqItem.id]) {
+            const res = await pairing.handleMobileSignPending(reqItem, options);
+            if (res) {
               ar.setMapSelectedSculpture(null);
+              setNotifRefreshBump((n) => n + 1);
             }
           }}
           onRejectPending={async (reqItem) => {
             if (!reqItem?.id) return;
             await pairing.handleMobileRejectPending(reqItem.id);
             ar.setMapSelectedSculpture(null);
+            setNotifRefreshBump((n) => n + 1);
           }}
           pendingApprovalBusy={Boolean(
             ar.mapSelectedSculpture?.pendingRequestId &&

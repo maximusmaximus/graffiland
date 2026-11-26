@@ -7993,4 +7993,334 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('Notification bell reliably shows numeric counts across unread alerts, async pending approvals, and peek/close cycles; clicking approval row opens preview', async () => {
+    const notifMod = await loadJsxModule('client/src/components/NotificationCenter.jsx');
+    const { NotificationProvider, GlobalNotificationBell } = notifMod;
+
+    const ownerUser = {
+      id: 'u-bell-1',
+      name: 'Bell Owner',
+      walletAddress: '0x1111111111111111111111111111111111111111'
+    };
+    const pendingReq1 = {
+      id: 'sigreq-bell-1',
+      status: 'pending',
+      action: 'create_sculpture',
+      parcelId: 'GLAND-BELL01',
+      landDisplayName: 'Echo Plaza',
+      summaryTitle: 'Place "Neon Dragon"',
+      agentName: 'VoxelBot',
+      payload: {
+        title: 'Neon Dragon',
+        modelFormat: 'glb',
+        hasAttachedModel: true
+      },
+      createdAt: new Date().toISOString()
+    };
+    const pendingReq2 = {
+      id: 'sigreq-bell-2',
+      status: 'pending',
+      action: 'create_sculpture',
+      parcelId: 'GLAND-BELL01',
+      landDisplayName: 'Echo Plaza',
+      summaryTitle: 'Place "Crystal Arch"',
+      agentName: 'VoxelBot',
+      payload: {
+        title: 'Crystal Arch',
+        voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }]
+      },
+      createdAt: new Date().toISOString()
+    };
+
+    const origFetch = globalThis.fetch;
+    const markedReadIds = [];
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/api/notifications/read') && opts.method === 'POST') {
+        const body = JSON.parse(opts.body || '{}');
+        if (Array.isArray(body.ids)) markedReadIds.push(...body.ids);
+        return { ok: true, status: 200, json: async () => ({ unreadCount: 0 }) };
+      }
+      if (u.includes('/api/notifications')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            unreadCount: 2,
+            preferences: {
+              sculpture_on_land: true,
+              mint_slots_unlocked: true,
+              mint_limit_reached: true,
+              land_expiring: true,
+              land_activity: true,
+              browser_push_enabled: false
+            },
+            notifications: [
+              {
+                id: 'n-bell-approval-1',
+                category: 'land_activity',
+                severity: 'action',
+                title: '✍️ Approval needed: Place "Neon Dragon"',
+                message: 'VoxelBot requested placing Neon Dragon.',
+                parcelId: 'GLAND-BELL01',
+                actionType: 'open_land_approval',
+                actionLabel: 'Preview on Land',
+                meta: {
+                  requestId: 'sigreq-bell-1',
+                  action: 'create_sculpture',
+                  hasSculpturePreview: true
+                },
+                read: false,
+                createdAt: new Date().toISOString()
+              },
+              {
+                id: 'n-bell-art-1',
+                category: 'sculpture_on_land',
+                severity: 'info',
+                title: '🎨 New art "Star Totem" on "Echo Plaza"',
+                message: '@maya added art to your land.',
+                parcelId: 'GLAND-BELL01',
+                sculptureId: 'sc-star-1',
+                actionType: 'open_sculpture',
+                actionLabel: 'View Art',
+                meta: { sculptureUrl: '?sculpture=sc-star-1', parcelUrl: '?parcel=GLAND-BELL01' },
+                read: false,
+                createdAt: new Date().toISOString()
+              }
+            ]
+          })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const dispatched = [];
+      const renderTree = (pendingList, loaded) =>
+        React.createElement(
+          NotificationProvider,
+          {
+            user: ownerUser,
+            variant: 'desktop',
+            pendingApprovals: pendingList,
+            pendingApprovalsLoaded: loaded,
+            onAction: (act) => dispatched.push(act)
+          },
+          React.createElement(GlobalNotificationBell, { testId: 'test-bell-btn' })
+        );
+
+      // 1) Startup before parent finishes fetching pendingApprovals (pendingApprovals=[], loaded=false):
+      //    unread approval alert is NOT dropped — bell badge immediately shows "2"!
+      const view = RTL.render(renderTree([], false));
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '2');
+      });
+
+      // 2) Parent finishes fetching 2 pending approvals (1 persisted + 1 synthetic) -> bell shows "3" (1 regular + 2 pending)
+      view.rerender(renderTree([pendingReq1, pendingReq2], true));
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '3');
+      });
+
+      // 3) Opening Inbox marks ONLY the non-approval alert read -> bell STILL shows "2" for the 2 pending approvals!
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('test-bell-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(markedReadIds.includes('n-bell-art-1'), true);
+        assert.equal(markedReadIds.includes('n-bell-approval-1'), false);
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '2');
+      });
+
+      // 4) Clicking the approval notification row itself (not only the Preview button) opens preview_pending_sculpture
+      const approvalRow = globalThis.document.querySelector('[data-request-id="sigreq-bell-1"]');
+      assert.ok(approvalRow);
+      RTL.fireEvent.click(approvalRow);
+      assert.equal(dispatched.length, 1);
+      assert.equal(dispatched[0].actionType, 'preview_pending_sculpture');
+      assert.equal(dispatched[0].pendingRequest?.id, 'sigreq-bell-1');
+
+      // 5) Even after closing popover to preview, bell STILL shows "2" until approved/rejected!
+      assert.equal(view.getByTestId('notif-unread-badge').textContent, '2');
+
+      // 6) Resolving 1 pending approval drops badge to "1"; resolving the last clears it cleanly
+      view.rerender(renderTree([pendingReq2], true));
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('notif-unread-badge').textContent, '1');
+      });
+      view.rerender(renderTree([], true));
+      await RTL.waitFor(() => {
+        assert.equal(Boolean(view.queryByTestId('notif-unread-badge')), false);
+      });
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('Isometric preview framing centers models cleanly and both label & notification preview paths open the zoomed-in isometric approval modal', async () => {
+    const {
+      computeIsometricModelFraming,
+      ISOMETRIC_AZIMUTH_DEG,
+      ISOMETRIC_ELEVATION_DEG,
+      ISOMETRIC_PREVIEW_FOV_DEG
+    } = await import('../client/src/utils/isometricCameraFraming.js');
+    const { buildPendingPreviewSculpture } = await import(
+      '../client/src/utils/pendingApprovalPreview.js'
+    );
+    const { default: SculptureModal } = await loadJsxModule(
+      'client/src/components/SculptureModal.jsx'
+    );
+    const { default: PlotVisitView } = await loadJsxModule(
+      'client/src/components/PlotVisitView.jsx'
+    );
+
+    // 1) Pure isometric framing geometry: exact 45° azimuth & 35.264° elevation, tight zoomed-in scale
+    const smallFrame = computeIsometricModelFraming({ width: 1.0, height: 1.0, depth: 1.0, aspect: 1.6 });
+    const bigFrame = computeIsometricModelFraming({ width: 4.0, height: 4.0, depth: 4.0, aspect: 1.6 });
+    assert.equal(smallFrame.fov, ISOMETRIC_PREVIEW_FOV_DEG);
+    assert.equal(smallFrame.azimuthDeg, ISOMETRIC_AZIMUTH_DEG);
+    assert.equal(smallFrame.elevationDeg, ISOMETRIC_ELEVATION_DEG);
+    const dx = smallFrame.position[0] - smallFrame.target[0];
+    const dy = smallFrame.position[1] - smallFrame.target[1];
+    const dz = smallFrame.position[2] - smallFrame.target[2];
+    assert.ok(Math.abs(dx - dz) < 0.001, '45° azimuth should place camera equidistant on X and Z');
+    const elevDeg = (Math.atan2(dy, Math.hypot(dx, dz)) * 180) / Math.PI;
+    assert.ok(
+      Math.abs(elevDeg - ISOMETRIC_ELEVATION_DEG) < 0.1,
+      `Expected isometric elevation ~${ISOMETRIC_ELEVATION_DEG}°, got ${elevDeg.toFixed(2)}°`
+    );
+    assert.ok(
+      smallFrame.distance < 4.5 && bigFrame.distance > smallFrame.distance * 3.5,
+      'Camera distance should zoom tightly and scale proportionally with model dimensions'
+    );
+    assert.ok(Math.abs(smallFrame.target[1] - 0.48) < 0.001);
+
+    // 2) R2-staged attached custom model without inline base64 or local parcel coords still builds preview when allowFallbackCoords=true
+    const stagedReq = {
+      id: 'sigreq-r2-iso-1',
+      status: 'pending',
+      action: 'create_sculpture',
+      parcelId: 'GLAND-ISO01',
+      landDisplayName: 'Sky Garden',
+      summaryTitle: 'Place "Obsidian Owl"',
+      agentName: 'SculptAgent',
+      expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
+      payload: {
+        title: 'Obsidian Owl',
+        description: 'A sleek obsidian owl perched on a lantern.',
+        hasAttachedModel: true,
+        modelScale: 1.2
+      }
+    };
+    assert.equal(buildPendingPreviewSculpture(stagedReq, { parcels: [] }), null);
+    const previewSc = buildPendingPreviewSculpture(stagedReq, {
+      parcels: [],
+      allowFallbackCoords: true
+    });
+    assert.ok(previewSc);
+    assert.equal(previewSc.modelType, 'custom-3d');
+    assert.equal(previewSc.customModel.format, 'glb');
+    assert.ok(previewSc.customModel.proxyUrl.includes('sigreq-r2-iso-1/preview-model'));
+
+    const parcel = {
+      parcelId: 'GLAND-ISO01',
+      customName: 'Sky Garden',
+      ownerSub: 'u-iso-1',
+      centerLat: 37.775,
+      centerLng: -122.419,
+      volume: {
+        parcelId: 'GLAND-ISO01',
+        centerLat: 37.775,
+        centerLng: -122.419,
+        widthMeters: 24,
+        depthMeters: 24,
+        heightMeters: 28
+      }
+    };
+    const ownerUser = { id: 'u-iso-1', username: 'bigdog', name: 'BigDog' };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/signatures/pending')) {
+        return { ok: true, status: 200, json: async () => ({ requests: [stagedReq] }) };
+      }
+      if (u.includes('/api/lands/GLAND-ISO01')) {
+        return { ok: true, status: 200, json: async () => ({ parcel, sculptures: [] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, parcels: [parcel] }) };
+    };
+
+    try {
+      // 3) Clicking the PlotVisitView "Preview" label opens the 3D isometric approval modal directly on first click
+      const openedFromLabel = [];
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel,
+          sculptures: [],
+          allParcels: [parcel],
+          user: ownerUser,
+          ownedParcelIds: ['GLAND-ISO01'],
+          onSelectSculpture: (sc) => openedFromLabel.push(sc),
+          onClose: () => {}
+        })
+      );
+      await RTL.waitFor(() => {
+        assert.ok(plotView.getAllByTestId('plot-preview-label').length >= 1);
+      });
+      RTL.fireEvent.click(plotView.getAllByTestId('plot-preview-label')[0]);
+      assert.equal(openedFromLabel.length, 1);
+      assert.equal(openedFromLabel[0].isPendingPreview, true);
+      assert.equal(openedFromLabel[0].pendingRequestId, 'sigreq-r2-iso-1');
+      cleanup();
+
+      // 4) SculptureModal in pending preview mode defaults to zoomed-in isometric view (NOT zoomed-out land bounds)
+      //    and toggles cleanly between Isometric Model and On Land views with Approve / Reject / Open Land ready
+      const selectedParcels = [];
+      const modalView = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: openedFromLabel[0],
+          user: ownerUser,
+          config: {},
+          allParcels: [parcel],
+          onSelectParcel: (p) => selectedParcels.push(p),
+          onApprovePending: () => {},
+          onRejectPending: () => {},
+          onClose: () => {}
+        })
+      );
+
+      const viewerEl = modalView.getByTestId('sculpture-viewer-3d');
+      assert.equal(viewerEl.getAttribute('data-camera-mode'), 'isometric');
+      assert.equal(viewerEl.getAttribute('data-land-bounds-preview'), 'off');
+      assert.ok(modalView.getByTestId('preview-camera-toolbar'));
+      assert.ok(modalView.getByTestId('preview-cam-iso-btn'));
+      assert.ok(modalView.getByTestId('preview-cam-land-btn'));
+      assert.ok(modalView.getByTestId('preview-cam-reset-btn'));
+      assert.ok(modalView.getByTestId('preview-modal-approve-btn'));
+      assert.ok(modalView.getByTestId('preview-modal-reject-btn'));
+
+      // Switch to On Land view -> back to Isometric view
+      RTL.fireEvent.click(modalView.getByTestId('preview-cam-land-btn'));
+      assert.equal(viewerEl.getAttribute('data-camera-mode'), 'land');
+      assert.equal(viewerEl.getAttribute('data-land-bounds-preview'), 'on');
+
+      RTL.fireEvent.click(modalView.getByTestId('preview-cam-iso-btn'));
+      assert.equal(viewerEl.getAttribute('data-camera-mode'), 'isometric');
+      assert.equal(viewerEl.getAttribute('data-land-bounds-preview'), 'off');
+
+      // Optional Open Land button navigates cleanly to the parcel
+      RTL.fireEvent.click(modalView.getByTestId('preview-modal-open-land-btn'));
+      assert.equal(selectedParcels.length, 1);
+      assert.equal(selectedParcels[0].parcelId, 'GLAND-ISO01');
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

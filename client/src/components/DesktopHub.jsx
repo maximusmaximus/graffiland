@@ -256,6 +256,7 @@ export default function DesktopHub({
     pairings: []
   });
   const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [pendingApprovalsLoaded, setPendingApprovalsLoaded] = useState(false);
   const [previewApprovalBusyId, setPreviewApprovalBusyId] = useState('');
   const [previewApprovalErrors, setPreviewApprovalErrors] = useState({});
   const notifiedRepairKeysRef = useRef(new Set());
@@ -483,6 +484,7 @@ export default function DesktopHub({
         pairings: []
       });
       setPendingApprovals([]);
+      setPendingApprovalsLoaded(true);
       return;
     }
     try {
@@ -510,10 +512,15 @@ export default function DesktopHub({
       }
       if (sigRes && Array.isArray(sigRes.requests)) {
         setPendingApprovals(sigRes.requests.filter((r) => r && r.status === 'pending'));
+        setPendingApprovalsLoaded(true);
       }
     } catch {
       // ignore transient error
     }
+  }, [user?.id]);
+
+  useEffect(() => {
+    setPendingApprovalsLoaded(false);
   }, [user?.id]);
 
   useEffect(() => {
@@ -1031,14 +1038,30 @@ export default function DesktopHub({
     } else if (item.actionType === 'preview_pending_sculpture') {
       dismissOverlaysForNotification({ keepPlot: true });
       const reqId = item.pendingRequest?.id || item.meta?.requestId || '';
-      const matchedPreview =
+      let matchedPreview =
         (reqId && pendingPreviewSculptures.find((p) => p.pendingRequestId === reqId)) ||
         (item.pendingRequest
           ? buildPendingPreviewSculpture(item.pendingRequest, {
               parcels,
-              existingSculptures: sculptures
+              existingSculptures: sculptures,
+              allowFallbackCoords: true
             })
           : null);
+      if (!matchedPreview && reqId && typeof api.getSignatureRequest === 'function') {
+        try {
+          const sigRes = await api.getSignatureRequest(reqId);
+          const fullReq = sigRes?.request || sigRes;
+          if (fullReq?.id) {
+            matchedPreview = buildPendingPreviewSculpture(fullReq, {
+              parcels,
+              existingSculptures: sculptures,
+              allowFallbackCoords: true
+            });
+          }
+        } catch {
+          // Fall back to opening the land showcase below if hydration fails
+        }
+      }
       if (matchedPreview) {
         openSculpture(matchedPreview);
         return;
@@ -2042,6 +2065,8 @@ export default function DesktopHub({
       variant="desktop"
       refreshSignal={notifRefreshSignal}
       pendingApprovals={pendingApprovals}
+      pendingApprovalsLoaded={pendingApprovalsLoaded}
+      onRequestPendingRefresh={refreshPairingAndApprovals}
       onApprovalResolved={handleDesktopApprovalResolved}
       onAction={handleNotificationAction}
     >
@@ -2060,14 +2085,26 @@ export default function DesktopHub({
               data-testid="desktop-pending-approvals-btn"
               onClick={() => {
                 const first = pendingApprovals[0];
-                if (!first?.parcelId) return;
+                if (!first) return;
+                const previewMatch =
+                  pendingPreviewSculptures.find((p) => p.pendingRequestId === first.id) ||
+                  buildPendingPreviewSculpture(first, {
+                    parcels,
+                    existingSculptures: sculptures,
+                    allowFallbackCoords: true
+                  });
+                if (previewMatch) {
+                  openSculpture(previewMatch);
+                  return;
+                }
+                if (!first.parcelId) return;
                 const match =
                   (parcels || []).find(
                     (p) => String(p.parcelId || '').toUpperCase() === String(first.parcelId).toUpperCase()
                   ) || { parcelId: first.parcelId };
                 openLandShowcase(match);
               }}
-              title="Open your land to approve or reject pending agent transactions"
+              title="Preview & approve pending transactions"
             >
               <XeroIcon emoji="✍️" size={14} /> Approve ({pendingApprovals.length})
             </button>

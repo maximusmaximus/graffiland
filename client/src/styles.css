@@ -9800,6 +9800,7 @@ select {
   position: relative;
   display: inline-flex;
   align-items: center;
+  overflow: visible;
 }
 
 .notif-bell-btn {
@@ -9816,6 +9817,7 @@ select {
   background: rgba(12, 20, 36, 0.72);
   color: var(--text);
   cursor: pointer;
+  overflow: visible;
 }
 
 .notif-bell-mobile {
@@ -9841,26 +9843,30 @@ select {
 }
 
 .notif-bell-btn.has-unread {
-  border-color: rgba(0, 245, 212, 0.65);
-  box-shadow: 0 0 12px rgba(0, 245, 212, 0.28);
+  border-color: rgba(255, 62, 127, 0.65);
+  box-shadow: 0 0 12px rgba(255, 62, 127, 0.28);
 }
 
 .notif-count-badge {
   position: absolute;
-  top: -5px;
-  right: -5px;
-  min-width: 18px;
-  height: 18px;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  min-width: 19px;
+  height: 19px;
   padding: 0 5px;
   border-radius: 999px;
-  background: #ff3e7f;
+  border: 1.5px solid #080d18;
+  background: #ff2f75;
   color: #ffffff;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 800;
+  line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(255, 62, 127, 0.55);
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(255, 47, 117, 0.65);
 }
 
 .notif-portal-backdrop {
@@ -12247,18 +12253,147 @@ button.user-handle-badge:hover .user-handle-text {
   transform: translate(-50%, -50%);
 }
 
-.preview-approval-modal-card {
-  padding: 14px;
-  border: 1.5px dashed rgba(255, 209, 102, 0.68);
-  background: linear-gradient(160deg, rgba(255, 209, 102, 0.1), rgba(14, 20, 34, 0.92));
+.modal-card.sculpture-modal-card.is-pending-preview {
+  width: min(680px, calc(100vw - 24px));
+  border-color: rgba(255, 209, 102, 0.34);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.78), 0 0 0 1px rgba(255, 209, 102, 0.14);
 }
 
-.preview-approval-modal-head {
-  display: flex;
+.modal-card.sculpture-modal-card.is-pending-preview .sculpture-modal-sticky-stage {
+  padding: 12px 14px 10px;
+  border-bottom-color: rgba(255, 209, 102, 0.22);
+}
+
+.modal-card.sculpture-modal-card.is-pending-preview .sculpture-modal-title-group {
+  flex-direction: column;
   align-items: flex-start;
+  gap: 2px;
+}
+
+.sculpture-modal-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-header-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.preview-header-sub strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preview-stage-shell {
+  position: relative;
+}
+
+.preview-stage-toolbar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.preview-stage-mode-group,
+.preview-stage-util-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(6, 10, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.preview-stage-chip {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.preview-stage-chip:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.preview-stage-chip.is-active {
+  background: rgba(0, 245, 212, 0.2);
+  border-color: rgba(0, 245, 212, 0.55);
+  color: #b7fff5;
+}
+
+.sculpture-modal-scroll-body.is-pending-preview-body {
+  padding: 10px 14px 14px;
+}
+
+.preview-approval-modal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 0;
+}
+
+.preview-meta-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preview-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #dbe7f5;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.preview-meta-chip.is-gold {
+  color: #ffe394;
+  background: rgba(255, 209, 102, 0.14);
+  border-color: rgba(255, 209, 102, 0.42);
+}
+
+.preview-meta-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.preview-approval-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .preview-approval-modal-actions {
@@ -12266,7 +12401,40 @@ button.user-handle-badge:hover .user-handle-text {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 12px;
+  padding-top: 2px;
+}
+
+.preview-approve-primary-btn {
+  flex: 1 1 180px;
+  font-weight: 800;
+}
+
+.preview-open-land-btn {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .preview-meta-hint {
+    display: none;
+  }
+
+  .preview-stage-toolbar {
+    left: 6px;
+    right: 6px;
+    bottom: 6px;
+    gap: 4px;
+  }
+
+  .preview-stage-chip {
+    font-size: 10px;
+    padding: 3px 7px;
+  }
+
+  .preview-open-land-btn {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 .notif-inline-approve-btn,
