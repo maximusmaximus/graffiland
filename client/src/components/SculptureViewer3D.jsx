@@ -17,12 +17,16 @@ import {
   loadCustomModelObject
 } from '../utils/customModelLoader.js';
 import {
+  computeIsometricLandFraming,
+  computeIsometricModelFraming,
+  ISOMETRIC_PREVIEW_FOV_DEG
+} from '../utils/isometricCameraFraming.js';
+import {
   createDepthFadedThreeBoxWireframe,
   updateThreeWireframeDepthFade
 } from '../utils/prismDepthFade.js';
 import {
   buildVoxelGroup,
-  computeCenteredBounds,
   disposeObject3D,
   VOXEL_STEP
 } from './VoxelEngine3D.js';
@@ -48,6 +52,8 @@ export default function SculptureViewer3D({
   voxels = [],
   height = 300,
   autoRotate = true,
+  isometricFocus = false,
+  resetViewTick = 0,
   liveCursor = null,
   liveQuaternion = null,
   liveTransform = null,
@@ -78,7 +84,11 @@ export default function SculptureViewer3D({
   const keyLightRef = useRef(null);
   const maxAnisotropyRef = useRef(8);
   const modelBaseSizeRef = useRef({ width: 1.4, height: 1.4, depth: 1.4 });
-  const framedLandKeyRef = useRef('');
+  const framedModeKeyRef = useRef('');
+  const autoRotateRef = useRef(autoRotate);
+  autoRotateRef.current = autoRotate;
+  const isometricFocusRef = useRef(isometricFocus);
+  isometricFocusRef.current = isometricFocus;
   const [gizmoStatusText, setGizmoStatusText] = useState('');
   const [modelBoundsVersion, setModelBoundsVersion] = useState(0);
   const [modelStatus, setModelStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'error'
@@ -116,8 +126,9 @@ export default function SculptureViewer3D({
     scene.background = new THREE.Color('#090d18');
 
     const initWidth = Math.max(220, host.clientWidth || Math.min(640, (window.innerWidth || 640) - 48));
-    const camera = new THREE.PerspectiveCamera(50, initWidth / height, 0.05, 600);
-    camera.position.set(2.4, 1.8, 3.0);
+    const initFov = isometricFocusRef.current ? ISOMETRIC_PREVIEW_FOV_DEG : 50;
+    const camera = new THREE.PerspectiveCamera(initFov, initWidth / height, 0.05, 600);
+    camera.position.set(2.4, 1.8, 2.4);
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
     renderer.setSize(initWidth, height, false);
@@ -141,7 +152,8 @@ export default function SculptureViewer3D({
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.autoRotate = autoRotate;
+    controls.dampingFactor = 0.08;
+    controls.autoRotate = Boolean(autoRotateRef.current);
     controls.autoRotateSpeed = 1.4;
 
     scene.add(new THREE.HemisphereLight(0xd9f0ff, 0x1e2438, 0.85));
@@ -451,7 +463,7 @@ export default function SculptureViewer3D({
       siblingOverlayRef.current = null;
       gizmoOverlayRef.current = null;
     };
-  }, [height, autoRotate]);
+  }, [height]);
 
   // Load 3D geometry ONCE per model / voxel update at base scale = 1 (zero reload while sliding scale/move)
   const scId = sculpture?.id || '';
@@ -464,39 +476,7 @@ export default function SculptureViewer3D({
     const content = modelContentRef.current;
     if (!content) return undefined;
     clearGroup(content);
-
-    function frameSoloCamera(center, radius, minY) {
-      if (showLandBounds) return;
-      const groundY = Number.isFinite(minY) ? minY - 0.02 : -0.02;
-      if (gridRef.current) {
-        gridRef.current.position.set(center.x, groundY, center.z);
-        gridRef.current.scale.setScalar(Math.max(1, radius / 1.5));
-      }
-      if (shadowGroundRef.current) {
-        shadowGroundRef.current.position.set(center.x, groundY + 0.001, center.z);
-        shadowGroundRef.current.scale.setScalar(Math.max(1, radius / 1.5));
-      }
-      if (keyLightRef.current) {
-        const span = Math.max(4, radius * 2.4);
-        keyLightRef.current.position.set(center.x + span * 0.7, center.y + span * 1.1, center.z + span * 0.8);
-        keyLightRef.current.target.position.copy(center);
-        keyLightRef.current.shadow.camera.left = -span;
-        keyLightRef.current.shadow.camera.right = span;
-        keyLightRef.current.shadow.camera.top = span;
-        keyLightRef.current.shadow.camera.bottom = -span;
-        keyLightRef.current.shadow.camera.updateProjectionMatrix();
-      }
-      if (!liveCursor && controlsRef.current) {
-        controlsRef.current.target.copy(center);
-        if (cameraRef.current) {
-          cameraRef.current.position.set(
-            center.x + radius * 2.1,
-            center.y + radius * 1.35,
-            center.z + radius * 2.3
-          );
-        }
-      }
-    }
+    framedModeKeyRef.current = '';
 
     if (scFormat && sculpture) {
       let cancelled = false;
@@ -521,14 +501,6 @@ export default function SculptureViewer3D({
           setModelStatus('ready');
           setModelErrorMsg('');
           onModelBoundsMeasuredRef.current?.(baseDims);
-
-          const curScale = Number(liveTransform?.scale || extractSculptureScale(sculpture) || 1);
-          const center = new THREE.Vector3();
-          const sphere = new THREE.Sphere();
-          loaded.bounds.getCenter(center);
-          loaded.bounds.getBoundingSphere(sphere);
-          center.multiplyScalar(curScale);
-          frameSoloCamera(center, Math.max(0.8, sphere.radius * curScale), 0);
         })
         .catch((err) => {
           if (cancelled) return;
@@ -562,17 +534,6 @@ export default function SculptureViewer3D({
       onModelBoundsMeasuredRef.current?.(baseDims);
     }
     content.add(meshGroup);
-
-    if (voxels.length > 0 && controlsRef.current) {
-      const curScale = Number(liveTransform?.scale || extractSculptureScale(sculpture) || 1);
-      const { radius } = computeCenteredBounds(voxels);
-      const h = (modelBaseSizeRef.current?.height || 1) * curScale;
-      frameSoloCamera(
-        new THREE.Vector3(0, h / 2, 0),
-        Math.max(0.9, (voxels.length <= 2 ? radius : Math.max(1.0, radius)) * curScale),
-        0
-      );
-    }
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scId, scFormat, scCid, scDownloadUrl, scRotY, voxels, liveCursor]);
@@ -818,7 +779,81 @@ export default function SculptureViewer3D({
     }
 
     if (!hasLand) {
-      framedLandKeyRef.current = '';
+      pivot.updateMatrixWorld(true);
+      const worldBox = new THREE.Box3().setFromObject(pivot);
+      let boxW = footW;
+      let boxH = footH;
+      let boxD = footD;
+      let boxCx = 0;
+      let boxCz = 0;
+      let boxMinY = 0;
+      if (!worldBox.isEmpty()) {
+        const wSize = new THREE.Vector3();
+        const wCenter = new THREE.Vector3();
+        worldBox.getSize(wSize);
+        worldBox.getCenter(wCenter);
+        boxW = Math.max(0.08, wSize.x);
+        boxH = Math.max(0.08, wSize.y);
+        boxD = Math.max(0.08, wSize.z);
+        boxCx = wCenter.x;
+        boxCz = wCenter.z;
+        boxMinY = worldBox.min.y;
+      }
+
+      const targetFov = isometricFocus ? ISOMETRIC_PREVIEW_FOV_DEG : 50;
+      const camAspect =
+        cameraRef.current?.aspect ||
+        Math.max(0.8, (hostRef.current?.clientWidth || 560) / Math.max(160, height));
+      const framing = computeIsometricModelFraming({
+        width: boxW,
+        height: boxH,
+        depth: boxD,
+        centerX: boxCx,
+        centerY: boxMinY + boxH * 0.48,
+        centerZ: boxCz,
+        minY: boxMinY,
+        fovDeg: targetFov,
+        aspect: camAspect,
+        fillRatio: isometricFocus ? 0.74 : 0.64
+      });
+
+      if (gridRef.current) {
+        gridRef.current.position.set(boxCx, framing.groundY, boxCz);
+        gridRef.current.scale.setScalar(framing.gridScale);
+      }
+      if (shadowGroundRef.current) {
+        shadowGroundRef.current.position.set(boxCx, framing.groundY + 0.002, boxCz);
+        shadowGroundRef.current.scale.setScalar(framing.shadowScale);
+      }
+      if (keyLightRef.current) {
+        const span = framing.lightSpan;
+        keyLightRef.current.position.set(
+          boxCx + span * 0.72,
+          framing.target[1] + span * 1.15,
+          boxCz + span * 0.82
+        );
+        keyLightRef.current.target.position.set(framing.target[0], framing.target[1], framing.target[2]);
+        keyLightRef.current.shadow.camera.left = -span;
+        keyLightRef.current.shadow.camera.right = span;
+        keyLightRef.current.shadow.camera.top = span;
+        keyLightRef.current.shadow.camera.bottom = -span;
+        keyLightRef.current.shadow.camera.updateProjectionMatrix();
+      }
+
+      const soloKey = `${isometricFocus ? 'iso' : 'solo'}:${scId}:${modelBoundsVersion}:${resetViewTick}`;
+      if (!liveCursor && framedModeKeyRef.current !== soloKey && controlsRef.current && cameraRef.current) {
+        framedModeKeyRef.current = soloKey;
+        const cam = cameraRef.current;
+        if (Math.abs(cam.fov - framing.fov) > 0.05 || Math.abs(cam.near - framing.near) > 0.01) {
+          cam.fov = framing.fov;
+          cam.near = framing.near;
+          cam.far = framing.far;
+          cam.updateProjectionMatrix();
+        }
+        controlsRef.current.target.set(framing.target[0], framing.target[1], framing.target[2]);
+        cam.position.set(framing.position[0], framing.position[1], framing.position[2]);
+        controlsRef.current.update();
+      }
       return;
     }
 
@@ -928,16 +963,36 @@ export default function SculptureViewer3D({
     }
 
     // Frame the isometric land view once when entering Land Bounds mode (never fights user orbit)
-    const landKey = `${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}`;
-    if (framedLandKeyRef.current !== landKey && controlsRef.current && cameraRef.current) {
-      framedLandKeyRef.current = landKey;
-      const dist = Math.max(volW, volD, volH * 0.85) * 1.32;
-      const focusY = Math.min(volH * 0.35, Math.max(1.2, (baseDims.height * effScale) * 0.75));
-      controlsRef.current.target.set(0, focusY, 0);
-      cameraRef.current.position.set(dist * 0.78, Math.max(dist * 0.62, focusY + 1.8), dist * 0.88);
+    const landKey = `land:${scId}:${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}:${resetViewTick}`;
+    if (framedModeKeyRef.current !== landKey && controlsRef.current && cameraRef.current) {
+      framedModeKeyRef.current = landKey;
+      const cam = cameraRef.current;
+      const landFraming = computeIsometricLandFraming({
+        volW,
+        volH,
+        volD,
+        modelHeight: baseDims.height * effScale,
+        fovDeg: 46,
+        aspect: cam.aspect || 1.6
+      });
+      cam.fov = landFraming.fov;
+      cam.near = landFraming.near;
+      cam.far = landFraming.far;
+      cam.updateProjectionMatrix();
+      controlsRef.current.target.set(
+        landFraming.target[0],
+        landFraming.target[1],
+        landFraming.target[2]
+      );
+      cam.position.set(
+        landFraming.position[0],
+        landFraming.position[1],
+        landFraming.position[2]
+      );
       controlsRef.current.update();
     }
   }, [
+    scId,
     sculpture,
     liveTransform,
     parcelVolume,
@@ -946,6 +1001,10 @@ export default function SculptureViewer3D({
     showEditGizmo,
     placementBlocked,
     autoRotate,
+    isometricFocus,
+    resetViewTick,
+    liveCursor,
+    height,
     modelBoundsVersion
   ]);
 
@@ -991,6 +1050,7 @@ export default function SculptureViewer3D({
     <div
       className="sculpture-viewer-wrap"
       data-testid="sculpture-viewer-3d"
+      data-camera-mode={showLandBounds ? 'land' : isometricFocus ? 'isometric' : 'solo'}
       data-land-bounds-preview={showLandBounds ? 'on' : 'off'}
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
       data-model-status={modelStatus}
