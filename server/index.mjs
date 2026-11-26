@@ -40,6 +40,7 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../shared/notificationService.mjs';
+import { buildLandSharePageHtml, renderLandOgPng } from '../shared/landOgImage.mjs';
 import {
   buildObjectFittedLandVolume,
   centerVoxelsHorizontally,
@@ -1628,6 +1629,55 @@ export function createAppServer(serverOptions = {}) {
       ...(landFit ? { landFit } : {})
     };
     return res.status(checked.valid ? 200 : 400).json(payload);
+  });
+
+  app.get('/api/og/land/:parcelId', async (req, res) => {
+    try {
+      const rawId = String(req.params.parcelId || '').replace(/\.png$/i, '').trim();
+      const slugHint = String(req.query?.slug || '').replace(/-/g, ' ').trim();
+      let detail = null;
+      try {
+        detail = await getPublicParcelDetail(chatDb, { parcelOrSlug: rawId });
+      } catch {
+        detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
+      }
+      const pngBytes = await renderLandOgPng({
+        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
+        sculptures: detail?.sculptures || []
+      });
+      res.set('Content-Type', 'image/png');
+      res.set('Cache-Control', 'public, max-age=300');
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.send(Buffer.from(pngBytes));
+    } catch (err) {
+      res.status(500).json({ error: err?.message || 'Failed to render land OG image' });
+    }
+  });
+
+  app.get('/share/land/:parcelId', async (req, res) => {
+    try {
+      const rawId = String(req.params.parcelId || '').trim();
+      const slugHint = String(req.query?.slug || '').replace(/-/g, ' ').trim();
+      let detail = null;
+      try {
+        detail = await getPublicParcelDetail(chatDb, { parcelOrSlug: rawId });
+      } catch {
+        detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
+      }
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const html = buildLandSharePageHtml({
+        parcelId: rawId,
+        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
+        sculptures: detail?.sculptures || [],
+        apiOrigin: origin,
+        publicUrl: process.env.PUBLIC_URL || origin
+      });
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.set('Cache-Control', 'public, max-age=180');
+      res.send(html);
+    } catch (err) {
+      res.status(500).send(err?.message || 'Failed to build share page');
+    }
   });
 
   app.get(

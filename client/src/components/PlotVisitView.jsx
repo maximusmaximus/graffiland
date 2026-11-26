@@ -9,6 +9,7 @@ import {
 import { api } from '../utils/api.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
+  buildLandShareToXUrl,
   buildSculptureShareUrl,
   copyToClipboard
 } from '../utils/clipboard.js';
@@ -34,6 +35,7 @@ import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
+import XLogoIcon from './XLogoIcon.jsx';
 import XeroIcon from './XeroIcon.jsx';
 import MobileIsometricMap from './studio/MobileIsometricMap.jsx';
 
@@ -1411,16 +1413,33 @@ export default function PlotVisitView({
         <div className="plot-visit-header-actions">
           <GlobalNotificationBell compact testId="plot-visit-notif-bell-btn" />
           {activeParcel && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              data-testid="plot-share-btn"
-              aria-label="Copy parcel share link"
-              title="Copy share link"
-              onClick={handleCopyShareLink}
-            >
-              <XeroIcon emoji="📋" size={18} />
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-sm"
+                data-testid="plot-share-btn"
+                aria-label="Copy parcel share link"
+                title="Copy share link"
+                onClick={handleCopyShareLink}
+              >
+                <XeroIcon emoji="📋" size={18} />
+              </button>
+              <a
+                href={buildLandShareToXUrl({
+                  parcelId: activeParcel.parcelId,
+                  customName: activeParcel.customName || '',
+                  landName: landDisplayName
+                })}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-sm plot-share-x-btn"
+                data-testid="plot-share-x-btn"
+                aria-label={`Share ${landDisplayName} on X`}
+                title={`Share ${landDisplayName} on X (Twitter)`}
+              >
+                <XLogoIcon size={14} />
+              </a>
+            </>
           )}
           <button
             type="button"
@@ -1616,6 +1635,22 @@ export default function PlotVisitView({
                             </>
                           )}
                         </button>
+                        <a
+                          href={buildLandShareToXUrl({
+                            parcelId: activeParcel.parcelId,
+                            customName: activeParcel.customName || '',
+                            landName: landDisplayName
+                          })}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="plot-iso-land-x-btn"
+                          data-testid="plot-land-label-x-btn"
+                          aria-label={`Share ${landDisplayName} on X`}
+                          title={`Share ${landDisplayName} on X (Twitter)`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <XLogoIcon size={12} />
+                        </a>
                       </div>
                     );
                   })()}

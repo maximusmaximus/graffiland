@@ -144,7 +144,12 @@ export default function App() {
 
   const directLinkIntroOverlay = showDirectIntro ? (
     <DirectLinkIntroOverlay
+      config={config}
       onClose={dismissDirectIntro}
+      onAuthSuccess={(loggedInUser) => {
+        setUser(loggedInUser);
+        dismissDirectIntro();
+      }}
       onSignIn={() => {
         dismissDirectIntro();
         setDirectLoginOpen(true);

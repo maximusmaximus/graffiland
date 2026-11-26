@@ -1,4 +1,5 @@
-import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import { resolveLandDisplayName, slugifyLandTitle } from '../../../shared/landVolume.mjs';
+import { API_BASE } from './api.js';
 
 export const LOCAL_DRAFT_KEY = 'graffiland_studio_draft_v1';
 export const TUTORIAL_SEEN_KEY = 'graffiland_studio_tutorial_v1';
@@ -99,5 +100,52 @@ export function buildShareToXUrl({
     { defaultName: 'SPRAY.LAND' }
   );
   const text = `Check out "${title}" anchored on "${resolvedLand}" in 3D AR on SPRAY.LAND!`;
+  return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`;
+}
+
+/**
+ * Builds the dynamic OG share URL for a land parcel (backed by Worker/Server /share/land/:parcelId
+ * so X renders the property's name & custom 1200x630 PNG OG image before redirecting to SPRAY.LAND).
+ */
+export function buildLandOgShareUrl({
+  parcelId = '',
+  customName = '',
+  landName = '',
+  apiBase = API_BASE
+} = {}) {
+  const cleanPid = String(parcelId || '').trim().toUpperCase();
+  if (!cleanPid) return '';
+  const fallbackOrigin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://spray.land';
+  const base = String(apiBase || fallbackOrigin).replace(/\/+$/, '');
+  const slug = slugifyLandTitle(customName || landName || '');
+  return `${base}/share/land/${encodeURIComponent(cleanPid)}${
+    slug ? `?slug=${encodeURIComponent(slug)}` : ''
+  }`;
+}
+
+/**
+ * Builds a clean X (Twitter) intent URL for sharing a Virtual Land property tag with its OG card,
+ * clearly telling prospective users they can view/add to the land or have their AI agent add 3D models.
+ */
+export function buildLandShareToXUrl({
+  parcelId = '',
+  landName = '',
+  customName = '',
+  apiBase = API_BASE
+} = {}) {
+  const resolvedLand = resolveLandDisplayName(
+    { customName: customName || landName || '' },
+    { defaultName: 'this 3D Land' }
+  );
+  const shareUrl = buildLandOgShareUrl({
+    parcelId,
+    customName: customName || landName || '',
+    landName: resolvedLand,
+    apiBase
+  });
+  const text = `Check out "${resolvedLand}" on SPRAY.LAND! View it in 3D, add your own art, or have your AI agent add 3D models to it:`;
   return `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`;
 }
