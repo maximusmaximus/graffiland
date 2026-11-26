@@ -2291,9 +2291,30 @@ export default function MapView3D({
       shareBtn.dataset.parcelId = pid;
       shareBtn.setAttribute('aria-label', `Copy share link for ${landName}`);
       shareBtn.title = `Copy shareable visit link for ${landName}`;
-      const idleCopyText = isEmptyLand ? '🔗 Copy' : '🔗';
+      const copyIconUrl = xeroemoji.get('📋')?.svgUrl || '';
+      const renderIdleCopyContent = () => {
+        shareBtn.replaceChildren();
+        if (copyIconUrl) {
+          const img = document.createElement('img');
+          img.src = copyIconUrl;
+          img.alt = '';
+          img.setAttribute('aria-hidden', 'true');
+          img.width = 15;
+          img.height = 15;
+          img.className = 'xero-icon';
+          img.style.width = '15px';
+          img.style.height = '15px';
+          img.style.objectFit = 'contain';
+          shareBtn.appendChild(img);
+        } else {
+          shareBtn.appendChild(document.createTextNode('📋'));
+        }
+        if (isEmptyLand) {
+          shareBtn.appendChild(document.createTextNode(' Copy'));
+        }
+      };
       const copiedText = isEmptyLand ? '✓ Copied' : '✓';
-      shareBtn.textContent = idleCopyText;
+      renderIdleCopyContent();
       shareBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       shareBtn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
@@ -2312,7 +2333,7 @@ export default function MapView3D({
         shareBtn.textContent = copiedText;
         shareBtn.classList.add('is-copied');
         setTimeout(() => {
-          shareBtn.textContent = idleCopyText;
+          renderIdleCopyContent();
           shareBtn.classList.remove('is-copied');
         }, 1800);
       });

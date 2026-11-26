@@ -19,7 +19,6 @@ import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js'
 import {
   loadBoolPreference,
   loadLocalDraft,
-  QUICK_SCULPT_KEY,
   saveBoolPreference,
   SPRAY_BRUSH_GUIDE_SEEN_KEY,
   TUTORIAL_SEEN_KEY
@@ -136,9 +135,6 @@ export default function MobileStudio({
       setTutorialOpen(false);
     }
   }
-  const [quickSculpt, setQuickSculpt] = useState(
-    () => loadBoolPreference(QUICK_SCULPT_KEY, false)
-  );
   const [arSelectHint, setArSelectHint] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
@@ -1328,17 +1324,6 @@ export default function MobileStudio({
     setArNearbyParcelsForViews
   ]);
 
-  const handleToggleQuickSculpt = useCallback(() => {
-    setQuickSculpt((prev) => {
-      const next = !prev;
-      saveBoolPreference(QUICK_SCULPT_KEY, next);
-      showTemporaryHint(
-        next ? '⚡ Quick Sculpt ON (simplified tools)' : 'Pro Studio HUD restored'
-      );
-      return next;
-    });
-  }, [showTemporaryHint]);
-
   const handleMobileApprovalResolved = ({ requestId = '' } = {}) => {
     if (
       requestId &&
@@ -1596,8 +1581,6 @@ export default function MobileStudio({
           onOpenAgentHandoff={drafts.openAgentHandoff}
           onOpenLogin={() => setLoginOpen(true)}
           voxels={brush.voxels}
-          quickSculpt={quickSculpt}
-          onToggleQuickSculpt={handleToggleQuickSculpt}
           onOpenTutorial={() => setTutorialOpen(true)}
           onOpenInfo={() => {
             setInfoInitialTab('guide');
@@ -1711,7 +1694,6 @@ export default function MobileStudio({
 
         {!isInteractingWithLand && (
           <ToolCarouselBar
-            quickSculpt={quickSculpt}
             activeKeyTool={brush.activeKeyTool}
             toolAvailability={brush.toolAvailability}
             canTouch={canTouch}
@@ -1926,8 +1908,6 @@ export default function MobileStudio({
 
       {!isWelcomeOpen && !parcelVisit && tutorialOpen && (
         <FirstRunTutorialModal
-          quickSculpt={quickSculpt}
-          onToggleQuickSculpt={handleToggleQuickSculpt}
           onClose={(dontShow) => {
             if (dontShow) saveBoolPreference(TUTORIAL_SEEN_KEY, true);
             setTutorialOpen(false);

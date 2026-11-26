@@ -364,13 +364,18 @@ function MobileIsoSvgFallback({
                     onCopyLandShareLink?.(primaryEntry.parcel);
                   }}
                 >
-                  {landLabelCopied
-                    ? isEmptyLand
-                      ? '✓ Copied'
-                      : '✓'
-                    : isEmptyLand
-                      ? '🔗 Copy Link'
-                      : '🔗'}
+                  {landLabelCopied ? (
+                    isEmptyLand ? (
+                      '✓ Copied'
+                    ) : (
+                      '✓'
+                    )
+                  ) : (
+                    <>
+                      <XeroIcon emoji="📋" size={16} />
+                      {isEmptyLand ? ' Copy Link' : ''}
+                    </>
+                  )}
                 </button>
               </div>
             );
@@ -1907,13 +1912,18 @@ export default function MobileIsometricMap({
                       handleCopyPrimaryLandLink(primaryEntry.parcel);
                     }}
                   >
-                    {landLabelCopied
-                      ? isEmptyPrimaryLand
-                        ? '✓ Copied'
-                        : '✓'
-                      : isEmptyPrimaryLand
-                        ? '🔗 Copy Link'
-                        : '🔗'}
+                    {landLabelCopied ? (
+                      isEmptyPrimaryLand ? (
+                        '✓ Copied'
+                      ) : (
+                        '✓'
+                      )
+                    ) : (
+                      <>
+                        <XeroIcon emoji="📋" size={16} />
+                        {isEmptyPrimaryLand ? ' Copy Link' : ''}
+                      </>
+                    )}
                   </button>
                 </div>
               )}

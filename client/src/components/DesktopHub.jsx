@@ -2774,7 +2774,7 @@ export default function DesktopHub({
                                   setTimeout(() => setCopiedId(''), 1800);
                                 }}
                               >
-                                {copiedId === sc.id ? '✓' : '🔗'}
+                                {copiedId === sc.id ? '✓' : <XeroIcon emoji="📋" size={16} />}
                               </button>
                               <a
                                 className="btn gallery-card-action-btn"
@@ -2915,7 +2915,13 @@ export default function DesktopHub({
                             }}
                             title={`Copy share link for ${liveTitle}`}
                           >
-                            {copiedId === land.parcelId ? 'Copied!' : 'Share'}
+                            {copiedId === land.parcelId ? (
+                              'Copied!'
+                            ) : (
+                              <>
+                                <XeroIcon emoji="📋" size={15} /> Copy Link
+                              </>
+                            )}
                           </button>
                           {isOwned && (
                             <button
@@ -2930,7 +2936,7 @@ export default function DesktopHub({
                               }}
                               title={`Manage ${liveTitle}`}
                             >
-                              <XeroIcon emoji="⚙️" size={11} /> Manage
+                              <XeroIcon emoji="⚙️" size={15} /> Manage
                             </button>
                           )}
                         </div>

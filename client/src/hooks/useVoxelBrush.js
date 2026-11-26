@@ -39,20 +39,20 @@ import {
 } from '../utils/staleDrawGuard.js';
 
 export const KEY_TOOLS = [
-  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can', quick: true },
-  { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks', quick: true },
-  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase', quick: true },
-  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale, Y/Z rotate & move', quick: true },
-  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces', quick: true },
-  { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear', quick: true },
-  { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas', quick: true },
-  { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim', quick: true },
-  { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat', quick: true },
-  { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts', quick: true },
-  { id: 'occlusion', emoji: '🪞', label: 'Occlusion', hint: 'Toggle foreground occlusion', quick: false },
-  { id: 'pair', emoji: '🔗', label: 'Pair', hint: 'Pair desktop live 3D view', quick: false },
-  { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build', quick: false },
-  { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone', quick: true }
+  { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can' },
+  { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks' },
+  { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase' },
+  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale, Y/Z rotate & move' },
+  { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces' },
+  { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear' },
+  { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas' },
+  { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim' },
+  { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
+  { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts' },
+  { id: 'occlusion', emoji: '🪞', label: 'Occlusion', hint: 'Toggle foreground occlusion' },
+  { id: 'pair', emoji: '🔗', label: 'Pair', hint: 'Pair desktop live 3D view' },
+  { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
+  { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
 ];
 
 export const KEY_CAROUSEL_SLOT_PX = 54;

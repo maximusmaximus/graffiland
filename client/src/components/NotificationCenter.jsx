@@ -13,6 +13,7 @@ import { api } from '../utils/api';
 import { isPendingSculptureAction } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
+import XeroIcon from './XeroIcon.jsx';
 
 const CATEGORY_META = [
   {
@@ -1056,7 +1057,7 @@ function useNotificationEngine({
                 className={`notif-tab ${activeTab === 'settings' ? 'active' : ''}`}
                 onClick={() => setActiveTab('settings')}
               >
-                ⚙️ Settings
+                <XeroIcon emoji="⚙️" size={16} /> Settings
               </button>
             </div>
             <button

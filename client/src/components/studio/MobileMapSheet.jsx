@@ -679,7 +679,7 @@ export default function MobileMapSheet({
                           title="Manage this land"
                           onClick={() => onManageLand(land.parcelId)}
                         >
-                          <XeroIcon emoji="⚙️" size={12} />
+                          <XeroIcon emoji="⚙️" size={16} />
                         </button>
                       )}
                       <button
@@ -688,9 +688,9 @@ export default function MobileMapSheet({
                         data-testid="land-card-share-btn"
                         onClick={() => handleCopyLandShare(land)}
                         aria-label={`Copy share link for ${land.displayName}`}
-                        title="Share land link"
+                        title="Copy land link"
                       >
-                        <XeroIcon emoji="📤" size={12} />
+                        <XeroIcon emoji="📋" size={16} />
                       </button>
                     </div>
                   </div>
@@ -954,7 +954,7 @@ export default function MobileMapSheet({
                                   <div className="mobile-land-sculpture-actions">
                                     <button
                                       type="button"
-                                      className="btn btn-xs"
+                                      className="btn btn-xs mobile-land-share-btn"
                                       title="Copy sculpture link"
                                       aria-label={`Copy share link for ${sc.title}`}
                                       onClick={async (e) => {
@@ -967,7 +967,7 @@ export default function MobileMapSheet({
                                         );
                                       }}
                                     >
-                                      <XeroIcon emoji="📤" size={12} />
+                                      <XeroIcon emoji="📋" size={16} />
                                     </button>
                                     <button
                                       type="button"

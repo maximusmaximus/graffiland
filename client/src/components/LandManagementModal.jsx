@@ -580,7 +580,7 @@ export default function LandManagementModal({
                           setNotice(ok ? `Copied share link: ${shareUrl}` : shareUrl);
                         }}
                       >
-                        🔗 Share
+                        <XeroIcon emoji="📋" size={16} /> Copy Link
                       </button>
                       <button
                         type="button"

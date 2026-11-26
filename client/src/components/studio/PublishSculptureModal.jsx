@@ -136,7 +136,7 @@ export default function PublishSculptureModal({
                   onShowHint?.(ok ? 'Copied shareable deep link!' : 'Copy unavailable');
                 }}
               >
-                <XeroIcon emoji="📤" size={15} /> Copy Link
+                <XeroIcon emoji="📋" size={19} /> Copy Link
               </button>
               <a
                 className="btn"

@@ -35,8 +35,6 @@ export default function StudioHudTopBar({
   onOpenAgentHandoff,
   onOpenLogin,
   voxels,
-  quickSculpt,
-  onToggleQuickSculpt,
   onOpenTutorial,
   onOpenInfo,
   onOpenProfile = null,
@@ -266,20 +264,6 @@ export default function StudioHudTopBar({
                 {pendingCount}
               </span>
             )}
-          </button>
-
-          <button
-            type="button"
-            className={`top-mini-pill ${quickSculpt ? 'active' : ''}`}
-            onClick={onToggleQuickSculpt}
-            title={
-              quickSculpt
-                ? 'Quick Sculpt active (simplified HUD) — tap for Pro Mode'
-                : 'Pro HUD active — tap for simplified Quick Sculpt Mode'
-            }
-          >
-            <XeroIcon emoji="⚡" size={13} />
-            <span>{quickSculpt ? 'Quick' : 'Pro'}</span>
           </button>
 
           <button
@@ -565,7 +549,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {!isInteractingWithLand && mode === 'draw' && !quickSculpt && (
+        {!isInteractingWithLand && mode === 'draw' && (
           <div className="surface-pill hud-interactive">
             {surfaceAnchor ? (
               <>
@@ -618,7 +602,7 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {!isInteractingWithLand && mode === 'draw' && activeQuest && !quickSculpt && (
+        {!isInteractingWithLand && mode === 'draw' && activeQuest && (
           <div
             className="surface-pill hud-interactive"
             style={{
