@@ -240,6 +240,31 @@ export const api = {
   getMyLands: () => request('/api/lands/mine'),
   getLandDetail: (parcelOrSlug) =>
     request(`/api/lands/${encodeURIComponent(parcelOrSlug)}`),
+  recordLandView: (parcelId, { viewType = 'page', lat = null, lng = null } = {}) => {
+    let sessionId = '';
+    try {
+      const key = 'graffiland_view_session_id';
+      sessionId = window.sessionStorage?.getItem(key) || '';
+      if (!sessionId) {
+        sessionId =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID().replace(/-/g, '')
+            : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+        window.sessionStorage?.setItem(key, sessionId);
+      }
+    } catch {
+      sessionId = '';
+    }
+    return request(`/api/lands/${encodeURIComponent(parcelId)}/view`, {
+      method: 'POST',
+      body: JSON.stringify({
+        viewType: viewType === 'in_person' ? 'in_person' : 'page',
+        sessionId,
+        ...(Number.isFinite(Number(lat)) ? { lat: Number(lat) } : {}),
+        ...(Number.isFinite(Number(lng)) ? { lng: Number(lng) } : {})
+      })
+    });
+  },
   validateModelUrl: (payload) =>
     request('/api/models/validate-url', {
       method: 'POST',

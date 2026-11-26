@@ -3,6 +3,7 @@ import { STEWARD_DEFAULTS } from './constants.mjs';
 import { looksMobileRequest } from './chatPolicy.mjs';
 import { resolveLandDisplayName } from './landVolume.mjs';
 import { McpServiceError, normalizeParcelId } from './mcp/helpers.mjs';
+import { buildViewerDedupKey, recordLandView } from './landViewService.mjs';
 import {
   createNotification,
   syncAllExpiringLandNotifications
@@ -380,6 +381,13 @@ export async function checkInToLandInPerson(
       dedupeKey: `checkin:${cleanParcel}:${user.id}:${nowIso.slice(0, 13)}`
     }).catch(() => {});
   }
+
+  await recordLandView(db, {
+    parcelId: cleanParcel,
+    viewType: 'in_person',
+    viewerKey: buildViewerDedupKey({ userId: user.id }),
+    verifiedInPerson: true
+  }).catch(() => null);
 
   return {
     checkedIn: true,
