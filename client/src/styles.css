@@ -1957,11 +1957,6 @@ select {
   border-bottom: 1.5px solid #00f5d4;
 }
 
-.mobile-land-3d-btn {
-  border-color: rgba(0, 245, 212, 0.45);
-  color: #b5fff3;
-}
-
 .mobile-map-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -8915,6 +8910,26 @@ select {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.ar-land-visit-lock-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: rgba(203, 213, 225, 0.86);
+  font-size: 11px;
+  line-height: 1.35;
+  transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+.ar-land-visit-lock-note.is-pulsed {
+  background: rgba(255, 209, 102, 0.14);
+  border-color: rgba(255, 209, 102, 0.52);
+  color: #fff3c4;
+}
+
 .ar-land-primary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8944,6 +8959,24 @@ select {
   background: rgba(16, 30, 52, 0.96);
   border: 1px solid rgba(0, 245, 212, 0.42);
   color: #eafffc;
+}
+
+.ar-land-primary-btn.is-action-locked,
+.ar-land-secondary-primary-btn.is-action-locked {
+  background: rgba(30, 38, 54, 0.62);
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  color: rgba(148, 163, 184, 0.72);
+  box-shadow: none;
+  filter: grayscale(0.75);
+  opacity: 0.66;
+  cursor: not-allowed;
+}
+
+.ar-land-primary-btn.is-action-locked:hover,
+.ar-land-secondary-primary-btn.is-action-locked:hover {
+  background: rgba(36, 46, 64, 0.72);
+  border-color: rgba(255, 209, 102, 0.4);
+  color: rgba(203, 213, 225, 0.85);
 }
 
 .ar-land-tools-bar {
@@ -8982,6 +9015,26 @@ select {
   background: rgba(0, 245, 212, 0.14);
   border-color: rgba(0, 245, 212, 0.58);
   color: #a9fff2;
+}
+
+.ar-land-tool-btn.is-recommended {
+  background: rgba(0, 245, 212, 0.12);
+  border-color: rgba(0, 245, 212, 0.55);
+  color: #a9fff2;
+}
+
+.ar-land-tool-btn.is-action-locked {
+  background: rgba(26, 33, 47, 0.56);
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+  color: rgba(148, 163, 184, 0.62);
+  filter: grayscale(0.8);
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.ar-land-tool-btn.is-action-locked:hover {
+  border-color: rgba(255, 209, 102, 0.4);
+  color: rgba(203, 213, 225, 0.8);
 }
 
 .ar-land-sculptures {

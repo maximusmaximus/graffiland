@@ -220,15 +220,6 @@ export default function MobileMapSheet({
     handleFocusLandOnMap(parcelId);
   }
 
-  function handleOpenLandIn3D(parcelId) {
-    if (!parcelId) return;
-    markLandSeenById(parcelId);
-    setLocalSelectedParcelId(parcelId);
-    onSelectParcel?.(parcelId);
-    setMapDimensionMode('3d');
-    setLocalFocusTick((t) => t + 1);
-  }
-
   async function handleCopyLandShare(land) {
     const shareUrl = buildParcelShareUrl({
       origin: typeof window !== 'undefined' ? window.location.origin : '',
@@ -788,45 +779,38 @@ export default function MobileMapSheet({
                         )}
                       </div>
 
-                      {/* Land Action Row (Find in AR + Navigate + 3D Map) */}
-                      <div className="mobile-land-actions">
-                        {onFindLandInAR && location && (
-                          <button
-                            type="button"
-                            className="btn btn-xs btn-primary"
-                            data-testid="land-card-find-ar-btn"
-                            onClick={() => {
-                              markLandSeenById(land.parcelId);
-                              onFindLandInAR(land);
-                            }}
-                            aria-label={`Guide camera to ${land.displayName} in AR`}
-                          >
-                            <XeroIcon emoji="👁️" size={12} /> Find in AR
-                          </button>
-                        )}
-                        {land.googleMapsUrl && (
-                          <a
-                            className="btn btn-xs mobile-land-gmaps-btn"
-                            href={land.googleMapsUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            data-testid="land-google-maps-link"
-                            onClick={() => markLandSeenById(land.parcelId)}
-                            aria-label={`Navigate to ${land.displayName}`}
-                          >
-                            <XeroIcon emoji="🧭" size={12} /> Navigate
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-xs mobile-land-3d-btn"
-                          data-testid="land-card-3d-map-btn"
-                          onClick={() => handleOpenLandIn3D(land.parcelId)}
-                          aria-label={`View ${land.displayName} in 3D isometric map`}
-                        >
-                          <XeroIcon emoji="🧊" size={12} /> 3D Map
-                        </button>
-                      </div>
+                      {/* Land Action Row (Find in AR + Navigate) */}
+                      {((onFindLandInAR && location) || land.googleMapsUrl) && (
+                        <div className="mobile-land-actions">
+                          {onFindLandInAR && location && (
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-primary"
+                              data-testid="land-card-find-ar-btn"
+                              onClick={() => {
+                                markLandSeenById(land.parcelId);
+                                onFindLandInAR(land);
+                              }}
+                              aria-label={`Guide camera to ${land.displayName} in AR`}
+                            >
+                              <XeroIcon emoji="👁️" size={12} /> Find in AR
+                            </button>
+                          )}
+                          {land.googleMapsUrl && (
+                            <a
+                              className="btn btn-xs mobile-land-gmaps-btn"
+                              href={land.googleMapsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              data-testid="land-google-maps-link"
+                              onClick={() => markLandSeenById(land.parcelId)}
+                              aria-label={`Navigate to ${land.displayName}`}
+                            >
+                              <XeroIcon emoji="🧭" size={12} /> Navigate
+                            </a>
+                          )}
+                        </div>
+                      )}
 
                       {/* Nested Sculptures under this Land */}
                       <div className="mobile-land-sculptures" data-testid="land-sculptures-section">

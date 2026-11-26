@@ -1,4 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  CHAT_SIGHT_MAX_DISTANCE_M,
+  PIN_PARCEL_MAX_DISTANCE_M
+} from '../../../../shared/chatPolicy.mjs';
+import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../../shared/constants.mjs';
 import {
   buildParcelShareUrl,
   resolveLandDisplayName
@@ -13,10 +18,63 @@ import {
   resolveLandCoords
 } from '../../utils/landMapHelpers.js';
 import { useMeasurementUnits } from '../../utils/measurementUnits.js';
+import { notifySettingsSaved } from '../../utils/toastNotice.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
+
+function parseFiniteMetric(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Computes physical on-site proximity gates for AR Land Inspector actions so users
+ * cannot trigger in-person-only actions (drawing, check-in, Land Chat, AR alignment)
+ * while viewing a land remotely.
+ */
+export function evaluateArLandActionProximity(land) {
+  if (!land) {
+    return {
+      edgeDistM: null,
+      isInside: false,
+      outOfArRange: true,
+      canDrawAtLand: false,
+      canCheckInAtLand: false,
+      canChatAtLand: false,
+      canAlignAtLand: false
+    };
+  }
+  const edgeDistM =
+    parseFiniteMetric(land.edgeDistanceMetersExact) ??
+    parseFiniteMetric(land.edgeDistanceMeters) ??
+    parseFiniteMetric(land.distanceMeters);
+  const isInside = Boolean(land.isInside);
+  const outOfArRange =
+    Boolean(land.outOfArRange) ||
+    (!isInside && edgeDistM !== null && edgeDistM >= AR_MAX_VISIBLE_DISTANCE_METERS);
+
+  const canAlignAtLand =
+    !outOfArRange &&
+    (isInside || (edgeDistM !== null && edgeDistM < AR_MAX_VISIBLE_DISTANCE_METERS));
+  const canChatAtLand =
+    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= CHAT_SIGHT_MAX_DISTANCE_M));
+  const canCheckInAtLand =
+    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= PIN_PARCEL_MAX_DISTANCE_M));
+  const canDrawAtLand = !land.isFrozen && canCheckInAtLand;
+
+  return {
+    edgeDistM,
+    isInside,
+    outOfArRange,
+    canDrawAtLand,
+    canCheckInAtLand,
+    canChatAtLand,
+    canAlignAtLand
+  };
+}
 
 /**
  * Interactive Land Details & Quick Actions overlay displayed directly over the live AR camera
@@ -98,16 +156,32 @@ export default function ARLandInspectorPanel({
   const [localDisplayName, setLocalDisplayName] = useState('');
   const [checkInBusy, setCheckInBusy] = useState(false);
   const [checkedInDone, setCheckedInDone] = useState(false);
+  const [visitLockNotice, setVisitLockNotice] = useState('');
+  const [visitLockPulse, setVisitLockPulse] = useState(false);
+  const visitLockTimerRef = useRef(null);
+  const proximity = evaluateArLandActionProximity(land);
+  const {
+    edgeDistM,
+    canDrawAtLand,
+    canCheckInAtLand,
+    canChatAtLand,
+    canAlignAtLand
+  } = proximity;
   const hasAlignTool = typeof onAdjustCompassNudge === 'function';
   const autoExpandAlign = Boolean(
-    sensorStatus?.manualYawNudgeDeg || sensorStatus?.needsCompassCalibration || webxrActive
+    canAlignAtLand &&
+      (sensorStatus?.manualYawNudgeDeg || sensorStatus?.needsCompassCalibration || webxrActive)
   );
   const [alignExpanded, setAlignExpanded] = useState(autoExpandAlign);
   const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
 
   useEffect(() => {
-    if (autoExpandAlign) setAlignExpanded(true);
-  }, [autoExpandAlign]);
+    if (!canAlignAtLand) {
+      setAlignExpanded(false);
+    } else if (autoExpandAlign) {
+      setAlignExpanded(true);
+    }
+  }, [autoExpandAlign, canAlignAtLand]);
 
   // Reset inline rename & check-in state when switching to a different nearby land
   useEffect(() => {
@@ -117,8 +191,19 @@ export default function ARLandInspectorPanel({
     setLocalDisplayName('');
     setCheckInBusy(false);
     setCheckedInDone(false);
+    setVisitLockNotice('');
+    setVisitLockPulse(false);
     setAlignExpanded(autoExpandAlign);
   }, [land?.parcelId, autoExpandAlign]);
+
+  useEffect(() => {
+    return () => {
+      if (visitLockTimerRef.current) {
+        clearTimeout(visitLockTimerRef.current);
+        visitLockTimerRef.current = null;
+      }
+    };
+  }, []);
 
   if (!land) return null;
 
@@ -146,7 +231,40 @@ export default function ARLandInspectorPanel({
     (maxCnt, sc) => Math.max(maxCnt, Number(sc?.chatSummary?.messageCount || 0)),
     Number(land?.chatMessageCount || 0)
   );
+  const notifyVisitRequired = (actionLabel, maxDistMeters) => {
+    const withinLabel = formatDistanceMeters(maxDistMeters, unitSystem);
+    const awayDetail =
+      edgeDistM !== null
+        ? `you're ${formatDistanceMeters(edgeDistM, unitSystem)} away — walk within ${withinLabel}`
+        : `enable GPS and walk within ${withinLabel}`;
+    const msg = `Visit ${displayName} in person to ${actionLabel} (${awayDetail}).`;
+    setVisitLockNotice(msg);
+    setVisitLockPulse(true);
+    if (visitLockTimerRef.current) clearTimeout(visitLockTimerRef.current);
+    visitLockTimerRef.current = setTimeout(() => {
+      setVisitLockPulse(false);
+    }, 4500);
+    notifySettingsSaved(msg, {
+      tone: 'warning',
+      durationMs: 5200,
+      ...(land.googleMapsUrl
+        ? {
+            actionLabel: '🧭 Navigate',
+            onAction: () => {
+              if (typeof window !== 'undefined' && typeof window.open === 'function') {
+                window.open(land.googleMapsUrl, '_blank', 'noopener,noreferrer');
+              }
+            }
+          }
+        : {})
+    });
+  };
+
   const handleOpenLandChat = () => {
+    if (!canChatAtLand) {
+      notifyVisitRequired('join Land Chat', CHAT_SIGHT_MAX_DISTANCE_M);
+      return;
+    }
     if (!canonicalChatTarget) return;
     if (typeof onOpenLandChat === 'function') {
       onOpenLandChat(land, canonicalChatTarget);
@@ -230,6 +348,16 @@ export default function ARLandInspectorPanel({
   const hasPrimaryCheckIn = Boolean(exp.state !== 'permanent' && typeof onCheckInLand === 'function');
   const primaryActionCount =
     (hasPrimaryDraw ? 1 : 0) + (canOpenLandChat ? 1 : 0) + (hasPrimaryCheckIn ? 1 : 0);
+  const hasAnyLockedAction = Boolean(
+    (hasPrimaryDraw && !canDrawAtLand) ||
+      (canOpenLandChat && !canChatAtLand) ||
+      (hasPrimaryCheckIn && !canCheckInAtLand) ||
+      (hasAlignTool && !canAlignAtLand)
+  );
+  const defaultVisitLockMessage =
+    edgeDistM !== null
+      ? `Visit ${displayName} in person (${formatDistanceMeters(edgeDistM, unitSystem)} away) to unlock locked on-site actions.`
+      : `Enable GPS and visit ${displayName} in person to unlock locked on-site actions.`;
 
   return (
     <section
@@ -474,6 +602,18 @@ export default function ARLandInspectorPanel({
       <div className="ar-land-actions-section" data-testid="ar-land-actions-section">
         <div className="ar-land-section-kicker">Actions</div>
 
+        {hasAnyLockedAction && (
+          <div
+            className={`ar-land-visit-lock-note ${visitLockPulse ? 'is-pulsed' : ''}`}
+            data-testid="ar-land-visit-lock-note"
+            role="status"
+            aria-live="polite"
+          >
+            <XeroIcon emoji="🔒" size={12} />
+            <span>{visitLockNotice || defaultVisitLockMessage}</span>
+          </div>
+        )}
+
         {primaryActionCount > 0 && (
           <div
             className={`ar-land-primary-grid ${primaryActionCount === 1 ? 'is-single' : ''}`}
@@ -482,29 +622,53 @@ export default function ARLandInspectorPanel({
             {hasPrimaryDraw && (
               <button
                 type="button"
-                className="btn btn-primary ar-land-primary-btn"
+                className={`btn ar-land-primary-btn ${
+                  canDrawAtLand ? 'btn-primary' : 'is-action-locked'
+                }`}
                 data-testid="ar-land-draw-btn"
+                data-locked={canDrawAtLand ? 'false' : 'true'}
+                aria-disabled={canDrawAtLand ? undefined : 'true'}
                 title={
-                  exp.state !== 'permanent'
+                  !canDrawAtLand
+                    ? `Visit ${displayName} in person to draw on this land`
+                    : exp.state !== 'permanent'
                     ? 'Draw manually in Mobile AR here to fully mint & permanently own this land (removes timer)'
                     : 'Draw manually in Mobile AR on this land'
                 }
-                onClick={() => onDrawHere(land)}
+                onClick={() => {
+                  if (!canDrawAtLand) {
+                    notifyVisitRequired('draw on this land', PIN_PARCEL_MAX_DISTANCE_M);
+                    return;
+                  }
+                  onDrawHere(land);
+                }}
               >
-                <XeroIcon emoji="🎨" size={14} />
+                <XeroIcon emoji={canDrawAtLand ? '🎨' : '🔒'} size={14} />
                 <span>{exp.state !== 'permanent' ? 'Draw Here to Own' : 'Draw Here'}</span>
               </button>
             )}
             {canOpenLandChat && (
               <button
                 type="button"
-                className="btn ar-land-secondary-primary-btn"
+                className={`btn ar-land-secondary-primary-btn ${
+                  canChatAtLand ? '' : 'is-action-locked'
+                }`}
                 data-testid="ar-land-chat-btn"
-                aria-label={`Open chat for ${displayName}`}
-                title={`Open encrypted in-person chat for ${displayName}`}
+                data-locked={canChatAtLand ? 'false' : 'true'}
+                aria-disabled={canChatAtLand ? undefined : 'true'}
+                aria-label={
+                  canChatAtLand
+                    ? `Open chat for ${displayName}`
+                    : `Visit ${displayName} in person to open Land Chat`
+                }
+                title={
+                  canChatAtLand
+                    ? `Open encrypted in-person chat for ${displayName}`
+                    : `Visit ${displayName} in person to join Land Chat`
+                }
                 onClick={handleOpenLandChat}
               >
-                <XeroIcon emoji="💬" size={14} />
+                <XeroIcon emoji={canChatAtLand ? '💬' : '🔒'} size={14} />
                 <span>
                   Land Chat{landChatMessageCount > 0 ? ` (${landChatMessageCount})` : ''}
                 </span>
@@ -514,12 +678,26 @@ export default function ARLandInspectorPanel({
               <button
                 type="button"
                 className={`btn ar-land-secondary-primary-btn ${
-                  checkedInDone ? 'btn-primary' : ''
+                  !canCheckInAtLand
+                    ? 'is-action-locked'
+                    : checkedInDone
+                    ? 'btn-primary'
+                    : ''
                 }`}
                 data-testid="ar-land-checkin-btn"
-                disabled={checkInBusy}
-                title="Verify your physical in-person presence (Camera + GPS) to extend this land's timer (draw art to make it permanent)"
+                data-locked={canCheckInAtLand ? 'false' : 'true'}
+                aria-disabled={canCheckInAtLand ? undefined : 'true'}
+                disabled={canCheckInAtLand && checkInBusy}
+                title={
+                  canCheckInAtLand
+                    ? "Verify your physical in-person presence (Camera + GPS) to extend this land's timer (draw art to make it permanent)"
+                    : `Visit ${displayName} in person to check in IRL`
+                }
                 onClick={async () => {
+                  if (!canCheckInAtLand) {
+                    notifyVisitRequired('check in IRL', PIN_PARCEL_MAX_DISTANCE_M);
+                    return;
+                  }
                   if (checkInBusy) return;
                   setCheckInBusy(true);
                   try {
@@ -530,9 +708,18 @@ export default function ARLandInspectorPanel({
                   }
                 }}
               >
-                <XeroIcon emoji={checkedInDone ? '✅' : '📍'} size={13} />
+                <XeroIcon
+                  emoji={!canCheckInAtLand ? '🔒' : checkedInDone ? '✅' : '📍'}
+                  size={13}
+                />
                 <span>
-                  {checkInBusy ? 'Verifying…' : checkedInDone ? 'Visited IRL' : 'Check In IRL'}
+                  {!canCheckInAtLand
+                    ? 'Check In IRL'
+                    : checkInBusy
+                    ? 'Verifying…'
+                    : checkedInDone
+                    ? 'Visited IRL'
+                    : 'Check In IRL'}
                 </span>
               </button>
             )}
@@ -565,7 +752,7 @@ export default function ARLandInspectorPanel({
           )}
           {land.googleMapsUrl && (
             <a
-              className="ar-land-tool-btn"
+              className={`ar-land-tool-btn ${!canDrawAtLand ? 'is-recommended' : ''}`}
               href={land.googleMapsUrl}
               target="_blank"
               rel="noreferrer"
@@ -589,15 +776,32 @@ export default function ARLandInspectorPanel({
             <button
               type="button"
               className={`ar-land-tool-btn ${
-                alignExpanded || sensorStatus?.manualYawNudgeDeg ? 'is-active' : ''
+                !canAlignAtLand
+                  ? 'is-action-locked'
+                  : alignExpanded || sensorStatus?.manualYawNudgeDeg
+                  ? 'is-active'
+                  : ''
               }`}
               data-testid="ar-compass-align-toggle-btn"
-              aria-expanded={alignExpanded}
-              onClick={() => setAlignExpanded((prev) => !prev)}
+              data-locked={canAlignAtLand ? 'false' : 'true'}
+              aria-disabled={canAlignAtLand ? undefined : 'true'}
+              aria-expanded={canAlignAtLand ? alignExpanded : false}
+              title={
+                canAlignAtLand
+                  ? 'Fine-align compass bearing and AR tracking'
+                  : `Visit ${displayName} in person to view & align it in AR`
+              }
+              onClick={() => {
+                if (!canAlignAtLand) {
+                  notifyVisitRequired('align this land in AR', AR_MAX_VISIBLE_DISTANCE_METERS);
+                  return;
+                }
+                setAlignExpanded((prev) => !prev);
+              }}
             >
-              <XeroIcon emoji="🎯" size={14} />
+              <XeroIcon emoji={canAlignAtLand ? '🎯' : '🔒'} size={14} />
               <span>
-                {sensorStatus?.manualYawNudgeDeg
+                {canAlignAtLand && sensorStatus?.manualYawNudgeDeg
                   ? `Align ${sensorStatus.manualYawNudgeDeg > 0 ? '+' : ''}${
                       sensorStatus.manualYawNudgeDeg
                     }°`
@@ -608,7 +812,7 @@ export default function ARLandInspectorPanel({
         </div>
 
         {/* Collapsible Compass Fine-Align Nudge & 6-DoF ARCore Controls */}
-        {hasAlignTool && alignExpanded && (
+        {hasAlignTool && canAlignAtLand && alignExpanded && (
           <div
             className="ar-compass-nudge-bar"
             data-testid="ar-compass-nudge-controls"
