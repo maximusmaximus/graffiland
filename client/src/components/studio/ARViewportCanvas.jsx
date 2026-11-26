@@ -4,6 +4,7 @@ import { haversineMeters } from '../../../../shared/chatPolicy.mjs';
 import {
   advanceFluidSprayPoint,
   buildConnectedVoxelPath,
+  buildSmoothSplineVoxelPath,
   getVoxelCellStep,
   normalizeBlockScale,
   snapPointToVoxelLattice
@@ -67,6 +68,8 @@ function ARViewportCanvasInner({
   draftYawOffsetRef = null,
   orientationFusionRef = null,
   positionFilterRef = null,
+  spatialDrawTrackerRef = null,
+  reachRef = null,
   webxrControllerRef = null,
   onWebxrStateChange = null,
   fallbackEulerRef,
@@ -233,14 +236,15 @@ function ARViewportCanvasInner({
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 36;
-    const shadowBound = 9;
+    dirLight.shadow.camera.far = 48;
+    const shadowBound = 18;
     dirLight.shadow.camera.left = -shadowBound;
     dirLight.shadow.camera.right = shadowBound;
     dirLight.shadow.camera.top = shadowBound;
     dirLight.shadow.camera.bottom = -shadowBound;
     dirLight.shadow.bias = -0.0005;
     scene.add(dirLight);
+    scene.add(dirLight.target);
     dirLightRef.current = dirLight;
 
     const shadowCatcher = new THREE.Mesh(
@@ -413,6 +417,7 @@ function ARViewportCanvasInner({
     let rafId = 0;
     let lastFrameAt = performance.now();
     let spraySmoothPos = null;
+    let strokeControlPos = null;
     let lastWsPush = 0;
     let lastEnvPush = 0;
     let lastOcclusionPush = 0;
@@ -488,21 +493,72 @@ function ARViewportCanvasInner({
         camera.quaternion.setFromEuler(euler);
       }
 
-      // Apply local Recenter offset ONLY to draftGroup (never rotating GPS lands off True North!)
+      // Keep placed artwork strictly anchored in True-North world space (only allow local
+      // Recenter yaw offset while canvas is empty so existing art never drags/spins with phone).
       if (modeRef.current !== 'transform' && draftYawOffsetRef) {
-        draftGroup.rotation.y = draftYawOffsetRef.current || 0;
+        if (!voxelsRef.current?.length) {
+          draftGroup.rotation.y = draftYawOffsetRef.current || 0;
+        } else if (draftGroup.rotation.y !== 0) {
+          draftGroup.rotation.y = 0;
+          draftYawOffsetRef.current = 0;
+        }
       }
 
-      // Smooth 60Hz Kalman + IMU dead-reckoning glide for nearby lands & sculptures between 1Hz GPS ticks
-      if (!activeXrSession && positionFilterRef?.current?.initialized && locationRef.current) {
-        const subDelta = positionFilterRef.current.getLiveSubmeterDeltaMeters(locationRef.current);
-        nearbyGroup.position.set(
-          camera.position.x - subDelta.east,
-          0,
-          camera.position.z + subDelta.north
-        );
-      } else if (!activeXrSession) {
-        nearbyGroup.position.set(camera.position.x, 0, camera.position.z);
+      // 6-DoF World-Anchored Spatial Camera Translation (when WebXR is not driving pose):
+      // Fuses gyro-compensated visual odometry + ZUPT IMU acceleration + Kalman walking ENU
+      // so physically moving your phone moves the CAMERA through 3D space while your artwork
+      // stays locked right where you painted it!
+      if (!activeXrSession) {
+        const spatial = spatialDrawTrackerRef?.current;
+        const pf = positionFilterRef?.current;
+        const subDelta =
+          pf?.initialized && locationRef.current
+            ? pf.getLiveSubmeterDeltaMeters(locationRef.current)
+            : { east: 0, north: 0 };
+
+        if (spatial) {
+          if (pf?.initialized) {
+            spatial.updateFromKalmanWalk({
+              east: pf.east,
+              north: pf.north,
+              speedMps: pf.lastSpeed || 0,
+              dtSec: dtMs / 1000
+            });
+          }
+          if (videoRef.current && modeRef.current !== 'transform') {
+            const activeDepthM =
+              surfaceAnchorRef.current?.locked && Number(surfaceAnchorRef.current?.depthM) > 0
+                ? Number(surfaceAnchorRef.current.depthM)
+                : Number(reachRef?.current || 1.8);
+            spatial.updateFromVideoElement({
+              videoEl: videoRef.current,
+              cameraQuat: camera.quaternion,
+              vFovDeg: camera.fov,
+              aspect: camera.aspect,
+              depthMeters: activeDepthM,
+              nowMs: now
+            });
+          }
+          spatial.getWorldCameraPosition(baseCameraPos, camera.position);
+          const nearbyPos = spatial.getNearbyGroupPosition(baseCameraPos, subDelta);
+          nearbyGroup.position.set(nearbyPos.x, nearbyPos.y, nearbyPos.z);
+        } else {
+          camera.position.set(baseCameraPos.x, baseCameraPos.y, baseCameraPos.z);
+          nearbyGroup.position.set(
+            camera.position.x - subDelta.east,
+            0,
+            camera.position.z + subDelta.north
+          );
+        }
+
+        // Keep ground reference grid snapped to fixed 1m world lines so walking/moving
+        // gives crisp world-space parallax while shadows follow the active drawing area.
+        if (!surfaceAnchorRef.current) {
+          grid.position.set(Math.round(camera.position.x), -0.805, Math.round(camera.position.z));
+          shadowCatcher.position.set(camera.position.x, -0.8, camera.position.z);
+        }
+        dirLight.target.position.set(camera.position.x, 0, camera.position.z - 1.6);
+        dirLight.target.updateMatrixWorld();
       }
 
       const interactingLand = Boolean(isInteractingWithLandRef?.current);
@@ -526,6 +582,7 @@ function ARViewportCanvasInner({
 
       if (!paintingRef.current || toolRef.current !== 'brush') {
         spraySmoothPos = null;
+        strokeControlPos = null;
       }
 
       if (showCursor) {
@@ -557,6 +614,7 @@ function ARViewportCanvasInner({
           ghost.scale.setScalar(normalizeBlockScale(target.scale ?? curBlockScale));
           ghost.material.color.set(0xff2d55);
           spraySmoothPos = null;
+          strokeControlPos = null;
           lastPaintPosRef.current = null;
           if (paintingRef.current) {
             notifyBlockedByPlacedItem?.({
@@ -667,20 +725,30 @@ function ARViewportCanvasInner({
                 });
                 if (filtered.allowed.length > 0) {
                   lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
+                  strokeControlPos = filtered.blocked ? null : { x: strokeTarget.x, y: strokeTarget.y, z: strokeTarget.z };
                   lastStackAtRef.current = now;
                   applyVoxelBatch(filtered.allowed);
                 }
                 if (filtered.blocked) {
                   lastPaintPosRef.current = null;
                   spraySmoothPos = null;
+                  strokeControlPos = null;
                   notifyBlockedByPlacedItem?.(filtered.blockedBy);
                 }
               } else {
-                const stroke = buildConnectedVoxelPath(prev, strokeTarget, {
-                  step: VOXEL_STEP,
-                  blockScale: curBlockScale,
-                  maxSteps: 96
-                });
+                const stroke =
+                  toolRef.current === 'brush'
+                    ? buildSmoothSplineVoxelPath(prev, strokeTarget, {
+                        controlPoint: strokeControlPos,
+                        step: VOXEL_STEP,
+                        blockScale: curBlockScale,
+                        maxSteps: 256
+                      })
+                    : buildConnectedVoxelPath(prev, strokeTarget, {
+                        step: VOXEL_STEP,
+                        blockScale: curBlockScale,
+                        maxSteps: 256
+                      });
                 const filtered = filterStrokeAgainstPlacedItems({
                   prevPoint: prev,
                   pathPoints: stroke.path,
@@ -690,12 +758,20 @@ function ARViewportCanvasInner({
                 });
                 if (filtered.allowed.length > 0) {
                   lastPaintPosRef.current = filtered.blocked ? null : filtered.lastAllowedPoint;
+                  strokeControlPos = filtered.blocked
+                    ? null
+                    : {
+                        x: (prev.x + strokeTarget.x) * 0.5,
+                        y: (prev.y + strokeTarget.y) * 0.5,
+                        z: (prev.z + strokeTarget.z) * 0.5
+                      };
                   lastStackAtRef.current = now;
                   applyVoxelBatch(filtered.allowed);
                 }
                 if (filtered.blocked) {
                   lastPaintPosRef.current = null;
                   spraySmoothPos = null;
+                  strokeControlPos = null;
                   notifyBlockedByPlacedItem?.(filtered.blockedBy);
                 }
               }
@@ -1323,6 +1399,8 @@ function ARViewportCanvasInner({
     paintingRef,
     polRef,
     positionFilterRef,
+    spatialDrawTrackerRef,
+    reachRef,
     rawOrientationRef,
     rebuildDraftMesh,
     rendererRef,
