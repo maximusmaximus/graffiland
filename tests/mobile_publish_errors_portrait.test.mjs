@@ -113,10 +113,25 @@ describe('Mobile Portrait-Only Lock & Anti-Tilt Viewport Guard', () => {
 
     const html = fs.readFileSync(path.join(ROOT, 'client/index.html'), 'utf8');
     assert.match(html, /rel="manifest"\s+href="\/manifest\.webmanifest"/);
+    assert.match(html, /minimum-scale=1\.0/);
     assert.match(html, /maximum-scale=1\.0/);
     assert.match(html, /user-scalable=no/);
     assert.match(html, /viewport-fit=cover/);
     assert.match(html, /interactive-widget=resizes-content/);
+
+    const css = fs.readFileSync(path.join(ROOT, 'client/src/styles.css'), 'utf8');
+    assert.ok(
+      css.includes("html.mobile-portrait-locked input:not([type='checkbox']):not([type='radio']):not([type='range'])"),
+      'Mobile anti-zoom CSS must enforce >=16px inputs to prevent iOS focus auto-zoom'
+    );
+    assert.ok(
+      css.includes('font-size: 16px !important;'),
+      'Mobile inputs must force 16px font-size to stop Safari auto-zoom'
+    );
+    assert.ok(
+      css.includes('html.mobile-portrait-locked .hud-layer button'),
+      'Mobile HUD buttons must lock touch-action so buttons never drift off-screen'
+    );
   });
 
   test('isMobileLandscapeOrientation locks genuine landscape rotation without false-triggering on portrait keyboards', () => {
@@ -488,9 +503,77 @@ describe('Publish Sign-In Popup, Retry GPS HUD & Portrait Overlay (React + jsdom
 
     const cleanupLock = installMobileViewportLock({ win: dom.window, doc: dom.window.document });
     assert.equal(dom.window.document.documentElement.classList.contains('mobile-portrait-locked'), true);
+
+    // 1) Safari gesturestart page pinch/tilt is prevented
     const gestureEv = new dom.window.Event('gesturestart', { cancelable: true });
     dom.window.document.dispatchEvent(gestureEv);
     assert.equal(gestureEv.defaultPrevented, true, 'Safari gesturestart pinch/tilt must be prevented on mobile');
+
+    // 2) Multi-touch touchstart on HUD / non-canvas is prevented, while canvas touchstart passes through
+    const hudDiv = dom.window.document.createElement('div');
+    const mapCanvas = dom.window.document.createElement('canvas');
+    const actionBtn = dom.window.document.createElement('button');
+    dom.window.document.body.appendChild(hudDiv);
+    dom.window.document.body.appendChild(mapCanvas);
+    dom.window.document.body.appendChild(actionBtn);
+
+    const hudPinchStart = new dom.window.Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(hudPinchStart, 'touches', { value: [{ clientX: 50, clientY: 50 }, { clientX: 150, clientY: 150 }] });
+    hudDiv.dispatchEvent(hudPinchStart);
+    assert.equal(hudPinchStart.defaultPrevented, true, '2-finger touchstart on HUD must be blocked');
+
+    const canvasPinchStart = new dom.window.Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(canvasPinchStart, 'touches', { value: [{ clientX: 50, clientY: 50 }, { clientX: 150, clientY: 150 }] });
+    mapCanvas.dispatchEvent(canvasPinchStart);
+    assert.equal(canvasPinchStart.defaultPrevented, false, '2-finger touchstart on canvas stays usable for map/3D handlers');
+
+    // 3) Multi-touch touchmove is ALWAYS prevented at document bubble phase so page never zooms
+    const pinchMove = new dom.window.Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(pinchMove, 'touches', { value: [{ clientX: 40, clientY: 40 }, { clientX: 180, clientY: 180 }] });
+    hudDiv.dispatchEvent(pinchMove);
+    assert.equal(pinchMove.defaultPrevented, true, '2-finger touchmove must be prevented to block page pinch-zoom');
+
+    // 4) Double-tap touchend on non-interactive div is prevented, while rapid button taps are NOT swallowed
+    const tap1 = new dom.window.Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(tap1, 'touches', { value: [] });
+    Object.defineProperty(tap1, 'changedTouches', { value: [{ clientX: 100, clientY: 100 }] });
+    hudDiv.dispatchEvent(tap1);
+    assert.equal(tap1.defaultPrevented, false);
+
+    const tap2 = new dom.window.Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(tap2, 'touches', { value: [] });
+    Object.defineProperty(tap2, 'changedTouches', { value: [{ clientX: 104, clientY: 102 }] });
+    hudDiv.dispatchEvent(tap2);
+    assert.equal(tap2.defaultPrevented, true, 'Double-tap on non-interactive area must be blocked to stop zoom');
+
+    const btnTap1 = new dom.window.Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(btnTap1, 'touches', { value: [] });
+    Object.defineProperty(btnTap1, 'changedTouches', { value: [{ clientX: 100, clientY: 100 }] });
+    actionBtn.dispatchEvent(btnTap1);
+    const btnTap2 = new dom.window.Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(btnTap2, 'touches', { value: [] });
+    Object.defineProperty(btnTap2, 'changedTouches', { value: [{ clientX: 100, clientY: 100 }] });
+    actionBtn.dispatchEvent(btnTap2);
+    assert.equal(btnTap2.defaultPrevented, false, 'Rapid taps on buttons must never be swallowed');
+
+    // 5) Ctrl+wheel zoom on HUD is prevented
+    const ctrlWheel = new dom.window.Event('wheel', { bubbles: true, cancelable: true });
+    Object.defineProperty(ctrlWheel, 'ctrlKey', { value: true });
+    hudDiv.dispatchEvent(ctrlWheel);
+    assert.equal(ctrlWheel.defaultPrevented, true, 'Ctrl+wheel browser zoom must be prevented on mobile');
+
+    // 6) Stray root scroll drift resets back to (0, 0) on focusout so HUD buttons never drift off-screen
+    let scrolledTo = null;
+    Object.defineProperty(dom.window, 'scrollY', { value: 84, configurable: true, writable: true });
+    dom.window.scrollTo = (x, y) => {
+      scrolledTo = [x, y];
+    };
+    dom.window.document.dispatchEvent(new dom.window.Event('focusout', { bubbles: true }));
+    assert.deepEqual(scrolledTo, [0, 0], 'Stray viewport scroll drift must snap back to (0, 0) on keyboard close');
+
+    hudDiv.remove();
+    mapCanvas.remove();
+    actionBtn.remove();
     cleanupLock();
     assert.equal(dom.window.document.documentElement.classList.contains('mobile-portrait-locked'), false);
   });

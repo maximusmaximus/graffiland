@@ -1,13 +1,22 @@
 /**
- * Mobile portrait orientation lock & anti-tilt viewport utilities.
+ * Mobile portrait orientation lock, anti-zoom & anchored-HUD viewport utilities.
  *
  * - Attempts native `screen.orientation.lock('portrait-primary')` (falling back to `'portrait'`)
  *   on mobile mount, first user gesture, and fullscreen entry (works natively in Android Chrome
  *   fullscreen/PWA and fails silently on iOS Safari).
  * - Detects genuine physical landscape rotation while ignoring portrait soft-keyboard height
  *   shrink (where `innerHeight` shrinks below `innerWidth` while typing in an input).
- * - Prevents browser-level Safari `gesturestart` pinch/tilt zoom and overscroll bounce on mobile.
+ * - Blocks ALL mobile browser viewport zoom vectors (Safari gesturestart/change/end, multi-touch
+ *   pinch-zoom touchstart/touchmove, double-tap zoom on non-interactive surfaces, and Ctrl+wheel
+ *   pinch) while keeping dedicated map/3D canvas touch gestures intact.
+ * - Auto-resets stray root scroll drift on keyboard dismissal & visualViewport updates so HUD
+ *   buttons always remain anchored at their expected screen positions.
  */
+
+const CANVAS_OR_MAP_SELECTOR =
+  'canvas, .maplibregl-map, .leaflet-container, [data-allow-pinch="true"]';
+const INTERACTIVE_TAP_SELECTOR =
+  'button, a, input, textarea, select, label, [role="button"], canvas, .maplibregl-map, .leaflet-container';
 
 export function isEditableElementFocused(doc = typeof document !== 'undefined' ? document : null) {
   const el = doc?.activeElement;
@@ -16,6 +25,16 @@ export function isEditableElementFocused(doc = typeof document !== 'undefined' ?
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
   if (el.isContentEditable) return true;
   return false;
+}
+
+export function isCanvasOrMapTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  return Boolean(target.closest(CANVAS_OR_MAP_SELECTOR));
+}
+
+export function isInteractiveTapTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  return Boolean(target.closest(INTERACTIVE_TAP_SELECTOR));
 }
 
 /**
@@ -83,7 +102,31 @@ export async function tryLockPortraitOrientation(
 }
 
 /**
- * Locks mobile viewport against page-level pinch/tilt zoom, overscroll tilt, and landscape rotation.
+ * Keeps root mobile scroll pinned at (0, 0) whenever an input is not focused so fixed HUD buttons
+ * never drift out of view after keyboard dismissal or rubber-band gestures.
+ */
+export function resetMobileViewportAnchor(
+  win = typeof window !== 'undefined' ? window : null,
+  doc = typeof document !== 'undefined' ? document : null
+) {
+  if (!win || !doc) return false;
+  if (isEditableElementFocused(doc)) return false;
+  const sx = Number(win.scrollX ?? win.pageXOffset ?? 0);
+  const sy = Number(win.scrollY ?? win.pageYOffset ?? 0);
+  if (sx !== 0 || sy !== 0) {
+    try {
+      win.scrollTo?.(0, 0);
+    } catch {
+      // ignore non-scrollable environments
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Locks mobile viewport against pinch-zoom, double-tap zoom, input auto-zoom drift,
+ * overscroll shift, and landscape rotation so HUD buttons stay firmly anchored.
  * Returns a cleanup callback.
  */
 export function installMobileViewportLock({
@@ -96,6 +139,11 @@ export function installMobileViewportLock({
   doc.body?.classList?.add('mobile-portrait-locked');
 
   tryLockPortraitOrientation(win);
+  resetMobileViewportAnchor(win, doc);
+
+  let lastTapAt = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
 
   const onFirstGesture = () => {
     tryLockPortraitOrientation(win);
@@ -107,11 +155,67 @@ export function installMobileViewportLock({
     }
   };
 
+  const onTouchStart = (ev) => {
+    const touchCount = ev?.touches?.length || 0;
+    if (touchCount > 1 && !isCanvasOrMapTarget(ev.target)) {
+      ev.preventDefault();
+    }
+  };
+
+  const onTouchMove = (ev) => {
+    const touchCount = ev?.touches?.length || 0;
+    const isPinchScale = typeof ev?.scale === 'number' && ev.scale !== 1;
+    if (touchCount > 1 || isPinchScale) {
+      // Bubble-phase cancel stops browser-level page zoom even after canvas/map handlers run
+      ev.preventDefault();
+    }
+  };
+
+  const onTouchEnd = (ev) => {
+    if (!ev || (ev.touches && ev.touches.length > 0)) return;
+    const changed = ev.changedTouches;
+    if (!changed || changed.length !== 1) return;
+    // Never swallow rapid clicks on interactive buttons/controls (CSS touch-action handles them)
+    if (isInteractiveTapTarget(ev.target)) {
+      lastTapAt = 0;
+      return;
+    }
+    const now = Date.now();
+    const pt = changed[0];
+    const dx = Math.abs((pt?.clientX || 0) - lastTapX);
+    const dy = Math.abs((pt?.clientY || 0) - lastTapY);
+    if (lastTapAt > 0 && now - lastTapAt <= 320 && dx <= 40 && dy <= 40) {
+      ev.preventDefault();
+      lastTapAt = 0;
+      return;
+    }
+    lastTapAt = now;
+    lastTapX = pt?.clientX || 0;
+    lastTapY = pt?.clientY || 0;
+  };
+
+  const onWheel = (ev) => {
+    if (ev?.ctrlKey && !isCanvasOrMapTarget(ev.target)) {
+      ev.preventDefault();
+    }
+  };
+
+  const onAnchorCheck = () => {
+    resetMobileViewportAnchor(win, doc);
+  };
+
   win.addEventListener('pointerdown', onFirstGesture, { passive: true, once: true });
   win.addEventListener('touchstart', onFirstGesture, { passive: true, once: true });
   doc.addEventListener('gesturestart', preventPageGesture, { passive: false });
   doc.addEventListener('gesturechange', preventPageGesture, { passive: false });
   doc.addEventListener('gestureend', preventPageGesture, { passive: false });
+  doc.addEventListener('touchstart', onTouchStart, { passive: false });
+  doc.addEventListener('touchmove', onTouchMove, { passive: false });
+  doc.addEventListener('touchend', onTouchEnd, { passive: false });
+  doc.addEventListener('wheel', onWheel, { passive: false });
+  doc.addEventListener('focusout', onAnchorCheck, { passive: true });
+  win.visualViewport?.addEventListener?.('resize', onAnchorCheck);
+  win.visualViewport?.addEventListener?.('scroll', onAnchorCheck);
 
   return () => {
     doc.documentElement?.classList?.remove('mobile-portrait-locked');
@@ -121,5 +225,12 @@ export function installMobileViewportLock({
     doc.removeEventListener('gesturestart', preventPageGesture);
     doc.removeEventListener('gesturechange', preventPageGesture);
     doc.removeEventListener('gestureend', preventPageGesture);
+    doc.removeEventListener('touchstart', onTouchStart);
+    doc.removeEventListener('touchmove', onTouchMove);
+    doc.removeEventListener('touchend', onTouchEnd);
+    doc.removeEventListener('wheel', onWheel);
+    doc.removeEventListener('focusout', onAnchorCheck);
+    win.visualViewport?.removeEventListener?.('resize', onAnchorCheck);
+    win.visualViewport?.removeEventListener?.('scroll', onAnchorCheck);
   };
 }
