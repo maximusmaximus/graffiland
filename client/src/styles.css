@@ -783,6 +783,12 @@ select {
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45), 0 0 20px rgba(255, 62, 127, 0.24);
 }
 
+.key-slot-btn.is-center.tool-search {
+  border-color: var(--accent);
+  background: rgba(0, 245, 212, 0.22);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45), 0 0 22px rgba(0, 245, 212, 0.32);
+}
+
 .key-slot-btn.is-center.tool-transform {
   border-color: #80ff72;
   background: rgba(128, 255, 114, 0.22);

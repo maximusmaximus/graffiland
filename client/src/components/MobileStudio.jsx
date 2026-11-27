@@ -253,6 +253,7 @@ export default function MobileStudio({
   // Refs bridging actions between circularly-related hooks cleanly
   const recenterAimRef = useRef(null);
   const openDraftsSheetRef = useRef(null);
+  const openCatalogSearchRef = useRef(null);
   const openPairModalRef = useRef(null);
   const openAgentHandoffRef = useRef(null);
   const openPublishSheetRef = useRef(null);
@@ -262,10 +263,15 @@ export default function MobileStudio({
   // Brush & Canvas hook (receives AR + Chat bridges via refs initialized right below)
   const recenterAimCaller = useRef((...a) => recenterAimRef.current?.(...a));
   const openDraftsCaller = useRef((...a) => openDraftsSheetRef.current?.(...a));
+  const openCatalogSearchCaller = useRef((...a) => openCatalogSearchRef.current?.(...a));
   const openPairCaller = useRef((...a) => openPairModalRef.current?.(...a));
   const openAgentCaller = useRef((...a) => openAgentHandoffRef.current?.(...a));
   const openPublishCaller = useRef((...a) => openPublishSheetRef.current?.(...a));
   recenterAimRef.current = pol.recenterAim;
+  openCatalogSearchRef.current = () => {
+    setDockOpen(false);
+    setCatalogSearchOpen(true);
+  };
   const arTargetedIdRef = useRef('');
   const setArTargetedSculptureBridgeRef = useRef(null);
   const onTapArLandBridgeRef = useRef(null);
@@ -383,6 +389,7 @@ export default function MobileStudio({
     isInteractingWithLandRef,
     recenterAimRef: recenterAimCaller,
     openDraftsSheetRef: openDraftsCaller,
+    openCatalogSearchRef: openCatalogSearchCaller,
     openPairModalRef: openPairCaller,
     openAgentHandoffRef: openAgentCaller,
     openPublishSheetRef: openPublishCaller,

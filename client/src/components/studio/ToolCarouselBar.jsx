@@ -85,6 +85,8 @@ export default function ToolCarouselBar({
                   key={`${rel}-${item.id}`}
                   type="button"
                   data-tool-rel={rel}
+                  data-tool-id={item.id}
+                  data-testid={isCenterSlot ? `key-slot-center-${item.id}` : `key-slot-${item.id}`}
                   aria-disabled={isUnavailable || undefined}
                   className={`key-slot-btn ${isCenterSlot ? `is-center tool-${item.id} ${painting ? 'painting' : ''}` : 'is-neighbor'} ${isUnavailable ? 'is-unavailable' : ''}`}
                   style={{

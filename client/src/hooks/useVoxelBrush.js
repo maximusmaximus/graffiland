@@ -55,13 +55,12 @@ export const KEY_TOOLS = [
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase' },
   { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale, Y/Z rotate & move' },
   { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces' },
+  { id: 'search', emoji: '🔍', label: 'Search 3D', hint: 'Search & place 3D models & emojis' },
   { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear' },
   { id: 'clear', emoji: '🗑️', label: 'Clear', hint: 'Tap to erase current canvas' },
   { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim' },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
   { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts' },
-  { id: 'occlusion', emoji: '🪞', label: 'Occlusion', hint: 'Toggle foreground occlusion' },
-  { id: 'pair', emoji: '🔗', label: 'Pair', hint: 'Pair desktop live 3D view' },
   { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
   { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
 ];
@@ -143,6 +142,7 @@ export function useVoxelBrush({
   isInteractingWithLandRef = null,
   recenterAimRef = null,
   openDraftsSheetRef = null,
+  openCatalogSearchRef = null,
   openPairModalRef = null,
   openAgentHandoffRef,
   openPublishSheetRef,
@@ -460,6 +460,7 @@ export function useVoxelBrush({
       },
       recenter: { usable: true, reason: '' },
       drafts: { usable: true, reason: '' },
+      search: { usable: true, reason: '' },
       pair: { usable: true, reason: '' }
     };
   }, [
@@ -1938,6 +1939,7 @@ export function useVoxelBrush({
         toolId === 'clear' ||
         toolId === 'recenter' ||
         toolId === 'drafts' ||
+        toolId === 'search' ||
         toolId === 'occlusion' ||
         toolId === 'pair' ||
         toolId === 'agent' ||
@@ -1976,7 +1978,11 @@ export function useVoxelBrush({
   const triggerActiveKeyTool = useCallback(() => {
     const curTool = activeKeyToolRef.current;
     const isModalTool =
-      curTool === 'publish' || curTool === 'drafts' || curTool === 'pair' || curTool === 'agent';
+      curTool === 'publish' ||
+      curTool === 'drafts' ||
+      curTool === 'search' ||
+      curTool === 'pair' ||
+      curTool === 'agent';
     // Never request fullscreen right as a form modal opens (Android Chrome immediately exits
     // fullscreen on keyboard focus and causes viewport/backdrop glitches).
     if (!isModalTool) {
@@ -2017,6 +2023,8 @@ export function useVoxelBrush({
     } else if (curTool === 'recenter') {
       recenterAimRef?.current?.();
       showTemporaryHint('3D aim recentered');
+    } else if (curTool === 'search') {
+      openCatalogSearchRef?.current?.();
     } else if (curTool === 'drafts') {
       openDraftsSheetRef?.current?.();
     } else if (curTool === 'occlusion') {
@@ -2057,6 +2065,7 @@ export function useVoxelBrush({
     enterFullscreen,
     handleUndo,
     openAgentHandoffRef,
+    openCatalogSearchRef,
     openDraftsSheetRef,
     openPairModalRef,
     openPublishSheetRef,
@@ -2201,6 +2210,7 @@ export function useVoxelBrush({
             if (
               curTool === 'publish' ||
               curTool === 'drafts' ||
+              curTool === 'search' ||
               curTool === 'pair' ||
               curTool === 'agent'
             ) {
