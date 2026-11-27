@@ -4090,6 +4090,29 @@ select {
   outline: none;
 }
 
+.map3d-land-label-nav-btn {
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 209, 102, 0.12);
+  color: #ffe8a3;
+  padding: 4px 8px;
+  line-height: 1;
+  text-decoration: none;
+  pointer-events: auto;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.map3d-land-label-nav-btn:hover,
+.map3d-land-label-nav-btn:focus-visible {
+  background: rgba(255, 209, 102, 0.3);
+  color: #ffffff;
+  outline: none;
+}
+
 .map3d-land-label-copy-btn {
   border: none;
   border-left: 1px solid rgba(255, 255, 255, 0.16);
@@ -5111,7 +5134,7 @@ select {
   pointer-events: auto;
   display: inline-flex;
   align-items: stretch;
-  max-width: min(88%, 370px);
+  max-width: min(92%, 410px);
   border-radius: 999px;
   overflow: hidden;
   border: 1.5px solid rgba(255, 31, 143, 0.85);
@@ -5164,6 +5187,29 @@ select {
 
 .plot-iso-land-label-btn.is-selected {
   color: #fff0f8;
+}
+
+.plot-iso-land-nav-btn {
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 209, 102, 0.14);
+  color: #ffe8a3;
+  padding: 6px 10px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.plot-iso-land-nav-btn:hover,
+.plot-iso-land-nav-btn:focus-visible {
+  background: rgba(255, 209, 102, 0.32);
+  color: #ffffff;
+  outline: none;
 }
 
 .plot-iso-land-copy-btn {
@@ -5703,12 +5749,16 @@ select {
 
 @media (max-width: 520px) {
   .plot-iso-land-label-pill {
-    max-width: min(92%, 340px);
+    max-width: min(94%, 360px);
   }
 
   .plot-iso-land-label-btn {
     font-size: 11px;
     padding: 4px 8px 4px 9px;
+  }
+
+  .plot-iso-land-nav-btn {
+    padding: 5px 8px;
   }
 
   .plot-iso-land-copy-btn {

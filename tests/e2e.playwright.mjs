@@ -2018,7 +2018,12 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       timeout: 5000
     });
 
-    // Click side artwork label -> expands Neon Obelisk details cleanly below
+    // Details start hidden by default; clicking Show Details expands cleanly
+    assert.equal(await guestPage.locator('[data-testid="plot-land-details"]').count(), 0);
+    await guestPage.locator('[data-testid="plot-details-toggle"]').click();
+    await guestPage.waitForSelector('[data-testid="plot-land-details"]');
+
+    // Click side artwork label -> centers object isometrically and shows Neon Obelisk details below
     await guestPage.locator('[data-testid="plot-artwork-label"]').first().click();
     await guestPage.waitForSelector('[data-testid="plot-artwork-details"]');
     assert.ok(
@@ -2028,7 +2033,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     );
     assert.equal(await guestPage.locator('[data-testid="plot-artwork-management"]').count(), 0);
 
-    // Click floating Land Label -> switches cleanly back to Land details
+    // Click floating Land Label -> centers land isometrically and switches cleanly back to Land details
     await guestPage.locator('[data-testid="plot-land-label"]').click();
     await guestPage.waitForSelector('[data-testid="plot-land-details"]');
 

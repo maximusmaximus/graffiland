@@ -1006,7 +1006,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       }
     };
 
-    // 1) Far away -> Navigate shown (with distance badge on left), View in AR & Make Art hidden
+    // 1) Far away -> details start hidden by default; expanding shows Navigate (with distance badge on left), View in AR & Make Art hidden
     const farView = RTL.render(
       React.createElement(MobileParcelVisitView, {
         parcel: baseParcel,
@@ -1015,14 +1015,17 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
+    assert.equal(farView.queryByTestId('plot-land-details'), null);
+    assert.ok(farView.getByTestId('plot-land-label-nav-btn'));
+    RTL.fireEvent.click(farView.getByTestId('plot-details-toggle'));
     assert.ok(farView.getAllByText('Sunset Neon Courtyard').length >= 2);
     assert.ok(farView.getByText(/Sculpture park overlooking Market St/i));
-    assert.ok(farView.getByRole('link', { name: /Navigate/i }));
+    assert.ok(farView.getAllByRole('link', { name: /Navigate/i }).length >= 1);
     assert.equal(farView.queryByRole('button', { name: /View in AR/i }), null);
     assert.equal(farView.queryByRole('button', { name: /Make Art on This Property/i }), null);
     cleanup();
 
-    // 2) Near + Open -> View in AR AND Make Art on This Property both shown
+    // 2) Near + Open -> View in AR AND Make Art on This Property both shown once details expanded
     let viewedAr = false;
     let madeArt = false;
     const nearOpen = RTL.render(
@@ -1039,6 +1042,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
+    RTL.fireEvent.click(nearOpen.getByTestId('plot-details-toggle'));
     assert.ok(nearOpen.getByTestId('parcel-proximity-near'));
     RTL.fireEvent.click(nearOpen.getByRole('button', { name: /View in AR/i }));
     RTL.fireEvent.click(nearOpen.getByRole('button', { name: /Make Art on This Property/i }));
@@ -1046,7 +1050,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(madeArt, true);
     cleanup();
 
-    // 3) Near + Frozen -> View in AR shown, Make Art hidden + frozen notice shown
+    // 3) Near + Frozen -> View in AR shown, Make Art hidden + frozen notice shown once details expanded
     const nearFrozen = RTL.render(
       React.createElement(MobileParcelVisitView, {
         parcel: { ...baseParcel, frozen: true },
@@ -1057,6 +1061,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
+    RTL.fireEvent.click(nearFrozen.getByTestId('plot-details-toggle'));
     assert.ok(nearFrozen.getByRole('button', { name: /View in AR/i }));
     assert.equal(nearFrozen.queryByRole('button', { name: /Make Art on This Property/i }), null);
     assert.ok(nearFrozen.getByText(/frozen by the owner/i));
@@ -3107,19 +3112,24 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(guestView.getByTestId('mobile-iso-3d-map'));
     assert.equal(guestView.getByTestId('mobile-iso-3d-map').getAttribute('data-map-mode'), '3d');
     assert.ok(guestView.getByTestId('plot-land-label'));
+    assert.ok(guestView.getByTestId('plot-land-label-nav-btn'));
     const artworkCallouts = guestView.getAllByTestId('plot-artwork-label');
     assert.equal(artworkCallouts.length, 2);
     assert.equal(guestView.queryByText(/GLAND-9R1652RD/i), null);
+    // Details are hidden by default until user clicks Show Details
+    assert.equal(guestView.queryByTestId('plot-land-details'), null);
+    RTL.fireEvent.click(guestView.getByTestId('plot-details-toggle'));
     assert.ok(guestView.getByTestId('plot-signin-btn'));
     assert.equal(guestView.queryByTestId('plot-land-management'), null);
     assert.ok(guestView.getByTestId('plot-land-details'));
+    assert.equal(guestView.queryByText(/Copy Share Link/i), null);
 
-    // Click side artwork label -> expands that artwork's details below
+    // Click side artwork label -> selects artwork, centers isometrically, and updates expanded details
     RTL.fireEvent.click(artworkCallouts[0]);
     assert.ok(guestView.getByTestId('plot-artwork-details'));
     assert.equal(guestView.queryByTestId('plot-artwork-management'), null);
 
-    // Click floating Land Label -> switches cleanly back to Land details
+    // Click floating Land Label -> re-centers land isometrically and switches cleanly back to Land details
     RTL.fireEvent.click(guestView.getByTestId('plot-land-label'));
     assert.ok(guestView.getByTestId('plot-land-details'));
 
@@ -3221,6 +3231,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         })
       );
 
+      RTL.fireEvent.click(ownerView.getByTestId('plot-details-toggle'));
       assert.ok(ownerView.getByTestId('plot-owner-badge'));
       assert.ok(ownerView.getByTestId('plot-land-management'));
 
@@ -4075,8 +4086,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       RTL.fireEvent.click(plotView.getByTestId('plot-artwork-view-btn'));
       assert.deepEqual(openedFromPlot, [boomBox.id]);
 
-      // First click on label expands details; clicking artwork title button opens art view
+      // First click on label selects & centers object isometrically; expanding details exposes title button -> art view
       RTL.fireEvent.click(plotView.getByTestId('plot-artwork-label'));
+      RTL.fireEvent.click(plotView.getByTestId('plot-details-toggle'));
       await RTL.waitFor(() => {
         assert.ok(plotView.getByTestId('plot-artwork-title-btn'));
       });
@@ -4191,6 +4203,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(header.textContent.includes('Sign In'), false, 'Sign In must not appear in top bar');
       assert.equal(plotView.queryByTestId('plot-header-coords'), null);
 
+      RTL.fireEvent.click(plotView.getByTestId('plot-details-toggle'));
       const landDetails = plotView.getByTestId('plot-land-details');
       assert.equal(landDetails.textContent.includes('39.7302, -121.8407'), false);
       // Permanent label is hidden and dimensions are tucked cleanly inside the "i" icon
@@ -6228,7 +6241,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         })
       );
 
-      // 1) Signed-in land holder sees pending transactions card & re-pair alert right on the land view
+      // 1) Signed-in land holder expands details and sees pending transactions card & re-pair alert right on the land view
+      RTL.fireEvent.click(view.getByTestId('plot-details-toggle'));
       await RTL.waitFor(() => {
         assert.ok(view.getByTestId('plot-pending-approvals'));
         assert.equal(view.getAllByTestId('plot-pending-approval-item').length, 2);
@@ -6610,6 +6624,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       });
       assert.ok(plotView.getAllByTestId('plot-preview-label').length >= 1);
       assert.ok(plotView.getAllByTestId('plot-tab-preview').length === 2);
+      RTL.fireEvent.click(plotView.getByTestId('plot-details-toggle'));
       RTL.fireEvent.click(plotView.getAllByTestId('plot-preview-tx-btn')[0]);
       assert.equal(openedPreviews.length, 1);
       assert.equal(openedPreviews[0].isPendingPreview, true);
@@ -8690,6 +8705,152 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       });
       assert.match(view.getByTestId('orb-pack-status-badge').textContent || '', /44 pts · Day \+ Night/);
       assert.equal(view.queryByTestId('orb-nopack-cta'), null);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
+
+  test('PlotVisitView hides details by default, removes Copy Share Link, adds Navigate icon to land labels, and centers tags isometrically', async () => {
+    const { default: PlotVisitView } = await loadJsxModule(
+      'client/src/components/PlotVisitView.jsx'
+    );
+    const { computeSculptureIsometricCameraFit, resolveParcelVolume } = await import(
+      '../client/src/utils/landPreviewHelpers.js'
+    );
+
+    const stibblezParcel = {
+      parcelId: 'GLAND-STIBB001',
+      customName: 'Stibblez Land',
+      description: 'Isometric art plaza',
+      centerLat: 39.7302,
+      centerLng: -121.8406,
+      volume: {
+        centerLat: 39.7302,
+        centerLng: -121.8406,
+        widthMeters: 18,
+        depthMeters: 16,
+        heightMeters: 14,
+        rotationDeg: 15
+      }
+    };
+    const neighborParcel = {
+      parcelId: 'GLAND-BARK0002',
+      customName: 'BARKINGLOT',
+      centerLat: 39.7319,
+      centerLng: -121.8421,
+      volume: {
+        centerLat: 39.7319,
+        centerLng: -121.8421,
+        widthMeters: 14,
+        depthMeters: 14,
+        heightMeters: 12,
+        rotationDeg: 0
+      }
+    };
+    const sculptures = [
+      {
+        id: 'sc-stibblez',
+        parcelId: 'GLAND-STIBB001',
+        title: 'Stibblez',
+        voxelCount: 2478,
+        lat: 39.7302,
+        lng: -121.8406,
+        anchorOffset: { dx: 4.5, dy: 0, dz: -3.2, yaw: 0 }
+      },
+      {
+        id: 'sc-coffee',
+        parcelId: 'GLAND-STIBB001',
+        title: 'Turkey Day 2026 Coffee',
+        modelType: 'custom-3d',
+        customModel: { format: 'glb', scale: 1.2 },
+        lat: 39.7302,
+        lng: -121.8406,
+        anchorOffset: { dx: -5.0, dy: 0, dz: 3.0, yaw: 0 }
+      }
+    ];
+
+    // 1) computeSculptureIsometricCameraFit centers squarely on the offset 3D sculpture isometrically (pitch 55°)
+    const stibVol = resolveParcelVolume(stibblezParcel);
+    const objFit = computeSculptureIsometricCameraFit(sculptures[0], stibVol, {
+      viewportWidth: 960,
+      viewportHeight: 600
+    });
+    assert.ok(objFit);
+    assert.equal(objFit.pitch, 55);
+    assert.equal(objFit.bearing, -30); // rotationDeg (15) - 45
+    assert.notEqual(
+      Number(objFit.center[0]).toFixed(6),
+      Number(stibVol.centerLng).toFixed(6),
+      'Object isometric center must reflect anchorOffset dx/dz, not just land center'
+    );
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/lands/GLAND-BARK0002')) {
+        return { ok: true, status: 200, json: async () => ({ parcel: neighborParcel, sculptures: [] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel: stibblezParcel,
+          sculptures,
+          allParcels: [stibblezParcel, neighborParcel],
+          userLocation: { lat: 39.7305, lng: -121.8409 },
+          onClose: () => {}
+        })
+      );
+
+      // 2) Details are hidden by default & stage gets expanded isometric view
+      assert.equal(view.queryByTestId('plot-land-details'), null);
+      assert.match(view.getByTestId('plot-details-toggle').textContent || '', /Show Details/i);
+      const mapEl = view.getByTestId('mobile-iso-3d-map');
+      const initLandTick = Number(mapEl.getAttribute('data-focus-tick') || 0);
+      const initObjTick = Number(mapEl.getAttribute('data-focus-sculpture-tick') || 0);
+
+      // 3) Land label includes the Navigate (🧭) icon pointing to Google Maps directions
+      const landNavBtn = view.getByTestId('plot-land-label-nav-btn');
+      assert.ok(
+        landNavBtn.getAttribute('href')?.includes('google.com/maps/dir') &&
+          landNavBtn.getAttribute('href')?.includes('39.730200'),
+        `Expected land label Navigate link to point to Stibblez Land coords, got: ${landNavBtn.getAttribute('href')}`
+      );
+
+      // 4) Clicking an artwork tag focuses & centers that object isometrically while keeping details hidden
+      const artLabels = view.getAllByTestId('plot-artwork-label');
+      RTL.fireEvent.click(artLabels[0]);
+      assert.equal(mapEl.getAttribute('data-focused-sculpture-id'), 'sc-stibblez');
+      assert.equal(Number(mapEl.getAttribute('data-focus-sculpture-tick')), initObjTick + 1);
+      assert.equal(view.queryByTestId('plot-artwork-details'), null, 'Details stay hidden by default');
+
+      // 5) Clicking active land label re-centers the land isometrically while keeping details hidden
+      RTL.fireEvent.click(view.getByTestId('plot-land-label'));
+      assert.equal(Number(mapEl.getAttribute('data-focus-tick')), initLandTick + 1);
+      assert.equal(mapEl.getAttribute('data-focused-sculpture-id'), '');
+      assert.equal(view.queryByTestId('plot-land-details'), null);
+
+      // 6) Clicking a neighboring land arrow switches to that land, centers it isometrically, and keeps details hidden
+      const neighborArrows = view.getAllByTestId('neighbor-edge-arrow');
+      assert.ok(neighborArrows.length >= 1);
+      await RTL.act(async () => {
+        RTL.fireEvent.click(neighborArrows[0]);
+      });
+      await RTL.waitFor(() => {
+        assert.equal(mapEl.getAttribute('data-focused-parcel-id'), 'GLAND-BARK0002');
+      });
+      assert.ok(Number(mapEl.getAttribute('data-focus-tick')) > initLandTick + 1);
+      assert.equal(view.queryByTestId('plot-land-details'), null);
+
+      // 7) Expanding details confirms "Copy Share Link" button is removed
+      RTL.fireEvent.click(view.getByTestId('plot-details-toggle'));
+      assert.ok(view.getByTestId('plot-land-details'));
+      assert.equal(view.queryByText(/Copy Share Link/i), null);
       cleanup();
     } finally {
       globalThis.fetch = origFetch;

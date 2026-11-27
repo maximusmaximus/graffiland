@@ -7,7 +7,11 @@ import {
   normalizeRotationDeg,
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
-import { parcelLocalOffsetToWorldLatLng } from '../../../shared/sculpturePlacement.mjs';
+import {
+  extractSculptureBaseDimensions,
+  extractSculptureScale,
+  parcelLocalOffsetToWorldLatLng
+} from '../../../shared/sculpturePlacement.mjs';
 import {
   buildGoogleMapsLandUrl,
   formatDistanceMeters,
@@ -198,7 +202,8 @@ export function computeIsometricCameraFit(
     viewportWidth = 600,
     viewportHeight = 270,
     viewMode = 'isometric',
-    bearingOffsetDeg = 0
+    bearingOffsetDeg = 0,
+    maxZoom = null
   } = {}
 ) {
   if (!volume || !Number.isFinite(volume.centerLat) || !Number.isFinite(volume.centerLng)) {
@@ -264,7 +269,12 @@ export function computeIsometricCameraFit(
   // Keep small 2-8m lands framed with visible surrounding streets & buildings on mobile screens
   // instead of over-zooming into an empty tile pocket at z21+. Users can still pinch-zoom closer.
   // Allow zooming out down to z10.5 so tall 250m lands never clip their top boundary off-screen.
-  const maxAutoIsoZoom = vw <= 520 ? 19.6 : 20.4;
+  const maxAutoIsoZoom =
+    maxZoom !== null && maxZoom !== undefined && Number.isFinite(Number(maxZoom))
+      ? Number(maxZoom)
+      : vw <= 520
+        ? 19.6
+        : 20.4;
   const clampedIsoZoom = Math.max(10.5, Math.min(maxAutoIsoZoom, rawIsoZoom));
   const zoom = isContext
     ? Math.max(9.5, Math.min(16.8, clampedIsoZoom - 2.35))
@@ -295,6 +305,138 @@ export function computeIsometricCameraFit(
     },
     metersPerPixel: Number(actualMetersPerPx.toFixed(4))
   };
+}
+
+/**
+ * Resolves the exact world coordinates (lat, lng) and 3D bounding size of a sculpture/object
+ * placed inside a Virtual Land parcel, honoring live Three.js transform or parcel anchorOffset.
+ */
+export function resolveSculptureWorldTarget(sculpture, volume = null, liveTransform = null) {
+  if (!sculpture && !liveTransform) return null;
+
+  const volLat = Number(volume?.centerLat);
+  const volLng = Number(volume?.centerLng);
+  const volRotDeg = Number(volume?.rotationDeg || 0);
+  const baseAlt = Number(volume?.baseAltitudeM || 0);
+
+  let lat = NaN;
+  let lng = NaN;
+  let widthM = 0;
+  let depthM = 0;
+  let heightM = 0;
+  let baseLiftM = baseAlt;
+
+  if (
+    liveTransform &&
+    Number.isFinite(Number(liveTransform.lat)) &&
+    Number.isFinite(Number(liveTransform.lng))
+  ) {
+    if (
+      Number.isFinite(Number(liveTransform.worldLat)) &&
+      Number.isFinite(Number(liveTransform.worldLng))
+    ) {
+      lat = Number(liveTransform.worldLat);
+      lng = Number(liveTransform.worldLng);
+    } else {
+      const wPos = parcelLocalOffsetToWorldLatLng(
+        Number(liveTransform.lat),
+        Number(liveTransform.lng),
+        Number(liveTransform.anchorDx || 0),
+        Number(liveTransform.anchorDz || 0),
+        Number(liveTransform.parcelRotationDeg ?? volRotDeg)
+      );
+      lat = wPos.lat;
+      lng = wPos.lng;
+    }
+    widthM = Math.max(0.5, Number(liveTransform.renderedSize?.x || 0));
+    heightM = Math.max(0.5, Number(liveTransform.renderedSize?.y || 0));
+    depthM = Math.max(0.5, Number(liveTransform.renderedSize?.z || 0));
+    baseLiftM = Number(liveTransform.altitudeMeters || baseAlt);
+  } else if (sculpture) {
+    const rawLat = Number(sculpture.lat);
+    const rawLng = Number(sculpture.lng);
+    const originLat = Number.isFinite(rawLat) ? rawLat : volLat;
+    const originLng = Number.isFinite(rawLng) ? rawLng : volLng;
+    if (Number.isFinite(originLat) && Number.isFinite(originLng)) {
+      const dxM = Number(sculpture.anchorOffset?.dx || 0);
+      const dyM = Math.max(0, Number(sculpture.anchorOffset?.dy || 0));
+      const dzM = Number(sculpture.anchorOffset?.dz || 0);
+      const wPos = parcelLocalOffsetToWorldLatLng(originLat, originLng, dxM, dzM, volRotDeg);
+      lat = wPos.lat;
+      lng = wPos.lng;
+      baseLiftM = baseAlt + dyM;
+    }
+    const userScale = extractSculptureScale(sculpture);
+    const baseDims = extractSculptureBaseDimensions(sculpture);
+    widthM = Math.max(0.5, Number(baseDims.width || 1.2) * userScale);
+    depthM = Math.max(0.5, Number(baseDims.depth || 1.2) * userScale);
+    heightM = Math.max(0.5, Number(baseDims.height || 1.2) * userScale);
+  }
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return {
+    lat,
+    lng,
+    widthMeters: widthM,
+    depthMeters: depthM,
+    heightMeters: heightM,
+    baseAltitudeM: baseLiftM,
+    rotationDeg: volRotDeg
+  };
+}
+
+/**
+ * Computes exact isometric camera framing centered squarely on a single 3D sculpture/object
+ * (with comfortable framing margin so the full object + its base stay crisply centered).
+ */
+export function computeSculptureIsometricCameraFit(
+  sculpture,
+  volume = null,
+  {
+    viewportWidth = 600,
+    viewportHeight = 320,
+    bearingOffsetDeg = 0,
+    liveTransform = null
+  } = {}
+) {
+  const target = resolveSculptureWorldTarget(sculpture, volume, liveTransform);
+  if (!target) return null;
+
+  // Frame comfortably around the object (floor minimum 3.2m so tiny objects don't over-zoom into blank tiles)
+  const frameW = Math.max(3.2, target.widthMeters * 1.45);
+  const frameD = Math.max(3.2, target.depthMeters * 1.45);
+  const frameH = Math.max(2.0, target.heightMeters * 1.25);
+  const { corners, ring } = computeOrientedFootprintLngLat({
+    lat: target.lat,
+    lng: target.lng,
+    widthMeters: frameW,
+    depthMeters: frameD,
+    rotationDeg: target.rotationDeg
+  });
+
+  const objVolume = {
+    parcelId: sculpture?.parcelId || volume?.parcelId || '',
+    geohash: sculpture?.geohash || volume?.geohash || '',
+    centerLat: target.lat,
+    centerLng: target.lng,
+    widthMeters: frameW,
+    depthMeters: frameD,
+    heightMeters: frameH,
+    baseAltitudeM: target.baseAltitudeM,
+    rotationDeg: target.rotationDeg,
+    corners,
+    ring
+  };
+
+  const vw = Math.max(200, Number(viewportWidth) || 600);
+  return computeIsometricCameraFit(objVolume, {
+    viewportWidth: vw,
+    viewportHeight,
+    viewMode: 'isometric',
+    bearingOffsetDeg,
+    maxZoom: vw <= 520 ? 20.6 : 21.4
+  });
 }
 
 /**

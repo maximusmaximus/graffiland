@@ -326,7 +326,9 @@ describe('PlotVisitView Views Counter Beside Title Tag & Extra Metadata "i" Besi
     });
     assert.equal(viewCalls[0].body.viewType, 'page');
 
-    // 2) Author + Date + "i" icon row holds author name, formatted date, and the extra-metadata "i" icon
+    // 2) Details start hidden by default; expanding shows Author + Date + "i" icon row
+    assert.equal(view.queryByTestId('plot-author-meta-row'), null);
+    RTL.fireEvent.click(view.getByTestId('plot-details-toggle'));
     const authorRow = view.getByTestId('plot-author-meta-row');
     assert.ok(authorRow.textContent.includes('@bigdog'));
     assert.ok(view.getByTestId('plot-land-date').textContent.includes('Nov 25'));

@@ -41,6 +41,11 @@ import {
   resolveLandCoords
 } from '../utils/landMapHelpers.js';
 import {
+  computeIsometricCameraFit,
+  computeSculptureIsometricCameraFit,
+  resolveParcelVolume
+} from '../utils/landPreviewHelpers.js';
+import {
   buildPendingPreviewSculpture,
   buildPendingPreviewSculptures
 } from '../utils/pendingApprovalPreview.js';
@@ -674,9 +679,14 @@ export default function DesktopHub({
       setSelectedLandParcelId(resolvedParcelId);
     }
 
+    const vol = matchedParcel ? resolveParcelVolume(matchedParcel) : null;
+    const objFit = computeSculptureIsometricCameraFit(sc, vol, {
+      viewportWidth: typeof window !== 'undefined' ? window.innerWidth : 900,
+      viewportHeight: typeof window !== 'undefined' ? window.innerHeight : 600
+    });
     const parcelCoords = matchedParcel ? resolveLandCoords(matchedParcel) : null;
-    let focusLat = parcelCoords?.lat;
-    let focusLng = parcelCoords?.lng;
+    let focusLat = objFit?.center?.[1] ?? parcelCoords?.lat;
+    let focusLng = objFit?.center?.[0] ?? parcelCoords?.lng;
 
     if (!Number.isFinite(focusLat) || !Number.isFinite(focusLng)) {
       const b = sc.parcelBounds;
@@ -701,20 +711,25 @@ export default function DesktopHub({
     }
 
     if (Number.isFinite(focusLat) && Number.isFinite(focusLng)) {
-      const zoom = computeLandFocusZoom(matchedParcel);
+      const zoom = objFit?.zoom ?? computeLandFocusZoom(matchedParcel);
+      const pitch = objFit?.pitch ?? 55;
+      const bearing = objFit?.bearing ?? -45;
       setMapFocusTarget({
         lat: focusLat,
         lng: focusLng,
         zoom,
+        pitch,
+        bearing,
         parcelId: resolvedParcelId,
-        instant: true,
+        sculptureId: sc.id || '',
         ts: Date.now()
       });
       setMapViewport((prev) => ({
         ...(prev || {}),
         lat: focusLat,
         lng: focusLng,
-        zoom
+        zoom,
+        bearing
       }));
     }
   }
@@ -945,17 +960,37 @@ export default function DesktopHub({
   function focusLandOnMap(land) {
     if (!land?.parcelId) return;
     setSelectedLandParcelId(land.parcelId);
+    const vol = resolveParcelVolume(land);
+    const isoFit = vol
+      ? computeIsometricCameraFit(vol, {
+          viewportWidth: typeof window !== 'undefined' ? window.innerWidth : 900,
+          viewportHeight: typeof window !== 'undefined' ? window.innerHeight : 600,
+          viewMode: 'isometric'
+        })
+      : null;
     const coords = resolveLandCoords(land);
-    if (coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
-      const zoom = computeLandFocusZoom(land);
+    const targetLat = isoFit?.center?.[1] ?? coords?.lat;
+    const targetLng = isoFit?.center?.[0] ?? coords?.lng;
+    if (Number.isFinite(targetLat) && Number.isFinite(targetLng)) {
+      const zoom = isoFit?.zoom ?? computeLandFocusZoom(land);
+      const pitch = isoFit?.pitch ?? 55;
+      const bearing = isoFit?.bearing ?? -45;
       setMapFocusTarget({
-        lat: coords.lat,
-        lng: coords.lng,
+        lat: targetLat,
+        lng: targetLng,
         zoom,
+        pitch,
+        bearing,
         parcelId: land.parcelId,
         ts: Date.now()
       });
-      setMapViewport((prev) => ({ ...(prev || {}), lat: coords.lat, lng: coords.lng, zoom }));
+      setMapViewport((prev) => ({
+        ...(prev || {}),
+        lat: targetLat,
+        lng: targetLng,
+        zoom,
+        bearing
+      }));
     }
     const title = getLiveLandName(land, land.displayName || 'Virtual Land');
     recordLastViewedItem(user?.id, {
@@ -3175,10 +3210,11 @@ export default function DesktopHub({
           error={visitedParcel.error || ''}
           onSelectNeighborParcel={async (neighborParcel) => {
             if (!neighborParcel?.parcelId) return;
+            const hasLocalCoords = Boolean(resolveLandCoords(neighborParcel));
             setVisitedParcel({
-              loading: true,
+              loading: !hasLocalCoords,
               parcel: neighborParcel,
-              sculptures: [],
+              sculptures: Array.isArray(neighborParcel.sculptures) ? neighborParcel.sculptures : [],
               error: ''
             });
             try {
