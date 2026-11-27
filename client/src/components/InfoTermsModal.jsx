@@ -465,7 +465,8 @@ export default function InfoTermsModal({
                         intersection (e.g., <em>Market &amp; 5th</em>), business, address,
                         coordinates, or named land. Use scroll wheel, zoom/compass buttons, or{' '}
                         <strong>📐 Fit Draft</strong> to frame the full height and top rectangle of
-                        any land. Switch 2D/3D, Fit Lands, and Me directly on the map.
+                        any land. Switch 2D/3D, Fit Lands, and the 📍 location pin directly on the
+                        map.
                       </InfoTip>
                     </div>
                     <p>

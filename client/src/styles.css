@@ -2078,8 +2078,16 @@ select {
 }
 
 .maplibregl-ctrl-group button {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
+  aspect-ratio: 1 / 1;
+}
+
+.leaflet-control-zoom a {
+  width: 32px !important;
+  height: 32px !important;
+  line-height: 32px !important;
+  aspect-ratio: 1 / 1;
 }
 
 .maplibregl-ctrl-group .maplibregl-ctrl-compass .maplibregl-ctrl-icon {
@@ -2108,14 +2116,31 @@ select {
 .map-recenter-fab {
   background: rgba(8, 12, 22, 0.92);
   border-color: rgba(0, 245, 212, 0.48);
-  padding: 5px 8px;
-  min-height: 30px;
+  padding: 0 9px;
+  height: 32px;
+  min-height: 32px;
+  min-width: 32px;
+  border-radius: 8px;
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
+  flex: 0 0 auto;
   backdrop-filter: blur(8px);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.48);
   pointer-events: auto;
+}
+
+.map-recenter-fab.is-square-icon,
+.map-square-btn.is-square-icon {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  gap: 0;
+  border-radius: 8px;
+  flex: 0 0 auto;
 }
 
 .map-mode-toggle-fab {
@@ -2203,11 +2228,21 @@ select {
   color: #e0f2fe;
 }
 
-.map-land-simple-label.is-selected {
+.map-land-simple-label.is-selected,
+.map-land-simple-label.is-focused {
+  font-size: 13px;
+  padding: 4px 6px 4px 11px;
+  max-width: 260px;
+  border-width: 2px;
   border-color: rgba(255, 209, 102, 0.95);
-  background: rgba(24, 18, 6, 0.94);
+  background: rgba(24, 18, 6, 0.96);
   color: #fef08a;
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.62), 0 0 14px rgba(255, 209, 102, 0.5);
+}
+
+.map-land-simple-label.is-selected .map-land-simple-label-text,
+.map-land-simple-label.is-focused .map-land-simple-label-text {
+  max-width: 176px;
 }
 
 .mobile-map-overlay {
@@ -3696,9 +3731,25 @@ select {
 }
 
 .map3d-floating-toolbar .btn {
-  padding: 4px 7px;
+  padding: 0 9px;
+  height: 30px;
+  min-height: 30px;
+  min-width: 30px;
+  border-radius: 8px;
   font-size: 11px;
-  line-height: 1.15;
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.map3d-floating-toolbar .btn.is-square-icon {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  gap: 0;
 }
 
 .map-container.is-draw-mode,
@@ -4868,6 +4919,22 @@ select {
   border-color: #ffffff;
   box-shadow:
     0 0 14px color-mix(in srgb, var(--land-tag-accent, #ffd166) 55%, transparent);
+}
+
+.map3d-land-label-pill.is-focused {
+  border-width: 2px;
+  border-radius: 9px;
+  border-color: var(--land-tag-accent, #ffd166);
+  background: rgba(6, 10, 22, 0.97);
+  box-shadow:
+    0 5px 18px rgba(0, 0, 0, 0.66),
+    0 0 18px color-mix(in srgb, var(--land-tag-accent, #ffd166) 52%, transparent);
+}
+
+.map3d-land-label-pill.is-focused .map3d-owned-plus-tag {
+  font-size: 12.5px;
+  font-weight: 800;
+  padding: 5px 11px;
 }
 
 .map3d-owned-plus-tag {
@@ -6047,6 +6114,23 @@ select {
   color: #fff0f8;
 }
 
+.plot-iso-land-label-pill.is-focused,
+.plot-iso-land-label-pill.is-selected {
+  border-width: 2px;
+}
+
+.plot-iso-land-label-pill.is-focused .plot-iso-land-label-btn,
+.plot-iso-land-label-pill.is-selected .plot-iso-land-label-btn {
+  font-size: 14px;
+  padding: 7px 13px 7px 14px;
+}
+
+.plot-iso-land-label-pill.is-focused .plot-iso-land-dot,
+.plot-iso-land-label-pill.is-selected .plot-iso-land-dot {
+  width: 9px;
+  height: 9px;
+}
+
 .plot-iso-land-search-btn {
   border: none;
   border-left: 1px solid rgba(255, 255, 255, 0.16);
@@ -6643,6 +6727,12 @@ select {
     padding: 4px 8px 4px 9px;
   }
 
+  .plot-iso-land-label-pill.is-focused .plot-iso-land-label-btn,
+  .plot-iso-land-label-pill.is-selected .plot-iso-land-label-btn {
+    font-size: 13px;
+    padding: 6px 11px 6px 12px;
+  }
+
   .plot-iso-land-search-btn {
     padding: 5px 8px;
   }
@@ -6859,15 +6949,23 @@ select {
 
 .land-preview-chip {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(6, 11, 22, 0.88);
   color: #dce7fa;
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 0 9px;
+  height: 30px;
+  min-height: 30px;
+  min-width: 30px;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1;
   white-space: nowrap;
+  flex: 0 0 auto;
   cursor: pointer;
   backdrop-filter: blur(8px);
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
@@ -14039,9 +14137,9 @@ button.user-handle-badge:hover .user-handle-text {
   min-height: 22px;
 }
 
-/* Comfortable touch targets on touch screens without inflating compact .btn-sm / .btn-xs controls. */
+/* Comfortable touch targets on touch screens without inflating compact .btn-sm / .btn-xs / square map controls. */
 @media (pointer: coarse) {
-  .btn:not(.btn-sm):not(.btn-xs) {
+  .btn:not(.btn-sm):not(.btn-xs):not(.map-recenter-fab):not(.map-square-btn) {
     min-height: 44px;
   }
   .btn-sm {
@@ -14049,6 +14147,22 @@ button.user-handle-badge:hover .user-handle-text {
   }
   .btn-xs {
     min-height: 30px;
+  }
+  .map-recenter-fab,
+  .map3d-floating-toolbar .btn {
+    height: 36px;
+    min-height: 36px;
+    min-width: 36px;
+  }
+  .map-recenter-fab.is-square-icon,
+  .map3d-floating-toolbar .btn.is-square-icon,
+  .map-square-btn.is-square-icon {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    aspect-ratio: 1 / 1;
+    padding: 0;
   }
 }
 

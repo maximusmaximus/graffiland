@@ -439,7 +439,7 @@ export default function MapView({
         const simpleLabel = formatSimpleLandLabel(p, idx);
         const isEmptyLand = scCount === 0;
         const stateCls = isSelectedParcel
-          ? 'is-selected'
+          ? 'is-selected is-focused'
           : isFrozen
           ? 'is-frozen'
           : isDormant
@@ -468,7 +468,7 @@ export default function MapView({
             isEmptyLand ? 'is-empty-land' : ''
           }" data-testid="map-land-label" data-parcel-id="${escapeHtml(
             p.parcelId
-          )}" data-public-add="${canPublicAdd ? 'true' : 'false'}"><span class="map-land-simple-label-text">${escapeHtml(
+          )}" data-focused="${isSelectedParcel ? 'true' : 'false'}" data-public-add="${canPublicAdd ? 'true' : 'false'}"><span class="map-land-simple-label-text">${escapeHtml(
             simpleLabel
           )}</span>${searchBtnHtml}<button type="button" class="map-land-label-copy-btn" data-testid="map-land-copy-btn" data-parcel-id="${escapeHtml(
             p.parcelId
@@ -752,8 +752,15 @@ export default function MapView({
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             {userLocation && (
-              <button type="button" className="btn" onClick={centerOnUser}>
-                <XeroIcon emoji="🎯" size={13} /> Center on Me
+              <button
+                type="button"
+                className="btn map-square-btn is-square-icon"
+                data-testid="map-me-btn"
+                aria-label="Center map on my location"
+                title="Center map on my location"
+                onClick={centerOnUser}
+              >
+                <XeroIcon emoji="📍" size={15} />
               </button>
             )}
             {sculptures.length > 0 && (
@@ -810,28 +817,29 @@ export default function MapView({
             {userLocation && (
               <button
                 type="button"
-                className="btn map-recenter-fab"
+                className="btn map-recenter-fab is-square-icon"
                 data-testid="mobile-map-me-btn"
                 onClick={centerOnUser}
+                aria-label="Center map on my location"
                 title="Center map on my GPS location"
               >
-                <XeroIcon emoji="🎯" size={13} /> Me
+                <XeroIcon emoji="📍" size={15} />
               </button>
             )}
             <button
               type="button"
-              className="btn map-recenter-fab"
+              className="btn map-recenter-fab is-square-icon"
               data-testid="mobile-map-theme-toggle-btn"
               onClick={toggleMapTheme}
               aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
               title={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
             >
-              <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
+              <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={14} />
             </button>
             {onToggleFullMap && (
               <button
                 type="button"
-                className="btn map-recenter-fab"
+                className="btn map-recenter-fab is-square-icon"
                 data-testid="mobile-map-fullscreen-btn"
                 onClick={onToggleFullMap}
                 aria-label={isFullExpanded ? 'Exit full map' : 'Expand full map'}

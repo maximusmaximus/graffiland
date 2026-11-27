@@ -354,9 +354,10 @@ function MobileIsoSvgFallback({
             );
             return (
               <div
-                className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
+                className={`plot-iso-land-label-pill is-focused ${landSelected ? 'is-selected' : ''} ${
                   isEmptyLand ? 'is-empty-land' : ''
                 }`}
+                data-focused="true"
                 data-empty-land={isEmptyLand ? 'true' : 'false'}
                 style={{ left: '50%', top: 12, transform: 'translateX(-50%)' }}
               >
@@ -607,7 +608,6 @@ export default function MobileIsometricMap({
   useEffect(() => {
     mapThemeRef.current = mapTheme;
   }, [mapTheme]);
-  const [bearingOffset, setBearingOffset] = useState(0);
   const [liveBearing, setLiveBearing] = useState(-45);
   const [liveZoom, setLiveZoom] = useState(19);
   const [hydrationVersion, setHydrationVersion] = useState(0);
@@ -747,7 +747,7 @@ export default function MobileIsometricMap({
   const hydratedSculpturesRef = useRef(hydratedSculptures);
   const selectedSculptureIdRef = useRef(selectedSculptureId);
   const userLocationRef = useRef(userLocation);
-  const bearingOffsetRef = useRef(bearingOffset);
+  const bearingOffsetRef = useRef(0);
   const onSelectParcelRef = useRef(onSelectParcel);
   const onSelectSculptureRef = useRef(onSelectSculpture);
   const onToggle2DRef = useRef(onToggle2D);
@@ -766,9 +766,6 @@ export default function MobileIsometricMap({
   useEffect(() => {
     userLocationRef.current = userLocation;
   }, [userLocation]);
-  useEffect(() => {
-    bearingOffsetRef.current = bearingOffset;
-  }, [bearingOffset]);
   useEffect(() => {
     onSelectParcelRef.current = onSelectParcel;
     onSelectSculptureRef.current = onSelectSculpture;
@@ -1960,35 +1957,6 @@ export default function MobileIsometricMap({
     };
   }, [isFullExpanded, drawWireframes, fitCameraToTarget]);
 
-  function handleFitAllLands() {
-    userMovedRef.current = true;
-    fitCameraToTarget({
-      targetEntry: primaryEntry,
-      fitCluster: (entriesRef.current || []).length > 1,
-      animate: true
-    });
-  }
-
-  function handleOrbit90() {
-    const nextOffset = (bearingOffset + 90) % 360;
-    setBearingOffset(nextOffset);
-    if (isFullExpandedRef.current) {
-      const map = mapRef.current;
-      if (map) {
-        map.easeTo({
-          bearing: map.getBearing() + 90,
-          duration: 360,
-          essential: true
-        });
-      } else {
-        setLiveBearing((b) => (b + 90) % 360);
-      }
-      return;
-    }
-    userMovedRef.current = false;
-    fitCameraToTarget({ targetEntry: primaryEntry, offsetDeg: nextOffset, animate: true });
-  }
-
   function handleFitLand() {
     // Explicit user recenter: fit the land cleanly, keeping free-navigation unlocked in Full View
     userMovedRef.current = Boolean(isFullExpandedRef.current);
@@ -2135,9 +2103,10 @@ export default function MobileIsometricMap({
                 return (
                 <div
                   ref={landLabelBtnRef}
-                  className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
+                  className={`plot-iso-land-label-pill is-focused ${landSelected ? 'is-selected' : ''} ${
                     primaryTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
                   } ${isEmptyPrimaryLand ? 'is-empty-land' : ''}`.trim()}
+                  data-focused="true"
                   data-empty-land={isEmptyPrimaryLand ? 'true' : 'false'}
                   data-land-lifecycle={primaryTheme.status}
                   style={{ display: 'none', transform: 'translateX(-50%)' }}
@@ -2372,16 +2341,6 @@ export default function MobileIsometricMap({
             <XeroIcon emoji="🗺️" size={13} /> 2D
           </button>
         )}
-        <button
-          type="button"
-          className="btn map-recenter-fab"
-          data-testid="mobile-map-orbit-btn"
-          aria-label="Rotate 3D view 90 degrees"
-          title="Rotate 3D view 90°"
-          onClick={handleOrbit90}
-        >
-          ↻ 90°
-        </button>
         {resolvedEntries.length > 0 && (
           <button
             type="button"
@@ -2394,44 +2353,32 @@ export default function MobileIsometricMap({
             <XeroIcon emoji="🎯" size={13} /> Fit
           </button>
         )}
-        {isFullExpanded && !showcaseMode && resolvedEntries.length > 1 && (
-          <button
-            type="button"
-            className="btn map-recenter-fab"
-            data-testid="mobile-map-fit-all-btn"
-            aria-label="Fit all nearby lands in 3D view"
-            title="Zoom out to fit nearby lands"
-            onClick={handleFitAllLands}
-          >
-            <XeroIcon emoji="🗺️" size={13} /> All
-          </button>
-        )}
         {userLocation && (
           <button
             type="button"
-            className="btn map-recenter-fab"
+            className="btn map-recenter-fab is-square-icon"
             data-testid="mobile-map-me-btn"
             aria-label="Center 3D map on my location"
             title="Center on my GPS location"
             onClick={handleCenterMe}
           >
-            <XeroIcon emoji="📍" size={13} /> Me
+            <XeroIcon emoji="📍" size={15} />
           </button>
         )}
         <button
           type="button"
-          className="btn map-recenter-fab"
+          className="btn map-recenter-fab is-square-icon"
           data-testid="mobile-map-theme-toggle-btn"
           aria-label={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
           title={isDarkMap ? 'Switch map to Light Mode' : 'Switch map to Dark Mode'}
           onClick={toggleMapTheme}
         >
-          <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={13} />
+          <XeroIcon emoji={isDarkMap ? '🌙' : '☀️'} size={14} />
         </button>
         {onToggleFullMap && (
           <button
             type="button"
-            className="btn map-recenter-fab"
+            className="btn map-recenter-fab is-square-icon"
             data-testid="mobile-map-fullscreen-btn"
             aria-label={isFullExpanded ? 'Exit full map' : 'Expand full map'}
             title={isFullExpanded ? 'Exit full-screen map' : 'Expand map full-screen'}
@@ -2442,10 +2389,10 @@ export default function MobileIsometricMap({
         )}
         <span className="land-preview-map-info" data-testid="mobile-iso-map-info">
           <InfoTip title="How to Navigate This Map" mode="popover" align="right">
-            Drag to rotate or pan, scroll/pinch to zoom, tap <strong>↻ 90°</strong> to orbit,{' '}
-            <strong>🎯 Fit</strong> to re-center, or <strong>🗺️ 2D</strong> to switch to top-down
-            view. <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong> lands need
-            a human to place IRL AR artwork before their timer expires.
+            Drag to rotate or pan, scroll/pinch to zoom, tap <strong>🎯 Fit</strong> to re-center,{' '}
+            <strong>📍</strong> to jump to your location, or <strong>🗺️ 2D</strong> to switch to
+            top-down view. <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong>{' '}
+            lands need a human to place IRL AR artwork before their timer expires.
           </InfoTip>
         </span>
       </div>

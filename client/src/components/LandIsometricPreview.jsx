@@ -1289,16 +1289,6 @@ export default function LandIsometricPreview({
     setUserMovedCamera(false);
   };
 
-  const handleOrbit90 = () => {
-    if (viewMode === 'topdown') {
-      setViewMode('isometric');
-      setBearingOffset(90);
-    } else {
-      setBearingOffset((prev) => (prev + 90) % 360);
-    }
-    setUserMovedCamera(false);
-  };
-
   const handleRefit = () => {
     setUserMovedCamera(false);
     applyCameraFit(volume, {
@@ -1534,21 +1524,11 @@ export default function LandIsometricPreview({
               </svg>
               <span className="land-preview-compass-label">{compass.label}</span>
             </button>
-            <button
-              type="button"
-              className="land-preview-chip"
-              aria-label="Rotate isometric view 90 degrees"
-              title="Orbit 90° around your land"
-              onClick={handleOrbit90}
-            >
-              ↻ 90°
-            </button>
             <span className="land-preview-map-info" data-testid="land-preview-map-info">
               <InfoTip title="How to Navigate This Map" mode="popover" align="right">
                 Switch between <strong>Iso</strong> (fitted 3D plot), <strong>Area</strong>{' '}
-                (neighborhood context), and <strong>2D</strong> (North-up site plan), click{' '}
-                <strong>↻ 90°</strong> to orbit all sides, drag to pan/rotate, scroll or pinch to
-                zoom, or tap <strong>🎯 Fit</strong> to re-center.{' '}
+                (neighborhood context), and <strong>2D</strong> (North-up site plan), drag to
+                pan/rotate, scroll or pinch to zoom, or tap <strong>🎯 Fit</strong> to re-center.{' '}
                 <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong> lands need a
                 human to place IRL AR artwork before their timer expires.
                 {otherParcelEntries.length > 0

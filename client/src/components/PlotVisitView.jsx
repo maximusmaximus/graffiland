@@ -1741,11 +1741,12 @@ export default function PlotVisitView({
                     const activeTheme = resolveLandColorTheme({ ...activeParcel, frozen: isFrozen });
                     return (
                       <div
-                        className={`plot-iso-land-label-pill ${
+                        className={`plot-iso-land-label-pill is-focused ${
                           selectedTarget === 'land' ? 'is-selected' : ''
                         } ${
                           activeTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
                         } ${isEmptyLand ? 'is-empty-land' : ''}`.trim()}
+                        data-focused="true"
                         data-empty-land={isEmptyLand ? 'true' : 'false'}
                         data-land-lifecycle={activeTheme.status}
                         style={{
@@ -1964,7 +1965,7 @@ export default function PlotVisitView({
                   </button>
                   <button
                     type="button"
-                    className="btn map-recenter-fab"
+                    className="btn map-recenter-fab is-square-icon"
                     data-testid="mobile-map-fullscreen-btn"
                     aria-label={isMapFull ? 'Exit full map' : 'Expand full map'}
                     title={isMapFull ? 'Exit full-screen map' : 'Expand map full-screen'}

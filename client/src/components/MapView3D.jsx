@@ -956,8 +956,19 @@ export default function MapView3D({
       return (a.entry.geom.avgDepth || 0) - (b.entry.geom.avgDepth || 0);
     });
 
-    for (const { el, entry, anchor } of landPinEntries) {
+    for (const { pid, el, entry, anchor } of landPinEntries) {
+      const isFocusedPin = Boolean(
+        selectedParcelIdRef.current && String(selectedParcelIdRef.current).toUpperCase() === pid
+      );
       el.style.display = 'flex';
+      el.classList.toggle('is-focused', isFocusedPin);
+      el.dataset.focused = isFocusedPin ? 'true' : 'false';
+      el.style.zIndex = isFocusedPin ? '24' : '';
+      const pillEl = el.querySelector('.map3d-land-label-pill');
+      if (pillEl) {
+        pillEl.classList.toggle('is-focused', isFocusedPin);
+        pillEl.dataset.focused = isFocusedPin ? 'true' : 'false';
+      }
       if (el.dataset.landAccent !== entry.outerColor) {
         el.dataset.landAccent = entry.outerColor;
         el.style.setProperty('--land-tag-accent', entry.outerColor);
@@ -2240,8 +2251,15 @@ export default function MapView3D({
       );
       const isEmptyLand = itemCount === 0;
       const landName = resolveLandDisplayName(p, { defaultName: 'Virtual Land' });
+      const isFocusedLand = Boolean(
+        selectedParcelIdRef.current && String(selectedParcelIdRef.current).toUpperCase() === pid
+      );
       const wrap = document.createElement('div');
-      wrap.className = 'map3d-owned-action-pin map3d-ui-stop';
+      wrap.className = `map3d-owned-action-pin map3d-ui-stop ${isFocusedLand ? 'is-focused' : ''}`.trim();
+      wrap.dataset.focused = isFocusedLand ? 'true' : 'false';
+      if (isFocusedLand) {
+        wrap.style.zIndex = '24';
+      }
 
       if (isOwned) {
         const btnRow = document.createElement('div');
@@ -2285,7 +2303,8 @@ export default function MapView3D({
       const labelPill = document.createElement('div');
       labelPill.className = `map3d-land-label-pill map3d-ui-stop ${
         landTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
-      } ${isEmptyLand ? 'is-empty-land' : ''}`.trim();
+      } ${isEmptyLand ? 'is-empty-land' : ''} ${isFocusedLand ? 'is-focused' : ''}`.trim();
+      labelPill.dataset.focused = isFocusedLand ? 'true' : 'false';
       labelPill.dataset.emptyLand = isEmptyLand ? 'true' : 'false';
       labelPill.dataset.landLifecycle = landTheme.status;
       labelPill.dataset.publicAdd = isPublicAdd ? 'true' : 'false';
@@ -3819,10 +3838,13 @@ export default function MapView3D({
             {userLocation && (
               <button
                 type="button"
-                className="btn"
+                className="btn is-square-icon"
+                data-testid="map3d-me-btn"
+                aria-label="Center map on my location"
+                title="Center map on my location"
                 onClick={handleCenterOnUser}
               >
-                <XeroIcon emoji="🎯" size={12} /> Me
+                <XeroIcon emoji="📍" size={15} />
               </button>
             )}
             <InfoTip title="3D Map & Land Handles" mode="popover">
