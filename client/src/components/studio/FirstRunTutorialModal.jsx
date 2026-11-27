@@ -18,7 +18,7 @@ const TUTORIAL_STEPS = [
     body: 'Hold and move your phone like a spray can to paint in 3D, or tap 🔍 Search to place ready-made 3D props & emojis.',
     infoTitle: 'Brush, Search 3D, Stack, Erase & Studio Tools',
     infoBody:
-      'Tap 🔍 in the top right to search SimReady, Pixels & XeroEmoji 3D items (auto-switches to Lock & Scale when placed), or swipe the bottom carousel between Brush (🖌️), Stack (🧱 — hold to build off faces), Erase (🧽), Lock & Scale (✅), Foreground Occlusion (🪞), and Agent Code (📋).'
+      'Tap 🔍 in the top right or bottom carousel to search SimReady, Pixels & XeroEmoji 3D items (auto-switches to Lock & Scale when placed), swipe the bottom carousel between Brush (🖌️), Pencil (✏️), Erase (🧽), Lock & Scale (✅), Stack (🧱 — hold to build off faces), Preview (👁️), and Publish (🚀), or tap the bottom-right Copy Agent Prompt (🤖) button.'
   },
   {
     emoji: '🚀',

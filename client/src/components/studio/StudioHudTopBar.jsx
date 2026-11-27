@@ -36,7 +36,6 @@ export default function StudioHudTopBar({
   onOpenAgentHandoff,
   onOpenLogin,
   voxels,
-  onOpenTutorial,
   onOpenInfo,
   onOpenCatalogSearch = null,
   hasPlacedCatalogItem = false,
@@ -303,63 +302,57 @@ export default function StudioHudTopBar({
           </button>
         </div>
 
-        <div className="mobile-top-hud-subrow">
-          {pendingCount > 0 && !pairHubOpen && (
-            <button
-              type="button"
-              data-pair-hub-trigger="1"
-              data-testid="mobile-pending-alert-pill"
-              className="pending-alert-pill"
-              onClick={() => togglePairHub('pending')}
-              aria-label={`Review ${pendingCount} pending approval${pendingCount === 1 ? '' : 's'}`}
-            >
-              <XeroIcon emoji="🔔" size={12} />
-              <span>
-                {pendingCount} pending approval{pendingCount === 1 ? '' : 's'}
-              </span>
-              <span aria-hidden="true">▾</span>
-            </button>
-          )}
+        {((pendingCount > 0 && !pairHubOpen) ||
+          (needsRepairAlert && !pairHubOpen) ||
+          (isPaired && hasOwnedLand)) && (
+          <div className="mobile-top-hud-subrow">
+            {pendingCount > 0 && !pairHubOpen && (
+              <button
+                type="button"
+                data-pair-hub-trigger="1"
+                data-testid="mobile-pending-alert-pill"
+                className="pending-alert-pill"
+                onClick={() => togglePairHub('pending')}
+                aria-label={`Review ${pendingCount} pending approval${pendingCount === 1 ? '' : 's'}`}
+              >
+                <XeroIcon emoji="🔔" size={12} />
+                <span>
+                  {pendingCount} pending approval{pendingCount === 1 ? '' : 's'}
+                </span>
+                <span aria-hidden="true">▾</span>
+              </button>
+            )}
 
-          {needsRepairAlert && !pairHubOpen && (
-            <button
-              type="button"
-              data-pair-hub-trigger="1"
-              data-testid="mobile-repair-pill"
-              className="pending-alert-pill is-repair"
-              onClick={() => togglePairHub('pair')}
-              aria-label="Re-pair needed — open pairing panel"
-            >
-              <XeroIcon emoji="🔗" size={12} />
-              <span>Re-pair needed</span>
-              <span aria-hidden="true">▾</span>
-            </button>
-          )}
+            {needsRepairAlert && !pairHubOpen && (
+              <button
+                type="button"
+                data-pair-hub-trigger="1"
+                data-testid="mobile-repair-pill"
+                className="pending-alert-pill is-repair"
+                onClick={() => togglePairHub('pair')}
+                aria-label="Re-pair needed — open pairing panel"
+              >
+                <XeroIcon emoji="🔗" size={12} />
+                <span>Re-pair needed</span>
+                <span aria-hidden="true">▾</span>
+              </button>
+            )}
 
-          {isPaired && hasOwnedLand && (
-            <button
-              type="button"
-              className="land-manage-pill"
-              data-testid="mobile-land-management-btn"
-              onClick={onOpenLandManage}
-              aria-label="Land Management"
-              title="Land Management (Contributors, 3D Models & Agent Controls)"
-            >
-              <XeroIcon emoji="🗺️" size={14} label="Land" />
-              <span>Land ({ownedLandCount})</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="top-mini-pill"
-            onClick={onOpenTutorial}
-            aria-label="Open Tutorial Guide"
-            title="Quick Start Tutorial"
-          >
-            <XeroIcon emoji="❓" size={13} />
-          </button>
-        </div>
+            {isPaired && hasOwnedLand && (
+              <button
+                type="button"
+                className="land-manage-pill"
+                data-testid="mobile-land-management-btn"
+                onClick={onOpenLandManage}
+                aria-label="Land Management"
+                title="Land Management (Contributors, 3D Models & Agent Controls)"
+              >
+                <XeroIcon emoji="🗺️" size={14} label="Land" />
+                <span>Land ({ownedLandCount})</span>
+              </button>
+            )}
+          </div>
+        )}
 
         <MobilePairApprovalDropdown
           open={pairHubOpen}
