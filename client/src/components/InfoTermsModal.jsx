@@ -20,6 +20,7 @@ import {
   requestPasskeyAssertion
 } from '../utils/passkeyClient.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import ArTrackingSettings from './ArTrackingSettings.jsx';
 import BrandLogo from './BrandLogo.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
@@ -51,6 +52,10 @@ export default function InfoTermsModal({
   onOpenMobileMap = null,
   onLogout,
   onRequestLogin,
+  webxrSupported = null,
+  webxrActive = false,
+  onEnableWebxr = null,
+  onDisableWebxr = null,
   onClose
 }) {
   const [tab, setTab] = useState(initialTab);
@@ -736,8 +741,8 @@ export default function InfoTermsModal({
                         reconciles automatically as you paint (or tap the center reticle +{' '}
                         <strong>+ Seed</strong> to lock a specific spot). SPRAY.LAND fuses
                         True-North compass (WMM declination), 60Hz gyroscope, Kalman GPS, off-thread
-                        ORB landmarks, and optional 6-DoF WebXR; use the compass Align nudge or a
-                        figure-8 wave near steel structures.
+                        ORB landmarks, and automatic 6-DoF ARCore calibration when supported by your
+                        device (toggleable anytime in Profile ⚙️ Settings).
                       </InfoTip>
                     </div>
                     <p>
@@ -1011,6 +1016,12 @@ export default function InfoTermsModal({
           {tab === 'account' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>
               <MeasurementUnitSetting />
+              <ArTrackingSettings
+                webxrSupported={webxrSupported}
+                webxrActive={webxrActive}
+                onEnableWebxr={onEnableWebxr}
+                onDisableWebxr={onDisableWebxr}
+              />
 
               {!user ? (
                 <div className="card" style={{ textAlign: 'center' }}>

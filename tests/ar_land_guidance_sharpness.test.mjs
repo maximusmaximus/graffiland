@@ -470,7 +470,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       studioSrc,
-      /mappingPausedRef\.current = Boolean\(\s*isAwayFromMappingView \|\| pol\.mappingRestartPrompt\s*\);/
+      /mappingPausedRef\.current = Boolean\(\s*isAwayFromMappingView \|\| pol\.mappingRestartPrompt(?:\s*\|\|\s*showWebXrPreCalPrompt)?\s*\);/
     );
     assert.match(studioSrc, /\{!isArViewOnly && !isTransformMode && \(\s*<SceneCoverageWidget/);
     assert.match(studioSrc, /occlusionEnabled=\{brush\.occlusionEnabled\}/);

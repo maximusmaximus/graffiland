@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import {
   buildParcelShareUrl,
@@ -85,6 +85,8 @@ export default function LandManagementModal({
   const [promptCopied, setPromptCopied] = useState(false);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [showLocalUpload, setShowLocalUpload] = useState(false);
+  const [landsListOpen, setLandsListOpen] = useState(false);
+  const previewSectionRef = useRef(null);
 
   // Direct browser custom 3D model uploader + anchorOffset calibration
   const [uploadTitle, setUploadTitle] = useState('');
@@ -107,7 +109,16 @@ export default function LandManagementModal({
       ]);
       setWorkspace(res);
       setPasskeys(pkRes?.passkeys || []);
-      const list = res?.parcels || [];
+      const list = [...(res?.parcels || [])].sort((a, b) => {
+        const nameA = resolveLandDisplayName(a, { defaultName: 'Virtual Land' });
+        const nameB = resolveLandDisplayName(b, { defaultName: 'Virtual Land' });
+        const byName = nameA.localeCompare(nameB, undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
+        if (byName !== 0) return byName;
+        return String(a?.parcelId || '').localeCompare(String(b?.parcelId || ''));
+      });
       if (list.length > 0) {
         const preferredId = selectedParcelIdRef.current || initialParcelId;
         const picked = list.find((p) => p.parcelId === preferredId) || list[0];
@@ -144,10 +155,56 @@ export default function LandManagementModal({
     if (user?.id) loadWorkspace();
   }, [user?.id, loadWorkspace]);
 
+  const orderedParcels = useMemo(() => {
+    const raw = Array.isArray(workspace?.parcels) ? workspace.parcels : [];
+    return [...raw].sort((a, b) => {
+      const nameA = resolveLandDisplayName(a, { defaultName: 'Virtual Land' });
+      const nameB = resolveLandDisplayName(b, { defaultName: 'Virtual Land' });
+      const byName = nameA.localeCompare(nameB, undefined, {
+        numeric: true,
+        sensitivity: 'base'
+      });
+      if (byName !== 0) return byName;
+      return String(a?.parcelId || '').localeCompare(String(b?.parcelId || ''));
+    });
+  }, [workspace?.parcels]);
+
   const activeParcel =
-    workspace?.parcels?.find((p) => p.parcelId === selectedParcelId) ||
-    workspace?.parcels?.[0] ||
+    orderedParcels.find((p) => p.parcelId === selectedParcelId) ||
+    orderedParcels[0] ||
     null;
+  const activeParcelIdx = activeParcel
+    ? orderedParcels.findIndex((p) => p.parcelId === activeParcel.parcelId)
+    : -1;
+
+  function focusLandPreviewSection() {
+    const move = () => {
+      const el = previewSectionRef.current;
+      if (!el) return;
+      if (typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      if (typeof el.focus === 'function') {
+        try {
+          el.focus({ preventScroll: true });
+        } catch {
+          el.focus();
+        }
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(move);
+    } else {
+      move();
+    }
+  }
+
+  function handleSelectLandFromList(p) {
+    if (!p) return;
+    selectParcel(p);
+    setLandsListOpen(false);
+    focusLandPreviewSection();
+  }
 
   function selectParcel(p) {
     setSelectedParcelId(p.parcelId);
@@ -526,61 +583,107 @@ export default function LandManagementModal({
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Organized Parcel Selector with Quick Prev/Next for Multi-Land Owners */}
-            <div className="land-mgmt-selector-bar" role="tablist" aria-label="Your owned lands">
-              <div className="land-mgmt-selector-pills">
-                {workspace.parcels.map((p) => {
-                  const isActive = activeParcel?.parcelId === p.parcelId;
-                  return (
-                    <button
-                      key={p.parcelId}
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      className={`btn btn-sm land-mgmt-parcel-tab ${isActive ? 'btn-primary is-active' : ''}`}
-                      onClick={() => selectParcel(p)}
-                    >
-                      <XeroIcon emoji={p.frozen || p.settings?.frozen ? '❄️' : '📍'} size={13} />{' '}
-                      <span>{resolveLandDisplayName(p, { defaultName: 'Virtual Land' })}</span>
-                      <span className="land-mgmt-tab-count">· {p.sculptureCount}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              {workspace.parcels.length > 1 && activeParcel && (
-                <div className="land-mgmt-selector-nav">
-                  <button
-                    type="button"
-                    className="btn btn-xs"
-                    aria-label="Previous land"
-                    onClick={() => {
-                      const idx = workspace.parcels.findIndex(
-                        (item) => item.parcelId === activeParcel.parcelId
-                      );
-                      const prevIdx = (idx - 1 + workspace.parcels.length) % workspace.parcels.length;
-                      selectParcel(workspace.parcels[prevIdx]);
-                    }}
-                  >
-                    ‹
-                  </button>
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                    {workspace.parcels.findIndex((item) => item.parcelId === activeParcel.parcelId) + 1}
-                    /{workspace.parcels.length}
+            {/* Compact Unfold Selector Bar (keeps preview & settings from being pushed down) */}
+            <div className="land-mgmt-selector-wrap">
+              <div className="land-mgmt-selector-bar">
+                <button
+                  type="button"
+                  className={`btn btn-sm land-mgmt-unfold-btn ${landsListOpen ? 'is-open' : ''}`}
+                  data-testid="land-mgmt-lands-unfold-btn"
+                  aria-expanded={landsListOpen}
+                  aria-controls="land-mgmt-lands-dropdown"
+                  onClick={() => setLandsListOpen((open) => !open)}
+                >
+                  <span className="land-mgmt-unfold-main">
+                    <XeroIcon
+                      emoji={activeParcel?.frozen || activeParcel?.settings?.frozen ? '❄️' : '🗺️'}
+                      size={14}
+                    />
+                    <span className="land-mgmt-unfold-label">
+                      My Lands ({orderedParcels.length})
+                    </span>
+                    {activeParcel && (
+                      <span className="land-mgmt-unfold-current">
+                        · {resolveLandDisplayName(activeParcel, { defaultName: 'Virtual Land' })}
+                      </span>
+                    )}
                   </span>
-                  <button
-                    type="button"
-                    className="btn btn-xs"
-                    aria-label="Next land"
-                    onClick={() => {
-                      const idx = workspace.parcels.findIndex(
-                        (item) => item.parcelId === activeParcel.parcelId
+                  <span className="land-mgmt-unfold-caret" aria-hidden="true">
+                    {landsListOpen ? '▴ Hide' : '▾ Unfold'}
+                  </span>
+                </button>
+                {orderedParcels.length > 1 && activeParcel && (
+                  <div className="land-mgmt-selector-nav">
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      aria-label="Previous land"
+                      onClick={() => {
+                        const prevIdx =
+                          (activeParcelIdx - 1 + orderedParcels.length) % orderedParcels.length;
+                        handleSelectLandFromList(orderedParcels[prevIdx]);
+                      }}
+                    >
+                      ‹
+                    </button>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      {activeParcelIdx + 1}/{orderedParcels.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-xs"
+                      aria-label="Next land"
+                      onClick={() => {
+                        const nextIdx = (activeParcelIdx + 1) % orderedParcels.length;
+                        handleSelectLandFromList(orderedParcels[nextIdx]);
+                      }}
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {landsListOpen && (
+                <div
+                  id="land-mgmt-lands-dropdown"
+                  className="land-mgmt-lands-panel"
+                  data-testid="land-mgmt-lands-list"
+                  role="tablist"
+                  aria-label="Your owned lands"
+                >
+                  <div className="land-mgmt-lands-panel-head">
+                    <span className="mono">
+                      Select a land to preview ({orderedParcels.length} owned · A–Z)
+                    </span>
+                  </div>
+                  <div className="land-mgmt-lands-scroll">
+                    {orderedParcels.map((p, idx) => {
+                      const isActive = activeParcel?.parcelId === p.parcelId;
+                      const landLabel = resolveLandDisplayName(p, { defaultName: 'Virtual Land' });
+                      const isFrozenParcel = Boolean(p.frozen || p.settings?.frozen);
+                      return (
+                        <button
+                          key={p.parcelId}
+                          type="button"
+                          role="tab"
+                          aria-selected={isActive}
+                          data-testid="land-mgmt-land-row"
+                          data-parcel-id={p.parcelId}
+                          className={`land-mgmt-land-row ${isActive ? 'is-active' : ''}`}
+                          onClick={() => handleSelectLandFromList(p)}
+                        >
+                          <span className="land-mgmt-land-idx mono">#{idx + 1}</span>
+                          <XeroIcon emoji={isFrozenParcel ? '❄️' : '📍'} size={13} />
+                          <span className="land-mgmt-land-name">{landLabel}</span>
+                          <span className="land-mgmt-land-meta mono">
+                            <span>{p.sculptureCount || 0} art</span>
+                            {isActive && <span className="land-mgmt-land-active-pill">Previewing</span>}
+                          </span>
+                        </button>
                       );
-                      const nextIdx = (idx + 1) % workspace.parcels.length;
-                      selectParcel(workspace.parcels[nextIdx]);
-                    }}
-                  >
-                    ›
-                  </button>
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -599,30 +702,37 @@ export default function LandManagementModal({
             {activeParcel && (
               <>
                 {/* 0) Perfectly Fit Isometric Geographic Map Preview */}
-                <LandIsometricPreview
-                  parcel={activeParcel}
-                  displayNameOverride={customName}
-                  frozenOverride={frozen}
-                  allParcels={workspace.parcels}
-                  userLocation={userLocation}
-                  onSelectParcel={(p) => selectParcel(p)}
-                  onSelectSculpture={
-                    onSelectSculpture
-                      ? (sc) => {
-                          onClose?.();
-                          onSelectSculpture(sc);
-                        }
-                      : null
-                  }
-                  onFocusParcel={
-                    onFocusParcel
-                      ? (p, vol) => {
-                          onClose?.();
-                          onFocusParcel(p, vol);
-                        }
-                      : null
-                  }
-                />
+                <div
+                  ref={previewSectionRef}
+                  tabIndex={-1}
+                  className="land-mgmt-preview-anchor"
+                  data-testid="land-mgmt-preview-anchor"
+                >
+                  <LandIsometricPreview
+                    parcel={activeParcel}
+                    displayNameOverride={customName}
+                    frozenOverride={frozen}
+                    allParcels={orderedParcels}
+                    userLocation={userLocation}
+                    onSelectParcel={(p) => handleSelectLandFromList(p)}
+                    onSelectSculpture={
+                      onSelectSculpture
+                        ? (sc) => {
+                            onClose?.();
+                            onSelectSculpture(sc);
+                          }
+                        : null
+                    }
+                    onFocusParcel={
+                      onFocusParcel
+                        ? (p, vol) => {
+                            onClose?.();
+                            onFocusParcel(p, vol);
+                          }
+                        : null
+                    }
+                  />
+                </div>
 
                 {/* 1) Land Details, Permissions & Security */}
                 <form

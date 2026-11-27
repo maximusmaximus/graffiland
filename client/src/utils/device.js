@@ -2,7 +2,10 @@ export function isMobileDevice() {
   if (typeof window === 'undefined') return false;
   const ua = navigator.userAgent || '';
   const mobileUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
-  const coarsePointer = window.matchMedia?.('(pointer: coarse)')?.matches;
+  const coarsePointer = Boolean(
+    window.matchMedia?.('(pointer: coarse)')?.matches ||
+      window.matchMedia?.('(any-pointer: coarse)')?.matches
+  );
   const shortestSide = Math.min(window.innerWidth || 0, window.innerHeight || window.innerWidth || 0);
   const narrowTouch = navigator.maxTouchPoints > 0 && shortestSide <= 1024;
   return Boolean(mobileUa || (coarsePointer && narrowTouch));

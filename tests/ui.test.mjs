@@ -2050,8 +2050,12 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         'topdown'
       );
 
-      // 2) Selecting another land immediately loads that land's isometric preview (and resets to isometric)
+      // 2) Lands list is collapsed by default; unfolding it shows ordered lands and picking one closes the list & loads its isometric preview
+      assert.equal(view.queryByTestId('land-mgmt-lands-list'), null);
+      RTL.fireEvent.click(view.getByTestId('land-mgmt-lands-unfold-btn'));
+      assert.ok(view.getByTestId('land-mgmt-lands-list'));
       RTL.fireEvent.click(view.getByRole('tab', { name: /Midtown Rooftop/i }));
+      assert.equal(view.queryByTestId('land-mgmt-lands-list'), null);
       await RTL.waitFor(() => {
         const preview = view.getByTestId('land-mgmt-iso-preview');
         assert.equal(preview.getAttribute('data-parcel-id'), 'GLAND-DR5RU6N5');
@@ -7770,17 +7774,18 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       const drawBtn = remoteView.getByTestId('ar-land-draw-btn');
       const chatBtn = remoteView.getByTestId('ar-land-chat-btn');
       const checkInBtn = remoteView.getByTestId('ar-land-checkin-btn');
-      const alignBtn = remoteView.getByTestId('ar-compass-align-toggle-btn');
 
-      // All 4 in-person buttons are visually locked/greyed out (and Draw does NOT carry btn-primary)
-      for (const btn of [drawBtn, chatBtn, checkInBtn, alignBtn]) {
+      // Align AR button & compass nudge controls are completely removed (calibration handles alignment)
+      assert.equal(remoteView.queryByTestId('ar-compass-align-toggle-btn'), null);
+      assert.equal(remoteView.queryByTestId('ar-compass-nudge-controls'), null);
+
+      // All 3 remaining in-person buttons are visually locked/greyed out (and Draw does NOT carry btn-primary)
+      for (const btn of [drawBtn, chatBtn, checkInBtn]) {
         assert.equal(btn.getAttribute('data-locked'), 'true');
         assert.equal(btn.getAttribute('aria-disabled'), 'true');
         assert.ok(btn.className.includes('is-action-locked'));
       }
       assert.equal(drawBtn.className.includes('btn-primary'), false);
-      // Align controls must NOT auto-expand while remote, even with non-zero manualYawNudgeDeg
-      assert.equal(Boolean(remoteView.queryByTestId('ar-compass-nudge-controls')), false);
       // Visit lock note & recommended Navigate highlight are shown
       assert.ok(remoteView.getByTestId('ar-land-visit-lock-note').textContent.includes('Visit DismalLand in person'));
       assert.ok(remoteView.getByTestId('ar-land-gmaps-link').className.includes('is-recommended'));
@@ -7789,23 +7794,16 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       RTL.fireEvent.click(drawBtn);
       RTL.fireEvent.click(chatBtn);
       RTL.fireEvent.click(checkInBtn);
-      RTL.fireEvent.click(alignBtn);
 
       assert.equal(fired.draw, 0, 'Remote click on Draw Here must NOT trigger onDrawHere');
       assert.equal(fired.chat, 0, 'Remote click on Land Chat must NOT trigger onOpenLandChat');
       assert.equal(fired.checkIn, 0, 'Remote click on Check In IRL must NOT trigger onCheckInLand');
-      assert.equal(
-        Boolean(remoteView.queryByTestId('ar-compass-nudge-controls')),
-        false,
-        'Remote click on Align AR must NOT expand compass nudge controls'
-      );
-      assert.equal(toasts.length, 4, 'Each locked button tap must emit a visit-required notification');
+      assert.equal(toasts.length, 3, 'Each locked button tap must emit a visit-required notification');
       assert.ok(toasts[0].message.includes('Visit DismalLand in person to draw on this land'));
       assert.equal(toasts[0].tone, 'warning');
       assert.ok(toasts[0].actionLabel.includes('Navigate'));
       assert.ok(toasts[1].message.includes('Visit DismalLand in person to join Land Chat'));
       assert.ok(toasts[2].message.includes('Visit DismalLand in person to check in IRL'));
-      assert.ok(toasts[3].message.includes('Visit DismalLand in person to align this land in AR'));
 
       // Remote-allowed controls (Manage + View 3D artwork) continue working cleanly
       RTL.fireEvent.click(remoteView.getByTestId('ar-land-manage-btn'));
@@ -7814,7 +7812,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(fired.inspectArt, 1);
       cleanup();
 
-      // 3) On-site land (isInside: true): all actions unlock and execute normally
+      // 3) On-site land (isInside: true): all actions unlock and execute normally (and Align AR stays removed)
       const localView = RTL.render(
         React.createElement(ARLandInspectorPanel, {
           land: {
@@ -7835,23 +7833,21 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
             fired.checkIn += 1;
             return true;
           },
-          onAdjustCompassNudge: () => {},
-          onResetCompassNudge: () => {},
           onClose: () => {}
         })
       );
 
       assert.equal(Boolean(localView.queryByTestId('ar-land-visit-lock-note')), false);
       assert.equal(localView.queryByTestId('ar-land-draw-btn'), null);
+      assert.equal(localView.queryByTestId('ar-compass-align-toggle-btn'), null);
+      assert.equal(localView.queryByTestId('ar-compass-nudge-controls'), null);
       RTL.fireEvent.click(localView.getByTestId('ar-land-chat-btn'));
       await RTL.act(async () => {
         RTL.fireEvent.click(localView.getByTestId('ar-land-checkin-btn'));
       });
-      RTL.fireEvent.click(localView.getByTestId('ar-compass-align-toggle-btn'));
       assert.equal(fired.draw, 0);
       assert.equal(fired.chat, 1);
       assert.equal(fired.checkIn, 1);
-      assert.ok(localView.getByTestId('ar-compass-nudge-controls'));
       cleanup();
     } finally {
       unsub();
@@ -8715,7 +8711,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       assert.equal(securityPayloads[1].body.minOrbInliers, 12);
       assert.equal(securityPayloads[1].body.maxReprojErrPx, 4.5);
 
-      // 3) Switching to calibrated Urban parcel shows Auto (Dense Urban) + Day + Night slots & hides no-pack CTA
+      // 3) Unfolding lands list & switching to calibrated Urban parcel shows Auto (Dense Urban) + Day + Night slots & hides no-pack CTA
+      RTL.fireEvent.click(view.getByTestId('land-mgmt-lands-unfold-btn'));
       RTL.fireEvent.click(view.getByRole('tab', { name: /Urban Brick Wall/i }));
       await RTL.waitFor(() => {
         assert.equal(view.getByTestId('orb-calibration-mode-badge').textContent, 'Auto (Dense Urban)');
