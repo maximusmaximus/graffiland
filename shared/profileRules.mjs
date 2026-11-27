@@ -363,3 +363,200 @@ export function validateProfileImage(raw, { kind = 'avatar' } = {}) {
     error: `${label} must be an uploaded PNG/JPEG/WebP image${kind === 'header' ? ', a background preset,' : ''} or an HTTPS image URL.`
   };
 }
+
+/**
+ * 10 core SPRAY.LAND features summing to exactly 100 points for the User Profile Feature Rating.
+ */
+export const PROFILE_FEATURE_MILESTONES = Object.freeze([
+  {
+    id: 'profile_setup',
+    label: 'Customize Profile',
+    points: 10,
+    tip: 'Add a bio, custom avatar, or banner in Edit Profile.'
+  },
+  {
+    id: 'own_land',
+    label: 'Claim a Virtual Land',
+    points: 10,
+    tip: 'Claim or mint your first Virtual Land plot.'
+  },
+  {
+    id: 'publish_art',
+    label: 'Sculpt & Publish 3D Art',
+    points: 15,
+    tip: 'Paint or sculpt a 3D piece in Mobile AR and publish it.'
+  },
+  {
+    id: 'place_3d_model',
+    label: 'Place a 3D Model',
+    points: 10,
+    tip: 'Search & place a 3D catalog model or upload a .GLB/.OBJ.'
+  },
+  {
+    id: 'irl_permanent',
+    label: 'Awaken / IRL Land Lock',
+    points: 10,
+    tip: 'Visit a land in person on Mobile AR (check in or add 3+ blocks).'
+  },
+  {
+    id: 'explore_lands',
+    label: 'Explore Lands & Art',
+    points: 10,
+    tip: 'Explore lands on the 2D/3D Map and inspect artworks.'
+  },
+  {
+    id: 'agent_collab',
+    label: 'AI Agent Collaboration',
+    points: 10,
+    tip: 'Pair an AI agent (GLP-...) or let your agent add models to a land.'
+  },
+  {
+    id: 'manage_land',
+    label: 'Customize a Land',
+    points: 10,
+    tip: 'Name or configure a land inside Land Management.'
+  },
+  {
+    id: 'quests_or_builder',
+    label: 'Multi-Piece Builder or Quest',
+    points: 10,
+    tip: 'Publish 3+ artworks (or 50+ blocks) or launch a Land Quest.'
+  },
+  {
+    id: 'market_or_share',
+    label: 'Share or Trade',
+    points: 5,
+    tip: 'Copy/share a link or list a Land Deed on the Marketplace.'
+  }
+]);
+
+/**
+ * Computes a transparent 0–100 Feature Rating based on the user's real history,
+ * plus exact remaining tips so they know what else to try to raise their score.
+ *
+ * @param {{
+ *   profile?: any,
+ *   stats?: any,
+ *   lands?: any[],
+ *   sculptures?: any[],
+ *   listings?: any[],
+ *   quests?: any[],
+ *   actions?: any[],
+ *   localActions?: any[],
+ *   lastViewed?: any[]
+ * }} [params]
+ */
+export function computeProfileFeatureScore({
+  profile = null,
+  stats = null,
+  lands = [],
+  sculptures = [],
+  listings = [],
+  quests = [],
+  actions = [],
+  localActions = [],
+  lastViewed = []
+} = {}) {
+  const safeLands = Array.isArray(lands) ? lands : [];
+  const safeSculptures = Array.isArray(sculptures) ? sculptures : [];
+  const safeListings = Array.isArray(listings) ? listings : [];
+  const safeQuests = Array.isArray(quests) ? quests : [];
+  const allActions = [
+    ...(Array.isArray(actions) ? actions : []),
+    ...(Array.isArray(localActions) ? localActions : [])
+  ];
+  const safeViewed = Array.isArray(lastViewed) ? lastViewed : [];
+
+  const actionText = (act) =>
+    `${act?.type || ''} ${act?.title || ''} ${act?.detail || ''}`.toLowerCase();
+  const hasActionMatching = (re) => allActions.some((a) => re.test(actionText(a)));
+
+  const landCount = Math.max(Number(stats?.landCount || 0), safeLands.length);
+  const sculptureCount = Math.max(Number(stats?.sculptureCount || 0), safeSculptures.length);
+  const totalBlocks = Number(stats?.totalBlocks || 0);
+  const awakenedLands = Number(stats?.awakenedLands || 0);
+  const activeListingCount = Math.max(Number(stats?.activeListingCount || 0), safeListings.length);
+  const questCount = Math.max(Number(stats?.questCount || 0), safeQuests.length);
+
+  const checks = {
+    profile_setup: Boolean(
+      profile?.username &&
+        (String(profile?.bio || '').trim() ||
+          String(profile?.avatarImage || '').trim() ||
+          (String(profile?.headerImage || '').trim() &&
+            String(profile?.headerImage || '').trim() !== 'preset:cyber-grid') ||
+          hasActionMatching(/update_profile/))
+    ),
+    own_land: Boolean(
+      landCount >= 1 || hasActionMatching(/\b(mint_land|claim_land|create_land|claim parcel)\b/)
+    ),
+    publish_art: Boolean(
+      sculptureCount >= 1 ||
+        totalBlocks >= 1 ||
+        hasActionMatching(/\b(publish|create_sculpture|sculpt|paint)\b/)
+    ),
+    place_3d_model: Boolean(
+      safeSculptures.some(
+        (sc) => sc?.modelType === 'custom-3d' || Boolean(sc?.customModel?.format)
+      ) || hasActionMatching(/\b(model|catalog|glb|gltf|obj|stl|ply|3d item|3d model)\b/)
+    ),
+    irl_permanent: Boolean(
+      awakenedLands >= 1 ||
+        safeLands.some(
+          (l) =>
+            l?.stewardStatus === 'awakened' ||
+            l?.expiration?.state === 'permanent' ||
+            Boolean(l?.hadHumanInteraction)
+        ) ||
+        hasActionMatching(/\b(check[_ -]?in|awaken|irl visit|in-person)\b/)
+    ),
+    explore_lands: Boolean(
+      safeViewed.length >= 1 ||
+        landCount >= 2 ||
+        hasActionMatching(/\b(view|visit|inspect|explore|map|navigate)\b/)
+    ),
+    agent_collab: Boolean(
+      profile?.accountType === 'agent' ||
+        allActions.some((a) => a?.type === 'signed_action') ||
+        hasActionMatching(/\b(agent|mcp|pair|signed_action|approved)\b/)
+    ),
+    manage_land: Boolean(
+      safeLands.some(
+        (l) =>
+          Boolean(String(l?.customName || '').trim()) ||
+          Boolean(String(l?.curationNote || l?.description || '').trim())
+      ) || hasActionMatching(/\b(manage|rename|update_land|land settings|curation)\b/)
+    ),
+    quests_or_builder: Boolean(
+      questCount >= 1 ||
+        sculptureCount >= 3 ||
+        totalBlocks >= 50 ||
+        hasActionMatching(/\b(quest)\b/)
+    ),
+    market_or_share: Boolean(
+      activeListingCount >= 1 ||
+        hasActionMatching(/\b(list|listing|buy|sale|market|share|copied|copy)\b/)
+    )
+  };
+
+  let score = 0;
+  const completed = [];
+  const nextToTry = [];
+  for (const item of PROFILE_FEATURE_MILESTONES) {
+    if (checks[item.id]) {
+      score += item.points;
+      completed.push(item);
+    } else {
+      nextToTry.push(item);
+    }
+  }
+
+  return {
+    score: Math.min(100, Math.max(0, score)),
+    maxScore: 100,
+    completedCount: completed.length,
+    totalFeatures: PROFILE_FEATURE_MILESTONES.length,
+    completed,
+    nextToTry
+  };
+}

@@ -477,6 +477,10 @@ function sanitizeUser(row) {
     picture: avatarImage || '',
     avatarImage,
     headerImage,
+    profilePublic:
+      row.profile_public === undefined || row.profile_public === null
+        ? true
+        : Number(row.profile_public) !== 0,
     userNumber,
     walletAddress: row.wallet_address,
     customPayoutAddress: row.custom_payout_address || '',
@@ -1481,7 +1485,8 @@ export default {
           getPublicProfile(d1Adapter, {
             identifier: user.id,
             origin: request.headers.get('Origin') || url.origin,
-            pathname: '/'
+            pathname: '/',
+            viewerUserId: user.id
           }),
           getUserMintCapacityStatus(d1Adapter, user.id).catch(() => null)
         ]);
@@ -1527,13 +1532,16 @@ export default {
           username: body?.username,
           bio: body?.bio,
           avatarImage: nextAvatar,
-          headerImage: nextHeader
+          headerImage: nextHeader,
+          profilePublic:
+            typeof body?.profilePublic === 'boolean' ? body.profilePublic : undefined
         });
         const [pub, mintStatus] = await Promise.all([
           getPublicProfile(d1Adapter, {
             identifier: updated.id,
             origin: request.headers.get('Origin') || url.origin,
-            pathname: '/'
+            pathname: '/',
+            viewerUserId: updated.id
           }),
           getUserMintCapacityStatus(d1Adapter, updated.id).catch(() => null)
         ]);
@@ -1546,11 +1554,13 @@ export default {
     const publicProfileMatch = pathname.match(/^\/api\/profiles\/([^/]+)$/);
     if (publicProfileMatch && request.method === 'GET') {
       try {
+        const viewer = await getAuthUser(request, env, cfg).catch(() => null);
         const handle = decodeURIComponent(publicProfileMatch[1]);
         const pub = await getPublicProfile(d1Adapter, {
           identifier: handle,
           origin: request.headers.get('Origin') || url.origin,
-          pathname: '/'
+          pathname: '/',
+          viewerUserId: viewer?.id || ''
         });
         return jsonResponse(pub, 200, request);
       } catch (err) {

@@ -16147,6 +16147,168 @@ html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {
   font-weight: 700;
 }
 
+/* Terms Experimental Safety Card, Calibration Pro Tip, Profile Feature Rating & Private Profile Gate */
+.terms-safety-warning-card {
+  padding: 12px 14px;
+  border-color: rgba(255, 183, 3, 0.58);
+  background: linear-gradient(135deg, rgba(44, 24, 8, 0.92), rgba(24, 12, 16, 0.94));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terms-safety-warning-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #ffd166;
+  font-size: 13px;
+}
+
+.terms-safety-warning-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.48;
+  color: #fde68a;
+}
+
+.guide-calibration-pro-tip {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  background: rgba(0, 245, 212, 0.08);
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.42;
+  color: #dbeafe;
+}
+
+.guide-calibration-pro-tip strong {
+  color: var(--accent);
+}
+
+.profile-feature-rating-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 209, 102, 0.32);
+  background: rgba(15, 23, 42, 0.84);
+  flex-wrap: wrap;
+}
+
+.profile-feature-rating-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.profile-feature-rating-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.profile-feature-rating-score {
+  color: var(--accent-gold);
+  font-size: 13.5px;
+}
+
+.profile-feature-rating-track {
+  flex: 1 1 90px;
+  min-width: 72px;
+  max-width: 160px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+.profile-feature-rating-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #00f5d4 0%, #ffd166 100%);
+  transition: width 0.25s ease;
+}
+
+.profile-feature-tip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.profile-feature-tip-heading {
+  font-weight: 700;
+  color: var(--accent-gold);
+  margin-bottom: 4px;
+}
+
+.profile-feature-tip-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-feature-tip-maxed {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.profile-feature-tip-done {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.profile-feature-done-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.12);
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  color: var(--accent);
+}
+
+.profile-private-gate {
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.profile-private-gate strong {
+  font-size: 15px;
+  color: var(--text);
+}
+
+.profile-private-gate p {
+  margin: 0;
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.profile-private-owner-badge {
+  border-color: rgba(255, 183, 3, 0.45);
+  color: #fde68a;
+  background: rgba(44, 24, 8, 0.72);
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,
