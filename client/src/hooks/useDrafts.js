@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../utils/api.js';
 import {
   clearLocalDraft,
-  copyToClipboard,
   saveLocalDraft
 } from '../utils/clipboard.js';
 
@@ -35,7 +34,6 @@ export function useDrafts({
   commitTransformAndExit,
   stopBrushPainting,
   resetArtTransformState,
-  ensureToolUsable,
   captureSculptureSnapshot,
   setSensorBanner,
   showTemporaryHint,
@@ -273,7 +271,6 @@ export function useDrafts({
   );
 
   const openAgentHandoff = useCallback(async () => {
-    if (!ensureToolUsable('agent')) return;
     setAgentOpen(true);
     setAgentError('');
     setAgentCopied(false);
@@ -298,7 +295,7 @@ export function useDrafts({
 
     if (!activeLoc) {
       setAgentError(
-        'Enable GPS location permission first so the agent code locks onto your physical spot.'
+        'Enable GPS location permission to lock an instant session code onto your exact physical spot.'
       );
       return;
     }
@@ -308,19 +305,12 @@ export function useDrafts({
       const created = await api.createAgentSession({ location: activeLoc });
       setAgentSession(created);
       lastAppliedAgentTsRef.current = '';
-      const ok = await copyToClipboard(created.clipboardText);
-      setAgentCopied(ok);
-      setSensorBanner(
-        ok
-          ? `Copied Agent Code ${created.code} — send it to your agent to stage blocks here.`
-          : `Agent Code ${created.code} ready — tap Copy inside the sheet.`
-      );
     } catch (err) {
       setAgentError(err.message);
     } finally {
       setAgentBusy(false);
     }
-  }, [ensureToolUsable, location, locationRef, setSensorBanner]);
+  }, [location, locationRef]);
 
   const refreshAgentDraft = useCallback(async () => {
     if (!agentSession?.code) return;

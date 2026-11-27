@@ -754,7 +754,9 @@ export default function InfoTermsModal({
                     <InfoTip title="Mobile Tool Carousel">
                       Hold and move your phone like a spray can to paint in 3D, or swipe the bottom
                       Key Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger
-                      Z-rotate &amp; sliders) → Stack → Preview → Agent Code → Publish</strong>.
+                      Z-rotate &amp; sliders) → Stack → Search 3D → Preview → Publish</strong>, or
+                      tap the bottom-right <strong>Copy Agent Prompt</strong> button to invite your
+                      AI agent here.
                       AR lands and sculptures appear in true 1:1 perspective with atmospheric haze
                       within <strong>300 ft</strong> and sharpen as you approach. Selecting a
                       drawing or painting tool automatically fades existing land art so your strokes

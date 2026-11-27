@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   buildAutonomousAgentPrompt,
   buildPropertyOwnerPrompt,
@@ -7,6 +7,7 @@ import {
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
+import { buildMobileLocationAgentPrompt } from '../../utils/mobileAgentPrompt.js';
 import { useSafeBackdropClose } from '../../utils/modalBackdropGuard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
@@ -240,116 +241,287 @@ export function PairDesktopMcpModal({
 }
 
 export function AgentHandoffModal({
-  agentBusy,
-  agentError,
-  agentSession,
-  agentCopied,
+  agentBusy = false,
+  agentError = '',
+  agentSession = null,
+  agentCopied = false,
   setAgentCopied,
+  location = null,
+  activeLand = null,
+  pairingCode = '',
+  onRetryGenerateSession = null,
   onRefreshAgentDraft,
   onInspectInAR,
   onPublishOnPhone,
+  onNotifyCopied = null,
   onClose
 }) {
-  const backdropCloseProps = useSafeBackdropClose(onClose);
+  const [copyFeedback, setCopyFeedback] = useState('');
+  const [copyFailed, setCopyFailed] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('.info-tip-popover')) return;
+      e.preventDefault();
+      onClose?.();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const apiOrigin =
+    API_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+  const publicUrl =
+    typeof window !== 'undefined' ? window.location.origin : 'https://spray.land';
+  const promptText = buildMobileLocationAgentPrompt({
+    location: location || agentSession?.location || null,
+    activeLand,
+    agentSession,
+    pairingCode,
+    apiOrigin,
+    publicUrl
+  });
+
+  const isOnLand = Boolean(activeLand?.parcelId);
+  const landDisplayName = isOnLand
+    ? resolveLandDisplayName(activeLand, { defaultName: 'Virtual Land' })
+    : agentSession?.parcelName || agentSession?.landDisplayName
+    ? resolveLandDisplayName(
+        { customName: agentSession.parcelName || agentSession.landDisplayName || '' },
+        { defaultName: 'Virtual Land' }
+      )
+    : '';
+  const hasCoords =
+    Number.isFinite(Number(location?.lat)) && Number.isFinite(Number(location?.lng));
+
+  const handleCopyPrompt = async () => {
+    setCopyFailed(false);
+    const ok = await copyToClipboard(promptText);
+    setAgentCopied?.(ok);
+    if (ok) {
+      const msg = isOnLand
+        ? `Prompt copied! Paste into your AI agent to add to "${landDisplayName}" or engage here.`
+        : 'Prompt copied! Paste into your AI agent to claim new land, build 3D art, or engage here.';
+      setCopyFeedback(msg);
+      onNotifyCopied?.(msg);
+    } else {
+      setCopyFailed(true);
+      setCopyFeedback('');
+    }
+  };
+
+  const handleCopyCodeOnly = async () => {
+    if (!agentSession?.code) return;
+    setCopyFailed(false);
+    const ok = await copyToClipboard(agentSession.code);
+    setAgentCopied?.(ok);
+    if (ok) {
+      const msg = `Copied session code ${agentSession.code} to clipboard!`;
+      setCopyFeedback(msg);
+      onNotifyCopied?.(msg);
+    } else {
+      setCopyFailed(true);
+      setCopyFeedback('');
+    }
+  };
+
+  const showCopiedState = Boolean(agentCopied || copyFeedback);
+
   return (
-    <div className="modal-backdrop" {...backdropCloseProps}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3 className="modal-title">
-            <XeroIcon emoji="🤖" size={22} /> Agent Sculpture Code
-          </h3>
+    <div
+      className="modal-backdrop mobile-agent-prompt-backdrop is-fullscreen-sheet"
+      data-testid="mobile-agent-prompt-modal"
+      data-camera-hidden="true"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        className="modal-card mobile-agent-prompt-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Copy AI Agent Prompt"
+      >
+        <div className="modal-header mobile-catalog-search-header">
+          <div className="mobile-catalog-search-heading">
+            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 16 }}>
+              <XeroIcon emoji="🤖" size={20} />
+              <span>Copy Agent Prompt</span>
+            </h3>
+            <div
+              className="mobile-catalog-camera-paused-note"
+              data-testid="mobile-agent-camera-paused-note"
+            >
+              <XeroIcon emoji="📷" size={11} />
+              <span>Camera hidden while configuring your AI agent</span>
+            </div>
+          </div>
           <div className="modal-header-actions">
             <GlobalNotificationBell compact />
-            <button className="btn" onClick={onClose}>
-              <XeroIcon emoji="❌" size={15} />
+            <button
+              type="button"
+              className="btn btn-sm mobile-catalog-close-btn"
+              data-testid="agent-prompt-close-btn"
+              aria-label="Close agent prompt and return to camera"
+              onClick={() => onClose?.()}
+            >
+              <XeroIcon emoji="✕" size={14} />
+              <span>Camera</span>
             </button>
           </div>
         </div>
 
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 0 }}>
-          Give this location-locked code to your AI agent so it can read our 4x voxel tools,
-          12 colors, and 3 block types to build a 3D sculpture here. You must inspect and tap{' '}
-          <strong>Publish</strong> on your phone to mint.
-        </p>
-
-        {agentBusy && (
-          <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-            Generating location code...
-          </div>
-        )}
-
-        {agentError && (
-          <div style={{ color: '#ffb3c1', fontSize: 12, marginBottom: 8 }}>
-            <XeroIcon emoji="⚠️" size={14} /> {agentError}
-          </div>
-        )}
-
-        {agentSession?.code && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className="mono" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.06em' }}>
-                  {agentSession.code}
+        <div className="mobile-catalog-search-body mobile-agent-prompt-body">
+          <div
+            className={`card agent-location-context-card ${isOnLand ? 'is-on-land' : 'is-open-spot'}`}
+            data-testid="agent-location-context"
+            data-on-land={isOnLand ? 'true' : 'false'}
+          >
+            <div className="agent-location-context-title">
+              <XeroIcon emoji={isOnLand ? '📍' : '✨'} size={15} />
+              <strong>
+                {isOnLand
+                  ? `On Land: ${landDisplayName}`
+                  : 'Open Spot — Claim New Land or Build Here'}
+              </strong>
+            </div>
+            <p className="agent-location-context-desc">
+              {isOnLand
+                ? 'Copy this prompt so your AI agent can add 3D models or voxel art to this land, inspect artworks, or engage with it just like a human.'
+                : 'Copy this prompt so your AI agent can claim a new 3D land at your spot, add ready-made 3D models or voxel sculptures, or engage with nearby lands like a human.'}
+            </p>
+            <div className="agent-location-context-meta mono">
+              {isOnLand && <span>{activeLand.parcelId}</span>}
+              {hasCoords ? (
+                <span>
+                  {Number(location.lat).toFixed(5)}, {Number(location.lng).toFixed(5)}
                 </span>
-                <span className={`badge ${agentSession.status === 'ready' ? 'teal' : 'gold'}`}>
-                  {agentSession.status === 'ready'
-                    ? `Loaded ${agentSession.voxelCount || agentSession.draftVoxels?.length || 0} voxels`
-                    : 'Waiting for agent build...'}
+              ) : (
+                <span>GPS acquiring…</span>
+              )}
+              {agentSession?.code && (
+                <span className="badge teal" style={{ fontSize: 10.5 }}>
+                  Code: {agentSession.code}
                 </span>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                {resolveLandDisplayName(
-                  { customName: agentSession.parcelName || agentSession.landDisplayName || '' },
-                  { defaultName: 'Virtual Land' }
-                )}{' '}
-                · 4x (0.05m/block) · 10000×10000×10000 limit
-              </div>
-              {agentSession.endpoints?.spec && (
-                <div style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>
-                  Spec: <span className="mono">{agentSession.endpoints.spec}</span>
-                </div>
               )}
             </div>
+          </div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={async () => {
-                  const ok = await copyToClipboard(agentSession.clipboardText);
-                  setAgentCopied(ok);
-                }}
-              >
-                <XeroIcon emoji="📋" size={15} />{' '}
-                {agentCopied ? 'Copied Prompt & Code!' : 'Copy Agent Prompt & Code'}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={async () => {
-                  const ok = await copyToClipboard(agentSession.code);
-                  setAgentCopied(ok);
-                }}
-              >
-                Copy Code Only
-              </button>
-              <button type="button" className="btn" onClick={onRefreshAgentDraft}>
-                <XeroIcon emoji="🔄" size={15} /> Check Draft
-              </button>
-            </div>
+          <div className="agent-prompt-primary-actions">
+            <button
+              type="button"
+              className={`btn btn-primary agent-copy-prompt-cta ${showCopiedState ? 'is-copied' : ''}`}
+              data-testid="copy-agent-prompt-btn"
+              onClick={handleCopyPrompt}
+            >
+              <XeroIcon emoji={showCopiedState ? '✅' : '📋'} size={16} />
+              <span>{showCopiedState ? 'Prompt Copied to Clipboard!' : 'Copy Agent Prompt'}</span>
+            </button>
 
-            {agentSession.status === 'ready' && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button type="button" className="btn btn-primary" onClick={onInspectInAR}>
-                  <XeroIcon emoji="👁️" size={15} /> Inspect in AR
+            <div className="agent-prompt-secondary-row">
+              {agentSession?.code && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  data-testid="copy-agent-code-btn"
+                  onClick={handleCopyCodeOnly}
+                >
+                  <XeroIcon emoji="🔑" size={13} /> Copy Code ({agentSession.code})
                 </button>
-                <button type="button" className="btn btn-pink" onClick={onPublishOnPhone}>
-                  <XeroIcon emoji="🚀" size={15} /> Publish on Phone
+              )}
+              {agentSession?.code && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  data-testid="agent-check-draft-btn"
+                  onClick={onRefreshAgentDraft}
+                >
+                  <XeroIcon emoji="🔄" size={13} /> Check Draft
+                </button>
+              )}
+              {!agentSession?.code && !agentBusy && typeof onRetryGenerateSession === 'function' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  data-testid="agent-retry-session-btn"
+                  onClick={onRetryGenerateSession}
+                >
+                  <XeroIcon emoji="📍" size={13} /> Generate Location Code
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showCopiedState && (
+            <div
+              className="agent-copy-confirmation"
+              data-testid="agent-copy-confirmation"
+              role="status"
+              aria-live="polite"
+            >
+              <XeroIcon emoji="✅" size={15} />
+              <span>
+                {copyFeedback ||
+                  'Prompt copied to clipboard! Paste it into your AI agent to add to this land, claim new land, or engage here.'}
+              </span>
+            </div>
+          )}
+
+          {copyFailed && (
+            <div
+              className="status-banner status-banner-error"
+              data-testid="agent-copy-error"
+              role="alert"
+              style={{ fontSize: 12 }}
+            >
+              ⚠️ Browser blocked automatic clipboard access — long-press and copy the prompt box below.
+            </div>
+          )}
+
+          {agentBusy && (
+            <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
+              ⏳ Locking live GPS location code… (you can already copy the prompt above)
+            </div>
+          )}
+
+          {agentError && (
+            <div
+              className="status-banner"
+              data-testid="agent-session-notice"
+              style={{ fontSize: 12, color: '#ffd166' }}
+            >
+              <XeroIcon emoji="⚠️" size={13} /> {agentError} — You can still copy the general Agent Prompt above.
+            </div>
+          )}
+
+          {agentSession?.status === 'ready' && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--accent)' }}>
+                ✨ Agent staged {agentSession.voxelCount || agentSession.draftVoxels?.length || 0} blocks!
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={onInspectInAR}>
+                  <XeroIcon emoji="👁️" size={14} /> Inspect in AR
+                </button>
+                <button type="button" className="btn btn-pink btn-sm" onClick={onPublishOnPhone}>
+                  <XeroIcon emoji="🚀" size={14} /> Publish on Phone
                 </button>
               </div>
-            )}
+            </div>
+          )}
+
+          <div className="agent-prompt-preview-box">
+            <div className="agent-prompt-preview-label">
+              <span>Prompt Preview (includes land, GPS, 3D Catalog &amp; MCP instructions)</span>
+            </div>
+            <pre
+              className="agent-prompt-preview mono"
+              data-testid="agent-prompt-preview"
+            >
+              {promptText}
+            </pre>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

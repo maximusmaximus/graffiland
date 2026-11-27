@@ -61,7 +61,6 @@ export const KEY_TOOLS = [
   { id: 'recenter', emoji: '🧭', label: 'Recenter', hint: 'Tap to recenter 3D gyroscope aim' },
   { id: 'preview', emoji: '👁️', label: 'Preview', hint: 'AR preview & E2EE chat' },
   { id: 'drafts', emoji: '💾', label: 'Drafts', hint: 'Save & load sculpture drafts' },
-  { id: 'agent', emoji: '📋', label: 'Agent Code', hint: 'Copy code for AI agent build' },
   { id: 'publish', emoji: '🚀', label: 'Publish', hint: 'Review & mint on your phone' }
 ];
 
