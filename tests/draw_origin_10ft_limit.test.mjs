@@ -169,7 +169,7 @@ describe('useVoxelBrush 10-Foot Origin Enforcement (React + jsdom)', () => {
     }
   });
 
-  test('clamps reachMeters <= 10 ft, blocks/clips lines past 10 ft from set surfaceAnchor AND from device origin', async () => {
+  test('does NOT restrict users to 10 ft from origin so painting works freely anywhere', async () => {
     const { useVoxelBrush } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
 
     const camera = new THREE.PerspectiveCamera(68, 390 / 844, 0.05, 120);
@@ -220,25 +220,19 @@ describe('useVoxelBrush 10-Foot Origin Enforcement (React + jsdom)', () => {
       return React.createElement('div', null, String(api.voxels.length));
     }
 
-    // 1) Restored draft with old reachMeters=8.0 clamps strictly to <= 10 ft (3.048m)
+    // 1) Restored draft with reachMeters=8.0 is NOT forced down to 3.048m (10 ft)
     const view = RTL.render(
       React.createElement(Harness, {
         initialDraft: { reachMeters: 8.0, voxels: [] }
       })
     );
-    assert.ok(
-      hookApi.reachMeters <= MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
-      `Expected restored reach <= 3.048m, got ${hookApi.reachMeters}`
-    );
+    assert.equal(hookApi.reachMeters, 8.0);
     await RTL.act(async () => {
       hookApi.setReachMeters(9.5);
     });
-    assert.ok(
-      hookApi.reachMeters <= MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
-      `Expected setReachMeters(9.5) to clamp <= 3.048m, got ${hookApi.reachMeters}`
-    );
+    assert.equal(hookApi.reachMeters, 9.5);
 
-    // 2) Set a locked floor origin point at (0, 0, 0), then aim shallowly 15m (49 ft) out along the floor
+    // 2) Aiming >10 ft (e.g. 6m / ~20 ft) from a set floor origin is allowed (never returns out_of_range)
     await RTL.act(async () => {
       hookApi.setSurfaceAnchor({
         x: 0,
@@ -254,44 +248,30 @@ describe('useVoxelBrush 10-Foot Origin Enforcement (React + jsdom)', () => {
     });
 
     camera.position.set(0, 1.0, 2.0);
-    camera.lookAt(0, 0, -15.0); // Shallow ray intersecting y=0 at z=-15m (49 ft from origin!)
+    camera.lookAt(0, 0, -6.0);
     camera.updateMatrixWorld(true);
 
-    const idleFarTarget = hookApi.computeTargetVoxel(false);
-    assert.equal(idleFarTarget.action, 'out_of_range', 'Idle aim 49 ft from set origin must be blocked');
-    assert.equal(idleFarTarget.originSource, 'surface_anchor');
+    const farTarget = hookApi.computeTargetVoxel(false);
+    assert.equal(farTarget.action, 'add', 'Aiming >10 ft from surface origin must allow painting');
     assert.ok(
-      distanceFromDrawOrigin(idleFarTarget, { x: 0, y: 0, z: 0 }) <= MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS + 1e-4,
-      'Warning ghost cursor must clamp inside 10 ft boundary'
+      distanceFromDrawOrigin(farTarget, { x: 0, y: 0, z: 0 }) > MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
+      'Far target should remain beyond 10 ft without artificial origin clamping'
     );
 
-    // Trying to apply out_of_range target adds 0 blocks and shows clear 10 ft hint
     await RTL.act(async () => {
-      hookApi.applyVoxelAction(idleFarTarget);
+      hookApi.applyVoxelAction(farTarget);
     });
-    assert.equal(hookApi.voxels.length, 0);
-    assert.ok(hints.some((h) => /10 ft/i.test(h)), 'Must notify user of 10 ft origin limit');
-
-    // Mid-stroke continuous sweep from z=-1.0 (inside 10 ft) out to z=-15.0 (49 ft):
-    // clamps cleanly onto the exact 10 ft perimeter so the line reaches 10 ft and stops!
-    hookApi.lastPaintPosRef.current = { x: 0, y: 0.025, z: -1.0 };
-    const midSweepTarget = hookApi.computeTargetVoxel(true);
-    assert.equal(midSweepTarget.action, 'add');
-    assert.equal(midSweepTarget.clampedToOriginLimit, true);
-    assert.ok(
-      distanceFromDrawOrigin(midSweepTarget, { x: 0, y: 0, z: 0 }) <= MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS + 1e-4,
-      'Mid-stroke clamped target must stay strictly <= 10 ft from surfaceAnchor'
+    assert.equal(hookApi.voxels.length, 1, 'Applying voxel >10 ft from origin must succeed');
+    assert.equal(
+      hints.some((h) => /10 ft/i.test(h)),
+      false,
+      'Must never show a 10 ft origin lockout hint'
     );
 
-    // Once lastPaintPos is at the 10 ft rim, further frames aimed at -15m return out_of_range (no rim smearing!)
-    hookApi.lastPaintPosRef.current = { x: midSweepTarget.x, y: midSweepTarget.y, z: midSweepTarget.z };
-    const pastRimTarget = hookApi.computeTargetVoxel(true);
-    assert.equal(pastRimTarget.action, 'out_of_range');
-
-    // 3) Clear surfaceAnchor -> device origin governs!
-    // Start a continuous Brush stroke at device origin (0, 0.4, 2.2), then move device 6m away mid-stroke!
+    // 3) Without surfaceAnchor, walking >10 ft mid-stroke still computes 'add' cleanly and auto-reconciles surface
     await RTL.act(async () => {
       hookApi.setSurfaceAnchor(null);
+      hookApi.setVoxels([]);
       hookApi.stopBrushPainting();
     });
     camera.position.set(0, 0.4, 2.2);
@@ -303,37 +283,18 @@ describe('useVoxelBrush 10-Foot Origin Enforcement (React + jsdom)', () => {
     await RTL.act(async () => {
       hookApi.startContinuousHoldTool('brush');
     });
-    assert.equal(hookApi.voxels.length, 1, 'First stroke block at 1.8m from device origin succeeds');
-    assert.deepEqual(hookApi.strokeDeviceOriginRef.current, { x: 0, y: 0.4, z: 2.2 });
+    assert.equal(hookApi.voxels.length, 1);
+    assert.ok(hookApi.surfaceAnchor, 'Start surface should auto-reconcile on first paint');
 
-    // Walk 6 meters along +X without releasing Brush -> target at x=6.0 is > 10 ft from strokeDeviceOrigin (0, 0.4, 2.2)!
+    // Walk 6m away mid-stroke -> still allowed (action === 'add', no out_of_range block)
     camera.position.set(6.0, 0.4, 2.2);
     camera.lookAt(6.0, 0.4, 0.4);
     camera.updateMatrixWorld(true);
     const walkedMidStroke = hookApi.computeTargetVoxel(true);
+    assert.equal(walkedMidStroke.action, 'add');
     assert.ok(
-      distanceFromDrawOrigin(walkedMidStroke, { x: 0, y: 0.4, z: 2.2 }) <= MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS + 1e-4,
-      'Walking >10 ft mid-stroke must never allow voxels beyond 10 ft from device origin'
+      distanceFromDrawOrigin(walkedMidStroke, { x: 0, y: 0.4, z: 2.2 }) > MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
     );
-
-    // Enforced batch filter also rejects any point > 10 ft from device origin
-    const countBefore = hookApi.voxels.length;
-    await RTL.act(async () => {
-      hookApi.applyVoxelBatch([{ action: 'add', x: 6.0, y: 0.4, z: 0.4, scale: 1 }], {
-        enforceOriginLimit: true
-      });
-    });
-    assert.equal(hookApi.voxels.length, countBefore, 'Enforced batch must block voxels > 10 ft from stroke device origin');
-
-    // Release Brush -> start a NEW stroke at the new device location (6.0, 0.4, 2.2) -> allowed!
-    await RTL.act(async () => {
-      hookApi.stopBrushPainting();
-    });
-    assert.equal(hookApi.strokeDeviceOriginRef.current, null);
-    await RTL.act(async () => {
-      hookApi.startContinuousHoldTool('brush');
-    });
-    assert.equal(hookApi.voxels.length, countBefore + 1, 'New stroke from new device origin succeeds cleanly');
 
     view.unmount();
   });

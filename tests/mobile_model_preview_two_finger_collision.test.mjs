@@ -223,7 +223,7 @@ describe('Mobile 3D Model Preview, Multi-Axis 2-Finger Rotate/Position, Scene Fa
     }
   });
 
-  test('2-finger gesture simultaneously rotates (yaw), scales (pinch), and positions in 3D (X + Z depth); 1-finger drag moves X & Y freely', async () => {
+  test('2-finger gesture pivots Z on vertical pull, rotates Y on horizontal slide, and scales on pinch; 1-finger drag moves X & Y freely', async () => {
     const {
       captureTwoFingerFrame,
       computeOneFingerDragStep,
@@ -235,17 +235,14 @@ describe('Mobile 3D Model Preview, Multi-Axis 2-Finger Rotate/Position, Scene Fa
     const pivot = { x: 0, y: 0, z: -2.0 };
     const startTr = { scale: 1, rotXDeg: 0, rotYDeg: 0, rotZDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 };
 
-    // 1) Two-finger twist (45 deg counter-clockwise) + pinch spread (1.5x) + drag up-right
+    // 1) Two-finger pull up (-60px) + slide right (+60px) + pinch spread (1.5x)
     const f0 = captureTwoFingerFrame([
       { x: 100, y: 200 },
       { x: 200, y: 200 }
     ]);
-    // Midpoint moves from (150,200) -> (210,140) (right +60px, up -60px), dist 100 -> 150, angle 0 -> +45 deg
-    const rad45 = Math.PI / 4;
-    const halfD = 75;
     const nextPts = [
-      { x: 210 - Math.cos(rad45) * halfD, y: 140 - Math.sin(rad45) * halfD },
-      { x: 210 + Math.cos(rad45) * halfD, y: 140 + Math.sin(rad45) * halfD }
+      { x: 210 - 75, y: 140 },
+      { x: 210 + 75, y: 140 }
     ];
     const step2 = computeTwoFingerTransformStep({
       prevFrame: f0,
@@ -257,9 +254,19 @@ describe('Mobile 3D Model Preview, Multi-Axis 2-Finger Rotate/Position, Scene Fa
     });
 
     assert.ok(step2.nextTransform.scale > 1.4, `Expected pinch spread to enlarge scale, got ${step2.nextTransform.scale}`);
-    assert.ok(Math.abs(step2.nextTransform.rotYDeg) > 35, `Expected 2-finger twist to rotate Y yaw, got ${step2.nextTransform.rotYDeg}`);
-    assert.ok(step2.nextTransform.offsetX > 0.1, `Expected 2-finger slide right to shift +X, got ${step2.nextTransform.offsetX}`);
-    assert.ok(step2.nextTransform.offsetZ < -0.1, `Expected 2-finger slide up to push deeper (-Z), got ${step2.nextTransform.offsetZ}`);
+    assert.ok(step2.nextTransform.rotYDeg > 25, `Expected 2-finger slide right to rotate Y, got ${step2.nextTransform.rotYDeg}`);
+    assert.ok(step2.nextTransform.rotZDeg > 25, `Expected 2-finger pull up to pivot Z, got ${step2.nextTransform.rotZDeg}`);
+
+    // Two-finger pull down (+60px) pivots Z in the opposite direction
+    const pullDown = computeTwoFingerTransformStep({
+      prevFrame: f0,
+      nextPointers: [
+        { x: 100, y: 260 },
+        { x: 200, y: 260 }
+      ],
+      currentTransform: startTr
+    });
+    assert.ok(pullDown.nextTransform.rotZDeg < -25, `Expected 2-finger pull down to pivot -Z, got ${pullDown.nextTransform.rotZDeg}`);
 
     // 2) Single-finger drag right (+50px) and up (-40px) shifts BOTH +X and +Y smoothly
     const step1 = computeOneFingerDragStep({
@@ -422,7 +429,7 @@ describe('Mobile 3D Model Preview, Multi-Axis 2-Finger Rotate/Position, Scene Fa
     assert.ok(view.getByTestId('transform-rotx-slider'));
     assert.ok(view.getByTestId('transform-roty-slider'));
     assert.ok(view.getByTestId('transform-rotz-slider'));
-    assert.ok(view.getByTestId('transform-gesture-banner').textContent.includes('2-finger twist'));
+    assert.ok(view.getByTestId('transform-gesture-banner').textContent.includes('2-finger ↕ Z-pivot'));
 
     // Try moving -1.4m on X (straight into Golden Statue at x=0, z=-2.0) -> MUST BE BLOCKED!
     await RTL.act(async () => {

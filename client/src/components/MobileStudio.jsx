@@ -2149,7 +2149,6 @@ export default function MobileStudio({
         atmosphericTintRef={atmosphericTintRef}
         getActivePlacedItemColliders={brush.getActivePlacedItemColliders}
         notifyBlockedByPlacedItem={brush.notifyBlockedByPlacedItem}
-        notifyOutOfDrawRange={brush.notifyOutOfDrawRange}
         computeTargetVoxel={brush.computeTargetVoxel}
         applyVoxelBatch={brush.applyVoxelBatch}
         applyVoxelAction={brush.applyVoxelAction}
@@ -2206,12 +2205,6 @@ export default function MobileStudio({
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
           onOpenCatalogSearch={openCatalogSearchModal}
           hasPlacedCatalogItem={Boolean(placedCatalogItem)}
-          hasOwnedLand={lands.hasOwnedLand}
-          ownedLandCount={lands.ownedLandCount}
-          onOpenLandManage={() => {
-            lands.setLandManageParcelId('');
-            lands.setLandManageOpen(true);
-          }}
           editingSculpture={lands.editingSculpture}
           savingCanvasEdit={lands.savingCanvasEdit}
           onSaveCanvasModification={lands.handleSaveCanvasModification}
@@ -2227,7 +2220,6 @@ export default function MobileStudio({
           brushUnavailableReason={brush.toolAvailability.brush.reason}
           onSeedVoxelAtAnchor={brush.seedVoxelAtAnchor}
           onClearSurfaceAnchor={() => brush.setSurfaceAnchor(null)}
-          onSelectSurfaceCenter={() => brush.selectSurfaceAtScreenPoint()}
           needsGyroTap={pol.needsGyroTap}
           calibrationOverlayVisible={
             !isArViewOnly &&

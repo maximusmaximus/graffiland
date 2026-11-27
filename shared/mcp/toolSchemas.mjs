@@ -5,6 +5,39 @@ export const MCP_TOOLS = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'get_my_profile',
+    description:
+      'Read the paired user (or autonomous agent) public SPRAY.LAND profile including @username, bio, avatarImage, headerImage, public shareable profile URL (?u=...), stats, and owned lands/sculptures.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'update_profile',
+    description:
+      'Update the paired user (or autonomous agent) SPRAY.LAND profile — username (unique 3–24 chars), bio (up to 280 chars), avatarImage (public https:// URL, base64 raster data URL, or "" to reset), and/or headerImage (curated preset:cyber-grid / preset:neon-skyline / preset:sunset-voxel / preset:emerald-mesh / preset:gold-monolith / preset:midnight-wave, https:// URL, raster data URL, or "" to reset). Requires an active GLP pairing code (for human accounts) or agent Bearer auth.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        username: {
+          type: 'string',
+          description: 'New unique handle (3–24 lowercase letters, numbers, _ or -; no @ needed).'
+        },
+        bio: {
+          type: 'string',
+          description: 'Public profile bio text (max 280 characters).'
+        },
+        avatarImage: {
+          type: 'string',
+          description: 'Public https:// image URL, base64 PNG/JPEG/WebP data URL, or "" to reset.'
+        },
+        headerImage: {
+          type: 'string',
+          description:
+            'Curated preset token ("preset:cyber-grid", "preset:neon-skyline", "preset:sunset-voxel", "preset:emerald-mesh", "preset:gold-monolith", "preset:midnight-wave"), public https:// URL, raster data URL, or "" to reset.'
+        }
+      }
+    }
+  },
+  {
     name: 'list_my_lands',
     description: 'List all Virtual Land parcels and sculptures owned by the paired property owner.',
     inputSchema: { type: 'object', properties: {} }

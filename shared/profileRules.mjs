@@ -211,7 +211,7 @@ export function suggestUsernameFromName(name = '', email = '') {
 
 /**
  * Build a shareable public profile URL (`?u=<username>`).
- * @param {{ origin?: string, pathname?: string, username: string }} options
+ * @param {{ origin?: string, pathname?: string, username?: string }} [options]
  * @returns {string}
  */
 export function buildPublicProfileUrl({ origin = '', pathname = '/', username = '' } = {}) {

@@ -6,23 +6,17 @@ import {
   AREA_LIMIT_BLOCKS,
   HUMAN_MAX_DRAW_SPAN_FEET,
   HUMAN_MAX_DRAW_SPAN_METERS,
-  MAX_DRAW_DISTANCE_FROM_ORIGIN_FEET,
-  MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS,
   STALE_DRAW_ERASE_DISTANCE_FEET,
   STALE_DRAW_ERASE_IDLE_MINUTES,
   STALE_DRAW_ERASE_IDLE_MS
 } from '../../../shared/constants.mjs';
 import {
-  clampPointToDrawOriginRadius,
   computeAdjacentCandidateSlots,
   computeMaxHumanDrawScale,
-  distanceFromDrawOrigin,
   findBestAdjacentVoxelSlot,
   getVoxelCellStep,
-  isWithinDrawOriginRadius,
   measureVoxelHorizontalFootprint,
   normalizeBlockScale,
-  resolveDrawOriginPoint,
   snapToVoxelLattice
 } from '../../../shared/voxelStroke.mjs';
 import {
@@ -45,6 +39,7 @@ import {
   computeOneFingerDragStep,
   computeTwoFingerTransformStep
 } from '../utils/arTransformGestures.js';
+import { computeGizmoHandleDragStep } from '../utils/arTransformGizmo3D.js';
 import {
   evaluateStaleDrawErase,
   normalizeDrawLocation,
@@ -190,10 +185,7 @@ export function useVoxelBrush({
   const clampReach = useCallback((rawVal) => {
     const n = Number(rawVal);
     if (!Number.isFinite(n)) return 1.8;
-    return Math.max(
-      0.5,
-      Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, Math.round(n * 100) / 100)
-    );
+    return Math.max(0.5, Math.min(12, Math.round(n * 100) / 100));
   }, []);
   const [reachMeters, setReachMetersState] = useState(() => clampReach(initialDraft.reachMeters));
   const setReachMeters = useCallback(
@@ -223,6 +215,7 @@ export function useVoxelBrush({
   });
   const [transformPivot, setTransformPivot] = useState({ x: 0, y: 0, z: 0 });
   const [transformCollision, setTransformCollision] = useState(null);
+  const [activeGizmoHandle, setActiveGizmoHandle] = useState('');
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
   const [isDraggingKey, setIsDraggingKey] = useState(false);
@@ -268,7 +261,6 @@ export function useVoxelBrush({
   const clearedBackupRef = useRef(null);
   const lastPrereqNotifyRef = useRef({ toolId: '', msg: '', ts: 0 });
   const lastItemBlockNotifyRef = useRef({ msg: '', ts: 0 });
-  const lastRangeLimitNotifyRef = useRef({ msg: '', ts: 0 });
   const toolAvailabilityRef = useRef({});
   const keyGestureRef = useRef({
     active: false,
@@ -292,6 +284,7 @@ export function useVoxelBrush({
   const tapStartRef = useRef(null);
   const activeCanvasPointersRef = useRef(new Map());
   const transformPinchRef = useRef(null);
+  const activeGizmoHandleRef = useRef(null);
 
   useEffect(() => {
     surfaceAnchorRef.current = surfaceAnchor;
@@ -580,23 +573,50 @@ export function useVoxelBrush({
     [showTemporaryHint]
   );
 
-  const notifyOutOfDrawRange = useCallback(
-    (originSource = 'device_origin') => {
-      const msg =
-        originSource === 'surface_anchor'
-          ? `Max ${MAX_DRAW_DISTANCE_FROM_ORIGIN_FEET} ft from origin — tap scene to move origin.`
-          : `Max ${MAX_DRAW_DISTANCE_FROM_ORIGIN_FEET} ft from your device — release & step closer.`;
-      const now = Date.now();
-      if (
-        lastRangeLimitNotifyRef.current.msg === msg &&
-        now - lastRangeLimitNotifyRef.current.ts < 1100
-      ) {
-        return;
+  const reconcileAutoSurfaceAnchor = useCallback(
+    (anchorPoint) => {
+      if (surfaceAnchorRef.current || !anchorPoint) return;
+      const ax = Number(anchorPoint.x);
+      const ay = Number(anchorPoint.y);
+      const az = Number(anchorPoint.z);
+      if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(az)) return;
+      const camPos = cameraRef?.current?.position;
+      let nx = 0;
+      let ny = 1;
+      let nz = 0;
+      let depthM = Number(reachRef.current) || 1.8;
+      if (camPos && Number.isFinite(Number(camPos.x))) {
+        const dx = camPos.x - ax;
+        const dy = camPos.y - ay;
+        const dz = camPos.z - az;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist > 0.05) {
+          depthM = Number(Math.max(0.5, Math.min(12, dist)).toFixed(2));
+          const horiz = Math.hypot(dx, dz);
+          if (horiz > 0.1) {
+            nx = dx / horiz;
+            ny = 0;
+            nz = dz / horiz;
+          }
+        }
       }
-      lastRangeLimitNotifyRef.current = { msg, ts: now };
-      showTemporaryHint(msg);
+      const nextAnchor = {
+        x: ax,
+        y: ay,
+        z: az,
+        nx,
+        ny,
+        nz,
+        depthM,
+        label: 'Auto Surface',
+        source: 'auto',
+        sharpnessScore: 0.5,
+        locked: false
+      };
+      surfaceAnchorRef.current = nextAnchor;
+      setSurfaceAnchor(nextAnchor);
     },
-    [showTemporaryHint]
+    [cameraRef]
   );
 
   const computeTargetVoxel = useCallback(
@@ -607,14 +627,6 @@ export function useVoxelBrush({
 
       const activeScale = normalizeBlockScale(blockSizeRef.current);
       const cellStep = getVoxelCellStep(VOXEL_STEP, activeScale);
-      const maxOriginRadius =
-        Number(config?.policy?.maxDrawDistanceFromOriginMeters) ||
-        MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS;
-      const activeDrawOrigin = resolveDrawOriginPoint({
-        surfaceAnchor: surfaceAnchorRef.current,
-        strokeDeviceOrigin: strokeDeviceOriginRef.current,
-        cameraPosition: cam.position
-      });
 
       let origin = cam.position.clone();
       let dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
@@ -636,91 +648,28 @@ export function useVoxelBrush({
         dir = tapRay.ray.direction.clone().normalize();
       }
 
-      const snapStrictlyInsideOrigin = (rawPt, refOrigin) => {
-        const safeLimit = Math.max(cellStep, maxOriginRadius - cellStep * 0.55);
-        const clamped = clampPointToDrawOriginRadius(rawPt, refOrigin, safeLimit);
-        let sx = snapToVoxelLattice(clamped.x, VOXEL_STEP, activeScale);
-        let sy = snapToVoxelLattice(clamped.y, VOXEL_STEP, activeScale);
-        let sz = snapToVoxelLattice(clamped.z, VOXEL_STEP, activeScale);
-        if (!isWithinDrawOriginRadius({ x: sx, y: sy, z: sz }, refOrigin, maxOriginRadius)) {
-          const pulled = clampPointToDrawOriginRadius(
-            { x: sx, y: sy, z: sz },
-            refOrigin,
-            Math.max(cellStep * 0.5, maxOriginRadius - cellStep)
-          );
-          sx = snapToVoxelLattice(pulled.x, VOXEL_STEP, activeScale);
-          sy = snapToVoxelLattice(pulled.y, VOXEL_STEP, activeScale);
-          sz = snapToVoxelLattice(pulled.z, VOXEL_STEP, activeScale);
-        }
-        return { x: sx, y: sy, z: sz, rawClamped: { x: clamped.x, y: clamped.y, z: clamped.z } };
-      };
-
       const guardAgainstPlacedItems = (candidate) => {
         if (!candidate || (candidate.action !== 'add' && candidate.action !== 'replace')) {
           return candidate;
         }
-        let checked = candidate;
-        if (activeDrawOrigin) {
-          const probe = candidate.rawPoint || candidate;
-          const distFromOrigin = distanceFromDrawOrigin(probe, activeDrawOrigin);
-          const distFromSnapped = distanceFromDrawOrigin(candidate, activeDrawOrigin);
-          const distFromLiveCam =
-            activeDrawOrigin.source === 'device_origin'
-              ? distanceFromDrawOrigin(candidate, cam.position)
-              : 0;
-          const worstDist = Math.max(distFromOrigin, distFromSnapped, distFromLiveCam);
-          if (worstDist > maxOriginRadius + 1e-4) {
-            const refOrigin =
-              distFromLiveCam > maxOriginRadius + 1e-4 && distFromOrigin <= maxOriginRadius + 1e-4
-                ? { x: cam.position.x, y: cam.position.y, z: cam.position.z, source: 'device_origin' }
-                : activeDrawOrigin;
-            const prevPt = lastPaintPosRef.current;
-            const canExtendToRim =
-              Boolean(forContinuousHold && prevPt) &&
-              distanceFromDrawOrigin(prevPt, refOrigin) < maxOriginRadius - cellStep * 1.1;
-            const edge = snapStrictlyInsideOrigin(probe, refOrigin);
-            if (canExtendToRim) {
-              checked = {
-                ...candidate,
-                x: edge.x,
-                y: edge.y,
-                z: edge.z,
-                rawPoint: edge.rawClamped,
-                clampedToOriginLimit: true,
-                originSource: refOrigin.source
-              };
-            } else {
-              return {
-                ...candidate,
-                x: edge.x,
-                y: edge.y,
-                z: edge.z,
-                rawPoint: edge.rawClamped,
-                action: 'out_of_range',
-                originSource: refOrigin.source,
-                distanceMeters: Number(worstDist.toFixed(2))
-              };
-            }
-          }
-        }
         const colliders = getActivePlacedItemColliders();
-        if (colliders.length === 0) return checked;
+        if (colliders.length === 0) return candidate;
         const hit = testVoxelAgainstPlacedItems({
-          point: checked,
-          voxelScale: checked.scale ?? activeScale,
+          point: candidate,
+          voxelScale: candidate.scale ?? activeScale,
           voxelStep: VOXEL_STEP,
           rayOrigin: origin,
           colliders
         });
         if (hit.blocked) {
           return {
-            ...checked,
+            ...candidate,
             action: 'blocked',
             blockedReason: hit.reason,
             blockedByTitle: hit.title
           };
         }
-        return checked;
+        return candidate;
       };
 
       if (
@@ -858,7 +807,7 @@ export function useVoxelBrush({
           }
         }
         const fallbackDepth = Math.min(
-          maxOriginRadius,
+          12,
           Math.max(0.5, anchor.depthM || reachRef.current)
         );
         const fallbackPt = origin.clone().addScaledVector(dir, fallbackDepth);
@@ -872,7 +821,7 @@ export function useVoxelBrush({
         });
       }
 
-      const clampedReach = Math.min(maxOriginRadius, Math.max(0.5, Number(reachRef.current) || 1.8));
+      const clampedReach = Math.min(12, Math.max(0.5, Number(reachRef.current) || 1.8));
       const pt = origin.clone().addScaledVector(dir, clampedReach);
       return guardAgainstPlacedItems({
         action: 'add',
@@ -886,7 +835,6 @@ export function useVoxelBrush({
     [
       cameraRef,
       canvasHostRef,
-      config?.policy?.maxDrawDistanceFromOriginMeters,
       draftGroupRef,
       getActivePlacedItemColliders
     ]
@@ -1041,7 +989,7 @@ export function useVoxelBrush({
   );
 
   const applyVoxelBatch = useCallback(
-    (targets, { enforceOriginLimit = false, originPoint = null } = {}) => {
+    (targets) => {
       if (!Array.isArray(targets) || targets.length === 0) return;
       if (!calibrationReadyRef.current) {
         onRequireCalibrationRef.current?.();
@@ -1051,35 +999,17 @@ export function useVoxelBrush({
       const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
       const maxHumanSpan =
         config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
-      const maxOriginRadius =
-        Number(config?.policy?.maxDrawDistanceFromOriginMeters) ||
-        MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS;
       const maxVoxels = config?.policy?.maxVoxels || 4096;
 
       const uniqueAdds = [];
       const seenBatch = new Set();
       let hadOutOfBounds = false;
-      let hadOutOfOriginRange = false;
-      let outOfOriginSource = 'device_origin';
       let blockedHit = null;
       const placedColliders = getActivePlacedItemColliders();
       const rayOrigin = cameraRef?.current?.position || null;
-      const activeOrigin = enforceOriginLimit
-        ? originPoint ||
-          resolveDrawOriginPoint({
-            surfaceAnchor: surfaceAnchorRef.current,
-            strokeDeviceOrigin: strokeDeviceOriginRef.current,
-            cameraPosition: rayOrigin
-          })
-        : null;
 
       for (const t of targets) {
         if (!t) continue;
-        if (t.action === 'out_of_range') {
-          hadOutOfOriginRange = true;
-          outOfOriginSource = t.originSource || activeOrigin?.source || 'device_origin';
-          continue;
-        }
         if (t.action === 'blocked') {
           if (!blockedHit) {
             blockedHit = {
@@ -1090,14 +1020,6 @@ export function useVoxelBrush({
           continue;
         }
         if (t.action !== 'add' && t.action !== 'replace') continue;
-        if (
-          activeOrigin &&
-          !isWithinDrawOriginRadius(t, activeOrigin, maxOriginRadius)
-        ) {
-          hadOutOfOriginRange = true;
-          outOfOriginSource = activeOrigin.source || 'device_origin';
-          continue;
-        }
         if (
           Math.abs(t.x) > halfSpan ||
           Math.abs(t.y) > halfSpan ||
@@ -1138,10 +1060,6 @@ export function useVoxelBrush({
         notifyBlockedByPlacedItem(blockedHit);
       }
 
-      if (hadOutOfOriginRange) {
-        notifyOutOfDrawRange(outOfOriginSource);
-      }
-
       if (hadOutOfBounds && uniqueAdds.length === 0) {
         setSensorBanner(
           `Drawing size limit reached (${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft max)`
@@ -1149,6 +1067,9 @@ export function useVoxelBrush({
         return;
       }
       if (uniqueAdds.length === 0) return;
+      if (!surfaceAnchorRef.current) {
+        reconcileAutoSurfaceAnchor(uniqueAdds[0]);
+      }
       clearedBackupRef.current = null;
       setHasClearedBackup(false);
 
@@ -1314,13 +1235,12 @@ export function useVoxelBrush({
       cameraRef,
       config?.policy?.areaHalfSpanMeters,
       config?.policy?.humanMaxDrawSpanMeters,
-      config?.policy?.maxDrawDistanceFromOriginMeters,
       config?.policy?.maxVoxels,
       getActivePlacedItemColliders,
       locationRef,
       markDrawActivity,
       notifyBlockedByPlacedItem,
-      notifyOutOfDrawRange,
+      reconcileAutoSurfaceAnchor,
       setSensorBanner,
       showTemporaryHint
     ]
@@ -1362,10 +1282,6 @@ export function useVoxelBrush({
         eraseTargetVoxel(target);
         return;
       }
-      if (target.action === 'out_of_range') {
-        notifyOutOfDrawRange(target.originSource);
-        return;
-      }
       if (target.action === 'blocked') {
         notifyBlockedByPlacedItem({
           reason: target.blockedReason || 'overlap',
@@ -1379,14 +1295,13 @@ export function useVoxelBrush({
           showTemporaryHint(calibrationBlockReasonRef.current);
           return;
         }
-        applyVoxelBatch([target], { enforceOriginLimit: true });
+        applyVoxelBatch([target]);
       }
     },
     [
       applyVoxelBatch,
       eraseTargetVoxel,
       notifyBlockedByPlacedItem,
-      notifyOutOfDrawRange,
       showTemporaryHint
     ]
   );
@@ -1425,10 +1340,18 @@ export function useVoxelBrush({
 
     if (cage) {
       if (voxels.length > 0 || hasPlacedCatalogItem) {
-        cage.box.setFromObject(group);
-        cage.visible = !cage.box.isEmpty();
-        if (cage.material?.color?.setHex) {
-          cage.material.color.setHex(transformCollision?.blocked ? 0xff3e7f : 0x00f5d4);
+        const nextBox = new THREE.Box3().setFromObject(group);
+        if (cage.isObjectTransformGizmo && typeof cage.updateFromBox === 'function') {
+          cage.updateFromBox(nextBox, {
+            activeHandle: activeGizmoHandle,
+            colliding: Boolean(transformCollision?.blocked)
+          });
+        } else {
+          cage.box?.copy?.(nextBox);
+          cage.visible = !nextBox.isEmpty();
+          if (cage.material?.color?.setHex) {
+            cage.material.color.setHex(transformCollision?.blocked ? 0xff3e7f : 0x00f5d4);
+          }
         }
       } else {
         cage.visible = false;
@@ -1439,6 +1362,7 @@ export function useVoxelBrush({
     artTransform,
     transformPivot,
     transformCollision,
+    activeGizmoHandle,
     voxels,
     hasPlacedCatalogItem,
     draftGroupRef,
@@ -1525,6 +1449,8 @@ export function useVoxelBrush({
     setTransformCollision(null);
     activeCanvasPointersRef.current.clear();
     transformPinchRef.current = null;
+    activeGizmoHandleRef.current = null;
+    setActiveGizmoHandle('');
     if (draftGroupRef.current) {
       draftGroupRef.current.position.set(0, 0, 0);
       draftGroupRef.current.rotation.set(0, 0, 0);
@@ -1601,7 +1527,7 @@ export function useVoxelBrush({
       showTemporaryHint(
         hintOverride ||
           (voxelsRef.current.length || hasPlacedCatalogRef.current
-            ? 'Art locked — 2-finger rotate, pinch & depth-move, 1-finger drag to position, or use sliders · tap ✅ to draw'
+            ? 'Art locked — drag 3D bars, 2-finger ↕ Z-pivot / ↔ rotate / pinch scale, or use sliders · tap ✅ to draw'
             : 'Transform locked — tap ✅ again to return to drawing mode')
       );
     },
@@ -2020,9 +1946,6 @@ export function useVoxelBrush({
       const t = computeTargetVoxel(true);
       if (holdTool === 'erase') {
         eraseTargetVoxel(t);
-      } else if (t && t.action === 'out_of_range') {
-        lastPaintPosRef.current = null;
-        notifyOutOfDrawRange(t.originSource);
       } else if (t && t.action === 'blocked') {
         lastPaintPosRef.current = null;
         notifyBlockedByPlacedItem({
@@ -2032,7 +1955,7 @@ export function useVoxelBrush({
       } else if (t && (t.action === 'add' || t.action === 'replace')) {
         lastPaintPosRef.current = { x: t.x, y: t.y, z: t.z };
         lastStackAtRef.current = performance.now();
-        applyVoxelBatch([t], { enforceOriginLimit: true });
+        applyVoxelBatch([t]);
       }
     },
     [
@@ -2044,8 +1967,7 @@ export function useVoxelBrush({
       ensureToolUsable,
       enterFullscreen,
       eraseTargetVoxel,
-      notifyBlockedByPlacedItem,
-      notifyOutOfDrawRange
+      notifyBlockedByPlacedItem
     ]
   );
 
@@ -2441,12 +2363,9 @@ export function useVoxelBrush({
           .clone()
           .transformDirection(hit.object.matrixWorld)
           .normalize();
-        const depthM = Math.max(
-          0.45,
-          Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, hit.distance)
-        );
+        const depthM = Math.max(0.45, Math.min(12, hit.distance));
         const anchorPt =
-          hit.distance > MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS
+          hit.distance > 12
             ? origin.clone().addScaledVector(dir, depthM)
             : hit.point;
         setReachMeters(Number(depthM.toFixed(2)));
@@ -2483,13 +2402,13 @@ export function useVoxelBrush({
         nx = 0;
         ny = 1;
         nz = 0;
-        depthM = Math.max(0.75, Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, 1.25 / -dir.y));
+        depthM = Math.max(0.75, Math.min(12, 1.25 / -dir.y));
       } else if (dir.y < -0.12) {
         label = 'Table / Ledge';
         nx = 0;
         ny = 1;
         nz = 0;
-        depthM = Math.max(0.7, Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, 0.65 / -dir.y));
+        depthM = Math.max(0.7, Math.min(12, 0.65 / -dir.y));
       } else if (sharpness >= 0.22) {
         label = 'Wall / Surface';
         const horizLen = Math.hypot(dir.x, dir.z);
@@ -2498,13 +2417,13 @@ export function useVoxelBrush({
           ny = 0;
           nz = -dir.z / horizLen;
         }
-        depthM = Math.max(0.85, Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, 2.2 - sharpness * 0.7));
+        depthM = Math.max(0.85, Math.min(12, 2.2 - sharpness * 0.7));
       } else {
         const len = Math.hypot(nx, ny, nz) || 1;
         nx /= len;
         ny /= len;
         nz /= len;
-        depthM = Math.max(0.5, Math.min(MAX_DRAW_DISTANCE_FROM_ORIGIN_METERS, depthM));
+        depthM = Math.max(0.5, Math.min(12, depthM));
       }
 
       const pt = origin.addScaledVector(dir, depthM);
@@ -2589,10 +2508,40 @@ export function useVoxelBrush({
           // ignore
         }
         if (activeCanvasPointersRef.current.size >= 2) {
+          activeGizmoHandleRef.current = null;
+          setActiveGizmoHandle('');
           const pts = Array.from(activeCanvasPointersRef.current.values());
           transformPinchRef.current = captureTwoFingerFrame(pts);
         } else {
           transformPinchRef.current = null;
+          // Raycast against interactive Land-style 3D gizmo bars & corner orbs
+          const gizmo = transformBoxRef.current;
+          const host = canvasHostRef.current;
+          const cam = cameraRef.current;
+          const interactive = gizmo?.getInteractiveMeshes?.();
+          if (gizmo?.visible && host && cam && Array.isArray(interactive) && interactive.length > 0) {
+            const rect = host.getBoundingClientRect();
+            const ndc = new THREE.Vector2(
+              ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+              -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+            );
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(ndc, cam);
+            const hits = raycaster.intersectObjects(interactive, false);
+            const hit = hits.find((h) => h.object?.userData?.gizmoHandle && h.object?.userData?.gizmoAction);
+            if (hit) {
+              const handleKey = hit.object.userData.gizmoHandle;
+              const handleAction = hit.object.userData.gizmoAction;
+              activeGizmoHandleRef.current = { key: handleKey, action: handleAction };
+              setActiveGizmoHandle(handleKey);
+            } else {
+              activeGizmoHandleRef.current = null;
+              setActiveGizmoHandle('');
+            }
+          } else {
+            activeGizmoHandleRef.current = null;
+            setActiveGizmoHandle('');
+          }
         }
         return;
       }
@@ -2618,7 +2567,14 @@ export function useVoxelBrush({
         }, 115);
       }
     },
-    [isInteractingWithLandRef, rawOrientationRef, startContinuousHoldTool]
+    [
+      cameraRef,
+      canvasHostRef,
+      isInteractingWithLandRef,
+      rawOrientationRef,
+      startContinuousHoldTool,
+      transformBoxRef
+    ]
   );
 
   const handleCanvasPointerMove = useCallback(
@@ -2656,14 +2612,27 @@ export function useVoxelBrush({
           if (!cam) return;
           const dx = e.clientX - prevPt.x;
           const dy = e.clientY - prevPt.y;
-          const next = computeOneFingerDragStep({
-            dx,
-            dy,
-            cameraQuaternion: camQuat,
-            cameraPosition: camPos,
-            pivot: transformPivotRef.current,
-            currentTransform: artTransformRef.current
-          });
+          const grabbedHandle = activeGizmoHandleRef.current;
+          const next = grabbedHandle?.action
+            ? computeGizmoHandleDragStep({
+                handleAction: grabbedHandle.action,
+                dx,
+                dy,
+                cameraQuaternion: camQuat,
+                cameraPosition: camPos,
+                pivot: transformPivotRef.current,
+                currentTransform: artTransformRef.current,
+                minScale: 0.25,
+                maxScale: hasPlacedCatalogRef.current ? 2.5 : 2
+              })
+            : computeOneFingerDragStep({
+                dx,
+                dy,
+                cameraQuaternion: camQuat,
+                cameraPosition: camPos,
+                pivot: transformPivotRef.current,
+                currentTransform: artTransformRef.current
+              });
           setArtTransform(next);
         }
         return;
@@ -2688,6 +2657,10 @@ export function useVoxelBrush({
       if (activeCanvasPointersRef.current.size < 2) {
         transformPinchRef.current = null;
       }
+      if (activeCanvasPointersRef.current.size === 0 && activeGizmoHandleRef.current) {
+        activeGizmoHandleRef.current = null;
+        setActiveGizmoHandle('');
+      }
       if (canvasSprayTimerRef.current) {
         clearTimeout(canvasSprayTimerRef.current);
         canvasSprayTimerRef.current = null;
@@ -2706,6 +2679,10 @@ export function useVoxelBrush({
       activeCanvasPointersRef.current.delete(e.pointerId);
       if (activeCanvasPointersRef.current.size < 2) {
         transformPinchRef.current = null;
+      }
+      if (activeCanvasPointersRef.current.size === 0 && activeGizmoHandleRef.current) {
+        activeGizmoHandleRef.current = null;
+        setActiveGizmoHandle('');
       }
       if (canvasSprayTimerRef.current) {
         clearTimeout(canvasSprayTimerRef.current);
@@ -2758,15 +2735,13 @@ export function useVoxelBrush({
           if (toolRef.current === 'pencil') {
             if (!ensureToolUsable('pencil') || !assertOriginUnblockedForPaint()) return;
             const tapTarget = computeTargetVoxel(false, { clientX: e.clientX, clientY: e.clientY });
-            if (tapTarget?.action === 'out_of_range') {
-              notifyOutOfDrawRange(tapTarget.originSource);
-            } else if (tapTarget?.action === 'blocked') {
+            if (tapTarget?.action === 'blocked') {
               notifyBlockedByPlacedItem({
                 reason: tapTarget.blockedReason || 'overlap',
                 title: tapTarget.blockedByTitle || 'existing art'
               });
             } else if (tapTarget && (tapTarget.action === 'add' || tapTarget.action === 'replace')) {
-              applyVoxelBatch([tapTarget], { enforceOriginLimit: true });
+              applyVoxelBatch([tapTarget]);
             }
             return;
           }
@@ -2831,7 +2806,6 @@ export function useVoxelBrush({
       locationRef,
       nearbyGroupRef,
       notifyBlockedByPlacedItem,
-      notifyOutOfDrawRange,
       onTapArLand,
       openCameraSelectedChat,
       selectSurfaceAtScreenPoint,
@@ -2888,6 +2862,7 @@ export function useVoxelBrush({
     artTransformRef,
     transformPivot,
     transformCollision,
+    activeGizmoHandle,
     activeKeyTool,
     swipeDragPx,
     isDraggingKey,
@@ -2896,7 +2871,6 @@ export function useVoxelBrush({
     rebuildDraftMesh,
     getActivePlacedItemColliders,
     notifyBlockedByPlacedItem,
-    notifyOutOfDrawRange,
     computeTargetVoxel,
     applyVoxelBatch,
     eraseTargetVoxel,

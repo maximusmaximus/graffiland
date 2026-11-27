@@ -83,17 +83,16 @@ export function computeOneFingerDragStep({
 
 /**
  * Computes a multi-axis two-finger gesture step in AR transform mode:
- * - Pinch / spread: scales smoothly (`scale`)
- * - Two-finger twist: rotates smoothly around vertical Y-axis (`rotYDeg`, full 360° turntable spin)
- * - Two-finger drag (midpoint move): positions freely in 3D ground/depth space
- *   (horizontal slide = left/right along horizontal camera right; vertical slide up/down = push further / pull closer!)
+ * - Two fingers pulling up / down (`dMidY`): pivots smoothly on the Z axis (`rotZDeg`)
+ * - Two fingers moving left / right (`dMidX`) or twisting (`dAngleDeg`): rotates smoothly around Y (`rotYDeg`)
+ * - Pinch / spread (`dist` ratio): scales smoothly (`scale`)
  *
  * @param {{
  *   prevFrame: { dist: number, angle: number, midX: number, midY: number },
  *   nextPointers: Array<{ x: number, y: number }>,
- *   cameraQuaternion: THREE.Quaternion,
- *   cameraPosition: THREE.Vector3 | { x: number, y: number, z: number },
- *   pivot: { x: number, y: number, z: number },
+ *   cameraQuaternion?: THREE.Quaternion,
+ *   cameraPosition?: THREE.Vector3 | { x: number, y: number, z: number },
+ *   pivot?: { x: number, y: number, z: number },
  *   currentTransform: {
  *     scale: number,
  *     rotXDeg?: number,
@@ -110,9 +109,6 @@ export function computeOneFingerDragStep({
 export function computeTwoFingerTransformStep({
   prevFrame,
   nextPointers,
-  cameraQuaternion,
-  cameraPosition,
-  pivot,
   currentTransform,
   minScale = 0.25,
   maxScale = 2.5
@@ -131,70 +127,29 @@ export function computeTwoFingerTransformStep({
   let dAngleDeg = ((nextFrame.angle - prevFrame.angle) * 180) / Math.PI;
   if (dAngleDeg > 180) dAngleDeg -= 360;
   if (dAngleDeg < -180) dAngleDeg += 360;
-  const effectiveTwistDeg = Math.abs(dAngleDeg) > 0.25 ? dAngleDeg : 0;
+  const effectiveTwistDeg = Math.abs(dAngleDeg) > 0.3 ? dAngleDeg : 0;
 
   const dMidX = nextFrame.midX - prevFrame.midX;
   const dMidY = nextFrame.midY - prevFrame.midY;
 
-  // Build camera-relative horizontal basis for intuitive 2-finger ground & depth placement
-  const camForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-  camForward.y = 0;
-  if (camForward.lengthSq() < 1e-4) {
-    camForward.set(0, 0, -1);
-  } else {
-    camForward.normalize();
-  }
-  const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraQuaternion);
-  camRight.y = 0;
-  if (camRight.lengthSq() < 1e-4) {
-    camRight.set(1, 0, 0);
-  } else {
-    camRight.normalize();
-  }
-
-  const camPos = new THREE.Vector3(
-    Number(cameraPosition?.x || 0),
-    Number(cameraPosition?.y || 0),
-    Number(cameraPosition?.z || 0)
-  );
-  const worldPos = new THREE.Vector3(
-    Number(pivot?.x || 0) + Number(currentTransform?.offsetX || 0),
-    Number(pivot?.y || 0) + Number(currentTransform?.offsetY || 0),
-    Number(pivot?.z || 0) + Number(currentTransform?.offsetZ || 0)
-  );
-  const dist = Math.max(0.8, Math.min(6, camPos.distanceTo(worldPos)));
-  const panScale = dist * 0.0028;
-
-  // Dragging two fingers UP (dMidY < 0) pushes model further into scene (+camForward);
-  // dragging DOWN (dMidY > 0) pulls model closer (-camForward); dragging LEFT/RIGHT shifts laterally!
-  const lateralMove = Math.abs(dMidX) > 0.6 ? dMidX * panScale : 0;
-  const depthMove = Math.abs(dMidY) > 0.6 ? -dMidY * panScale * 1.15 : 0;
+  const horizontalRotDeg = Math.abs(dMidX) > 0.5 ? dMidX * 0.58 : 0;
+  const verticalZPivotDeg = Math.abs(dMidY) > 0.5 ? -dMidY * 0.55 : 0;
 
   const nextScale = Math.max(
     minScale,
     Math.min(maxScale, Number((Number(currentTransform.scale || 1) * scaleFactor).toFixed(3)))
   );
-  const nextRotY = wrapDeg180(Number(currentTransform.rotYDeg || 0) - effectiveTwistDeg * 1.15);
+  // Two fingers moving left/right (or twisting) rotates around Y; pulling up/down pivots on Z
+  const nextRotY = wrapDeg180(
+    Number(currentTransform.rotYDeg || 0) + horizontalRotDeg + effectiveTwistDeg * 0.85
+  );
+  const nextRotZ = wrapDeg180(Number(currentTransform.rotZDeg || 0) + verticalZPivotDeg);
 
   const nextTransform = {
     ...currentTransform,
     scale: nextScale,
     rotYDeg: nextRotY,
-    offsetX: Number(
-      (
-        Number(currentTransform.offsetX || 0) +
-        camRight.x * lateralMove +
-        camForward.x * depthMove
-      ).toFixed(4)
-    ),
-    offsetY: Number(Number(currentTransform.offsetY || 0).toFixed(4)),
-    offsetZ: Number(
-      (
-        Number(currentTransform.offsetZ || 0) +
-        camRight.z * lateralMove +
-        camForward.z * depthMove
-      ).toFixed(4)
-    )
+    rotZDeg: nextRotZ
   };
 
   return { nextTransform, nextFrame };

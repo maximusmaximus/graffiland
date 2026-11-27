@@ -357,7 +357,7 @@ export default function ARLandInspectorPanel({
     ? formatLandDimensions(land, unitSystem)
     : land.dimensionsLabel;
 
-  const hasPrimaryDraw = Boolean(!land.isFrozen && onDrawHere);
+  const hasPrimaryDraw = Boolean(!land.isFrozen && !land.isInside && onDrawHere);
   const hasPrimaryCheckIn = Boolean(exp.state !== 'permanent' && typeof onCheckInLand === 'function');
   const primaryActionCount =
     (hasPrimaryDraw ? 1 : 0) + (canOpenLandChat ? 1 : 0) + (hasPrimaryCheckIn ? 1 : 0);
@@ -434,17 +434,7 @@ export default function ARLandInspectorPanel({
                 </button>
               </div>
             )}
-            {hasPrimaryDraw && canDrawAtLand ? (
-              <button
-                type="button"
-                className="btn btn-xs btn-primary ar-land-compact-cta"
-                data-testid="ar-land-compact-draw-btn"
-                onClick={() => onDrawHere(land)}
-              >
-                <XeroIcon emoji="🎨" size={13} />
-                <span>Draw</span>
-              </button>
-            ) : land.googleMapsUrl ? (
+            {!land.isInside && land.googleMapsUrl ? (
               <a
                 className="btn btn-xs ar-land-compact-cta"
                 href={land.googleMapsUrl}

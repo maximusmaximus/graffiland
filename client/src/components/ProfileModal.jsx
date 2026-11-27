@@ -86,6 +86,7 @@ export default function ProfileModal({
   const [loadError, setLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('lands'); // 'lands' | 'sculptures' | 'last-viewed' | 'actions'
   const [editing, setEditing] = useState(Boolean(initialEditing));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyTick, setHistoryTick] = useState(0);
 
   const [usernameInput, setUsernameInput] = useState(() =>
@@ -655,6 +656,19 @@ export default function ProfileModal({
                 {copiedKey === 'profile' ? '✓' : <XeroIcon emoji="📋" size={16} />}
               </button>
             )}
+            {isOwner && (
+              <button
+                type="button"
+                className={`btn btn-sm profile-settings-gear-btn ${settingsOpen ? 'is-open' : ''}`}
+                data-testid="profile-settings-gear-btn"
+                aria-label="User settings"
+                aria-expanded={settingsOpen}
+                title={settingsOpen ? 'Hide settings' : 'User settings (units, wallet & paired agent)'}
+                onClick={() => setSettingsOpen((prev) => !prev)}
+              >
+                <XeroIcon emoji="⚙️" size={16} />
+              </button>
+            )}
             {isOwner && !editing && (
               <button
                 type="button"
@@ -868,6 +882,23 @@ export default function ProfileModal({
                 {/* Share Public Profile Bar */}
                 <div className="profile-share-bar">
                   {publicProfileUrl && (
+                    <button
+                      type="button"
+                      className={`btn btn-xs profile-public-link-btn ${
+                        copiedKey === 'profile-share' ? 'is-copy-confirmed' : ''
+                      }`}
+                      data-testid="profile-share-copy-btn"
+                      aria-label="Copy profile link"
+                      title={publicProfileUrl}
+                      onClick={() =>
+                        handleCopyUrl('profile-share', publicProfileUrl, 'profile link')
+                      }
+                    >
+                      <XeroIcon emoji="🔗" size={12} />{' '}
+                      {copiedKey === 'profile-share' ? 'Copied!' : 'Copy Link'}
+                    </button>
+                  )}
+                  {publicProfileUrl && (
                     <a
                       className="btn btn-xs"
                       href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
@@ -880,30 +911,14 @@ export default function ProfileModal({
                       𝕏
                     </a>
                   )}
-                  {isOwner && onOpenWalletSettings && (
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={() => {
-                        onClose?.();
-                        onOpenWalletSettings();
-                      }}
-                    >
-                      <XeroIcon emoji="💳" size={12} /> Wallet
-                    </button>
-                  )}
-                  {isOwner && onLogout && (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-danger"
-                      onClick={() => {
-                        onClose?.();
-                        onLogout();
-                      }}
-                    >
-                      <XeroIcon emoji="🚪" size={12} /> Sign Out
-                    </button>
-                  )}
+                  <InfoTip title="Share Profile & Paired Agent Updates">
+                    Copy your public profile link (<code>?u=@{profile.username || 'handle'}</code>)
+                    to share your lands, sculptures, and bio anywhere. When your account is paired
+                    with an AI agent (<code>GLP-...</code>), your paired agent can also inspect and
+                    update your <code>@username</code>, <code>bio</code>, <code>avatarImage</code>,
+                    and <code>headerImage</code> directly via MCP tools <code>get_my_profile</code>{' '}
+                    and <code>update_profile</code>.
+                  </InfoTip>
                 </div>
 
                 {saveNotice && (
@@ -912,7 +927,69 @@ export default function ProfileModal({
                   </div>
                 )}
 
-                {isOwner && <MeasurementUnitSetting compact />}
+                {isOwner && settingsOpen && (
+                  <div
+                    className="profile-settings-panel"
+                    data-testid="profile-settings-panel"
+                    role="region"
+                    aria-label="User settings"
+                  >
+                    <div className="profile-settings-panel-head">
+                      <strong>
+                        <XeroIcon emoji="⚙️" size={13} /> User Settings
+                      </strong>
+                      <InfoTip title="User Settings & Paired Agent Profile Sync">
+                        Customize your Measurement Units (Auto by location, US Imperial ft/mi, or
+                        Metric m/km), manage your Wallet &amp; Payout address, or let your paired
+                        MCP agent update your public profile using <code>get_my_profile</code> and{' '}
+                        <code>update_profile</code>.
+                      </InfoTip>
+                    </div>
+
+                    <MeasurementUnitSetting />
+
+                    <div className="profile-settings-agent-note" data-testid="profile-agent-sync-note">
+                      <XeroIcon emoji="🤖" size={13} />
+                      <span>
+                        <strong>Paired Agent Profile Updates:</strong> Connected <code>GLP-...</code>{' '}
+                        agents can read &amp; update your <code>@username</code>, <code>bio</code>,
+                        avatar, and banner via MCP <code>get_my_profile</code> &amp;{' '}
+                        <code>update_profile</code>.
+                      </span>
+                    </div>
+
+                    {(onOpenWalletSettings || onLogout) && (
+                      <div className="profile-settings-actions">
+                        {onOpenWalletSettings && (
+                          <button
+                            type="button"
+                            className="btn btn-xs"
+                            data-testid="profile-settings-wallet-btn"
+                            onClick={() => {
+                              onClose?.();
+                              onOpenWalletSettings();
+                            }}
+                          >
+                            <XeroIcon emoji="💳" size={12} /> Wallet &amp; Payouts
+                          </button>
+                        )}
+                        {onLogout && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-danger"
+                            data-testid="profile-settings-logout-btn"
+                            onClick={() => {
+                              onClose?.();
+                              onLogout();
+                            }}
+                          >
+                            <XeroIcon emoji="🚪" size={12} /> Sign Out
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
