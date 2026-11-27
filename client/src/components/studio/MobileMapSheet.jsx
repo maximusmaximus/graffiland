@@ -11,6 +11,8 @@ import {
   formatShortDate,
   groupNearestLandsWithSculptures,
   isLandOwnedByUser,
+  isLandPubliclyAddable,
+  resolveLandColorTheme,
   resolveLandCoords
 } from '../../utils/landMapHelpers.js';
 import {
@@ -47,6 +49,7 @@ export default function MobileMapSheet({
   onMarkLandSeen = null,
   onOpenProfile = null,
   onManageLand = null,
+  onOpenSearchAdd = null,
   onRenameLand = null,
   onShowHint,
   onClose,
@@ -279,62 +282,148 @@ export default function MobileMapSheet({
     setMapHeightMode((prev) => (prev === 'fullscreen' ? 'compact' : 'fullscreen'));
   }
 
+  // Pressing Esc while in full-screen map cleanly exits back to split list + map
+  useEffect(() => {
+    if (!isFullMap || typeof window === 'undefined') return undefined;
+    const onKeyDown = (e) => {
+      if (e.defaultPrevented || e.key !== 'Escape') return;
+      if (typeof document !== 'undefined' && document.querySelector('[data-info-tip-mode]')) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setMapHeightMode('compact');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFullMap]);
+
   const mapToggleLabel = isFullMap ? 'Exit Full' : 'Expand Map';
+  const focusedLandOwned = focusedLand
+    ? isLandOwnedByUser(focusedLand, { user, ownedParcelIds })
+    : false;
+  const focusedLandTheme = focusedLand ? resolveLandColorTheme(focusedLand) : null;
+  const focusedLandCanSearchAdd = Boolean(
+    focusedLand &&
+      onOpenSearchAdd &&
+      (focusedLandOwned || isLandPubliclyAddable(focusedLand))
+  );
+
+  const handleOpenSearchAddForParcel = (parcelOrId) => {
+    if (typeof onOpenSearchAdd !== 'function') return;
+    const target =
+      typeof parcelOrId === 'string'
+        ? displayedLands.find((l) => l.parcelId === parcelOrId) || { parcelId: parcelOrId }
+        : parcelOrId;
+    if (!target?.parcelId) return;
+    markLandSeenById(target.parcelId);
+    onOpenSearchAdd(target);
+  };
 
   return (
-    <div className="mobile-map-overlay" role="dialog" aria-label="Nearest Lands and Sculptures Map">
-      <div className="mobile-map-header">
-        <div className="mobile-map-title-group">
-          <XeroIcon emoji="🗺️" size={20} />
-          <div style={{ minWidth: 0 }}>
-            <div className="mobile-map-title">Nearest Lands</div>
-            <div className="mobile-map-subtitle">
-              Closest parcels · Sculptures · Expiry · Navigate
-            </div>
+    <div
+      className={`mobile-map-overlay ${isFullMap ? 'is-fullscreen-mode' : ''}`.trim()}
+      data-testid="mobile-map-overlay"
+      data-map-fullscreen={isFullMap ? 'true' : 'false'}
+      role="dialog"
+      aria-label="Nearest Lands and Sculptures Map"
+    >
+      {isFullMap ? (
+        <div className="mobile-map-fullscreen-topbar" data-testid="mobile-map-fullscreen-topbar">
+          <div className="mobile-map-segmented" role="group" aria-label="Distance filter">
+            <button
+              type="button"
+              className={`btn btn-xs ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
+              onClick={() => setAreaFilterMode?.('nearby')}
+            >
+              Nearest{grouped.nearbyLands.length > 0 ? ` (${grouped.nearbyLands.length})` : ` (${nearbyRadiusLabel})`}
+            </button>
+            <button
+              type="button"
+              className={`btn btn-xs ${areaFilterMode === 'all' ? 'btn-primary' : ''}`}
+              onClick={() => setAreaFilterMode?.('all')}
+            >
+              All ({grouped.allLands.length})
+            </button>
+          </div>
+          <div className="mobile-map-header-actions">
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              data-testid="mobile-map-expand-header-btn"
+              onClick={toggleFullMap}
+              aria-label={mapToggleLabel}
+            >
+              <XeroIcon emoji="↙️" size={12} /> {mapToggleLabel}
+            </button>
+            <GlobalNotificationBell compact testId="mobile-map-notif-bell-btn" />
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={onClose}
+              aria-label="Close map"
+              title="Close"
+            >
+              <XeroIcon emoji="❌" size={14} />
+            </button>
           </div>
         </div>
-        <div className="mobile-map-header-actions">
-          <GlobalNotificationBell compact testId="mobile-map-notif-bell-btn" />
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={onClose}
-            aria-label="Close map"
-            title="Close"
-          >
-            <XeroIcon emoji="❌" size={14} />
-          </button>
-        </div>
-      </div>
+      ) : (
+        <>
+          <div className="mobile-map-header">
+            <div className="mobile-map-title-group">
+              <XeroIcon emoji="🗺️" size={20} />
+              <div style={{ minWidth: 0 }}>
+                <div className="mobile-map-title">Nearest Lands</div>
+                <div className="mobile-map-subtitle">
+                  Closest parcels · Sculptures · Expiry · Navigate
+                </div>
+              </div>
+            </div>
+            <div className="mobile-map-header-actions">
+              <GlobalNotificationBell compact testId="mobile-map-notif-bell-btn" />
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={onClose}
+                aria-label="Close map"
+                title="Close"
+              >
+                <XeroIcon emoji="❌" size={14} />
+              </button>
+            </div>
+          </div>
 
-      <div className="mobile-map-controls">
-        <div className="mobile-map-segmented" role="group" aria-label="Distance filter">
-          <button
-            type="button"
-            className={`btn btn-xs ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
-            onClick={() => setAreaFilterMode?.('nearby')}
-          >
-            Nearest{grouped.nearbyLands.length > 0 ? ` (${grouped.nearbyLands.length})` : ` (${nearbyRadiusLabel})`}
-          </button>
-          <button
-            type="button"
-            className={`btn btn-xs ${areaFilterMode === 'all' ? 'btn-primary' : ''}`}
-            onClick={() => setAreaFilterMode?.('all')}
-          >
-            All Lands ({grouped.allLands.length})
-          </button>
-        </div>
+          <div className="mobile-map-controls">
+            <div className="mobile-map-segmented" role="group" aria-label="Distance filter">
+              <button
+                type="button"
+                className={`btn btn-xs ${areaFilterMode === 'nearby' ? 'btn-primary' : ''}`}
+                onClick={() => setAreaFilterMode?.('nearby')}
+              >
+                Nearest{grouped.nearbyLands.length > 0 ? ` (${grouped.nearbyLands.length})` : ` (${nearbyRadiusLabel})`}
+              </button>
+              <button
+                type="button"
+                className={`btn btn-xs ${areaFilterMode === 'all' ? 'btn-primary' : ''}`}
+                onClick={() => setAreaFilterMode?.('all')}
+              >
+                All Lands ({grouped.allLands.length})
+              </button>
+            </div>
 
-        <button
-          type="button"
-          className={`btn btn-xs ${isFullMap ? 'btn-primary' : ''}`}
-          data-testid="mobile-map-expand-header-btn"
-          onClick={toggleFullMap}
-          aria-label={mapToggleLabel}
-        >
-          <XeroIcon emoji={isFullMap ? '↙️' : '↕️'} size={12} /> {mapToggleLabel}
-        </button>
-      </div>
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="mobile-map-expand-header-btn"
+              onClick={toggleFullMap}
+              aria-label={mapToggleLabel}
+            >
+              <XeroIcon emoji="↕️" size={12} /> {mapToggleLabel}
+            </button>
+          </div>
+        </>
+      )}
 
       <div
         ref={mapCanvasRef}
@@ -361,6 +450,8 @@ export default function MobileMapSheet({
             onToggle2D={() => setMapDimensionMode('2d')}
             onToggleFullMap={toggleFullMap}
             onSelectParcel={handleSelectParcelOnMap}
+            onCopyLandShareLink={handleCopyLandShare}
+            onOpenAddLandItem={onOpenSearchAdd ? handleOpenSearchAddForParcel : null}
             onSelectSculpture={onSelectSculpture}
             onOpenSculptureView={onSelectSculpture}
           />
@@ -388,6 +479,7 @@ export default function MobileMapSheet({
             onToggleFullMap={toggleFullMap}
             onSelectSculpture={onSelectSculpture}
             onSelectParcel={handleSelectParcelOnMap}
+            onAdd3DItemForParcel={onOpenSearchAdd ? handleOpenSearchAddForParcel : null}
           />
         )}
       </div>
@@ -395,13 +487,43 @@ export default function MobileMapSheet({
       {isFullMap && focusedLand && (
         <div className="mobile-map-fullscreen-dock" data-testid="mobile-map-fullscreen-dock">
           <div className="mobile-map-fullscreen-dock-info">
-            <strong className="mobile-map-fullscreen-dock-title">{focusedLand.displayName}</strong>
+            <div className="mobile-map-fullscreen-dock-title-row">
+              {focusedLandTheme && (
+                <span
+                  className="mobile-map-dock-lifecycle-dot"
+                  style={{ background: focusedLandTheme.outerColor }}
+                  title={focusedLandTheme.label}
+                  aria-hidden="true"
+                />
+              )}
+              <strong className="mobile-map-fullscreen-dock-title">{focusedLand.displayName}</strong>
+            </div>
             <span className="mobile-map-fullscreen-dock-meta mono">
-              {focusedLand.dimensionsLabel ? `${focusedLand.dimensionsLabel} · ` : ''}
+              {focusedLand.distanceLabel ? `${focusedLand.distanceLabel} · ` : ''}
+              {focusedLand.compactDimensionsLabel
+                ? `${focusedLand.compactDimensionsLabel} · `
+                : focusedLand.dimensionsLabel
+                ? `${focusedLand.dimensionsLabel} · `
+                : ''}
               {`${focusedLand.sculptures.length} art`}
+              {focusedLand.expiration?.state && focusedLand.expiration.state !== 'permanent'
+                ? ` · ⏳ ${focusedLand.expiration.badgeText}`
+                : ''}
             </span>
           </div>
           <div className="mobile-map-fullscreen-dock-actions">
+            {focusedLandCanSearchAdd && (
+              <button
+                type="button"
+                className="btn btn-xs"
+                data-testid="mobile-map-dock-search-add-btn"
+                onClick={() => handleOpenSearchAddForParcel(focusedLand)}
+                aria-label={`Search and add 3D item to ${focusedLand.displayName}`}
+                title="Search & place a 3D model on this land"
+              >
+                <XeroIcon emoji="🔍" size={12} /> Add 3D
+              </button>
+            )}
             {onFindLandInAR && location && (
               <button
                 type="button"
@@ -427,6 +549,28 @@ export default function MobileMapSheet({
               >
                 <XeroIcon emoji="🧭" size={12} /> Navigate
               </a>
+            )}
+            <button
+              type="button"
+              className="btn btn-xs"
+              data-testid="mobile-map-dock-copy-btn"
+              onClick={() => handleCopyLandShare(focusedLand)}
+              aria-label={`Copy share link for ${focusedLand.displayName}`}
+              title="Copy land link"
+            >
+              <XeroIcon emoji="📋" size={13} />
+            </button>
+            {focusedLandOwned && onManageLand && (
+              <button
+                type="button"
+                className="btn btn-xs"
+                data-testid="mobile-map-dock-manage-btn"
+                onClick={() => onManageLand(focusedLand.parcelId)}
+                aria-label={`Manage ${focusedLand.displayName}`}
+                title="Manage this land"
+              >
+                <XeroIcon emoji="⚙️" size={13} />
+              </button>
             )}
             <button
               type="button"

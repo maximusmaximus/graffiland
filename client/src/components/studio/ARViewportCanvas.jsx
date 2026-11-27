@@ -127,9 +127,16 @@ function ARViewportCanvasInner({
   onCanvasPointerDown,
   onCanvasPointerMove,
   onCanvasPointerUp,
-  onCanvasPointerCancel
+  onCanvasPointerCancel,
+  onRequestContextRecover = null
 }) {
   const [contextLost, setContextLost] = useState(false);
+  const contextLostRef = useRef(false);
+  const needsRemountOnResumeRef = useRef(false);
+  const contextRecoverTimerRef = useRef(null);
+  const resumeLoopRef = useRef(null);
+  const onRequestContextRecoverRef = useRef(onRequestContextRecover);
+  onRequestContextRecoverRef.current = onRequestContextRecover;
   const isTransformMode = mode === 'transform';
   const renderPausedRef = useRef(Boolean(renderPaused));
   renderPausedRef.current = Boolean(renderPaused);
@@ -219,10 +226,26 @@ function ARViewportCanvasInner({
 
     const onContextLost = (ev) => {
       ev.preventDefault();
+      contextLostRef.current = true;
       setContextLost(true);
+      clearTimeout(contextRecoverTimerRef.current);
+      if (renderPausedRef.current) {
+        // Silently defer recovery until user returns from map/modal to AR view
+        needsRemountOnResumeRef.current = true;
+        return;
+      }
+      contextRecoverTimerRef.current = setTimeout(() => {
+        if (!renderPausedRef.current && contextLostRef.current) {
+          onRequestContextRecoverRef.current?.();
+        }
+      }, 900);
     };
     const onContextRestored = () => {
+      clearTimeout(contextRecoverTimerRef.current);
+      contextLostRef.current = false;
+      needsRemountOnResumeRef.current = false;
       setContextLost(false);
+      resumeLoopRef.current?.();
       onCameraRefreshNeededRef.current?.({ reason: 'webgl_restored', force: true });
     };
     renderer.domElement.addEventListener('webglcontextlost', onContextLost, false);
@@ -1311,15 +1334,20 @@ function ARViewportCanvasInner({
     };
 
     const animate = () => {
+      if (!activeXrSession && renderPausedRef.current) {
+        rafId = 0;
+        return;
+      }
       rafId = requestAnimationFrame(animate);
       renderFrame(null);
     };
 
     const startStandardLoop = () => {
-      if (!rafId && !activeXrSession) {
+      if (!rafId && !activeXrSession && !renderPausedRef.current) {
         rafId = requestAnimationFrame(animate);
       }
     };
+    resumeLoopRef.current = startStandardLoop;
 
     if (webxrControllerRef) {
       webxrControllerRef.current = {
@@ -1383,6 +1411,8 @@ function ARViewportCanvasInner({
         cur.stop().catch(() => {});
       }
       originBeaconMatRef.current = null;
+      resumeLoopRef.current = null;
+      clearTimeout(contextRecoverTimerRef.current);
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
@@ -1489,6 +1519,34 @@ function ARViewportCanvasInner({
     yawOffsetRef
   ]);
 
+  // Resume AR RAF loop & auto-recover any WebGL context evicted while full-screen map/modal was open
+  useEffect(() => {
+    if (renderPaused) return undefined;
+    resumeLoopRef.current?.();
+    const gl = rendererRef?.current?.getContext?.();
+    const isLostNow = Boolean(
+      needsRemountOnResumeRef.current ||
+        contextLostRef.current ||
+        (typeof gl?.isContextLost === 'function' && gl.isContextLost())
+    );
+    if (!isLostNow) return undefined;
+    needsRemountOnResumeRef.current = false;
+    clearTimeout(contextRecoverTimerRef.current);
+    contextRecoverTimerRef.current = setTimeout(() => {
+      const curGl = rendererRef?.current?.getContext?.();
+      if (
+        !renderPausedRef.current &&
+        (contextLostRef.current ||
+          (typeof curGl?.isContextLost === 'function' && curGl.isContextLost()))
+      ) {
+        onRequestContextRecoverRef.current?.();
+      }
+    }, 220);
+    return () => {
+      clearTimeout(contextRecoverTimerRef.current);
+    };
+  }, [renderPaused, rendererRef]);
+
   return (
     <>
       <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
@@ -1536,11 +1594,24 @@ function ARViewportCanvasInner({
       {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
         <div className="reticle" />
       )}
-      {contextLost && (
-        <div className="scene-error-fallback" role="status">
+      {contextLost && !renderPaused && (
+        <div
+          className="scene-error-fallback is-ar-viewport-recovery"
+          data-testid="ar-webgl-recovery-overlay"
+          role="status"
+        >
           <div className="scene-error-card card">
             <XeroIcon emoji="⏳" size={20} />
             <p style={{ fontSize: 13 }}>Recovering mobile WebGL AR context...</p>
+            <button
+              type="button"
+              className="btn btn-xs btn-primary"
+              data-testid="ar-webgl-reload-btn"
+              onClick={() => onRequestContextRecover?.()}
+              style={{ marginTop: 8 }}
+            >
+              Reload AR View
+            </button>
           </div>
         </div>
       )}
@@ -1550,9 +1621,14 @@ function ARViewportCanvasInner({
 
 export default function ARViewportCanvas(props) {
   const [sceneMountKey, setSceneMountKey] = useState(0);
+  const triggerRecover = () => setSceneMountKey((k) => k + 1);
   return (
-    <SceneErrorBoundary onRecover={() => setSceneMountKey((k) => k + 1)}>
-      <ARViewportCanvasInner key={sceneMountKey} {...props} />
+    <SceneErrorBoundary onRecover={triggerRecover}>
+      <ARViewportCanvasInner
+        key={sceneMountKey}
+        {...props}
+        onRequestContextRecover={triggerRecover}
+      />
     </SceneErrorBoundary>
   );
 }
