@@ -520,8 +520,9 @@ export default function MapView3D({
   const initBearingVal = viewMode === 'isometric' ? -45 : viewMode === '3d' ? -35 : 0;
   const [pitchDeg, setPitchDeg] = useState(initPitchVal);
   const [bearingDeg, setBearingDeg] = useState(initBearingVal);
-  const [showBuildings, setShowBuildings] = useState(true);
-  const [showTerrain, setShowTerrain] = useState(false);
+  // 3D buildings & terrain are enabled automatically in 3D/isometric; 3D buildings turn off in 2D
+  const showBuildings = viewMode !== '2d';
+  const showTerrain = true;
   const { mapTheme, isDarkMap, toggleMapTheme } = useMapTheme();
   const mapThemeRef = useRef(mapTheme);
   const appliedMapThemeRef = useRef(mapTheme);
@@ -1448,6 +1449,16 @@ export default function MapView3D({
       showBuildings: showBuildingsRef.current,
       buildingOpacity: 0.78
     });
+
+    try {
+      if (showTerrainRef.current && map.getSource('terrarium-dem')) {
+        map.setTerrain({ source: 'terrarium-dem', exaggeration: 1.25 });
+      } else {
+        map.setTerrain(null);
+      }
+    } catch {
+      // ignore if DEM blocked
+    }
 
     try {
       if (!map.getSource('owned-lands')) {
@@ -3549,6 +3560,8 @@ export default function MapView3D({
       ref={stageRef}
       className="map3d-stage"
       data-view-mode={viewMode}
+      data-show-buildings={showBuildings ? 'on' : 'off'}
+      data-show-terrain={showTerrain ? 'on' : 'off'}
       data-pitch={Math.round(pitchDeg)}
       data-bearing={Math.round(bearingDeg)}
       data-draw-mode={drawMode ? 'on' : 'off'}
@@ -3725,20 +3738,6 @@ export default function MapView3D({
                 📐 Fit Draft
               </button>
             )}
-            <button
-              type="button"
-              className={`btn ${showBuildings ? 'btn-primary' : ''}`}
-              onClick={() => setShowBuildings((v) => !v)}
-            >
-              <XeroIcon emoji="🏢" size={12} /> Buildings
-            </button>
-            <button
-              type="button"
-              className={`btn ${showTerrain ? 'btn-primary' : ''}`}
-              onClick={() => setShowTerrain((v) => !v)}
-            >
-              <XeroIcon emoji="🏔️" size={12} /> Terrain
-            </button>
             {parcels.length > 0 && (
               <button
                 type="button"

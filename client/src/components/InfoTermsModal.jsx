@@ -454,12 +454,12 @@ export default function InfoTermsModal({
                     <XeroIcon emoji="🗺️" size={16} />
                     <strong>3D Map, Zoom &amp; Live Search</strong>
                     <InfoTip title="Map Camera, Zoom & Search">
-                      Desktop opens in 3D with real OpenFreeMap buildings. Search any street
+                      Desktop opens in 3D with real OpenFreeMap buildings &amp; terrain automatically
+                      enabled (2D hides 3D buildings for a clean top-down view). Search any street
                       intersection (e.g., <em>Market &amp; 5th</em>), business, address,
                       coordinates, or named land. Use scroll wheel, the map zoom/compass buttons, or{' '}
                       <strong>📐 Fit Draft</strong> anytime to zoom out and see the full height and
-                      top rectangle of any land. Switch 2D/3D or toggle Buildings, Terrain, Fit
-                      Lands, and Me right on the map.
+                      top rectangle of any land. Switch 2D/3D, Fit Lands, and Me right on the map.
                     </InfoTip>
                   </div>
                   <p>
