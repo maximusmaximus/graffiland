@@ -30,6 +30,11 @@ export const MCP_TOOLS = [
         description: { type: 'string' },
         voxels: { type: 'array' },
         modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
+        catalogItemId: {
+          type: 'string',
+          description:
+            'Optional ready-made 3D catalog item ID from search_3d_catalog (simready:<id>, pixels:<id>, or xeroemoji:<id>). Auto-resolves modelUrl and .glb format.'
+        },
         modelBase64: { type: 'string' },
         modelData: { type: 'string' },
         modelUrl: { type: 'string' },
@@ -45,9 +50,33 @@ export const MCP_TOOLS = [
     }
   },
   {
+    name: 'search_3d_catalog',
+    description:
+      'Search 9,000+ ready-to-place 3D .glb props, pixel-art 3D models, and 3D extruded emojis across maximusmaximus/simready-pile (SimReady Pile), maximusmaximus/pixels (Pixels Atlas), and maximusmaximus/xeroemoji-pile (XeroEmoji Pile) so AI agents do not have to build every 3D item from scratch. Returns ready-to-use `catalogItemId` and `modelUrl` values you can pass directly into `validate_3d_model_url` or `load_3d_model_on_land`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Search keywords (e.g. "chair", "cactus", "guitar", "dragon", "fire", "pizza", "rocket"). Leave empty to list curated featured picks across all 3 libraries.'
+        },
+        source: {
+          type: 'string',
+          enum: ['all', 'simready', 'pixels', 'xeroemoji'],
+          description: 'Filter by asset library: all (default), simready, pixels, or xeroemoji.'
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of results to return (1-40, default 12).'
+        }
+      }
+    }
+  },
+  {
     name: 'load_3d_model_on_land',
     description:
-      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto any open unfrozen Virtual Land parcel (places new item on owned or community open lands, routing to land holder approval automatically if requireApproval is ON while minting the NFT to the proposing artist; or replaces an existing sculptureId when owned). Strict 1 unit = 1 meter scale (no autoscaling): models larger than the land W×D×H boundary are rejected (409) with exact maxSafeScale.',
+      'Load ANY suitable non-voxel 3D model file (.glb, .gltf, .obj, .stl, .ply) via catalogItemId (from search_3d_catalog), direct modelUrl (auto-validated & auto-detected), modelBase64, or modelData onto any open unfrozen Virtual Land parcel (places new item on owned or community open lands, routing to land holder approval automatically if requireApproval is ON while minting the NFT to the proposing artist; or replaces an existing sculptureId when owned). Strict 1 unit = 1 meter scale (no autoscaling): models larger than the land W×D×H boundary are rejected (409) with exact maxSafeScale.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -55,6 +84,11 @@ export const MCP_TOOLS = [
         sculptureId: { type: 'string' },
         title: { type: 'string' },
         description: { type: 'string' },
+        catalogItemId: {
+          type: 'string',
+          description:
+            'Optional ready-made 3D catalog item ID returned by search_3d_catalog (simready:<id>, pixels:<id>, or xeroemoji:<id>).'
+        },
         modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
         modelBase64: { type: 'string' },
         modelData: { type: 'string' },
@@ -74,17 +108,20 @@ export const MCP_TOOLS = [
   {
     name: 'validate_3d_model_url',
     description:
-      'Validate an external https:// or ipfs:// 3D model URL before uploading, checking format support (.glb/.gltf/.obj/.stl/.ply), 4 MB size limit, 150k triangle budget, 8-texture mobile WebGL limit, exact native bounding box in meters, and optional fit against a target parcelId (returning landFit + maxSafeScale).',
+      'Validate an external https:// or ipfs:// 3D model URL (or catalogItemId from search_3d_catalog) before uploading, checking format support (.glb/.gltf/.obj/.stl/.ply), 4 MB size limit, 150k triangle budget, 8-texture mobile WebGL limit, exact native bounding box in meters, and optional fit against a target parcelId (returning landFit + maxSafeScale).',
     inputSchema: {
       type: 'object',
       properties: {
         modelUrl: { type: 'string' },
+        catalogItemId: {
+          type: 'string',
+          description: 'Optional catalog item ID from search_3d_catalog (simready:<id>, pixels:<id>, or xeroemoji:<id>).'
+        },
         modelFormat: { type: 'string', enum: ['glb', 'gltf', 'obj', 'stl', 'ply'] },
         parcelId: { type: 'string' },
         modelScale: { type: 'number' },
         anchorOffset: { type: 'object' }
-      },
-      required: ['modelUrl']
+      }
     }
   },
   {

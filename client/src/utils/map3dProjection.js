@@ -22,7 +22,9 @@ export function resolveTerrainGroundMeters(map, lng, lat) {
   try {
     if (typeof map.getTerrain === 'function' && !map.getTerrain()) return 0;
     const elev = map.queryTerrainElevation([Number(lng), Number(lat)], { exaggerated: true });
-    return Number.isFinite(elev) ? elev : 0;
+    if (typeof elev === 'number' && Number.isFinite(elev)) return elev;
+    const camElev = Number(map?._camera?.projectedCamera?.elevation ?? map?.transform?.elevation ?? 0);
+    return Number.isFinite(camElev) ? camElev : 0;
   } catch {
     return 0;
   }
@@ -31,6 +33,14 @@ export function resolveTerrainGroundMeters(map, lng, lat) {
 /**
  * Projects a 3D [lng, lat, altitudeMeters] coordinate onto screen CSS pixel coordinates
  * matching MapLibre GL's current camera transform, strictly culling points behind the camera.
+ *
+ * IMPORTANT (MapLibre GL v6 terrain):
+ * `projectedCamera.pixelMatrix3D` already includes MapLibre's `-camera.elevation` terrain
+ * offset (matching `locationToScreenPoint` & custom-layer `defaultProjectionData.mainMatrix`),
+ * whereas `projectedCamera.mercatorMatrix` is captured BEFORE `translate(0, 0, -elevation)`.
+ * We therefore prefer `pixelMatrix3D` first, and subtract `cameraElevation` when falling back
+ * to `mercatorMatrix` so 3D land wireframes & floating labels sit 100% flush on the ground
+ * footprint at any terrain elevation (never floating +elevation meters in the sky).
  */
 export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMeters = 0) {
   if (!map || !Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
@@ -44,48 +54,9 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
   const height = canvas?.clientHeight || canvas?.height || 0;
 
   const projectedCamera = map._camera?.projectedCamera || null;
-  const matrix = resolveMercatorMatrix(map);
   const MC = maplibregl?.MercatorCoordinate;
 
-  if (matrix && MC && typeof MC.fromLngLat === 'function' && width > 0 && height > 0) {
-    let mc = null;
-    try {
-      mc = MC.fromLngLat([Number(lng), Number(lat)], alt);
-    } catch {
-      mc = null;
-    }
-    if (mc) {
-      const x = mc.x;
-      const y = mc.y;
-      const z = mc.z || 0;
-      const cx = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
-      const cy = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
-      const cw = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
-      // Strictly cull coordinates behind the camera (never fall back to 2D map.project!)
-      if (!Number.isFinite(cw) || cw <= 0.0001) {
-        return { x: 0, y: 0, depth: Number.isFinite(cw) ? cw : 0, visible: false };
-      }
-      const ndcX = cx / cw;
-      const ndcY = cy / cw;
-      // Guard against extreme near-plane singularity explosions
-      if (
-        !Number.isFinite(ndcX) ||
-        !Number.isFinite(ndcY) ||
-        Math.abs(ndcX) > 12 ||
-        Math.abs(ndcY) > 12
-      ) {
-        return { x: 0, y: 0, depth: cw, visible: false };
-      }
-      return {
-        x: (ndcX + 1) * 0.5 * width,
-        y: (1 - ndcY) * 0.5 * height,
-        depth: cw,
-        visible: true
-      };
-    }
-  }
-
-  // Secondary 3D projection via MapLibre v6 pixelMatrix3D when available without mercatorMatrix
+  // Primary 3D projection: MapLibre v6 terrain-aware pixelMatrix3D (includes -camera.elevation)
   const pixelMatrix3D =
     projectedCamera?.pixelMatrix3D || projectedCamera?.mercator?.pixelMatrix3D || null;
   const worldSize = Number(projectedCamera?.worldSize || projectedCamera?.mercator?.worldSize || 0);
@@ -119,7 +90,54 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
       }
       return { x: sx, y: sy, depth: ow, visible: true };
     } catch {
-      return { x: 0, y: 0, depth: 0, visible: false };
+      // fall through to mercatorMatrix fallback
+    }
+  }
+
+  // Secondary 3D projection: mercatorMatrix (subtract camera.elevation because mercatorMatrix omits -elevation)
+  const matrix = resolveMercatorMatrix(map);
+  if (matrix && MC && typeof MC.fromLngLat === 'function' && width > 0 && height > 0) {
+    const rawCamElev = Number(projectedCamera?.elevation ?? map?.transform?.elevation ?? 0);
+    const cameraElev =
+      Number.isFinite(rawCamElev) &&
+      (typeof map.getTerrain !== 'function' || Boolean(map.getTerrain()))
+        ? rawCamElev
+        : 0;
+    const mercatorAlt = alt - cameraElev;
+    let mc = null;
+    try {
+      mc = MC.fromLngLat([Number(lng), Number(lat)], mercatorAlt);
+    } catch {
+      mc = null;
+    }
+    if (mc) {
+      const x = mc.x;
+      const y = mc.y;
+      const z = mc.z || 0;
+      const cx = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+      const cy = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+      const cw = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+      // Strictly cull coordinates behind the camera (never fall back to 2D map.project!)
+      if (!Number.isFinite(cw) || cw <= 0.0001) {
+        return { x: 0, y: 0, depth: Number.isFinite(cw) ? cw : 0, visible: false };
+      }
+      const ndcX = cx / cw;
+      const ndcY = cy / cw;
+      // Guard against extreme near-plane singularity explosions
+      if (
+        !Number.isFinite(ndcX) ||
+        !Number.isFinite(ndcY) ||
+        Math.abs(ndcX) > 12 ||
+        Math.abs(ndcY) > 12
+      ) {
+        return { x: 0, y: 0, depth: cw, visible: false };
+      }
+      return {
+        x: (ndcX + 1) * 0.5 * width,
+        y: (1 - ndcY) * 0.5 * height,
+        depth: cw,
+        visible: true
+      };
     }
   }
 

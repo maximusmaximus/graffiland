@@ -220,10 +220,23 @@ async function main() {
     return;
   }
 
+  if (cmd === 'catalog-search' || cmd === 'search-catalog') {
+    const query = flags.query || flags.q || '';
+    const source = flags.source || 'all';
+    const limit = Number(flags.limit || 12);
+    const out = await callMcpTool(apiUrl, token, 'search_3d_catalog', { query, source, limit });
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
   if (cmd === 'validate-model') {
-    if (!flags.url) throw new Error('--url <https://...> is required.');
+    if (!flags.url && !flags['catalog-id']) {
+      throw new Error('--url <https://...> or --catalog-id <source:id> is required.');
+    }
     const out = await callMcpTool(apiUrl, token, 'validate_3d_model_url', {
-      modelUrl: flags.url,
+      ...(flags.url ? { modelUrl: flags.url } : {}),
+      ...(flags['catalog-id'] ? { catalogItemId: flags['catalog-id'] } : {}),
+      ...(flags.parcel ? { parcelId: flags.parcel } : {}),
       ...(flags.format ? { modelFormat: flags.format } : {})
     });
     console.log(JSON.stringify(out, null, 2));
@@ -231,12 +244,16 @@ async function main() {
   }
 
   if (cmd === 'upload-model') {
-    if (!flags.parcel || !flags.url) throw new Error('--parcel and --url are required.');
+    if (!flags.parcel || (!flags.url && !flags['catalog-id'])) {
+      throw new Error('--parcel and (--url or --catalog-id) are required.');
+    }
     const out = await callMcpTool(apiUrl, token, 'load_3d_model_on_land', {
       parcelId: flags.parcel,
-      modelUrl: flags.url,
+      ...(flags.url ? { modelUrl: flags.url } : {}),
+      ...(flags['catalog-id'] ? { catalogItemId: flags['catalog-id'] } : {}),
       title: flags.title || 'Uploaded 3D Model',
       description: flags.desc || '3D model uploaded directly via SPRAY.LAND CLI.',
+      ...(flags.scale ? { modelScale: Number(flags.scale) } : {}),
       ...(flags.format ? { modelFormat: flags.format } : {})
     });
     console.log(JSON.stringify(out, null, 2));

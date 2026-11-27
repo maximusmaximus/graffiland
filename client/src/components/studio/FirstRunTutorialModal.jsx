@@ -14,11 +14,11 @@ const TUTORIAL_STEPS = [
   },
   {
     emoji: '🧱',
-    title: '2. Sculpt 4x Blocks or Hand Off to AI',
-    body: 'Hold and move your phone like a spray can to paint in 3D, or stack and erase blocks.',
-    infoTitle: 'Brush, Stack, Erase & Studio Tools',
+    title: '2. Sculpt 4x Blocks, Search 3D Items, or Hand Off to AI',
+    body: 'Hold and move your phone like a spray can to paint in 3D, or tap 🔍 Search to place ready-made 3D props & emojis.',
+    infoTitle: 'Brush, Search 3D, Stack, Erase & Studio Tools',
     infoBody:
-      'Swipe the bottom carousel between Brush (🖌️), Stack (🧱 — hold to build off faces), Erase (🧽), Lock & Scale (✅), Foreground Occlusion (🪞), and Agent Code (📋).'
+      'Tap 🔍 in the top right to search SimReady, Pixels & XeroEmoji 3D items (auto-switches to Lock & Scale when placed), or swipe the bottom carousel between Brush (🖌️), Stack (🧱 — hold to build off faces), Erase (🧽), Lock & Scale (✅), Foreground Occlusion (🪞), and Agent Code (📋).'
   },
   {
     emoji: '🚀',

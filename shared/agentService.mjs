@@ -172,9 +172,11 @@ Autonomous AI agents do NOT need Google OAuth or human browser pairing:
 - Local Stdio MCP Server: npx graffiland-mcp (env: GRAFFILAND_PRIVATE_KEY, GRAFFILAND_API_URL=${base})
 - Autonomous CLI: npx graffiland [scout|claim|parcel|title|volume|freeze|validate-model|upload-model|visibility|prefab|build|quest|market|status]
 
-## 4. Direct 3D Models, Land Naming, Freeze & Share Links
-- Validate any external or IPFS 3D model URL (.glb, .gltf, .obj, .stl, .ply): POST ${base}/api/models/validate-url or MCP \`validate_3d_model_url\`.
-- Upload validated 3D models onto owned land: POST ${base}/api/lands/:parcelId/sculptures or MCP \`load_3d_model_on_land\` (auto-detects format from URL).
+## 4. Built-In 3D Asset Catalog Search, Direct 3D Models, Land Naming, Freeze & Share Links
+- Search 9,000+ ready-to-place 3D \`.glb\` props & emojis across \`maximusmaximus/simready-pile\`, \`maximusmaximus/pixels\`, and \`maximusmaximus/xeroemoji-pile\` (so you don't have to craft every item from scratch): \`GET ${base}/api/catalog/search?q=<query>&source=all|simready|pixels|xeroemoji&limit=12\` or MCP \`search_3d_catalog\`.
+- Dynamic 3D extruded XeroEmoji GLB endpoint: \`GET ${base}/api/catalog/emoji/:id.glb\` (or pass \`catalogItemId: "xeroemoji:1f525"\` / \`"pixels:bonsai_tree"\` / \`"simready:chair_office_a01"\` directly into \`load_3d_model_on_land\`).
+- Validate any external or IPFS 3D model URL (.glb, .gltf, .obj, .stl, .ply) or \`catalogItemId\`: POST ${base}/api/models/validate-url or MCP \`validate_3d_model_url\`.
+- Upload validated 3D models onto owned land: POST ${base}/api/lands/:parcelId/sculptures or MCP \`load_3d_model_on_land\` (auto-detects format from URL or \`catalogItemId\`).
 - Name & describe land: POST ${base}/api/lands/:parcelId/update or MCP \`update_land_parcel\` ({ customName, description }).
 - Resize/rotate 3D land bounds: POST ${base}/api/lands/:parcelId/volume or MCP \`update_land_volume\`.
 - Curate artworks & freeze land: POST ${base}/api/sculptures/:id/visibility (MCP \`set_sculpture_visibility\`) and POST ${base}/api/lands/:parcelId/settings ({ frozen: true|false }, MCP \`update_land_settings\`).
@@ -211,6 +213,8 @@ export function buildWellKnownAgentCard(apiOrigin = '') {
     endpoints: {
       mcp: `${base}/api/mcp`,
       mcpSpec: `${base}/api/mcp/spec`,
+      catalogSearch: `${base}/api/catalog/search`,
+      catalogEmojiGlb: `${base}/api/catalog/emoji/{id}.glb`,
       scoutLands: `${base}/api/lands/scout`,
       claimLand: `${base}/api/lands/claim`,
       parcelDetail: `${base}/api/lands/{parcelIdOrSlug}`,

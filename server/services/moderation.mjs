@@ -141,14 +141,28 @@ export function validatePublishPayload(body) {
     errors.push('You must accept the SPRAY.LAND Terms of Service and Virtual Land Rules.');
   }
 
-  const voxelValidation = sanitizeVoxels(body?.voxels);
-  errors.push(...voxelValidation.errors);
+  const hasCustomModel = Boolean(
+    body?.catalogItemId ||
+      body?.modelUrl ||
+      body?.modelBase64 ||
+      body?.modelData ||
+      body?.model?.url ||
+      body?.model?.catalogItemId
+  );
+  const rawVoxels = Array.isArray(body?.voxels) ? body.voxels : [];
+  let cleanVoxels = [];
+  if (rawVoxels.length > 0 || !hasCustomModel) {
+    const voxelValidation = sanitizeVoxels(body?.voxels);
+    errors.push(...voxelValidation.errors);
+    cleanVoxels = voxelValidation.cleanVoxels;
+  }
 
   return {
     ok: errors.length === 0,
     errors,
     title,
     description,
-    cleanVoxels: voxelValidation.cleanVoxels
+    cleanVoxels,
+    hasCustomModel
   };
 }

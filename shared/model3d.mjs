@@ -1,3 +1,9 @@
+import {
+  buildCatalogEmojiGlb,
+  extractCatalogEmojiId,
+  resolveCatalogItemReference
+} from './catalogSearchService.mjs';
+
 export const CUSTOM_MODEL_MAX_BYTES = 4 * 1024 * 1024;
 export const INLINE_MODEL_DB_MAX_BYTES = 180 * 1024;
 export const MAX_CUSTOM_MODEL_TRIANGLES = 150000;
@@ -231,8 +237,26 @@ function inspectGltfJsonStats(parsed) {
         posAcc.min.length >= 3 &&
         posAcc.max.length >= 3
       ) {
-        const [x0, y0, z0] = posAcc.min.map(Number);
-        const [x1, y1, z1] = posAcc.max.map(Number);
+        // Honor glTF 2.0 / KHR_mesh_quantization normalized integer accessors (e.g., Pixel Art Atlas & ABO GLBs)
+        let normDivisor = 1;
+        if (posAcc.normalized === true) {
+          const ct = Number(posAcc.componentType || 0);
+          if (ct === 5120) normDivisor = 127; // BYTE
+          else if (ct === 5121) normDivisor = 255; // UNSIGNED_BYTE
+          else if (ct === 5122) normDivisor = 32767; // SHORT
+          else if (ct === 5123) normDivisor = 65535; // UNSIGNED_SHORT
+        }
+        const normVal = (v) => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) return NaN;
+          if (normDivisor === 1) return n;
+          const scaled = n / normDivisor;
+          return posAcc.componentType === 5120 || posAcc.componentType === 5122
+            ? Math.max(-1, Math.min(1, scaled))
+            : Math.max(0, Math.min(1, scaled));
+        };
+        const [x0, y0, z0] = posAcc.min.slice(0, 3).map(normVal);
+        const [x1, y1, z1] = posAcc.max.slice(0, 3).map(normVal);
         if ([x0, y0, z0, x1, y1, z1].every(Number.isFinite)) {
           boxes.push({ x0, y0, z0, x1, y1, z1 });
         }
@@ -792,10 +816,22 @@ export function extractCustomModelInput(input = {}) {
       ? input.model
       : null;
 
-  const rawFormat = modelObj?.format ?? input?.modelFormat ?? '';
+  const catalogItemId = String(modelObj?.catalogItemId ?? input?.catalogItemId ?? '').trim();
+  const catalogResolved = catalogItemId ? resolveCatalogItemReference({ catalogItemId }) : null;
+  if (catalogItemId && !catalogResolved) {
+    return {
+      provided: true,
+      error: `Invalid catalogItemId "${catalogItemId}". Expected simready:<id>, pixels:<id>, or xeroemoji:<id>.`,
+      customModel: null
+    };
+  }
+
+  const rawFormat = modelObj?.format ?? input?.modelFormat ?? (catalogResolved ? catalogResolved.modelFormat : '');
   const rawBase64 = modelObj?.dataBase64 ?? modelObj?.base64 ?? input?.modelBase64 ?? '';
   const rawData = modelObj?.dataText ?? modelObj?.data ?? input?.modelData ?? '';
-  const rawUrl = String(modelObj?.url ?? input?.modelUrl ?? '').trim();
+  const rawUrl = String(
+    modelObj?.url ?? input?.modelUrl ?? (catalogResolved ? catalogResolved.modelUrl : '')
+  ).trim();
   const rawScale = Number(modelObj?.scale ?? input?.modelScale ?? 1);
   const rawRotY = Number(modelObj?.rotationY ?? input?.modelRotationY ?? 0);
 
@@ -866,7 +902,8 @@ export function extractCustomModelInput(input = {}) {
     }
     stats = inspected.stats;
   } else if (rawUrl) {
-    if (!/^(https?:\/\/|ipfs:\/\/)/i.test(rawUrl)) {
+    const isCatalogEmojiRel = Boolean(extractCatalogEmojiId({ modelUrl: rawUrl, catalogItemId }));
+    if (!isCatalogEmojiRel && !/^(https?:\/\/|ipfs:\/\/)/i.test(rawUrl)) {
       return {
         provided: true,
         error: 'modelUrl must start with https://, http://, or ipfs://',
@@ -994,6 +1031,43 @@ export async function validate3dModelUrl(rawUrl, { formatHint = '', timeoutMs = 
   if (!trimmed) {
     return { valid: false, error: 'Enter a 3D model URL (https://... or ipfs://...).' };
   }
+
+  // Fast in-process resolution for dynamic XeroEmoji 3D GLBs (avoids Worker self-fetch)
+  const emojiId = extractCatalogEmojiId({ modelUrl: trimmed, catalogItemId: trimmed });
+  if (emojiId) {
+    try {
+      const built = await buildCatalogEmojiGlb(emojiId);
+      const checkedEmoji = extractCustomModelInput({
+        modelFormat: 'glb',
+        modelBase64: modelBytesToB64(built.bytes)
+      });
+      if (checkedEmoji.error || !checkedEmoji.customModel) {
+        return { valid: false, error: checkedEmoji.error || 'Failed to build 3D emoji GLB.' };
+      }
+      return {
+        valid: true,
+        error: null,
+        format: 'glb',
+        mimeType: FORMAT_MIME_TYPES.glb,
+        byteLength: built.bytes.length,
+        stats: checkedEmoji.customModel.stats,
+        suggestedTitle: built.title || `Emoji ${emojiId}`,
+        resolvedUrl: `/api/catalog/emoji/${encodeURIComponent(built.emojiId)}.glb`,
+        originalUrl: trimmed,
+        bytes: built.bytes,
+        customModel: {
+          ...checkedEmoji.customModel,
+          externalUrl: `/api/catalog/emoji/${encodeURIComponent(built.emojiId)}.glb`
+        }
+      };
+    } catch (err) {
+      return {
+        valid: false,
+        error: err?.message || `Could not build 3D XeroEmoji GLB (${emojiId}).`
+      };
+    }
+  }
+
   if (!/^(https?:\/\/|ipfs:\/\/)/i.test(trimmed)) {
     return { valid: false, error: 'Model link must start with https://, http://, or ipfs://' };
   }
@@ -1193,6 +1267,17 @@ export async function fetchModelBytesFromGateways({
   }
 
   if (externalUrl) {
+    const emojiId = extractCatalogEmojiId({ modelUrl: externalUrl });
+    if (emojiId) {
+      try {
+        const built = await buildCatalogEmojiGlb(emojiId, { fetchImpl });
+        if (built?.bytes?.length > 0 && built.bytes.length <= maxBytes) {
+          return built.bytes;
+        }
+      } catch {
+        // Fall through to gateway URLs
+      }
+    }
     const resolvedExt = resolveSafeExternalModelUrl(externalUrl);
     if (resolvedExt) {
       pushUrl(resolvedExt);

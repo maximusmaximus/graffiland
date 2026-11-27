@@ -56,6 +56,7 @@ import ARLandInspectorPanel, {
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
+import MobileCatalogSearchModal from './studio/MobileCatalogSearchModal.jsx';
 import MobileMapSheet from './studio/MobileMapSheet.jsx';
 import MobileParcelVisitView from './studio/MobileParcelVisitView.jsx';
 import PublishSculptureModal from './studio/PublishSculptureModal.jsx';
@@ -64,6 +65,8 @@ import SprayBrushIntroModal from './studio/SprayBrushIntroModal.jsx';
 import StudioDockDrawer from './studio/StudioDockDrawer.jsx';
 import StudioHudTopBar from './studio/StudioHudTopBar.jsx';
 import ToolCarouselBar from './studio/ToolCarouselBar.jsx';
+import { loadCustomModelObject } from '../utils/customModelLoader.js';
+import { disposeObject3D } from './VoxelEngine3D.js';
 import {
   computeRoomPossessionProof,
   generateRoomKeyB64,
@@ -155,6 +158,13 @@ export default function MobileStudio({
   const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
   const [openPairHubSignal, setOpenPairHubSignal] = useState(null);
   const [notifRefreshBump, setNotifRefreshBump] = useState(0);
+  const [catalogSearchOpen, setCatalogSearchOpen] = useState(false);
+  const [catalogPlaceBusy, setCatalogPlaceBusy] = useState(false);
+  const [placedCatalogItem, setPlacedCatalogItem] = useState(null);
+  const placedCatalogItemRef = useRef(null);
+  placedCatalogItemRef.current = placedCatalogItem;
+  const placedCatalogPivotRef = useRef(null);
+  const placedCatalogMeshRef = useRef(null);
   const hintTimerRef = useRef(null);
   const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
@@ -262,6 +272,81 @@ export default function MobileStudio({
   const onAutoEraseStaleDrawingBridgeRef = useRef(null);
   const isInteractingWithLandRef = useRef(false);
 
+  const clearPlacedCatalogItem = useCallback(() => {
+    const mesh = placedCatalogMeshRef.current;
+    if (mesh) {
+      if (mesh.parent) mesh.parent.remove(mesh);
+      disposeObject3D(mesh);
+      placedCatalogMeshRef.current = null;
+    }
+    placedCatalogPivotRef.current = null;
+    placedCatalogItemRef.current = null;
+    setPlacedCatalogItem(null);
+  }, []);
+
+  const syncPlacedCatalogMesh = useCallback((nextItem) => {
+    const mesh = placedCatalogMeshRef.current;
+    if (!mesh || !nextItem) return;
+    mesh.position.set(nextItem.pos.x, nextItem.pos.y, nextItem.pos.z);
+    mesh.rotation.set(
+      0,
+      THREE.MathUtils.degToRad(nextItem.rotYDeg || 0),
+      THREE.MathUtils.degToRad(nextItem.rotZDeg || 0),
+      'YXZ'
+    );
+    mesh.scale.setScalar(nextItem.scale || 1);
+    mesh.updateMatrixWorld(true);
+    placedCatalogPivotRef.current = { ...nextItem.pos };
+  }, []);
+
+  const handleCommitCatalogTransform = useCallback(
+    (tr, pivot) => {
+      const cur = placedCatalogItemRef.current;
+      if (!cur) return;
+      const s = Math.min(20, Math.max(0.1, Number((cur.scale || 1) * (tr.scale || 1))));
+      const nextRotY = Number(((cur.rotYDeg || 0) + (tr.rotYDeg || 0)) % 360);
+      const nextRotZ = Math.max(-180, Math.min(180, Number((cur.rotZDeg || 0) + (tr.rotZDeg || 0))));
+      const pv = pivot || cur.pos || { x: 0, y: 0, z: 0 };
+      const quat = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          0,
+          THREE.MathUtils.degToRad(tr.rotYDeg || 0),
+          THREE.MathUtils.degToRad(tr.rotZDeg || 0),
+          'YXZ'
+        )
+      );
+      const delta = new THREE.Vector3(
+        cur.pos.x - pv.x,
+        cur.pos.y - pv.y,
+        cur.pos.z - pv.z
+      )
+        .multiplyScalar(tr.scale || 1)
+        .applyQuaternion(quat);
+      const nextPos = {
+        x: Number((pv.x + (tr.offsetX || 0) + delta.x).toFixed(3)),
+        y: Number((pv.y + (tr.offsetY || 0) + delta.y).toFixed(3)),
+        z: Number((pv.z + (tr.offsetZ || 0) + delta.z).toFixed(3))
+      };
+      const updated = {
+        ...cur,
+        scale: Number(s.toFixed(3)),
+        rotYDeg: Number(nextRotY.toFixed(1)),
+        rotZDeg: Number(nextRotZ.toFixed(1)),
+        pos: nextPos
+      };
+      placedCatalogItemRef.current = updated;
+      setPlacedCatalogItem(updated);
+      syncPlacedCatalogMesh(updated);
+    },
+    [syncPlacedCatalogMesh]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearPlacedCatalogItem();
+    };
+  }, [clearPlacedCatalogItem]);
+
   const brush = useVoxelBrush({
     config,
     initialDraft,
@@ -306,8 +391,139 @@ export default function MobileStudio({
     refreshLocationNow: pol.refreshLocationNow,
     isPublishingRef,
     onAutoEraseStaleDrawing: (info) => onAutoEraseStaleDrawingBridgeRef.current?.(info),
-    onResetSpatialOrigin: pol.resetSpatialDrawOrigin
+    onResetSpatialOrigin: pol.resetSpatialDrawOrigin,
+    hasPlacedCatalogItem: Boolean(placedCatalogItem),
+    placedCatalogPivotRef,
+    onCommitCatalogTransform: handleCommitCatalogTransform,
+    onClearCatalogItem: clearPlacedCatalogItem
   });
+
+  const handlePlaceMobileCatalogItem = useCallback(
+    async (item) => {
+      if (!item) return;
+      if (!pol.calibrationReady) {
+        pol.setScanBoxCollapsed(false);
+        showTemporaryHint(
+          pol.calibrationLoss?.summary ||
+            pol.calibrationReadiness?.subHint ||
+            'Finish calibrating AR space before placing 3D items.'
+        );
+        return;
+      }
+      setCatalogPlaceBusy(true);
+      try {
+        // Compute natural world placement point in front of camera (or on locked surface anchor)
+        let targetPos = { x: 0, y: 0, z: -(brush.reachRef?.current || 1.8) };
+        const anchor = brush.surfaceAnchorRef?.current;
+        if (anchor && Number.isFinite(Number(anchor.x))) {
+          targetPos = {
+            x: Number(anchor.x),
+            y: Number(anchor.y),
+            z: Number(anchor.z)
+          };
+        } else if (cameraRef.current) {
+          const cam = cameraRef.current;
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+          const reach = Number(brush.reachRef?.current || 1.8);
+          const pt = cam.position.clone().addScaledVector(forward, reach);
+          targetPos = {
+            x: Number(pt.x.toFixed(3)),
+            y: Number((pt.y - 0.25).toFixed(3)),
+            z: Number(pt.z.toFixed(3))
+          };
+        }
+
+        // Replace any previously staged catalog mesh cleanly (one at a time)
+        clearPlacedCatalogItem();
+
+        let loadedObj = null;
+        let baseSize = { width: 1, height: 1, depth: 1 };
+        try {
+          const res = await loadCustomModelObject(
+            {
+              id: item.id,
+              customModel: {
+                format: item.modelFormat || 'glb',
+                modelUrl: item.modelUrl,
+                scale: 1
+              }
+            },
+            { applyCustomScale: false }
+          );
+          if (res?.object3d) {
+            loadedObj = res.object3d;
+            if (res.baseSize) baseSize = res.baseSize;
+          }
+        } catch {
+          // Graceful fallback visual marker if headless/offline environment cannot decode GLB
+          const fallbackGeo = new THREE.BoxGeometry(0.65, 0.65, 0.65);
+          const fallbackMat = new THREE.MeshStandardMaterial({
+            color: 0x00f5d4,
+            roughness: 0.35,
+            metalness: 0.2
+          });
+          loadedObj = new THREE.Mesh(fallbackGeo, fallbackMat);
+          loadedObj.position.y = 0.325;
+        }
+
+        // Normalize initial AR placement scale to comfortable ~0.75m size in front of user
+        const maxDim = Math.max(0.1, baseSize.width || 1, baseSize.height || 1, baseSize.depth || 1);
+        const initialScale = Number(Math.max(0.15, Math.min(2.0, 0.75 / maxDim)).toFixed(3));
+
+        const nextPlaced = {
+          id: item.id,
+          rawId: item.rawId,
+          source: item.source,
+          sourceName: item.sourceName,
+          title: item.title,
+          modelFormat: item.modelFormat || 'glb',
+          modelUrl: item.modelUrl,
+          previewImageUrl: item.previewImageUrl || null,
+          scale: initialScale,
+          rotYDeg: 0,
+          rotZDeg: 0,
+          pos: targetPos,
+          baseSize
+        };
+
+        if (loadedObj && draftGroupRef.current) {
+          const holder = new THREE.Group();
+          holder.name = `catalog-placed-${item.id}`;
+          holder.add(loadedObj);
+          draftGroupRef.current.add(holder);
+          placedCatalogMeshRef.current = holder;
+        }
+
+        placedCatalogItemRef.current = nextPlaced;
+        placedCatalogPivotRef.current = { ...targetPos };
+        setPlacedCatalogItem(nextPlaced);
+        syncPlacedCatalogMesh(nextPlaced);
+        brush.markDrawActivity?.({ forceState: true });
+
+        if (!title.trim() && item.title) {
+          setTitle(String(item.title).slice(0, 48));
+        }
+
+        setCatalogSearchOpen(false);
+        // Automatically switch to Lock & Scale tooling so user can resize/position immediately,
+        // then tap ✅ Draw to keep painting or 🚀 Publish to mint!
+        brush.enterTransformMode({
+          pivotOverride: targetPos,
+          hintOverride: `Placed "${item.title}" — scale, rotate or move it, then tap ✅ Draw to paint more or 🚀 Publish!`
+        });
+      } finally {
+        setCatalogPlaceBusy(false);
+      }
+    },
+    [
+      brush,
+      clearPlacedCatalogItem,
+      pol,
+      showTemporaryHint,
+      syncPlacedCatalogMesh,
+      title
+    ]
+  );
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
 
@@ -767,6 +983,7 @@ export default function MobileStudio({
 
   onAutoEraseStaleDrawingBridgeRef.current = () => {
     drafts.discardActiveCanvasDraft();
+    clearPlacedCatalogItem();
     setTitle('');
     setDescription('');
     setCluePrompt('');
@@ -851,8 +1068,12 @@ export default function MobileStudio({
 
   const openPublishSheet = useCallback(
     ({ skipVoxelCheck = false, userOverride = null } = {}) => {
-      if (!skipVoxelCheck && (!brush.voxelsRef.current || brush.voxelsRef.current.length === 0)) {
-        brush.notifyToolUnavailable('publish', 'Draw at least 1 block first.');
+      const hasAnyArt = Boolean(
+        (brush.voxelsRef.current && brush.voxelsRef.current.length > 0) ||
+          placedCatalogItemRef.current
+      );
+      if (!skipVoxelCheck && !hasAnyArt) {
+        brush.notifyToolUnavailable('publish', 'Draw at least 1 block or place a 3D item first.');
         return;
       }
       if (activeInsideLand?.isFrozen) {
@@ -934,6 +1155,7 @@ export default function MobileStudio({
       drafts.markDraftPublished(drafts.activeDraftIdRef.current);
       setMintReceipt(resultPayload);
       brush.setVoxels([]);
+      clearPlacedCatalogItem();
       pol.resetSpatialDrawOrigin();
       setTitle('');
       setDescription('');
@@ -949,7 +1171,7 @@ export default function MobileStudio({
           .catch(() => {});
       }
     },
-    [ar, brush, drafts, lands, pol]
+    [ar, brush, clearPlacedCatalogItem, drafts, lands, pol]
   );
 
   const {
@@ -1084,6 +1306,7 @@ export default function MobileStudio({
       parcelVisit ||
       ar.mapSelectedSculpture ||
       lands.landManageOpen ||
+      catalogSearchOpen ||
       pairing.pairOpen ||
       drafts.agentOpen ||
       drafts.draftsOpen ||
@@ -1109,6 +1332,8 @@ export default function MobileStudio({
     ? 'publish'
     : lands.landManageOpen
     ? `land-manage:${lands.landManageParcelId || 'all'}`
+    : catalogSearchOpen
+    ? 'catalog-search'
     : profileHandle
     ? `profile:${profileHandle}`
     : drafts.draftsOpen
@@ -1158,6 +1383,10 @@ export default function MobileStudio({
       }
       if (lands.landManageOpen) {
         lands.setLandManageOpen(false);
+        return true;
+      }
+      if (catalogSearchOpen) {
+        setCatalogSearchOpen(false);
         return true;
       }
       if (profileHandle) {
@@ -1323,11 +1552,26 @@ export default function MobileStudio({
           ? Math.min(3.0, Math.max(0.5, Number(brush.reachRef?.current || 1.8)))
           : 0;
       const headingRad = trueHeadingDeg !== null ? THREE.MathUtils.degToRad(trueHeadingDeg) : 0;
+      const placedCat = placedCatalogItemRef.current;
+      const placedCatYawRad = THREE.MathUtils.degToRad(Number(placedCat?.rotYDeg || 0));
       const anchorOffset = {
-        dx: Number(((Number(tr.offsetX || 0)) + Math.sin(headingRad) * forwardReachM).toFixed(3)),
-        dy: Number(tr.offsetY || 0),
-        dz: Number(((Number(tr.offsetZ || 0)) - Math.cos(headingRad) * forwardReachM).toFixed(3)),
-        yaw: Number((draftYawRad + localTransformYawRad).toFixed(4))
+        dx: Number(
+          (
+            Number(tr.offsetX || 0) +
+            Number(placedCat?.pos?.x || 0) +
+            Math.sin(headingRad) * forwardReachM
+          ).toFixed(3)
+        ),
+        dy: Number((Number(tr.offsetY || 0) + Number(placedCat?.pos?.y || 0)).toFixed(3)),
+        dz: Number(
+          (
+            Number(tr.offsetZ || 0) +
+            Number(placedCat?.pos?.z || 0) -
+            Math.cos(headingRad) * forwardReachM
+          ).toFixed(3)
+        ),
+        yaw: Number((draftYawRad + localTransformYawRad + placedCatYawRad).toFixed(4)),
+        ...(placedCat?.rotZDeg ? { roll: Number(placedCat.rotZDeg) } : {})
       };
       const enrichedPolSnap = {
         ...polSnap,
@@ -1338,6 +1582,15 @@ export default function MobileStudio({
         description,
         termsAccepted,
         voxels: brush.voxels,
+        ...(placedCat
+          ? {
+              catalogItemId: placedCat.id,
+              modelFormat: placedCat.modelFormat || 'glb',
+              modelUrl: placedCat.modelUrl,
+              modelScale: Number(((placedCat.scale || 1) * (tr.scale || 1)).toFixed(3)),
+              modelRotationY: Number(THREE.MathUtils.degToRad(placedCat.rotYDeg || 0).toFixed(4))
+            }
+          : {}),
         anchorOffset,
         previewDataUrl,
         targetParcelId: activeInsideLand?.parcelId || '',
@@ -1562,6 +1815,7 @@ export default function MobileStudio({
     drafts.setAgentOpen(false);
     pairing.setPairOpen(false);
     lands.setLandManageOpen(false);
+    setCatalogSearchOpen(false);
     setProfileHandle('');
     setInfoOpen(false);
     setArchiveOpen(false);
@@ -1814,6 +2068,8 @@ export default function MobileStudio({
             setInfoOpen(true);
           }}
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
+          onOpenCatalogSearch={() => setCatalogSearchOpen(true)}
+          hasPlacedCatalogItem={Boolean(placedCatalogItem)}
           hasOwnedLand={lands.hasOwnedLand}
           ownedLandCount={lands.ownedLandCount}
           onOpenLandManage={() => {
@@ -1939,6 +2195,7 @@ export default function MobileStudio({
             mode={brush.mode}
             dockOpen={dockOpen}
             voxelsLength={brush.voxels.length}
+            placedCatalogItem={placedCatalogItem}
             artTransform={brush.artTransform}
             onSetArtTransform={brush.setArtTransform}
             onToggleTransformLock={brush.toggleTransformLock}
@@ -2223,11 +2480,34 @@ export default function MobileStudio({
         />
       )}
 
+      {catalogSearchOpen && (
+        <MobileCatalogSearchModal
+          busy={catalogPlaceBusy}
+          disabled={!pol.calibrationReady}
+          disabledReason={
+            pol.calibrationLoss?.summary ||
+            pol.calibrationReadiness?.subHint ||
+            'Finish calibrating AR space before placing 3D items.'
+          }
+          placedItem={placedCatalogItem}
+          onPlaceItem={handlePlaceMobileCatalogItem}
+          onRemovePlacedItem={() => {
+            clearPlacedCatalogItem();
+            if (brush.mode === 'transform' && brush.voxels.length === 0) {
+              brush.setMode('draw');
+            }
+            showTemporaryHint('Removed placed 3D item');
+          }}
+          onClose={() => setCatalogSearchOpen(false)}
+        />
+      )}
+
       {brush.mode === 'publish' && (
         <PublishSculptureModal
           config={config}
           user={user}
           voxels={brush.voxels}
+          placedCatalogItem={placedCatalogItem}
           polStats={pol.polStats}
           location={pol.location}
           orbStatus={pol.orbStatus}

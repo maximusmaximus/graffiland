@@ -483,7 +483,7 @@ async function resolveCustomModelBytes(customModel) {
   };
 }
 
-async function upsertSculptureModelRow(db, { sculptureId, parcelId, customModel, ipfsResult }) {
+export async function upsertSculptureModelRow(db, { sculptureId, parcelId, customModel, ipfsResult }) {
   const now = new Date().toISOString();
   const inlineB64 =
     !ipfsResult?.modelCachedInR2 &&

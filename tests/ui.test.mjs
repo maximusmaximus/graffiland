@@ -111,7 +111,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(view.getByText(/Proof of Location locks your real-world spot/i));
 
     RTL.fireEvent.click(view.getByText(/Next Step/i));
-    assert.ok(view.getByText(/2\. Sculpt 4x Blocks or Hand Off to AI/i));
+    assert.ok(view.getByText(/2\. Sculpt 4x Blocks, Search 3D Items, or Hand Off to AI/i));
 
     RTL.fireEvent.click(view.getByText(/Next Step/i));
     assert.ok(view.getByText(/3\. Claim Virtual Land, Chat & Curate/i));
