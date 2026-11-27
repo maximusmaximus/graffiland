@@ -31,6 +31,7 @@ import {
   TUTORIAL_SEEN_KEY
 } from '../utils/clipboard.js';
 import { markModalOpenedFromPointerUp } from '../utils/modalBackdropGuard.js';
+import { shouldAutoFadeOtherArt } from '../utils/arLandGuidance.js';
 import { useARPreview } from '../hooks/useARPreview.js';
 import { useChat } from '../hooks/useChat.js';
 import { useDrafts } from '../hooks/useDrafts.js';
@@ -157,7 +158,6 @@ export default function MobileStudio({
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const [editingSculptureIdState, setEditingSculptureIdState] = useState('');
-  const [fadeOtherItems, setFadeOtherItems] = useState(false);
   const [seenLandsMap, setSeenLandsMap] = useState(() => loadSeenLands());
   const [openPairHubSignal, setOpenPairHubSignal] = useState(null);
   const [notifRefreshBump, setNotifRefreshBump] = useState(0);
@@ -182,7 +182,6 @@ export default function MobileStudio({
   cameraSuspendedRef.current = Boolean(catalogSearchOpen);
   const editingSculptureIdRef = useRef('');
   const fadeOtherItemsRef = useRef(false);
-  fadeOtherItemsRef.current = fadeOtherItems;
   const atmosphericTintRef = useRef(0x9dbcd8);
   const webxrControllerRef = useRef(null);
 
@@ -583,6 +582,13 @@ export default function MobileStudio({
   );
 
   const focusedArLandId = arViewSession?.parcel?.parcelId || '';
+  const autoFadeDrawTool = shouldAutoFadeOtherArt({
+    mode: brush.mode,
+    activeKeyTool: brush.activeKeyTool,
+    tool: brush.tool,
+    isInteractingWithLand: Boolean(focusedArLandId),
+    isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
+  });
 
   const ar = useARPreview({
     user,
@@ -605,7 +611,7 @@ export default function MobileStudio({
     focusedLandId: focusedArLandId,
     isArViewOnly: Boolean(arViewSession || brush.mode === 'preview'),
     editingSculptureId: editingSculptureIdState,
-    fadeOtherItems,
+    fadeOtherItems: autoFadeDrawTool,
     atmosphericTintRef,
     orientationFusionRef: pol.orientationFusionRef
   });
@@ -617,6 +623,13 @@ export default function MobileStudio({
   );
   isInteractingWithLandRef.current = isInteractingWithLand;
   isArViewOnlyRef.current = isArViewOnly;
+  fadeOtherItemsRef.current = shouldAutoFadeOtherArt({
+    mode: brush.mode,
+    activeKeyTool: brush.activeKeyTool,
+    tool: brush.tool,
+    isInteractingWithLand,
+    isArViewOnly
+  });
 
   const arExitLabel =
     arViewSession?.source === 'plot'
@@ -1059,19 +1072,6 @@ export default function MobileStudio({
     editingSculptureIdRef.current = editId;
     setEditingSculptureIdState(editId);
   }, [lands.editingSculpture?.id]);
-
-  const handleToggleFadeOtherItems = useCallback(() => {
-    setFadeOtherItems((prev) => {
-      const next = !prev;
-      fadeOtherItemsRef.current = next;
-      showTemporaryHint(
-        next
-          ? 'Other art faded — solid collision protection stays active so you never draw through it.'
-          : 'Other land art restored to full visibility.'
-      );
-      return next;
-    });
-  }, [showTemporaryHint]);
 
   const handleToggleWebxr = useCallback(async () => {
     const ctrl = webxrControllerRef.current;
@@ -2213,9 +2213,6 @@ export default function MobileStudio({
           isInteractingWithLand={isInteractingWithLand}
           nearbyCameraLand={activeInsideLand || ar.primaryCameraLand}
           nearbyCameraLandCount={ar.immediateCameraLands.length}
-          nearbyOtherItemsCount={ar.visibleOtherItemsCount}
-          fadeOtherItems={fadeOtherItems}
-          onToggleFadeOtherItems={handleToggleFadeOtherItems}
           sensorStatus={pol.sensorStatus}
           webxrSupported={pol.webxrSupported}
           webxrActive={pol.webxrActive}
@@ -2348,9 +2345,6 @@ export default function MobileStudio({
             setMaterial={brush.setMaterial}
             reachMeters={brush.reachMeters}
             setReachMeters={brush.setReachMeters}
-            nearbyOtherItemsCount={ar.visibleOtherItemsCount}
-            fadeOtherItems={fadeOtherItems}
-            onToggleFadeOtherItems={handleToggleFadeOtherItems}
           />
         )}
 

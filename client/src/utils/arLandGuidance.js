@@ -483,3 +483,22 @@ export function applyProximitySharpnessToObject3D(
     }
   });
 }
+
+export const AUTO_FADE_DRAW_TOOLS = Object.freeze(new Set(['brush', 'pencil', 'stack', 'erase']));
+
+/**
+ * Returns true when selecting a drawing or painting tool should automatically fade
+ * existing placed art on the land (while keeping 3D collision protection active).
+ */
+export function shouldAutoFadeOtherArt({
+  mode = 'draw',
+  activeKeyTool = '',
+  tool = '',
+  isInteractingWithLand = false,
+  isArViewOnly = false
+} = {}) {
+  if (isInteractingWithLand || isArViewOnly) return false;
+  if (mode !== 'draw') return false;
+  const selected = String(activeKeyTool || tool || '').toLowerCase();
+  return AUTO_FADE_DRAW_TOOLS.has(selected);
+}

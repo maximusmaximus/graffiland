@@ -485,7 +485,8 @@ export function useARPreview({
     const nextSculptureIds = new Set();
     let selectedCustomPending = 0;
     const cleanEditingId = String(editingSculptureId || '').trim();
-    const activeFadeMultiplier = mode === 'draw' && fadeOtherItems ? 0.22 : 1;
+    const activeFadeMultiplier =
+      mode === 'draw' && !arSelectedLandId && !cleanFocusedLandId && fadeOtherItems ? 0.22 : 1;
     const hazeTintHex = Number.isFinite(Number(atmosphericTintRef?.current))
       ? Number(atmosphericTintRef.current)
       : DEFAULT_ATMOSPHERIC_HAZE_HEX;
