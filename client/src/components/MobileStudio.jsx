@@ -23,12 +23,14 @@ import {
 } from '../utils/seenLands.js';
 import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
 import {
+  CAMERA_FIRST_TOOLS_SEEN_KEY,
   loadBoolPreference,
   loadLocalDraft,
   saveBoolPreference,
   SPRAY_BRUSH_GUIDE_SEEN_KEY,
   TUTORIAL_SEEN_KEY
 } from '../utils/clipboard.js';
+import { markModalOpenedFromPointerUp } from '../utils/modalBackdropGuard.js';
 import { useARPreview } from '../hooks/useARPreview.js';
 import { useChat } from '../hooks/useChat.js';
 import { useDrafts } from '../hooks/useDrafts.js';
@@ -54,6 +56,7 @@ import ARLandInspectorPanel, {
   evaluateArLandActionProximity
 } from './studio/ARLandInspectorPanel.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
+import CameraFirstToolsPrompt from './studio/CameraFirstToolsPrompt.jsx';
 import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
 import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
 import MobileCatalogSearchModal from './studio/MobileCatalogSearchModal.jsx';
@@ -161,6 +164,9 @@ export default function MobileStudio({
   const [catalogSearchOpen, setCatalogSearchOpen] = useState(false);
   const [catalogPlaceBusy, setCatalogPlaceBusy] = useState(false);
   const [placedCatalogItem, setPlacedCatalogItem] = useState(null);
+  const [cameraFirstToolsSeen, setCameraFirstToolsSeen] = useState(() =>
+    loadBoolPreference(CAMERA_FIRST_TOOLS_SEEN_KEY, false)
+  );
   const placedCatalogItemRef = useRef(null);
   placedCatalogItemRef.current = placedCatalogItem;
   const placedCatalogPivotRef = useRef(null);
@@ -172,6 +178,8 @@ export default function MobileStudio({
   const drawReturnSessionRef = useRef(null);
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
+  const cameraSuspendedRef = useRef(false);
+  cameraSuspendedRef.current = Boolean(catalogSearchOpen);
   const editingSculptureIdRef = useRef('');
   const fadeOtherItemsRef = useRef(false);
   fadeOtherItemsRef.current = fadeOtherItems;
@@ -241,7 +249,8 @@ export default function MobileStudio({
     onLocationUpdate: (loc, refined) => onLocationUpdateBridgeRef.current?.(loc, refined),
     onCameraRefreshed: (meta) => onCameraRefreshedBridgeRef.current?.(meta),
     onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.(),
-    mappingPausedRef
+    mappingPausedRef,
+    cameraSuspendedRef
   });
 
   useEffect(() => {
@@ -267,11 +276,20 @@ export default function MobileStudio({
   const openPairCaller = useRef((...a) => openPairModalRef.current?.(...a));
   const openAgentCaller = useRef((...a) => openAgentHandoffRef.current?.(...a));
   const openPublishCaller = useRef((...a) => openPublishSheetRef.current?.(...a));
+  const dismissCameraFirstTools = useCallback(() => {
+    setCameraFirstToolsSeen(true);
+    saveBoolPreference(CAMERA_FIRST_TOOLS_SEEN_KEY, true);
+  }, []);
+
   recenterAimRef.current = pol.recenterAim;
   openCatalogSearchRef.current = () => {
+    markModalOpenedFromPointerUp();
     setDockOpen(false);
     setCatalogSearchOpen(true);
   };
+  const openCatalogSearchModal = useCallback(() => {
+    openCatalogSearchRef.current?.();
+  }, []);
   const arTargetedIdRef = useRef('');
   const setArTargetedSculptureBridgeRef = useRef(null);
   const onTapArLandBridgeRef = useRef(null);
@@ -529,6 +547,38 @@ export default function MobileStudio({
       showTemporaryHint,
       syncPlacedCatalogMesh,
       title
+    ]
+  );
+
+  useEffect(() => {
+    if (!cameraFirstToolsSeen && (brush.voxels.length > 0 || Boolean(placedCatalogItem))) {
+      dismissCameraFirstTools();
+    }
+  }, [brush.voxels.length, cameraFirstToolsSeen, dismissCameraFirstTools, placedCatalogItem]);
+
+  const handleSelectFirstCameraTool = useCallback(
+    (toolId) => {
+      if (!pol.calibrationReady) return;
+      dismissCameraFirstTools();
+      if (toolId === 'pencil') {
+        brush.selectKeyTool('pencil', { silent: true });
+        showTemporaryHint('✏️ Draw selected — tap to place & stack 3D blocks!');
+      } else if (toolId === 'brush') {
+        sprayBrushGuideSeenRef.current = true;
+        saveBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, true);
+        brush.selectKeyTool('brush', { silent: true });
+        showTemporaryHint('🖌️ Paint selected — hold & sweep your phone like a spray can!');
+      } else if (toolId === 'search') {
+        brush.selectKeyTool('search', { silent: true });
+        openCatalogSearchModal();
+      }
+    },
+    [
+      brush,
+      dismissCameraFirstTools,
+      openCatalogSearchModal,
+      pol.calibrationReady,
+      showTemporaryHint
     ]
   );
 
@@ -1993,8 +2043,13 @@ export default function MobileStudio({
         isArViewOnly={isArViewOnly}
         isArViewOnlyRef={isArViewOnlyRef}
         renderPaused={Boolean(
-          ar.mapOpen || parcelVisit || lands.landManageOpen || ar.mapSelectedSculpture
+          ar.mapOpen ||
+            parcelVisit ||
+            lands.landManageOpen ||
+            ar.mapSelectedSculpture ||
+            catalogSearchOpen
         )}
+        cameraHidden={Boolean(catalogSearchOpen)}
         mode={brush.mode}
         modeRef={brush.modeRef}
         toolRef={brush.toolRef}
@@ -2044,7 +2099,10 @@ export default function MobileStudio({
         onCanvasPointerCancel={brush.handleCanvasPointerCancel}
       />
 
-      <div className="hud-layer">
+      <div
+        className={`hud-layer${catalogSearchOpen ? ' is-camera-hidden' : ''}`}
+        aria-hidden={catalogSearchOpen || undefined}
+      >
         <StudioHudTopBar
           user={user}
           mode={brush.mode}
@@ -2075,7 +2133,7 @@ export default function MobileStudio({
             setInfoOpen(true);
           }}
           onOpenProfile={() => user && setProfileHandle(user.username || user.id)}
-          onOpenCatalogSearch={() => setCatalogSearchOpen(true)}
+          onOpenCatalogSearch={openCatalogSearchModal}
           hasPlacedCatalogItem={Boolean(placedCatalogItem)}
           hasOwnedLand={lands.hasOwnedLand}
           ownedLandCount={lands.ownedLandCount}
@@ -2244,6 +2302,26 @@ export default function MobileStudio({
             }}
           />
         )}
+
+        {!cameraFirstToolsSeen &&
+          !isWelcomeOpen &&
+          !tutorialOpen &&
+          !parcelVisit &&
+          !hasFullscreenOverlay &&
+          !isInteractingWithLand &&
+          !isArViewOnly &&
+          !isTransformMode &&
+          brush.voxels.length === 0 &&
+          !placedCatalogItem && (
+            <CameraFirstToolsPrompt
+              calibrationReady={pol.calibrationReady}
+              calibrationProgressPct={
+                pol.calibrationReadiness?.progressPct ?? pol.sceneScan?.coveragePct ?? 0
+              }
+              onSelectTool={handleSelectFirstCameraTool}
+              onDismiss={dismissCameraFirstTools}
+            />
+          )}
 
         {!isInteractingWithLand && (
           <StudioDockDrawer
@@ -2779,8 +2857,7 @@ export default function MobileStudio({
             if (land?.parcelId) {
               setPreferredDrawLandId(land.parcelId);
             }
-            setDockOpen(false);
-            setCatalogSearchOpen(true);
+            openCatalogSearchModal();
           }}
           onRenameLand={handleRenameLandSynced}
           onShowHint={showTemporaryHint}

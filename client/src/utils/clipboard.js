@@ -6,6 +6,7 @@ export const TUTORIAL_SEEN_KEY = 'graffiland_studio_tutorial_v1';
 export const WELCOME_OVERLAY_SEEN_KEY = 'graffiland_first_visit_welcome_seen_v1';
 export const DIRECT_LINK_INTRO_SEEN_KEY = 'graffiland_direct_link_intro_seen_v1';
 export const SPRAY_BRUSH_GUIDE_SEEN_KEY = 'graffiland_spray_brush_guide_seen_v1';
+export const CAMERA_FIRST_TOOLS_SEEN_KEY = 'graffiland_camera_first_tools_seen_v1';
 
 export function loadLocalDraft() {
   try {

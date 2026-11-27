@@ -23,7 +23,7 @@ export function markModalOpenedFromPointerUp(nowMs = Date.now()) {
   writePointerUpStamp(nowMs);
 }
 
-export function isWithinPointerUpGhostWindow(graceMs = 450, nowMs = Date.now()) {
+export function isWithinPointerUpGhostWindow(graceMs = 900, nowMs = Date.now()) {
   const stamp = readPointerUpStamp();
   return stamp > 0 && nowMs - stamp < graceMs;
 }
@@ -41,7 +41,7 @@ export function resetPointerUpGhostWindow() {
  *    accidentally dismisses the modal.
  * 3. Deliberate clicks/taps directly on the backdrop close immediately with zero lag.
  */
-export function useSafeBackdropClose(onClose, { graceMs = 450 } = {}) {
+export function useSafeBackdropClose(onClose, { graceMs = 900 } = {}) {
   const pointerDownOnBackdropRef = useRef(false);
   const sawPointerDownSinceMountRef = useRef(false);
 
