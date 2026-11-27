@@ -13322,6 +13322,19 @@ button.user-handle-badge:hover .user-handle-text {
   }
 }
 
+/* Desktop Pinch-to-Zoom -> Map-Only Guard (prevent browser pinch-zooming surrounding page chrome) */
+html.desktop-map-pinch-locked,
+body.desktop-map-pinch-locked {
+  touch-action: pan-x pan-y;
+}
+
+html.desktop-map-pinch-locked .map-3d-wrap,
+html.desktop-map-pinch-locked .map-container,
+html.desktop-map-pinch-locked .mobile-iso-map-root,
+html.desktop-map-pinch-locked .land-preview-stage {
+  touch-action: none;
+}
+
 /* Mobile Portrait-Only Lock, No-Zoom & Anchored HUD Viewport Guard */
 html.mobile-portrait-locked,
 body.mobile-portrait-locked {

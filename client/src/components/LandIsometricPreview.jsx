@@ -3,6 +3,10 @@ import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import { buildSculptureShareUrl, copyToClipboard } from '../utils/clipboard.js';
 import {
+  registerDesktopZoomableMap,
+  zoomMapLibreByDelta
+} from '../utils/desktopMapPinchZoom.js';
+import {
   buildParcelGeoSummary,
   computeIsometricCameraFit,
   computeScaleBarForZoom,
@@ -1043,6 +1047,15 @@ export default function LandIsometricPreview({
         map.scrollZoom?.setZoomRate?.(1 / 65);
 
         mapRef.current = map;
+        const unregisterPinchZoom = registerDesktopZoomableMap({
+          id: 'land-isometric-preview',
+          getContainer: () => stageRef.current || mapHostRef.current,
+          getNativeTarget: () => mapHostRef.current,
+          zoomByDelta: (delta, cx, cy) =>
+            zoomMapLibreByDelta(map, delta, cx, cy, () => {
+              setUserMovedCamera(true);
+            })
+        });
         lastCenteredParcelRef.current = {
           parcelId: initVol.parcelId,
           lat: initVol.centerLat,
@@ -1102,6 +1115,7 @@ export default function LandIsometricPreview({
         glCanvas?.addEventListener?.('webglcontextlost', onContextLost, false);
         glCanvas?.addEventListener?.('webglcontextrestored', onContextRestored, false);
         map.__graffilandCleanup = () => {
+          unregisterPinchZoom();
           clearTimeout(styleTimeout);
           clearTimeout(contextLostTimer);
           glCanvas?.removeEventListener?.('webglcontextlost', onContextLost);

@@ -17,6 +17,7 @@ import {
   WELCOME_OVERLAY_SEEN_KEY
 } from './utils/clipboard.js';
 import { isMobileDevice } from './utils/device.js';
+import { installDesktopMapPinchZoom } from './utils/desktopMapPinchZoom.js';
 import {
   installMobileViewportLock,
   isMobileLandscapeOrientation
@@ -81,8 +82,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isMobile) return undefined;
-    return installMobileViewportLock();
+    if (isMobile) {
+      return installMobileViewportLock();
+    }
+    return installDesktopMapPinchZoom();
   }, [isMobile]);
 
   useEffect(() => {
