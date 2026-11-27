@@ -114,6 +114,7 @@ export default function SceneCoverageWidget({
               <div className="scene-scan-precision mono">
                 ±{formatShortLength(sceneScan.precisionMeters, unitSystem, { decimals: 2, compact: true })} · {orbStatus.engine} ({orbStatus.keyframes}/3)
                 {orbStatus.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
+                {orbStatus.packStatus === 'no_pack' ? ' · Scan space on mobile to calibrate Visual Match' : ''}
               </div>
               {mode === 'preview' && onRefreshOrbRescan && (
                 <button

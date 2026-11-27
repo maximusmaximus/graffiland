@@ -36,6 +36,11 @@ import {
   disposeObject3D,
   latLngOffsetMeters
 } from '../components/VoxelEngine3D.js';
+import {
+  ORB_DEFAULT_MAX_REPROJ_ERR_PX,
+  meetsClientInitialCalibrationGate,
+  unwrapOrbPackCacheEntry
+} from '../utils/orbMatcher.js';
 
 /**
  * Manages nearby AR sculptures & 3D holographic land volumes rendering (in BOTH draw and
@@ -73,6 +78,8 @@ export function useARPreview({
   const arSelectedLandIdRef = useRef('');
   const arTargetedIdRef = useRef('');
   const orbHeadingCorrectionRadRef = useRef(0);
+  const autoCalAttemptedRef = useRef(new Set());
+  const autoCalBuffersRef = useRef(new Map());
   const [arModelLoadedTick, setArModelLoadedTick] = useState(0);
   const [visibleOtherItemsCount, setVisibleOtherItemsCount] = useState(0);
 
@@ -1036,8 +1043,8 @@ export function useARPreview({
 
       busy = true;
       try {
-        let packEntry = orbPackCacheRef.current.get(activeParcelId);
-        if (packEntry === undefined) {
+        let rawEntry = orbPackCacheRef.current.get(activeParcelId);
+        if (rawEntry === undefined) {
           const fetched = await api
             .fetchParcelLandmarkPack(activeParcelId, {
               lat: loc.lat,
@@ -1045,12 +1052,138 @@ export function useARPreview({
               deviceProfile: { isMobile: true }
             })
             .catch(() => null);
-          packEntry = fetched?.available ? fetched.anchorPack : null;
-          orbPackCacheRef.current.set(activeParcelId, packEntry);
+          rawEntry = fetched
+            ? {
+                available: Boolean(fetched.available && fetched.anchorPack),
+                anchorPack: fetched.available ? fetched.anchorPack : null,
+                effectivePolicy: fetched.effectivePolicy || null,
+                orbStatus: fetched.orbStatus || (fetched.available ? 'optional' : 'no_pack'),
+                upgradePath: fetched.upgradePath || (fetched.available ? '' : 'first_mobile_scan'),
+                lightingSlots: Array.isArray(fetched.lightingSlots) ? fetched.lightingSlots : [],
+                desiredLightingSlot: fetched.desiredLightingSlot || '',
+                missingLightingSlots: Array.isArray(fetched.missingLightingSlots)
+                  ? fetched.missingLightingSlots
+                  : []
+              }
+            : null;
+          orbPackCacheRef.current.set(activeParcelId, rawEntry);
         }
-        if (!packEntry || cancelled) return;
+        if (cancelled) return;
 
-        const match = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, packEntry);
+        const entry = unwrapOrbPackCacheEntry(rawEntry);
+        setOrbStatus((prev) => {
+          const nextPackStatus = entry.orbStatus || (entry.available ? 'optional' : 'no_pack');
+          const nextEnvTier = entry.effectivePolicy?.envTier || prev.envTier || '';
+          const nextMaxErr = entry.effectivePolicy?.maxReprojErrPx ?? prev.effectiveMaxReprojErrPx ?? null;
+          const nextMinInliers = entry.effectivePolicy?.minOrbInliers ?? prev.effectiveMinInliers ?? null;
+          if (
+            prev.packStatus === nextPackStatus &&
+            prev.envTier === nextEnvTier &&
+            prev.effectiveMaxReprojErrPx === nextMaxErr &&
+            prev.effectiveMinInliers === nextMinInliers
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            packStatus: nextPackStatus,
+            envTier: nextEnvTier,
+            isAuto: entry.effectivePolicy?.isAuto ?? prev.isAuto ?? true,
+            lightingSlots: entry.lightingSlots,
+            effectiveMinInliers: nextMinInliers,
+            effectiveMaxReprojErrPx: nextMaxErr
+          };
+        });
+
+        // Automatic background calibration for packless Browser/Agent lands OR missing complementary lighting slot
+        const targetCalSlot =
+          !entry.available
+            ? entry.desiredLightingSlot || 'daylight'
+            : entry.missingLightingSlots[0] || '';
+        const attemptKey = targetCalSlot ? `${activeParcelId}:${targetCalSlot}` : '';
+        if (
+          user?.id &&
+          targetCalSlot &&
+          attemptKey &&
+          !autoCalAttemptedRef.current.has(attemptKey)
+        ) {
+          let buf = autoCalBuffersRef.current.get(attemptKey);
+          if (!buf) {
+            buf = new Map();
+            autoCalBuffersRef.current.set(attemptKey, buf);
+          }
+          // Seed from live scene-scan keyframes if already captured in matching slot
+          if (orbKeyframesRef.current?.size > 0 && buf.size < 3) {
+            for (const [k, kf] of orbKeyframesRef.current.entries()) {
+              if (!buf.has(k) && (!entry.available || kf?.lightingTag === targetCalSlot)) {
+                buf.set(k, kf);
+              }
+            }
+          }
+          if (buf.size < 3) {
+            const headingDeg = Number(orientationFusionRef?.current?.getHeadingDeg?.() ?? 0);
+            const yawNorm = (((headingDeg + 180) % 360) + 360) % 360 - 180;
+            const slotBucket =
+              !buf.has('center') && Math.abs(yawNorm) <= 18
+                ? 'center'
+                : !buf.has('left') && yawNorm < -18
+                  ? 'left'
+                  : !buf.has('right') && yawNorm > 18
+                    ? 'right'
+                    : `view-${buf.size}`;
+            const kf = await orbTrackerRef.current
+              ?.extractKeyframeFeatures(videoRef.current, {
+                yawDeg: yawNorm,
+                pitchDeg: 0,
+                solarRegime: entry.effectivePolicy?.solarRegime || ''
+              })
+              .catch(() => null);
+            if (!cancelled && kf?.features?.length >= 6) {
+              if (!entry.available || kf.lightingTag === targetCalSlot) {
+                buf.set(slotBucket, kf);
+              }
+            }
+          }
+
+          const candidateKfs = Array.from(buf.values()).slice(0, 3);
+          const gate = meetsClientInitialCalibrationGate(candidateKfs);
+          if (gate.ok && !cancelled) {
+            autoCalAttemptedRef.current.add(attemptKey);
+            api
+              .saveParcelLandmarkPack(activeParcelId, {
+                lat: loc.lat,
+                lng: loc.lng,
+                keyframes: candidateKfs,
+                allowInitialClaim: true,
+                deviceProfile: { isMobile: true }
+              })
+              .then((saved) => {
+                if (saved?.ok && !cancelled) {
+                  autoCalBuffersRef.current.delete(attemptKey);
+                  orbPackCacheRef.current.delete(activeParcelId);
+                  setOrbStatus((prev) => ({
+                    ...prev,
+                    packStatus: 'optional',
+                    lightingSlots: saved.lightingSlots || prev.lightingSlots || []
+                  }));
+                }
+              })
+              .catch(() => {
+                // Non-blocking: server may reject if another visitor already calibrated this slot
+              });
+          }
+        }
+
+        if (!entry.anchorPack || cancelled) return;
+
+        const effectiveMaxErr = Number(
+          entry.effectivePolicy?.maxReprojErrPx || ORB_DEFAULT_MAX_REPROJ_ERR_PX
+        );
+        const match = await orbTrackerRef.current?.matchLiveFrame(
+          videoRef.current,
+          entry.anchorPack,
+          { maxReprojErr: effectiveMaxErr }
+        );
         if (!match || cancelled) return;
         if (match.inlierCount >= 4) {
           latestOrbProofRef.current = {
@@ -1075,7 +1208,8 @@ export function useARPreview({
         setOrbStatus((prev) => ({
           ...prev,
           relocalizedInliers: match.inlierCount || 0,
-          reprojErrPx: match.inlierCount > 0 ? match.reprojectionErrorPx : null
+          reprojErrPx: match.inlierCount > 0 ? match.reprojectionErrorPx : null,
+          matchedLightingSlot: match.matchedLightingSlot || prev.matchedLightingSlot || ''
         }));
       } catch {
         // non-blocking relocalization tick
@@ -1101,10 +1235,12 @@ export function useARPreview({
     mode,
     nearbyGroupRef,
     nearbySculptures,
+    orbKeyframesRef,
     orbPackCacheRef,
     orbTrackerRef,
     orientationFusionRef,
     setOrbStatus,
+    user?.id,
     videoRef
   ]);
 
@@ -1113,6 +1249,12 @@ export function useARPreview({
       arSelectedLandId || arTargetedSculpture?.sculpture?.parcelId || nearbySculptures[0]?.parcelId;
     if (targetParcelId) {
       orbPackCacheRef.current.delete(targetParcelId);
+      for (const k of Array.from(autoCalAttemptedRef.current)) {
+        if (k.startsWith(`${targetParcelId}:`)) autoCalAttemptedRef.current.delete(k);
+      }
+      for (const k of Array.from(autoCalBuffersRef.current.keys())) {
+        if (k.startsWith(`${targetParcelId}:`)) autoCalBuffersRef.current.delete(k);
+      }
     }
     orbKeyframesRef.current.clear();
     orbHeadingCorrectionRadRef.current = 0;

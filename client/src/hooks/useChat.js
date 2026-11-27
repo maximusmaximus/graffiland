@@ -6,6 +6,10 @@ import {
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
 import {
+  ORB_DEFAULT_MAX_REPROJ_ERR_PX,
+  unwrapOrbPackCacheEntry
+} from '../utils/orbMatcher.js';
+import {
   decryptPinnedIpfsBatch,
   getOrCreateDeviceIdentity,
   loadLocalRoomKey,
@@ -193,12 +197,23 @@ export function useChat({
           sightProof: unsignedSight
         });
         const ch = await api.issueParcelPinChallenge(sc.id, {
+          lat: loc.lat,
+          lng: loc.lng,
           deviceProfile: { isMobile: true }
         });
         let orbProof = latestOrbProofRef.current;
-        const cachedPack = orbPackCacheRef.current.get(sc.parcelId);
-        if (cachedPack && videoRef.current?.readyState >= 2) {
-          const freshOrb = await orbTrackerRef.current?.matchLiveFrame(videoRef.current, cachedPack);
+        const cachedEntry = unwrapOrbPackCacheEntry(orbPackCacheRef.current.get(sc.parcelId));
+        const effectiveMaxErr = Number(
+          ch.maxReprojErrPx ||
+            cachedEntry.effectivePolicy?.maxReprojErrPx ||
+            ORB_DEFAULT_MAX_REPROJ_ERR_PX
+        );
+        if (cachedEntry.anchorPack && videoRef.current?.readyState >= 2) {
+          const freshOrb = await orbTrackerRef.current?.matchLiveFrame(
+            videoRef.current,
+            cachedEntry.anchorPack,
+            { maxReprojErr: effectiveMaxErr }
+          );
           if (freshOrb?.descriptorDigest) {
             orbProof = {
               descriptorDigest: freshOrb.descriptorDigest,
@@ -211,6 +226,12 @@ export function useChat({
             };
           }
         }
+        const hasUsableOrbProof = Boolean(
+          orbProof?.descriptorDigest &&
+            (!ch.descriptorDigest || orbProof.descriptorDigest === ch.descriptorDigest) &&
+            Array.isArray(orbProof.matchedDescriptors) &&
+            orbProof.matchedDescriptors.length > 0
+        );
         let webauthnAssertion = null;
         if (ch.webauthnRequired) {
           webauthnAssertion = await requestPasskeyAssertion(
@@ -229,7 +250,7 @@ export function useChat({
         });
         const unlocked = await api.unlockPinnedIpfsBatch(sc.id, {
           ...signed,
-          ...(orbProof ? { orbProof } : {}),
+          ...(hasUsableOrbProof ? { orbProof } : {}),
           ...(webauthnAssertion ? { webauthnAssertion } : {}),
           deviceProfile: { isMobile: true }
         });
@@ -247,6 +268,8 @@ export function useChat({
             pins: dec.pins || [],
             batchSeq: dec.batchSeq || seq,
             meta: unlocked.meta || summary,
+            orbStatus: unlocked.orbStatus || ch.orbStatus || '',
+            upgradePath: unlocked.upgradePath || ch.upgradePath || '',
             error: '',
             needsPasskey: false
           };
