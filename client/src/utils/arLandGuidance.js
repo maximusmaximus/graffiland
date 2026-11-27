@@ -506,3 +506,23 @@ export function shouldAutoFadeOtherArt({
   const selected = String(activeKeyTool || tool || '').toLowerCase();
   return AUTO_FADE_DRAW_TOOLS.has(selected);
 }
+
+/**
+ * Returns true when the user is going to publish (Publish sheet open OR Publish
+ * tool selected in the bottom carousel) so the view isolates ONLY the art they
+ * just made or the 3D model they just placed — completely hiding other art,
+ * sculptures, and land items on the land.
+ */
+export function shouldIsolatePublishArtView({
+  mode = 'draw',
+  activeKeyTool = '',
+  isInteractingWithLand = false,
+  isArViewOnly = false
+} = {}) {
+  if (isInteractingWithLand || isArViewOnly) return false;
+  if (mode === 'publish') return true;
+  if (mode === 'draw' && String(activeKeyTool || '').toLowerCase() === 'publish') {
+    return true;
+  }
+  return false;
+}

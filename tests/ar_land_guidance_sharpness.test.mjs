@@ -404,7 +404,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       viewportSrc,
-      /\{!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && \(/
+      /\{!isArViewOnly &&[\s\S]*?!isTransformMode &&[\s\S]*?cameraReady &&[\s\S]*?!sceneScanOptimal &&[\s\S]*?!mappingRestartRequired && \(/
     );
     assert.match(
       viewportSrc,
@@ -412,11 +412,11 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       viewportSrc,
-      /\{!isArViewOnly && !isTransformMode && occlusionEnabled && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/
+      /\{!isArViewOnly && !isTransformMode &&(?:\s*!isPublishIsolated &&)? occlusionEnabled && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/
     );
-    assert.match(viewportSrc, /grid\.visible = !arViewOnly;/);
-    assert.match(viewportSrc, /shadowCatcher\.visible = !arViewOnly;/);
-    assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly;/);
+    assert.match(viewportSrc, /grid\.visible = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
+    assert.match(viewportSrc, /shadowCatcher\.visible = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
+    assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
     assert.match(
       viewportSrc,
       /if \(\s*!arViewOnly &&\s*!isTransform &&\s*!isMappingPaused &&\s*(?:!isSceneLocked|needsMoreCalibration) &&\s*now - lastScanPosePush > 110\s*\)/

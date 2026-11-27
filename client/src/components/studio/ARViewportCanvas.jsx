@@ -121,6 +121,8 @@ function ARViewportCanvasInner({
   onCameraRefreshNeeded = null,
   onArLandGuidance = null,
   fadeOtherItemsRef = null,
+  isolatePublishArt = false,
+  isolatePublishArtRef = null,
   atmosphericTintRef = null,
   getActivePlacedItemColliders = null,
   notifyBlockedByPlacedItem = null,
@@ -147,6 +149,9 @@ function ARViewportCanvasInner({
   const onRequestContextRecoverRef = useRef(onRequestContextRecover);
   onRequestContextRecoverRef.current = onRequestContextRecover;
   const isTransformMode = mode === 'transform';
+  const isPublishIsolated = Boolean(mode === 'publish' || isolatePublishArt);
+  const localIsolatePublishRef = useRef(isPublishIsolated);
+  localIsolatePublishRef.current = isPublishIsolated;
   const effectiveRenderPaused = Boolean(renderPaused || cameraHidden);
   const renderPausedRef = useRef(effectiveRenderPaused);
   renderPausedRef.current = effectiveRenderPaused;
@@ -608,15 +613,25 @@ function ARViewportCanvasInner({
       const arViewOnly = Boolean(
         isArViewOnlyRef?.current || interactingLand || modeRef.current === 'preview'
       );
+      const isPublishIsolatedFrame = Boolean(
+        modeRef.current === 'publish' ||
+          isolatePublishArtRef?.current ||
+          localIsolatePublishRef.current
+      );
       const isCalibratedForDraw = Boolean(calibrationReadyRef.current);
       const showCursor =
-        !arViewOnly && modeRef.current === 'draw' && !interactingLand && isCalibratedForDraw;
+        !isPublishIsolatedFrame &&
+        !arViewOnly &&
+        modeRef.current === 'draw' &&
+        !interactingLand &&
+        isCalibratedForDraw;
+      nearbyGroup.visible = !isPublishIsolatedFrame;
       ghost.visible = showCursor;
-      grid.visible = !arViewOnly;
-      shadowCatcher.visible = !arViewOnly;
-      dirLight.castShadow = !arViewOnly;
-      draftGroup.visible = !interactingLand;
-      if (arViewOnly) {
+      grid.visible = !arViewOnly && !isPublishIsolatedFrame;
+      shadowCatcher.visible = !arViewOnly && !isPublishIsolatedFrame;
+      dirLight.castShadow = !arViewOnly && !isPublishIsolatedFrame;
+      draftGroup.visible = isPublishIsolatedFrame ? true : !interactingLand;
+      if (arViewOnly || isPublishIsolatedFrame) {
         transformBox.visible = false;
       }
       for (let i = 0; i < neighborSlotPool.length; i += 1) {
@@ -847,7 +862,7 @@ function ARViewportCanvasInner({
       let originZ = null;
       let originRequired = false;
 
-      if (arViewOnly || interactingLand || !isCalibratedForDraw) {
+      if (isPublishIsolatedFrame || arViewOnly || interactingLand || !isCalibratedForDraw) {
         surfaceMarker.visible = false;
       } else if (anchor) {
         originX = anchor.x;
@@ -1070,6 +1085,7 @@ function ARViewportCanvasInner({
       const selectedLandId = arSelectedLandIdRef?.current || '';
 
       if (
+        !isPublishIsolatedFrame &&
         (modeRef.current === 'draw' ||
           modeRef.current === 'transform' ||
           modeRef.current === 'preview') &&
@@ -1263,9 +1279,17 @@ function ARViewportCanvasInner({
         }
       }
 
+      if (isPublishIsolatedFrame && arTargetedIdRef.current) {
+        arTargetedIdRef.current = '';
+        setArTargetedSculpture(null);
+      }
       if (now - lastTargetCheck > 180) {
         lastTargetCheck = now;
-        if (modeRef.current === 'preview' && nearbyGroupRef.current?.children.length) {
+        if (
+          !isPublishIsolatedFrame &&
+          modeRef.current === 'preview' &&
+          nearbyGroupRef.current?.children.length
+        ) {
           targetRay.setFromCamera(centerNdc, camera);
           const hits = targetRay.intersectObjects(nearbyGroupRef.current.children, true);
           const hitObj = hits.find((h) => h.object?.userData?.sculpture);
@@ -1435,6 +1459,7 @@ function ARViewportCanvasInner({
     envUpdaterRef,
     eraseTargetVoxel,
     fadeOtherItemsRef,
+    isolatePublishArtRef,
     fallbackEulerRef,
     getActivePlacedItemColliders,
     ghostMeshRef,
@@ -1558,7 +1583,12 @@ function ARViewportCanvasInner({
       />
       {!cameraHidden && (
         <>
-          {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && (
+          {!isArViewOnly &&
+            !isTransformMode &&
+            !isPublishIsolated &&
+            cameraReady &&
+            !sceneScanOptimal &&
+            !mappingRestartRequired && (
             <div
               className="mapping-grayscale-grid"
               data-testid="mapping-grayscale-grid"
@@ -1589,6 +1619,7 @@ function ARViewportCanvasInner({
         aria-hidden={cameraHidden || undefined}
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         data-transform-mode={isTransformMode ? 'true' : 'false'}
+        data-publish-isolated={isPublishIsolated ? 'true' : 'false'}
         data-scene-locked={sceneScanOptimal && calibrationReady ? 'true' : 'false'}
         data-calibration-ready={calibrationReady ? 'true' : 'false'}
         data-mapping-restart-required={mappingRestartRequired ? 'true' : 'false'}
@@ -1599,14 +1630,18 @@ function ARViewportCanvasInner({
       />
       {!cameraHidden && (
         <>
-          {!isArViewOnly && !isTransformMode && occlusionEnabled && (
+          {!isArViewOnly && !isTransformMode && !isPublishIsolated && occlusionEnabled && (
             <canvas
               ref={occlusionCanvasRef}
               className="occlusion-overlay"
               data-testid="occlusion-overlay"
             />
           )}
-          {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
+          {!isArViewOnly &&
+            !isPublishIsolated &&
+            mode === 'draw' &&
+            !isInteractingWithLand &&
+            calibrationReady && (
             <ToolCenterReticle
               tool={tool}
               blockSize={blockSize}

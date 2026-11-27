@@ -36,7 +36,11 @@ import {
   SPRAY_BRUSH_GUIDE_SEEN_KEY
 } from '../utils/clipboard.js';
 import { markModalOpenedFromPointerUp } from '../utils/modalBackdropGuard.js';
-import { shouldAutoFadeOtherArt } from '../utils/arLandGuidance.js';
+import {
+  shouldAutoFadeOtherArt,
+  shouldIsolatePublishArtView
+} from '../utils/arLandGuidance.js';
+import { captureIsolatedDraftSnapshot } from '../utils/publishArtPreview.js';
 import { useARPreview } from '../hooks/useARPreview.js';
 import { useChat } from '../hooks/useChat.js';
 import { useDrafts } from '../hooks/useDrafts.js';
@@ -174,6 +178,7 @@ export default function MobileStudio({
   const cameraSuspendedRef = useRef(false);
   const editingSculptureIdRef = useRef('');
   const fadeOtherItemsRef = useRef(false);
+  const isolatePublishArtRef = useRef(false);
   const atmosphericTintRef = useRef(0x9dbcd8);
   const webxrControllerRef = useRef(null);
 
@@ -195,6 +200,7 @@ export default function MobileStudio({
   const isPublishingRef = useRef(false);
   isPublishingRef.current = publishing;
   const [publishError, setPublishError] = useState('');
+  const [publishPreviewUrl, setPublishPreviewUrl] = useState('');
   const [mintReceipt, setMintReceipt] = useState(null);
   const [activeQuest, setActiveQuest] = useState(null);
   const [selectedPlinthSlot, setSelectedPlinthSlot] = useState(null);
@@ -620,6 +626,12 @@ export default function MobileStudio({
     isInteractingWithLand: Boolean(focusedArLandId),
     isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
   });
+  const preIsolatePublishArt = shouldIsolatePublishArtView({
+    mode: brush.mode,
+    activeKeyTool: brush.activeKeyTool,
+    isInteractingWithLand: Boolean(focusedArLandId),
+    isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
+  });
 
   const ar = useARPreview({
     user,
@@ -643,6 +655,7 @@ export default function MobileStudio({
     isArViewOnly: Boolean(arViewSession || brush.mode === 'preview'),
     editingSculptureId: editingSculptureIdState,
     fadeOtherItems: autoFadeDrawTool,
+    isolatePublishArt: preIsolatePublishArt,
     atmosphericTintRef,
     orientationFusionRef: pol.orientationFusionRef
   });
@@ -652,8 +665,15 @@ export default function MobileStudio({
   const isArViewOnly = Boolean(
     arViewSession || isInteractingWithLand || brush.mode === 'preview'
   );
+  const isolatePublishArt = shouldIsolatePublishArtView({
+    mode: brush.mode,
+    activeKeyTool: brush.activeKeyTool,
+    isInteractingWithLand,
+    isArViewOnly
+  });
   isInteractingWithLandRef.current = isInteractingWithLand;
   isArViewOnlyRef.current = isArViewOnly;
+  isolatePublishArtRef.current = isolatePublishArt;
   fadeOtherItemsRef.current = shouldAutoFadeOtherArt({
     mode: brush.mode,
     activeKeyTool: brush.activeKeyTool,
@@ -1014,22 +1034,24 @@ export default function MobileStudio({
   arPinPreviewRef.current = chat.arPinPreview;
   openCameraSelectedChatRef.current = chat.openCameraSelectedChat;
 
-  const captureSculptureSnapshot = useCallback(() => {
-    try {
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        if (ghostMeshRef.current) ghostMeshRef.current.visible = false;
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
-        const url = rendererRef.current.domElement.toDataURL('image/png');
-        if (ghostMeshRef.current && brush.modeRef.current === 'draw') {
-          ghostMeshRef.current.visible = true;
-        }
-        return url;
-      }
-    } catch {
-      // ignore snapshot capture error
-    }
-    return '';
-  }, [brush.modeRef]);
+  const captureSculptureSnapshot = useCallback(({ autoFrame = true } = {}) => {
+    return captureIsolatedDraftSnapshot({
+      renderer: rendererRef.current,
+      scene: sceneRef.current,
+      camera: cameraRef.current,
+      draftGroup: draftGroupRef.current,
+      hideObjects: [
+        nearbyGroupRef.current,
+        ghostMeshRef.current,
+        gridHelperRef.current,
+        shadowPlaneRef.current,
+        surfaceMarkerRef.current,
+        transformBoxRef.current
+      ],
+      keepHiddenObjects: isolatePublishArtRef.current ? [nearbyGroupRef.current] : [],
+      autoFrame
+    });
+  }, []);
 
   const drafts = useDrafts({
     initialDraft,
@@ -1202,15 +1224,34 @@ export default function MobileStudio({
       }
       setPublishError('');
       setMintReceipt(null);
+      if (nearbyGroupRef.current) {
+        nearbyGroupRef.current.visible = false;
+      }
+      isolatePublishArtRef.current = true;
       if (brush.modeRef.current === 'transform') {
         brush.commitTransformAndExit('publish');
       } else {
+        const snap = captureSculptureSnapshot({ autoFrame: true });
+        if (snap) setPublishPreviewUrl(snap);
         brush.setMode('publish');
       }
     },
-    [activeInsideLand, brush, pol, user]
+    [activeInsideLand, brush, captureSculptureSnapshot, pol, user]
   );
   openPublishSheetRef.current = openPublishSheet;
+
+  useEffect(() => {
+    if (brush.mode !== 'publish') {
+      if (!mintReceipt) setPublishPreviewUrl('');
+      return undefined;
+    }
+    if (mintReceipt) return undefined;
+    const rafId = window.requestAnimationFrame(() => {
+      const snap = captureSculptureSnapshot({ autoFrame: true });
+      if (snap) setPublishPreviewUrl(snap);
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [brush.mode, brush.voxels, placedCatalogItem, mintReceipt, captureSculptureSnapshot]);
 
   const handleDesktopCommand = useCallback(
     (msg) => {
@@ -1622,7 +1663,12 @@ export default function MobileStudio({
           `"${activeInsideLand.displayName || 'This land'}" is frozen by its owner — new art cannot be added here.`
         );
       }
-      const previewDataUrl = captureSculptureSnapshot();
+      const previewDataUrl = captureSculptureSnapshot({ autoFrame: true });
+      const placedCatForPreview = placedCatalogItemRef.current;
+      const effectivePublishPreview = previewDataUrl || placedCatForPreview?.previewImageUrl || '';
+      if (effectivePublishPreview) {
+        setPublishPreviewUrl(effectivePublishPreview);
+      }
       const polSnap = pol.polRef.current.getSnapshot();
       const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
       const tr = brush.artTransformRef.current;
@@ -1823,15 +1869,31 @@ export default function MobileStudio({
           `"${activeInsideLand.displayName || 'This land'}" is frozen by its owner — new art cannot be added here.`
         );
       }
-      const previewDataUrl = captureSculptureSnapshot();
+      const previewDataUrl = captureSculptureSnapshot({ autoFrame: true });
+      const placedCatForPreview = placedCatalogItemRef.current;
+      const effectivePublishPreview = previewDataUrl || placedCatForPreview?.previewImageUrl || '';
+      if (effectivePublishPreview) {
+        setPublishPreviewUrl(effectivePublishPreview);
+      }
       const polSnap = pol.polRef.current.getSnapshot();
       const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
+      const placedCat = placedCatalogItemRef.current;
+      const tr = brush.artTransformRef.current;
       const out = await api.createPublishSignatureRequest({
         pairingCode: activePairingCode,
         title,
         description,
         termsAccepted,
         voxels: brush.voxels,
+        ...(placedCat
+          ? {
+              catalogItemId: placedCat.id,
+              modelFormat: placedCat.modelFormat || 'glb',
+              modelUrl: placedCat.modelUrl,
+              modelScale: Number(((placedCat.scale || 1) * (tr.scale || 1)).toFixed(3)),
+              modelRotationY: Number(THREE.MathUtils.degToRad(placedCat.rotYDeg || 0).toFixed(4))
+            }
+          : {}),
         previewDataUrl,
         targetParcelId: activeInsideLand?.parcelId || '',
         draftId: drafts.activeDraftId || undefined,
@@ -2146,6 +2208,8 @@ export default function MobileStudio({
         onCameraRefreshNeeded={pol.refreshCamera}
         onArLandGuidance={ar.setArLandGuidance}
         fadeOtherItemsRef={fadeOtherItemsRef}
+        isolatePublishArt={isolatePublishArt}
+        isolatePublishArtRef={isolatePublishArtRef}
         atmosphericTintRef={atmosphericTintRef}
         getActivePlacedItemColliders={brush.getActivePlacedItemColliders}
         notifyBlockedByPlacedItem={brush.notifyBlockedByPlacedItem}
@@ -2171,8 +2235,14 @@ export default function MobileStudio({
       />
 
       <div
-        className={`hud-layer${catalogSearchOpen || drafts.agentOpen ? ' is-camera-hidden' : ''}`}
-        aria-hidden={catalogSearchOpen || drafts.agentOpen || undefined}
+        className={`hud-layer${
+          catalogSearchOpen || drafts.agentOpen || brush.mode === 'publish'
+            ? ' is-camera-hidden'
+            : ''
+        }`}
+        aria-hidden={
+          catalogSearchOpen || drafts.agentOpen || brush.mode === 'publish' || undefined
+        }
       >
         <StudioHudTopBar
           user={user}
@@ -2653,6 +2723,7 @@ export default function MobileStudio({
           user={user}
           voxels={brush.voxels}
           placedCatalogItem={placedCatalogItem}
+          artPreviewUrl={publishPreviewUrl}
           polStats={pol.polStats}
           location={pol.location}
           orbStatus={pol.orbStatus}
