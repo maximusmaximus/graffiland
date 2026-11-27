@@ -42,7 +42,7 @@ function detectTouchPointer(compactProp) {
   return Number(window.innerWidth || 1024) <= 640;
 }
 
-function CatalogItemThumb({ item }) {
+function CatalogItemThumb({ item, onThumbReady = null }) {
   const [glbThumb, setGlbThumb] = useState(null);
   const meta = SOURCE_META[item?.source] || SOURCE_META.simready;
 
@@ -51,13 +51,16 @@ function CatalogItemThumb({ item }) {
     let active = true;
     const req = requestGlbThumbnail(resolveFetchableModelUrl(item.modelUrl));
     req.promise.then((dataUrl) => {
-      if (active && dataUrl) setGlbThumb(dataUrl);
+      if (active && dataUrl) {
+        setGlbThumb(dataUrl);
+        onThumbReady?.(item.id, dataUrl);
+      }
     });
     return () => {
       active = false;
       req.cancel();
     };
-  }, [item]);
+  }, [item, onThumbReady]);
 
   if (item?.previewImageUrl) {
     return (
@@ -121,7 +124,14 @@ export default function Catalog3DSearchBox({
   const [scrollState, setScrollState] = useState({ canLeft: false, canRight: true });
   const reqSeqRef = useRef(0);
   const carouselRef = useRef(null);
+  const thumbUrlByIdRef = useRef(new Map());
   const isTouchMode = detectTouchPointer(compact);
+
+  const handleThumbReady = useCallback((id, dataUrl) => {
+    if (id && dataUrl) {
+      thumbUrlByIdRef.current.set(id, dataUrl);
+    }
+  }, []);
 
   useEffect(() => {
     const seq = ++reqSeqRef.current;
@@ -272,7 +282,8 @@ export default function Catalog3DSearchBox({
     try {
       await onPlaceItem?.({
         ...item,
-        modelUrl: resolveFetchableModelUrl(item.modelUrl)
+        modelUrl: resolveFetchableModelUrl(item.modelUrl),
+        previewThumbDataUrl: item.previewImageUrl || thumbUrlByIdRef.current.get(item.id) || null
       });
       setSelectedId('');
     } finally {
@@ -425,7 +436,7 @@ export default function Catalog3DSearchBox({
                   title={`${item.title} · ${item.sourceName}`}
                 >
                   <div className="catalog-item-thumb-stage">
-                    <CatalogItemThumb item={item} />
+                    <CatalogItemThumb item={item} onThumbReady={handleThumbReady} />
                     <span
                       className={`catalog-source-chip is-${item.source}`}
                       style={{ borderColor: meta.accent }}
@@ -484,11 +495,16 @@ export default function Catalog3DSearchBox({
 
       {selectedItem && (
         <div className="catalog-selected-footer" data-testid="catalog-selected-bar">
-          <div className="catalog-selected-meta">
-            <strong>{selectedItem.title}</strong>
-            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
-              {selectedItem.sourceName} · .GLB
-            </span>
+          <div className="catalog-selected-preview-wrap" data-testid="catalog-selected-preview">
+            <div className="catalog-selected-preview-thumb">
+              <CatalogItemThumb item={selectedItem} onThumbReady={handleThumbReady} />
+            </div>
+            <div className="catalog-selected-meta">
+              <strong>{selectedItem.title}</strong>
+              <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                {selectedItem.sourceName} · 3D .GLB Preview
+              </span>
+            </div>
           </div>
           <button
             type="button"
@@ -498,7 +514,7 @@ export default function Catalog3DSearchBox({
             title={disabled && disabledReason ? disabledReason : `Place ${selectedItem.title}`}
             onClick={() => handlePlaceSelected(selectedItem)}
           >
-            {placingId === selectedItem.id ? '⏳ Placing…' : actionLabel}
+            {placingId === selectedItem.id ? '⏳ Loading 3D…' : actionLabel}
           </button>
         </div>
       )}

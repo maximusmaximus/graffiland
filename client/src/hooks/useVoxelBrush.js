@@ -35,9 +35,16 @@ import {
 import { ForegroundOcclusionCompositor } from '../components/ForegroundOcclusion.js';
 import {
   collectPlacedItemColliders,
+  computeCandidateDraftWorldBox,
+  testBoundingBoxAgainstPlacedItems,
   testTransformedVoxelsAgainstPlacedItems,
   testVoxelAgainstPlacedItems
 } from '../utils/arItemCollision.js';
+import {
+  captureTwoFingerFrame,
+  computeOneFingerDragStep,
+  computeTwoFingerTransformStep
+} from '../utils/arTransformGestures.js';
 import {
   evaluateStaleDrawErase,
   normalizeDrawLocation,
@@ -53,7 +60,7 @@ export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can' },
   { id: 'pencil', emoji: '✏️', label: 'Pencil', hint: 'Tap to place, stack, or replace blocks' },
   { id: 'erase', emoji: '🧽', label: 'Erase', hint: 'Tap or hold blocks to erase' },
-  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: 'Lock art to scale, Y/Z rotate & move' },
+  { id: 'transform', emoji: '✅', label: 'Lock & Scale', hint: '2-finger rotate, scale & position in 3D' },
   { id: 'stack', emoji: '🧱', label: 'Stack', hint: 'Hold to stack onto block faces' },
   { id: 'search', emoji: '🔍', label: 'Search 3D', hint: 'Search & place 3D models & emojis' },
   { id: 'undo', emoji: '↩️', label: 'Undo', hint: 'Tap to undo last block or restore clear' },
@@ -95,7 +102,8 @@ function hasNonIdentityTransform(tr) {
   if (!tr) return false;
   return (
     Math.abs(tr.scale - 1) > 0.005 ||
-    Math.abs(tr.rotYDeg) > 0.25 ||
+    Math.abs(tr.rotXDeg || 0) > 0.25 ||
+    Math.abs(tr.rotYDeg || 0) > 0.25 ||
     Math.abs(tr.rotZDeg || 0) > 0.25 ||
     Math.abs(tr.offsetX) > 0.002 ||
     Math.abs(tr.offsetY) > 0.002 ||
@@ -152,6 +160,7 @@ export function useVoxelBrush({
   onAutoEraseStaleDrawing = null,
   onResetSpatialOrigin = null,
   hasPlacedCatalogItem = false,
+  placedCatalogItemRef = null,
   placedCatalogPivotRef = null,
   onCommitCatalogTransform = null,
   onClearCatalogItem = null
@@ -205,6 +214,7 @@ export function useVoxelBrush({
   const [surfaceAnchor, setSurfaceAnchor] = useState(() => initialDraft.surfaceAnchor || null);
   const [artTransform, setArtTransformState] = useState({
     scale: 1,
+    rotXDeg: 0,
     rotYDeg: 0,
     rotZDeg: 0,
     offsetX: 0,
@@ -212,6 +222,7 @@ export function useVoxelBrush({
     offsetZ: 0
   });
   const [transformPivot, setTransformPivot] = useState({ x: 0, y: 0, z: 0 });
+  const [transformCollision, setTransformCollision] = useState(null);
   const [activeKeyTool, setActiveKeyTool] = useState('brush');
   const [swipeDragPx, setSwipeDragPx] = useState(0);
   const [isDraggingKey, setIsDraggingKey] = useState(false);
@@ -885,17 +896,57 @@ export function useVoxelBrush({
     (updater) => {
       const maxHumanSpan =
         config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
+      const prev = artTransformRef.current || {
+        scale: 1,
+        rotXDeg: 0,
+        rotYDeg: 0,
+        rotZDeg: 0,
+        offsetX: 0,
+        offsetY: 0,
+        offsetZ: 0
+      };
+      const rawNext = typeof updater === 'function' ? updater(prev) : updater;
+      if (!rawNext) return;
+
+      const evalTransformCollision = (candTr) => {
+        const colliders = getActivePlacedItemColliders();
+        if (!colliders || colliders.length === 0) {
+          return { blocked: false, blockedBy: null, penetrationDepth: 0 };
+        }
+        const candBox = computeCandidateDraftWorldBox({
+          draftGroup: draftGroupRef?.current || null,
+          placedCatalogItem: placedCatalogItemRef?.current || null,
+          voxels: voxelsRef.current || [],
+          pivot: transformPivotRef.current,
+          artTransform: candTr,
+          voxelStep: VOXEL_STEP
+        });
+        return testBoundingBoxAgainstPlacedItems({
+          box: candBox,
+          colliders,
+          marginMeters: 0.04
+        });
+      };
+
+      const maxScaleBound = hasPlacedCatalogRef.current ? 2.5 : 2;
+      let candidate = {
+        scale: Math.max(0.25, Math.min(maxScaleBound, Number(rawNext.scale ?? 1))),
+        rotXDeg: Number(rawNext.rotXDeg ?? prev.rotXDeg ?? 0),
+        rotYDeg: Number(rawNext.rotYDeg ?? prev.rotYDeg ?? 0),
+        rotZDeg: Number(rawNext.rotZDeg ?? prev.rotZDeg ?? 0),
+        offsetX: Number(rawNext.offsetX ?? prev.offsetX ?? 0),
+        offsetY: Number(rawNext.offsetY ?? prev.offsetY ?? 0),
+        offsetZ: Number(rawNext.offsetZ ?? prev.offsetZ ?? 0)
+      };
+
       let clampedForFootprint = false;
-      setArtTransformState((prev) => {
-        const next = typeof updater === 'function' ? updater(prev) : updater;
-        if (!next) return prev;
-        const list = voxelsRef.current || [];
-        if (list.length === 0) return next;
-        const reqScale = Math.max(0.25, Math.min(2, Number(next.scale ?? 1)));
+      const list = voxelsRef.current || [];
+      if (list.length > 0) {
+        const reqScale = Math.max(0.25, Math.min(2, candidate.scale));
         const maxAllowedScale = computeMaxHumanDrawScale(list, {
           step: VOXEL_STEP,
-          rotYDeg: Number(next.rotYDeg || 0),
-          rotZDeg: Number(next.rotZDeg || 0),
+          rotYDeg: candidate.rotYDeg,
+          rotZDeg: candidate.rotZDeg,
           pivot: transformPivotRef.current,
           maxSpanMeters: maxHumanSpan,
           minScale: 0.25,
@@ -903,19 +954,90 @@ export function useVoxelBrush({
         });
         if (reqScale > maxAllowedScale + 1e-4) {
           clampedForFootprint = true;
-          return { ...next, scale: maxAllowedScale };
+          candidate = { ...candidate, scale: maxAllowedScale };
+        } else {
+          candidate = { ...candidate, scale: reqScale };
         }
-        return { ...next, scale: reqScale };
-      });
-      if (clampedForFootprint) {
-        queueMicrotask(() => {
-          showTemporaryHint(
-            `Max drawing size is ${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft`
-          );
+      }
+
+      let finalNext = candidate;
+      let collisionHit = null;
+      let collisionCleared = false;
+
+      // Prevent placing, moving, rotating, or scaling sculptures inside other sculptures
+      if (modeRef.current === 'transform' && (list.length > 0 || hasPlacedCatalogRef.current)) {
+        const nextCol = evalTransformCollision(candidate);
+        if (nextCol.blocked) {
+          const prevCol = evalTransformCollision(prev);
+          if (prevCol.blocked && nextCol.penetrationDepth < prevCol.penetrationDepth - 0.002) {
+            // Already overlapping (e.g., async neighbor load): allow moving OUT of overlap
+            collisionHit = nextCol.blockedBy;
+            finalNext = candidate;
+          } else {
+            // Try smooth per-axis sliding so the sculpture glides alongside obstacles cleanly
+            let slid = null;
+            const axisCandidates = [
+              { ...prev, offsetX: candidate.offsetX },
+              { ...prev, offsetZ: candidate.offsetZ },
+              { ...prev, offsetY: candidate.offsetY },
+              { ...prev, offsetX: candidate.offsetX, offsetY: candidate.offsetY },
+              { ...prev, offsetZ: candidate.offsetZ, offsetY: candidate.offsetY }
+            ];
+            for (const slide of axisCandidates) {
+              const moved =
+                Math.abs(slide.offsetX - prev.offsetX) > 1e-4 ||
+                Math.abs(slide.offsetY - prev.offsetY) > 1e-4 ||
+                Math.abs(slide.offsetZ - prev.offsetZ) > 1e-4;
+              if (!moved) continue;
+              if (!evalTransformCollision(slide).blocked) {
+                slid = slide;
+                break;
+              }
+            }
+            collisionHit = nextCol.blockedBy;
+            finalNext = slid || prev;
+          }
+        } else {
+          collisionCleared = true;
+        }
+      }
+
+      artTransformRef.current = finalNext;
+      setArtTransformState(finalNext);
+
+      if (collisionHit) {
+        setTransformCollision({
+          blocked: true,
+          sculptureId: collisionHit.sculptureId || '',
+          title: collisionHit.title || 'existing art'
         });
+        const label = String(collisionHit.title || 'existing art').trim() || 'existing art';
+        const msg = `Can't place inside "${label}" — move to an open spot.`;
+        const now = Date.now();
+        if (
+          lastItemBlockNotifyRef.current.msg !== msg ||
+          now - lastItemBlockNotifyRef.current.ts >= 1200
+        ) {
+          lastItemBlockNotifyRef.current = { msg, ts: now };
+          showTemporaryHint(msg);
+        }
+      } else if (collisionCleared) {
+        setTransformCollision(null);
+      }
+
+      if (clampedForFootprint) {
+        showTemporaryHint(
+          `Max drawing size is ${HUMAN_MAX_DRAW_SPAN_FEET}ft × ${HUMAN_MAX_DRAW_SPAN_FEET}ft`
+        );
       }
     },
-    [config?.policy?.humanMaxDrawSpanMeters, showTemporaryHint]
+    [
+      config?.policy?.humanMaxDrawSpanMeters,
+      draftGroupRef,
+      getActivePlacedItemColliders,
+      placedCatalogItemRef,
+      showTemporaryHint
+    ]
   );
 
   const applyVoxelBatch = useCallback(
@@ -1284,6 +1406,7 @@ export function useVoxelBrush({
     }
 
     const s = artTransform.scale;
+    const radX = THREE.MathUtils.degToRad(artTransform.rotXDeg || 0);
     const radY = THREE.MathUtils.degToRad(artTransform.rotYDeg || 0);
     const radZ = THREE.MathUtils.degToRad(artTransform.rotZDeg || 0);
     const pivotVec = new THREE.Vector3(transformPivot.x, transformPivot.y, transformPivot.z);
@@ -1292,7 +1415,7 @@ export function useVoxelBrush({
       artTransform.offsetY,
       artTransform.offsetZ
     );
-    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, radY, radZ, 'YXZ'));
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(radX, radY, radZ, 'YXZ'));
     const transformedPivot = pivotVec.clone().multiplyScalar(s).applyQuaternion(quat);
 
     group.scale.setScalar(s);
@@ -1304,11 +1427,23 @@ export function useVoxelBrush({
       if (voxels.length > 0 || hasPlacedCatalogItem) {
         cage.box.setFromObject(group);
         cage.visible = !cage.box.isEmpty();
+        if (cage.material?.color?.setHex) {
+          cage.material.color.setHex(transformCollision?.blocked ? 0xff3e7f : 0x00f5d4);
+        }
       } else {
         cage.visible = false;
       }
     }
-  }, [mode, artTransform, transformPivot, voxels, hasPlacedCatalogItem, draftGroupRef, transformBoxRef]);
+  }, [
+    mode,
+    artTransform,
+    transformPivot,
+    transformCollision,
+    voxels,
+    hasPlacedCatalogItem,
+    draftGroupRef,
+    transformBoxRef
+  ]);
 
   useEffect(() => {
     const marker = surfaceMarkerRef.current;
@@ -1376,7 +1511,18 @@ export function useVoxelBrush({
   }, []);
 
   const resetArtTransformState = useCallback(() => {
-    setArtTransformState({ scale: 1, rotYDeg: 0, rotZDeg: 0, offsetX: 0, offsetY: 0, offsetZ: 0 });
+    const identity = {
+      scale: 1,
+      rotXDeg: 0,
+      rotYDeg: 0,
+      rotZDeg: 0,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 0
+    };
+    artTransformRef.current = identity;
+    setArtTransformState(identity);
+    setTransformCollision(null);
     activeCanvasPointersRef.current.clear();
     transformPinchRef.current = null;
     if (draftGroupRef.current) {
@@ -1386,6 +1532,9 @@ export function useVoxelBrush({
     }
     if (transformBoxRef.current) {
       transformBoxRef.current.visible = false;
+      if (transformBoxRef.current.material?.color?.setHex) {
+        transformBoxRef.current.material.color.setHex(0x00f5d4);
+      }
     }
   }, [draftGroupRef, transformBoxRef]);
 
@@ -1452,7 +1601,7 @@ export function useVoxelBrush({
       showTemporaryHint(
         hintOverride ||
           (voxelsRef.current.length || hasPlacedCatalogRef.current
-            ? 'Art locked — pinch to scale, 2-finger twist for Z-rotate, drag to move, or use sliders · tap ✅ to draw'
+            ? 'Art locked — 2-finger rotate, pinch & depth-move, 1-finger drag to position, or use sliders · tap ✅ to draw'
             : 'Transform locked — tap ✅ again to return to drawing mode')
       );
     },
@@ -1464,9 +1613,29 @@ export function useVoxelBrush({
       const tr = artTransformRef.current;
       const pivot = transformPivotRef.current;
       const hadTransform = modeRef.current === 'transform' && hasNonIdentityTransform(tr);
+      const placedColliders = getActivePlacedItemColliders();
+      let blockedCommitTitle = '';
+
       if (hadTransform && hasPlacedCatalogRef.current) {
-        onCommitCatalogTransformRef.current?.(tr, pivot);
-        markDrawActivity({ forceState: true });
+        const candBox = computeCandidateDraftWorldBox({
+          draftGroup: draftGroupRef?.current || null,
+          placedCatalogItem: placedCatalogItemRef?.current || null,
+          voxels: voxelsRef.current || [],
+          pivot,
+          artTransform: tr,
+          voxelStep: VOXEL_STEP
+        });
+        const catalogCol = testBoundingBoxAgainstPlacedItems({
+          box: candBox,
+          colliders: placedColliders,
+          marginMeters: 0.04
+        });
+        if (catalogCol.blocked) {
+          blockedCommitTitle = catalogCol.blockedBy?.title || 'existing art';
+        } else {
+          onCommitCatalogTransformRef.current?.(tr, pivot);
+          markDrawActivity({ forceState: true });
+        }
       }
       if (hadTransform && voxelsRef.current.length > 0) {
         const maxHumanSpan =
@@ -1483,7 +1652,7 @@ export function useVoxelBrush({
         const s = Math.min(tr.scale, maxAllowedScale);
         const quat = new THREE.Quaternion().setFromEuler(
           new THREE.Euler(
-            0,
+            THREE.MathUtils.degToRad(tr.rotXDeg || 0),
             THREE.MathUtils.degToRad(tr.rotYDeg || 0),
             THREE.MathUtils.degToRad(tr.rotZDeg || 0),
             'YXZ'
@@ -1508,16 +1677,17 @@ export function useVoxelBrush({
           step: VOXEL_STEP,
           maxSpanMeters: maxHumanSpan
         });
-        const placedColliders = getActivePlacedItemColliders();
         const collisionCheck = testTransformedVoxelsAgainstPlacedItems({
           voxels: baked,
           voxelStep: VOXEL_STEP,
           colliders: placedColliders
         });
         resetArtTransformState();
-        if (collisionCheck.blocked) {
+        if (collisionCheck.blocked || blockedCommitTitle) {
           showTemporaryHint(
-            `Can't move or scale into "${collisionCheck.blockedBy?.title || 'existing art'}" on this land`
+            `Can't move or scale into "${
+              collisionCheck.blockedBy?.title || blockedCommitTitle || 'existing art'
+            }" on this land`
           );
         } else if (!footprint.exceedsLimit) {
           setVoxels(baked);
@@ -1529,6 +1699,11 @@ export function useVoxelBrush({
         }
       } else {
         resetArtTransformState();
+        if (blockedCommitTitle) {
+          showTemporaryHint(
+            `Can't place inside "${blockedCommitTitle}" — reverted to previous open spot.`
+          );
+        }
       }
       setMode(nextMode);
       modeRef.current = nextMode;
@@ -1536,15 +1711,17 @@ export function useVoxelBrush({
         setTool(nextTool);
         toolRef.current = nextTool;
       }
-      if (nextMode === 'draw') {
+      if (nextMode === 'draw' && !blockedCommitTitle) {
         showTemporaryHint('Returned to drawing mode');
       }
     },
     [
       config?.policy?.areaHalfSpanMeters,
       config?.policy?.humanMaxDrawSpanMeters,
+      draftGroupRef,
       getActivePlacedItemColliders,
       markDrawActivity,
+      placedCatalogItemRef,
       resetArtTransformState,
       showTemporaryHint
     ]
@@ -2413,10 +2590,7 @@ export function useVoxelBrush({
         }
         if (activeCanvasPointersRef.current.size >= 2) {
           const pts = Array.from(activeCanvasPointersRef.current.values());
-          transformPinchRef.current = {
-            dist: Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)),
-            angle: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
-          };
+          transformPinchRef.current = captureTwoFingerFrame(pts);
         } else {
           transformPinchRef.current = null;
         }
@@ -2457,46 +2631,40 @@ export function useVoxelBrush({
 
       if (modeRef.current === 'transform') {
         if (!prevPt || !pointers.size) return;
+        const cam = cameraRef.current;
+        const camQuat = cam?.quaternion || new THREE.Quaternion();
+        const camPos = cam?.position || new THREE.Vector3();
         if (pointers.size >= 2) {
           const pts = Array.from(pointers.values());
-          const dist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
-          const angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
           if (!transformPinchRef.current) {
-            transformPinchRef.current = { dist, angle };
+            transformPinchRef.current = captureTwoFingerFrame(pts);
             return;
           }
-          const scaleFactor = dist / Math.max(12, transformPinchRef.current.dist);
-          let dAngleDeg = ((angle - transformPinchRef.current.angle) * 180) / Math.PI;
-          if (dAngleDeg > 180) dAngleDeg -= 360;
-          if (dAngleDeg < -180) dAngleDeg += 360;
-          transformPinchRef.current = { dist, angle };
-          setArtTransform((prev) => ({
-            ...prev,
-            scale: Math.max(0.25, Math.min(2, Number((prev.scale * scaleFactor).toFixed(3)))),
-            rotZDeg: Math.round((((prev.rotZDeg || 0) - dAngleDeg + 540) % 360) - 180)
-          }));
+          const step = computeTwoFingerTransformStep({
+            prevFrame: transformPinchRef.current,
+            nextPointers: pts,
+            cameraQuaternion: camQuat,
+            cameraPosition: camPos,
+            pivot: transformPivotRef.current,
+            currentTransform: artTransformRef.current,
+            minScale: 0.25,
+            maxScale: hasPlacedCatalogRef.current ? 2.5 : 2
+          });
+          transformPinchRef.current = step.nextFrame;
+          setArtTransform(step.nextTransform);
         } else if (pointers.size === 1) {
+          if (!cam) return;
           const dx = e.clientX - prevPt.x;
           const dy = e.clientY - prevPt.y;
-          const cam = cameraRef.current;
-          if (!cam) return;
-          const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion).normalize();
-          const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion).normalize();
-          const pivot = transformPivotRef.current;
-          const tr = artTransformRef.current;
-          const worldPos = new THREE.Vector3(
-            pivot.x + tr.offsetX,
-            pivot.y + tr.offsetY,
-            pivot.z + tr.offsetZ
-          );
-          const dist = Math.max(0.8, Math.min(5, cam.position.distanceTo(worldPos)));
-          const moveScale = dist * 0.0022;
-          setArtTransform((prev) => ({
-            ...prev,
-            offsetX: prev.offsetX + (camRight.x * dx - camUp.x * dy) * moveScale,
-            offsetY: prev.offsetY + (camRight.y * dx - camUp.y * dy) * moveScale,
-            offsetZ: prev.offsetZ + (camRight.z * dx - camUp.z * dy) * moveScale
-          }));
+          const next = computeOneFingerDragStep({
+            dx,
+            dy,
+            cameraQuaternion: camQuat,
+            cameraPosition: camPos,
+            pivot: transformPivotRef.current,
+            currentTransform: artTransformRef.current
+          });
+          setArtTransform(next);
         }
         return;
       }
@@ -2719,6 +2887,7 @@ export function useVoxelBrush({
     setArtTransform,
     artTransformRef,
     transformPivot,
+    transformCollision,
     activeKeyTool,
     swipeDragPx,
     isDraggingKey,

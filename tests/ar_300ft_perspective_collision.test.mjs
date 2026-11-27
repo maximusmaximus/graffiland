@@ -480,13 +480,26 @@ describe('AR Auto-Fade Art on Drawing/Painting Tools & Out-of-Range 300 ft Guida
       'Erase drawing tool must auto-fade other art'
     );
 
-    // 2) Auto-fade automatically turns OFF on non-drawing tools, preview, transform, or land inspection
-    assert.equal(
-      shouldAutoFadeOtherArt({ mode: 'preview', activeKeyTool: 'preview', tool: 'brush' }),
-      false
-    );
+    // 1b) Auto-fade also stays ON in transform mode and while a 3D catalog model is staged
     assert.equal(
       shouldAutoFadeOtherArt({ mode: 'transform', activeKeyTool: 'transform', tool: 'brush' }),
+      true,
+      'Transform / placement mode must fade other scene items'
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({
+        mode: 'draw',
+        activeKeyTool: 'search',
+        tool: 'brush',
+        hasPlacedCatalogItem: true
+      }),
+      true,
+      'Staged 3D catalog item must keep other scene items faded in draw mode'
+    );
+
+    // 2) Auto-fade automatically turns OFF on non-drawing tools without staged model, preview, or land inspection
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'preview', activeKeyTool: 'preview', tool: 'brush' }),
       false
     );
     assert.equal(

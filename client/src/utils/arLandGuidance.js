@@ -487,17 +487,21 @@ export function applyProximitySharpnessToObject3D(
 export const AUTO_FADE_DRAW_TOOLS = Object.freeze(new Set(['brush', 'pencil', 'stack', 'erase']));
 
 /**
- * Returns true when selecting a drawing or painting tool should automatically fade
- * existing placed art on the land (while keeping 3D collision protection active).
+ * Returns true when drawing, painting, or placing/positioning a 3D model should
+ * automatically fade existing placed art on the land (while keeping 3D collision
+ * protection active so sculptures can never be drawn or placed inside others).
  */
 export function shouldAutoFadeOtherArt({
   mode = 'draw',
   activeKeyTool = '',
   tool = '',
+  hasPlacedCatalogItem = false,
   isInteractingWithLand = false,
   isArViewOnly = false
 } = {}) {
   if (isInteractingWithLand || isArViewOnly) return false;
+  if (mode === 'transform') return true;
+  if (hasPlacedCatalogItem && mode === 'draw') return true;
   if (mode !== 'draw') return false;
   const selected = String(activeKeyTool || tool || '').toLowerCase();
   return AUTO_FADE_DRAW_TOOLS.has(selected);
