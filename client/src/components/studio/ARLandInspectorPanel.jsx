@@ -548,6 +548,16 @@ export default function ARLandInspectorPanel({
             )}
             <button
               type="button"
+              className="btn btn-xs ar-land-copy-icon-btn"
+              data-testid="ar-land-copy-link-btn"
+              onClick={handleCopyShare}
+              aria-label={`Copy share link for ${displayName}`}
+              title={`Copy share link for ${displayName}`}
+            >
+              <XeroIcon emoji="📋" size={18} />
+            </button>
+            <button
+              type="button"
               className="btn btn-xs ar-land-expand-toggle"
               data-testid="ar-land-details-toggle"
               aria-expanded="true"
@@ -895,17 +905,6 @@ export default function ARLandInspectorPanel({
               <span>Navigate</span>
             </a>
           )}
-          <button
-            type="button"
-            className="ar-land-tool-btn"
-            data-testid="ar-land-copy-link-btn"
-            onClick={handleCopyShare}
-            aria-label={`Copy share link for ${displayName}`}
-            title={`Copy share link for ${displayName}`}
-          >
-            <XeroIcon emoji="📋" size={18} />
-            <span>Copy Link</span>
-          </button>
           {hasAlignTool && (
             <button
               type="button"

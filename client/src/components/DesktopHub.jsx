@@ -2286,6 +2286,16 @@ export default function DesktopHub({
               <XeroIcon emoji="🗺️" size={16} /> Land Management ({myLands.parcelCount || myLands.parcels.length})
             </button>
           )}
+          <button
+            type="button"
+            className={`btn ${sidebarTab === 'leaders' ? 'btn-primary' : ''}`}
+            data-testid="nav-leaderboard-btn"
+            onClick={() => switchSidebarTab(sidebarTab === 'leaders' ? 'list' : 'leaders')}
+            aria-label="Leaderboard"
+            title="Leaderboard"
+          >
+            <XeroIcon emoji="🏆" size={16} />
+          </button>
           <button type="button" className="btn" onClick={openInfoModal} title="Info & Guide">
             <XeroIcon emoji="ℹ️" size={16} /> Info
           </button>
@@ -2419,15 +2429,6 @@ export default function DesktopHub({
                   <span className="desktop-nearby-tab-count">{displayedSculptures.length}</span>
                 </button>
               </div>
-              <button
-                type="button"
-                className="btn desktop-nearby-refresh-btn"
-                onClick={refreshData}
-                title="Refresh land & sculptures"
-                aria-label="Refresh land and sculptures"
-              >
-                <XeroIcon emoji="🔄" size={13} />
-              </button>
             </div>
 
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -2462,14 +2463,6 @@ export default function DesktopHub({
                 onClick={() => switchSidebarTab('gallery')}
               >
                 <XeroIcon emoji="🎨" size={11} /> Gallery
-              </button>
-              <button
-                type="button"
-                className={`btn ${sidebarTab === 'leaders' ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 7px', fontSize: 11, flex: '1 1 auto' }}
-                onClick={() => switchSidebarTab('leaders')}
-              >
-                <XeroIcon emoji="🏆" size={11} /> Leaders
               </button>
             </div>
 
@@ -2860,11 +2853,29 @@ export default function DesktopHub({
                               </span>
                             )}
                           </div>
-                          {land.distanceLabel && (
-                            <span className="badge teal" style={{ fontSize: 10, flexShrink: 0 }}>
-                              {land.distanceLabel} away
-                            </span>
-                          )}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                            {land.distanceLabel && (
+                              <span className="badge teal" style={{ fontSize: 10, flexShrink: 0 }}>
+                                {land.distanceLabel} away
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className={`btn btn-xs ${copiedId === land.parcelId ? 'is-copy-confirmed' : ''}`}
+                              data-testid="desktop-land-copy-link-btn"
+                              style={{ padding: '2px 6px' }}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await handleCopyParcelShareLink(land);
+                                setCopiedId(land.parcelId);
+                                setTimeout(() => setCopiedId(''), 1800);
+                              }}
+                              aria-label={`Copy share link for ${liveTitle}`}
+                              title={`Copy share link for ${liveTitle}`}
+                            >
+                              {copiedId === land.parcelId ? '✓' : <XeroIcon emoji="📋" size={14} />}
+                            </button>
+                          </div>
                         </div>
 
                         <div className="desktop-land-item-meta">
@@ -2910,26 +2921,6 @@ export default function DesktopHub({
                             }}
                           >
                             <XeroIcon emoji="🧊" size={11} /> Inspect Land
-                          </button>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ padding: '3px 8px', fontSize: 10.5 }}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              await handleCopyParcelShareLink(land);
-                              setCopiedId(land.parcelId);
-                              setTimeout(() => setCopiedId(''), 1800);
-                            }}
-                            title={`Copy share link for ${liveTitle}`}
-                          >
-                            {copiedId === land.parcelId ? (
-                              'Copied!'
-                            ) : (
-                              <>
-                                <XeroIcon emoji="📋" size={15} /> Copy Link
-                              </>
-                            )}
                           </button>
                           {isOwned && (
                             <button

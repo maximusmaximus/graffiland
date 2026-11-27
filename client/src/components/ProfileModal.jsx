@@ -643,6 +643,18 @@ export default function ProfileModal({
           </h2>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <GlobalNotificationBell compact testId="profile-modal-notif-bell-btn" />
+            {publicProfileUrl && (
+              <button
+                type="button"
+                className={`btn btn-sm ${copiedKey === 'profile' ? 'is-copy-confirmed' : ''}`}
+                data-testid="copy-profile-link-btn"
+                aria-label="Copy public profile link"
+                title="Copy public profile link"
+                onClick={() => handleCopyUrl('profile', publicProfileUrl, 'public profile link')}
+              >
+                {copiedKey === 'profile' ? '✓' : <XeroIcon emoji="📋" size={16} />}
+              </button>
+            )}
             {isOwner && !editing && (
               <button
                 type="button"
@@ -856,28 +868,17 @@ export default function ProfileModal({
                 {/* Share Public Profile Bar */}
                 <div className="profile-share-bar">
                   {publicProfileUrl && (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-xs profile-public-link-btn"
-                        data-testid="copy-profile-link-btn"
-                        onClick={() => handleCopyUrl('profile', publicProfileUrl, 'public profile link')}
-                      >
-                        <XeroIcon emoji="📋" size={16} />{' '}
-                        {copiedKey === 'profile' ? 'Copied Profile Link!' : 'Copy Public Profile Link'}
-                      </button>
-                      <a
-                        className="btn btn-xs"
-                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                          `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on SPRAY.LAND!`
-                        )}&url=${encodeURIComponent(publicProfileUrl)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        title="Share profile to X"
-                      >
-                        𝕏
-                      </a>
-                    </>
+                    <a
+                      className="btn btn-xs"
+                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
+                        `Explore @${profile.username}'s 3D Virtual Lands & AR sculptures on SPRAY.LAND!`
+                      )}&url=${encodeURIComponent(publicProfileUrl)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Share profile to X"
+                    >
+                      𝕏
+                    </a>
                   )}
                   {isOwner && onOpenWalletSettings && (
                     <button

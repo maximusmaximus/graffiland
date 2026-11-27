@@ -102,7 +102,6 @@ export function DesktopLandBuilderPanel({
   onDraftGestureEnd = null,
   onMintDraft,
   onMintAll,
-  onUpdateOwnedVolume,
   onOpenAddLandItem = null,
   onOpenTitleOwned = null,
   onCopyOwnedShareLink = null,
@@ -819,8 +818,26 @@ export function DesktopLandBuilderPanel({
                 vertical bars rotate, center moves) or expand the manual sliders below.
               </InfoTip>
             </div>
-            <div className="land-editor-id">
-              {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="land-editor-id">
+                {activeArea.toLocaleString()} m² · {activeCubic.toLocaleString()} m³
+              </div>
+              {activeMode === 'owned' && activeOwned && (
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  data-testid="land-editor-header-copy-link-btn"
+                  onClick={() => handleCopyMintedParcelLink(activeOwned)}
+                  aria-label={`Copy share link for ${resolveLandDisplayName(activeOwned, {
+                    defaultName: 'Virtual Land'
+                  })}`}
+                  title={`Copy share link for ${resolveLandDisplayName(activeOwned, {
+                    defaultName: 'Virtual Land'
+                  })}`}
+                >
+                  <XeroIcon emoji="📋" size={16} />
+                </button>
+              )}
             </div>
           </div>
 
@@ -1143,31 +1160,6 @@ export function DesktopLandBuilderPanel({
               </button>
             ) : (
               <>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-outline"
-                  onClick={() => handleCopyMintedParcelLink(activeOwned)}
-                >
-                  <XeroIcon emoji="📋" size={16} /> Copy Link
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  disabled={Boolean(mintBusy)}
-                  onClick={() =>
-                    onUpdateOwnedVolume?.(activeOwned.parcelId, {
-                      centerLat: activeVolume.centerLat,
-                      centerLng: activeVolume.centerLng,
-                      widthMeters: activeWidth,
-                      depthMeters: activeDepth,
-                      heightMeters: activeHeight,
-                      zScale: activeZScale,
-                      rotationDeg: activeRotation
-                    })
-                  }
-                >
-                  {mintBusy ? 'Saving…' : 'Save 3D Volume'}
-                </button>
                 {onOpenAddLandItem && (
                   <button
                     type="button"

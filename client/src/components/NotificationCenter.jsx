@@ -1172,16 +1172,6 @@ function useNotificationEngine({
                   : 'No unread alerts'}
               </span>
               <div className="notif-toolbar-btns">
-                <button
-                  type="button"
-                  className="notif-link-btn"
-                  data-testid="notif-refresh-btn"
-                  disabled={loading}
-                  onClick={() => loadNotifications({ silent: false })}
-                  title="Refresh notifications"
-                >
-                  🔄 Refresh
-                </button>
                 {!preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
                   <button
                     type="button"
@@ -1271,14 +1261,6 @@ function useNotificationEngine({
                   : 'No notification history'}
               </span>
               <div className="notif-toolbar-btns">
-                <button
-                  type="button"
-                  className="notif-link-btn"
-                  disabled={loading}
-                  onClick={() => loadNotifications({ silent: false })}
-                >
-                  🔄 Refresh
-                </button>
                 {historyDisplayNotifications.length > 0 && (
                   <button
                     type="button"

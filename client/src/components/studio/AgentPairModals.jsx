@@ -367,7 +367,6 @@ export function SavedDraftsModal({
   cloudDrafts,
   onManualSaveDraft,
   onStartNewDraft,
-  onRefreshCloudDrafts,
   onLoadDraft,
   onDeleteCloudDraft,
   onOpenLogin,
@@ -450,14 +449,6 @@ export function SavedDraftsModal({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <strong style={{ fontSize: 13 }}>Cloud Saved Drafts ({cloudDrafts.length})</strong>
-              <button
-                type="button"
-                className="btn"
-                disabled={draftsBusy}
-                onClick={onRefreshCloudDrafts}
-              >
-                <XeroIcon emoji="🔄" size={13} /> Refresh
-              </button>
             </div>
 
             {cloudDrafts.length === 0 ? (

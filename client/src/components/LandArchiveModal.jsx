@@ -113,11 +113,13 @@ export default function LandArchiveModal({
             <GlobalNotificationBell compact testId="archive-modal-notif-bell-btn" />
             <button
               type="button"
-              className="btn btn-sm"
+              className={`btn btn-sm ${copiedId === 'root' ? 'is-copy-confirmed' : ''}`}
+              data-testid="archive-header-copy-link-btn"
               onClick={() => handleCopyLink('')}
+              aria-label="Copy link to Land Archive"
               title="Copy link to Land Archive"
             >
-              <XeroIcon emoji="📋" size={17} /> {copiedId === 'root' ? 'Copied!' : 'Copy Archive Link'}
+              {copiedId === 'root' ? '✓' : <XeroIcon emoji="📋" size={17} />}
             </button>
             <button className="btn" onClick={onClose} aria-label="Close land archive">
               <XeroIcon emoji="✕" size={16} />

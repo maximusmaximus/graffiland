@@ -33,7 +33,6 @@ export default function MobileMapSheet({
   areaFilterMode = 'nearby',
   setAreaFilterMode,
   mapLoading = false,
-  loadPublicMapData,
   displayedMapSculptures = [],
   areaSculpturesSorted = [],
   mapParcels = [],
@@ -296,16 +295,6 @@ export default function MobileMapSheet({
         </div>
         <div className="mobile-map-header-actions">
           <GlobalNotificationBell compact testId="mobile-map-notif-bell-btn" />
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={mapLoading}
-            onClick={loadPublicMapData}
-            aria-label="Refresh nearest lands"
-            title="Refresh lands & sculptures"
-          >
-            <XeroIcon emoji="🔄" size={14} />
-          </button>
           <button
             type="button"
             className="btn btn-sm"
