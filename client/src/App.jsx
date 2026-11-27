@@ -61,7 +61,6 @@ export default function App() {
   );
   const [directLoginOpen, setDirectLoginOpen] = useState(false);
   const [desktopAction, setDesktopAction] = useState(null);
-  const [skipTutorialSignal, setSkipTutorialSignal] = useState(0);
 
   useEffect(() => {
     const syncViewportState = () => {
@@ -137,7 +136,6 @@ export default function App() {
     }
     if (isMobile) {
       saveBoolPreference(TUTORIAL_SEEN_KEY, true);
-      setSkipTutorialSignal((n) => n + 1);
     }
     setWelcomeOpen(false);
   }
@@ -145,7 +143,6 @@ export default function App() {
   function dismissDirectIntro() {
     saveBoolPreference(DIRECT_LINK_INTRO_SEEN_KEY, true);
     setDirectIntroOpen(false);
-    setSkipTutorialSignal((n) => n + 1);
   }
 
   const onboardingModal =
@@ -217,7 +214,6 @@ export default function App() {
             isWelcomeOpen={
               welcomeOpen || showDirectIntro || directLoginOpen || Boolean(onboardingModal)
             }
-            skipTutorialSignal={skipTutorialSignal}
           />
         </Suspense>
       ) : (

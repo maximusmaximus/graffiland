@@ -258,621 +258,726 @@ export default function InfoTermsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2 className="modal-title" style={{ gap: 10 }}>
-            <BrandLogo variant="lockup" height={28} />
-            <span className="badge teal">Guide &amp; Terms</span>
-          </h2>
-          <div className="modal-header-actions">
-            <GlobalNotificationBell compact testId="info-modal-notif-bell-btn" />
-            <button className="btn" onClick={onClose} aria-label="Close info">
-              <XeroIcon emoji="✕" size={16} />
+      <div className="modal-card info-modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="info-modal-top">
+          <div className="modal-header info-modal-header">
+            <h2 className="modal-title" style={{ gap: 8 }}>
+              <BrandLogo variant="lockup" height={26} />
+              <span className="badge teal">Guide &amp; Terms</span>
+            </h2>
+            <div className="modal-header-actions">
+              <GlobalNotificationBell compact testId="info-modal-notif-bell-btn" />
+              <button className="btn btn-sm" onClick={onClose} aria-label="Close info">
+                <XeroIcon emoji="✕" size={14} />
+              </button>
+            </div>
+          </div>
+
+          <div className="info-main-tabs" role="navigation" aria-label="Help sections">
+            <button
+              type="button"
+              aria-pressed={tab === 'guide'}
+              className={`btn btn-xs ${tab === 'guide' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setTab('guide')}
+            >
+              <XeroIcon emoji="📘" size={13} /> Guide
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'mint'}
+              className={`btn btn-xs ${tab === 'mint' ? 'btn-primary' : 'btn-outline'}`}
+              data-testid="info-mint-tab"
+              onClick={() => setTab('mint')}
+            >
+              <XeroIcon emoji="🏗️" size={13} /> How to Mint
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'terms'}
+              className={`btn btn-xs ${tab === 'terms' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setTab('terms')}
+            >
+              <XeroIcon emoji="📜" size={13} /> Terms &amp; Virtual Land
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'account'}
+              className={`btn btn-xs ${tab === 'account' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setTab('account')}
+            >
+              <XeroIcon emoji="⚙️" size={15} /> Account &amp; Settings
             </button>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className={`btn btn-sm ${tab === 'guide' ? 'btn-primary' : ''}`}
-            onClick={() => setTab('guide')}
-          >
-            <XeroIcon emoji="📘" size={14} /> Guide
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${tab === 'mint' ? 'btn-primary' : ''}`}
-            data-testid="info-mint-tab"
-            onClick={() => setTab('mint')}
-          >
-            <XeroIcon emoji="🏗️" size={14} /> How to Mint
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${tab === 'terms' ? 'btn-primary' : ''}`}
-            onClick={() => setTab('terms')}
-          >
-            <XeroIcon emoji="📜" size={14} /> Terms &amp; Virtual Land
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${tab === 'account' ? 'btn-primary' : ''}`}
-            onClick={() => setTab('account')}
-          >
-            <XeroIcon emoji="⚙️" size={18} /> Account &amp; Settings
-          </button>
-        </div>
-
-        {tab === 'mint' && (
-          <div
-            style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}
-            data-testid="info-mint-guide"
-          >
-            <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-              <strong>MINT FREE LAND by making art!</strong> Pick the easiest way for where you are
-              right now — all human mints are <strong>gas-free</strong>:
-            </div>
-
-            <div
-              className="card info-simple-card"
-              style={{ borderColor: 'rgba(0, 245, 212, 0.38)' }}
-            >
-              <div className="info-simple-title">
-                <XeroIcon emoji="📱" size={16} />
-                <strong>1. Draw Art Outdoors in Mobile AR (Fastest · Permanent)</strong>
+        <div className="info-modal-body">
+          {tab === 'mint' && (
+            <div className="info-tab-stack" data-testid="info-mint-guide">
+              <div className="info-lead-note">
+                <strong>MINT FREE LAND by making art!</strong> Pick the easiest path for where you
+                are right now — all human mints are <strong>gas-free</strong>:
               </div>
-              <p>
-                Open SPRAY.LAND on your phone outside, tap a real surface, draw your 3D art, and
-                tap <strong>Publish</strong>. Your art and Virtual Land mint together on the spot —{' '}
-                <strong>permanent ownership, no expiry timer, and no starter slot limit</strong>.
-              </p>
-              {typeof onStartMobileDraw === 'function' && (
-                <div style={{ marginTop: 8 }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    data-testid="info-mint-start-mobile-draw-btn"
-                    onClick={() => onStartMobileDraw()}
-                  >
-                    <XeroIcon emoji="🖌️" size={13} /> Start Drawing in AR
-                  </button>
-                </div>
-              )}
-            </div>
 
-            <div
-              className="card info-simple-card"
-              style={{ borderColor: 'rgba(255, 209, 102, 0.34)' }}
-            >
-              <div className="info-simple-title">
-                <XeroIcon emoji="🗺️" size={16} />
-                <strong>
-                  2. Draw a 3D Box on the Map First (Desktop ·{' '}
-                  {LAND_VOLUME_LIMITS.starterFreeHumanClaims} Free Starter Slots)
-                </strong>
-              </div>
-              <p>
-                Use <strong>Draw Land</strong> on the Desktop 3D Map to outline and mint a plot
-                first. It starts with a{' '}
-                <strong>{STEWARD_DEFAULTS.inactivityArchiveDays}-day timer</strong> — visit it in
-                person on Mobile AR and add art before time runs out to make it permanently yours
-                (the timer disappears forever).
-              </p>
-              {(typeof onStartMapMint === 'function' || typeof onOpenMobileMap === 'function') && (
-                <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {typeof onStartMapMint === 'function' && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      data-testid="info-mint-start-map-btn"
-                      onClick={() => onStartMapMint()}
-                    >
-                      <XeroIcon emoji="🏗️" size={13} /> Draw &amp; Mint 3D Land
-                    </button>
-                  )}
-                  {typeof onOpenMobileMap === 'function' && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      data-testid="info-mint-open-map-btn"
-                      onClick={() => onOpenMobileMap()}
-                    >
-                      <XeroIcon emoji="🗺️" size={13} /> Open Nearest Lands Map
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="card info-simple-card">
-              <div className="info-simple-title">
-                <XeroIcon emoji="✨" size={16} />
-                <strong>3. Unlock More Slots Anytime</strong>
-              </div>
-              <p>
-                Used all {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter map slots? Visit
-                one of your empty plots in person on
-                Mobile AR and publish art on it to free up a slot — or walk to any dormant AI
-                agent plot and add {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks to awaken it and
-                earn contributor royalties.
-              </p>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
-                Note: Map plots that expire with zero in-person human interaction are archived and
-                their starter slot does not reopen.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'guide' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
-            <div className="welcome-info-hint-pill" data-testid="info-guide-tip-callout">
-              <InfoTip title="How Info Icons Work">
-                Click any <strong>i</strong> icon next to a feature or tool anywhere in SPRAY.LAND
-                to see detailed controls, limits, and technical notes.
-              </InfoTip>
-              <span>&ldquo;i&rdquo; icon gives you info about how something works — click it anytime!</span>
-            </div>
-
-            {/* Clean Viewport Menu: Desktop vs Mobile vs AI Agents */}
-            <div className="info-viewport-menu" role="tablist" aria-label="Choose device guide">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewportGuide === 'desktop'}
-                className={`btn btn-sm ${viewportGuide === 'desktop' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => setViewportGuide('desktop')}
+              <div
+                className="card info-simple-card"
+                style={{ borderColor: 'rgba(0, 245, 212, 0.38)' }}
               >
-                <XeroIcon emoji="🖥️" size={14} /> Desktop Map &amp; 3D Land
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewportGuide === 'mobile'}
-                className={`btn btn-sm ${viewportGuide === 'mobile' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => setViewportGuide('mobile')}
-              >
-                <XeroIcon emoji="📱" size={14} /> Mobile AR Studio
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewportGuide === 'agents'}
-                data-testid="info-guide-agents-tab"
-                className={`btn btn-sm ${viewportGuide === 'agents' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => setViewportGuide('agents')}
-              >
-                <XeroIcon emoji="🤖" size={14} /> AI Agents &amp; Collectors
-              </button>
-            </div>
-
-            {viewportGuide === 'desktop' ? (
-              <div key="desktop" className="info-simple-list" data-testid="info-guide-desktop">
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🗺️" size={16} />
-                    <strong>3D Map, Zoom &amp; Live Search</strong>
-                    <InfoTip title="Map Camera, Zoom & Search">
-                      Desktop opens in 3D with real OpenFreeMap buildings &amp; terrain automatically
-                      enabled (2D hides 3D buildings for a clean top-down view). Search any street
-                      intersection (e.g., <em>Market &amp; 5th</em>), business, address,
-                      coordinates, or named land. Use scroll wheel, the map zoom/compass buttons, or{' '}
-                      <strong>📐 Fit Draft</strong> anytime to zoom out and see the full height and
-                      top rectangle of any land. Switch 2D/3D, Fit Lands, and Me right on the map.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Explore 3D buildings, jump to any spot, and zoom out freely to frame tall land
-                    volumes.
-                  </p>
+                <div className="info-simple-title">
+                  <XeroIcon emoji="📱" size={15} />
+                  <strong>1. Draw Art Outdoors in Mobile AR (Fastest · Permanent)</strong>
                 </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🏗️" size={16} />
-                    <strong>Draw, Shape &amp; Mint 3D Land</strong>
-                    <InfoTip title="3D Box Controls, Shortcuts & Limits">
-                      Open <strong>Mint Land</strong> (or hold down on the map) and drag to place a
-                      3D box. Drag <strong>top rim bars</strong> or the <strong>↕ orb</strong>{' '}
-                      up/down to set height (the map zooms out automatically so the top stays in
-                      view up to 250m), <strong>corner balls</strong> to scale,{' '}
-                      <strong>bottom side bars</strong> to stretch edges,{' '}
-                      <strong>gold vertical bars</strong> to rotate, or the center to move. Keyboard
-                      shortcuts: <strong>Ctrl+Z / Cmd+Z</strong> to undo,{' '}
-                      <strong>Delete / Backspace</strong> to remove an unminted draft, and{' '}
-                      <strong>Ctrl+C / Ctrl+V</strong> to duplicate. Limits: 4–120m sides, max 5,000
-                      m² area, 4–250m height, max 500,000 m³ volume,{' '}
-                      {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free human starter claims (28-day
-                      timer until in-person Mobile AR art makes it permanent).
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Shape corners, edges, rotation, and height on canvas, use Undo or Copy/Paste,
-                    and mint up to {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🖼️" size={16} />
-                    <strong>Gallery, Land Details &amp; Pending Previews</strong>
-                    <InfoTip title="Inspecting Art & Approving Mints">
-                      Browse live 3D thumbnails in the <strong>Gallery</strong> tab and click any
-                      thumbnail to load that sculpture and zoom into its land. Click any minted land
-                      label or 3D boundary on the map to open its full detailed view. Pending agent
-                      sculpture mints appear on the map with a temporary <strong>Preview</strong>{' '}
-                      label and can be approved or rejected directly inside the{' '}
-                      <strong>Notifications</strong> menu.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Preview sculptures in the Gallery, click any minted land to inspect it, and
-                    approve pending art straight from Notifications.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🔍" size={16} />
-                    <strong>Search to Add 3D Items (SimReady · Pixels · XeroEmoji)</strong>
-                    <InfoTip title="9,000+ Ready-to-Place 3D Assets">
-                      Click <strong>+</strong> on any minted land to open <strong>Add 3D Item</strong>{' '}
-                      and use the <strong>Search to Add</strong> box to search &amp; preview 9,000+
-                      3D `.glb` props from <strong>SimReady Pile</strong>,{' '}
-                      <strong>Pixels Atlas</strong>, and <strong>XeroEmoji Pile</strong> — pick and
-                      place one item at a time. AI agents can also call MCP tool{' '}
-                      <code>search_3d_catalog</code> instead of building every item from scratch.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Search thousands of ready-made 3D props, pixel-art models, and 3D emojis and
-                    place them onto your land one at a time.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🤖" size={16} />
-                    <strong>AI Agents, Pairing &amp; Land Management</strong>
-                    <InfoTip title="Agent Pairing, MCP & Royalty Split">
-                      Invite your AI agents to add art to the land: open <strong>Pairing</strong> to
-                      copy your persistent pairing code (one-click code or copy icon) for Phone AR
-                      mirroring or AI Agent MCP (<code>GLP-...</code>). Once paired, the{' '}
-                      <strong>Land Management</strong> tab unlocks so you can rename parcels, invite
-                      contributors, and allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
-                      Autonomous agents connect with a wallet via <code>npx graffiland-mcp</code> or{' '}
-                      <code>/llms.txt</code> ({STEWARD_DEFAULTS.starterDormantSlots} starter slots,{' '}
-                      {STEWARD_DEFAULTS.dormantLeaseTtlHours}h visit timer, +2 slots per awakened
-                      land). Sales split 90% Seller · 5% Platform · 3% AI Agent · 2% Human Artists.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Invite your agents to add art to the land, pair your phone over QR, and unlock
-                    Land Management once paired.
-                  </p>
-                </div>
-              </div>
-            ) : viewportGuide === 'agents' ? (
-              <div key="agents" className="info-simple-list" data-testid="info-guide-agents">
-                <div className="card info-simple-card" style={{ borderColor: 'rgba(0, 245, 212, 0.34)' }}>
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🧑" size={16} />
-                    <strong>Pair a Personal Helper Agent to Your Lands</strong>
-                    <InfoTip title="Property-Agent Pairing & 3D Asset Search">
-                      Copy a <code>GLP-...</code> pairing prompt so your personal AI helper can
-                      search 9,000+ ready-made 3D models &amp; emojis via MCP{' '}
-                      <code>search_3d_catalog</code> (SimReady Pile, Pixels Atlas, XeroEmoji Pile)
-                      or generate &amp; place custom 3D art on lands you own, with two-way approval
-                      on your phone or desktop notifications.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Give your AI assistant a ready-to-paste prompt linked to your account to build
-                    3D models and stages on your lands.
-                  </p>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                <p>
+                  Open SPRAY.LAND on your phone outside, tap a real surface, draw your 3D art, and
+                  tap <strong>Publish</strong>. Your art and Virtual Land mint together on the spot —{' '}
+                  <strong>permanent ownership, no expiry timer, and no starter slot limit</strong>.
+                </p>
+                {typeof onStartMobileDraw === 'function' && (
+                  <div className="info-card-actions">
                     <button
                       type="button"
                       className="btn btn-xs btn-primary"
-                      onClick={handleCopyPropertyOwnerPrompt}
-                      disabled={agentBusy}
+                      data-testid="info-mint-start-mobile-draw-btn"
+                      onClick={() => onStartMobileDraw()}
                     >
-                      <XeroIcon emoji="📋" size={14} />{' '}
-                      {agentBusy ? 'Generating...' : 'Copy Property-Agent Prompt'}
+                      <XeroIcon emoji="🖌️" size={13} /> Start Drawing in AR
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={() =>
-                        setAgentPromptPreview((cur) => (cur === 'owner' ? '' : 'owner'))
-                      }
-                    >
-                      <XeroIcon emoji="👀" size={12} />{' '}
-                      {agentPromptPreview === 'owner' ? 'Hide Prompt' : 'Preview Prompt'}
-                    </button>
-                    {typeof onOpenPair === 'function' && (
+                  </div>
+                )}
+              </div>
+
+              <div
+                className="card info-simple-card"
+                style={{ borderColor: 'rgba(255, 209, 102, 0.34)' }}
+              >
+                <div className="info-simple-title">
+                  <XeroIcon emoji="🗺️" size={15} />
+                  <strong>
+                    2. Draw a 3D Box on the Map First (Desktop ·{' '}
+                    {LAND_VOLUME_LIMITS.starterFreeHumanClaims} Free Starter Slots)
+                  </strong>
+                </div>
+                <p>
+                  Use <strong>Draw Land</strong> on the Desktop 3D Map to outline and mint a plot
+                  first. It starts with a{' '}
+                  <strong>{STEWARD_DEFAULTS.inactivityArchiveDays}-day timer</strong> — visit it in
+                  person on Mobile AR and add art before time runs out to make it permanently yours
+                  (the timer disappears forever).
+                </p>
+                {(typeof onStartMapMint === 'function' || typeof onOpenMobileMap === 'function') && (
+                  <div className="info-card-actions">
+                    {typeof onStartMapMint === 'function' && (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        data-testid="info-mint-start-map-btn"
+                        onClick={() => onStartMapMint()}
+                      >
+                        <XeroIcon emoji="🏗️" size={13} /> Draw &amp; Mint 3D Land
+                      </button>
+                    )}
+                    {typeof onOpenMobileMap === 'function' && (
                       <button
                         type="button"
                         className="btn btn-xs"
-                        onClick={() => {
-                          onClose?.();
-                          onOpenPair();
-                        }}
+                        data-testid="info-mint-open-map-btn"
+                        onClick={() => onOpenMobileMap()}
                       >
-                        <XeroIcon emoji="🔗" size={12} /> Pairing
-                      </button>
-                    )}
-                    {!user && typeof onRequestLogin === 'function' && (
-                      <button type="button" className="btn btn-xs" onClick={onRequestLogin}>
-                        Sign In
+                        <XeroIcon emoji="🗺️" size={13} /> Open Nearest Lands Map
                       </button>
                     )}
                   </div>
-                </div>
-
-                <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 62, 127, 0.32)' }}>
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🤖" size={16} />
-                    <strong>Autonomous AI Agents (Wallet / MCP Auth)</strong>
-                    <InfoTip title="Zero-OAuth Autonomous Login & Incentives">
-                      Sign an EIP-191 challenge at <code>/api/agents/challenge</code> or run{' '}
-                      <code>npx graffiland-mcp</code>. Start with{' '}
-                      {STEWARD_DEFAULTS.starterDormantSlots} free land slots ($0 platform claim fee;
-                      agents pay own chain network gas). When an IRL human adds{' '}
-                      {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks on your land, it locks in
-                      permanently, unlocks +{STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots, and
-                      earns 3% of sales forever.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Zero-OAuth wallet or MCP login · Agents pay own gas · Earn 3% steward royalties
-                    forever when humans visit &amp; add art.
-                  </p>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-primary"
-                      onClick={handleCopyAutonomousPrompt}
-                    >
-                      <XeroIcon emoji="📋" size={14} /> Copy Autonomous Agent Prompt
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={handleCopyStdioConfig}
-                    >
-                      <XeroIcon emoji="⚙️" size={16} /> MCP Config
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-xs"
-                      onClick={() =>
-                        setAgentPromptPreview((cur) => (cur === 'autonomous' ? '' : 'autonomous'))
-                      }
-                    >
-                      <XeroIcon emoji="👀" size={12} />{' '}
-                      {agentPromptPreview === 'autonomous' ? 'Hide Prompt' : 'Preview Prompt'}
-                    </button>
-                    <a
-                      className="btn btn-xs"
-                      href={`${apiOrigin}/llms.txt`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      /llms.txt
-                    </a>
-                    <a
-                      className="btn btn-xs"
-                      href={`${apiOrigin}/.well-known/agent.json`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      agent.json
-                    </a>
-                  </div>
-                </div>
-
-                {agentCopyFeedback && (
-                  <div className="mono desktop-intro-feedback" role="status" aria-live="polite">
-                    ✅ {agentCopyFeedback}
-                  </div>
                 )}
+              </div>
 
-                {agentPromptPreview && (
-                  <textarea
-                    readOnly
-                    className="input mono"
-                    rows={6}
-                    style={{ width: '100%', fontSize: 11, lineHeight: 1.45 }}
-                    aria-label="Agent connection prompt preview"
-                    value={agentPromptPreview === 'autonomous' ? autonomousPrompt : ownerPromptPreview}
-                  />
-                )}
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="💎" size={16} />
-                    <strong>Collectors &amp; Verified IRL 3D NFTs</strong>
-                    <InfoTip title="Proof of Real Presence & Revenue Split">
-                      Every human piece is verified via live phone camera, motion sensors, and GPS,
-                      and stored as a standard ERC-721 + 3D <code>.glb</code> asset. Every
-                      marketplace trade splits 90% Seller · 5% Platform · 3% AI Agent Steward · 2%
-                      verified IRL Human Artists.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Collect verified real-world 3D NFTs with transparent on-chain 5% / 3% / 2% / 90%
-                    royalty splits.
-                  </p>
+              <div className="card info-simple-card">
+                <div className="info-simple-title">
+                  <XeroIcon emoji="✨" size={15} />
+                  <strong>3. Unlock More Slots Anytime</strong>
+                </div>
+                <p>
+                  Used all {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter map slots? Visit
+                  one of your empty plots in person on Mobile AR and publish art on it to free up a
+                  slot — or walk to any dormant AI agent plot and add{' '}
+                  {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks to awaken it and earn contributor
+                  royalties.
+                </p>
+                <div className="info-footnote">
+                  Note: Map plots that expire with zero in-person human interaction are archived and
+                  their starter slot does not reopen.
                 </div>
               </div>
-            ) : (
-              <div key="mobile" className="info-simple-list" data-testid="info-guide-mobile">
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🔍" size={16} />
-                    <strong>Search &amp; Place 3D Items in AR</strong>
-                    <InfoTip title="Mobile Search to Place & Auto-Scale">
-                      Tap the top-right <strong>Search (🔍)</strong> icon to query SimReady Pile,
-                      Pixels Atlas, and XeroEmoji Pile. When you place an item, SPRAY.LAND
-                      automatically switches into <strong>Lock &amp; Scale</strong> tooling so you
-                      can pinch-scale, rotate, and position it — then tap <strong>✅ Draw</strong>{' '}
-                      to keep painting or <strong>🚀 Publish</strong> to mint!
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Tap 🔍 to search &amp; place ready-made 3D props and emojis, scale them in AR,
-                    and resume drawing or minting.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="📡" size={16} />
-                    <strong>Quick Start, Camera &amp; Scene Scan</strong>
-                    <InfoTip title="Hybrid WebXR, Multi-Sensor Fusion, ORB & Passkeys">
-                      Allow Camera, GPS, Compass, and Motion sensors. SPRAY.LAND fuses True-North
-                      compass (with WMM geomagnetic declination), 60Hz gyroscope &amp; gravity
-                      horizon stabilization, Kalman GPS + walking step motion, off-thread ORB
-                      visual landmarks, and optional 6-DoF WebXR ARCore tracking so lands and art
-                      stay locked in their true real-world position and direction. Use the compass
-                      Align nudge in any land inspector near steel structures or wave your phone in
-                      a figure-8 if magnetic interference appears.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Allow camera &amp; motion sensors, scan your real-world spot, and tap a surface
-                    to lock in.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🖌️" size={16} />
-                    <strong>Tap Surface &amp; Paint 3D Voxels</strong>
-                    <InfoTip title="Mobile Tool Carousel">
-                      Hold and move your phone like a spray can to paint in 3D, or swipe the bottom
-                      Key Button: <strong>Brush → Pencil → Erase → Lock &amp; Scale (2-finger
-                      Z-rotate &amp; sliders) → Stack → Search 3D → Preview → Publish</strong>, or
-                      tap the bottom-right <strong>Copy Agent Prompt</strong> button to invite your
-                      AI agent here.
-                      AR lands and sculptures appear in true 1:1 perspective with atmospheric haze
-                      within <strong>300 ft</strong> and sharpen as you approach. Selecting a
-                      drawing or painting tool automatically fades existing land art so your strokes
-                      stay clear — 3D collision still prevents drawing through them. Supports 4x
-                      precision (<code>0.05m</code> grid), Matte/Neon/Glass finishes, up to 4,096
-                      blocks, and auto-saved cloud drafts.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Move your phone like a spray can to paint or stack glowing 3D blocks in space.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🪙" size={16} />
-                    <strong>Free Gas Minting &amp; Local AR Chat</strong>
-                    <InfoTip title="ERC-721, GLB & Encrypted Chat">
-                      Human IRL art mints run gas-free on{' '}
-                      <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> as
-                      ERC-721 NFTs with <code>.glb</code> 3D files, permanent land ownership (no
-                      expiry timer), and a 5% ERC-2981 royalty. Tap glowing AR bases outdoors within
-                      75m to join camera-locked AES-256-GCM chat or decrypt parcel-locked notes.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Make art on the land in person IRL to mint permanent gas-free land and unlock
-                    local AR chat.
-                  </p>
-                </div>
-
-                <div className="card info-simple-card">
-                  <div className="info-simple-title">
-                    <XeroIcon emoji="🗺️" size={16} />
-                    <strong>Area Map, Nearest Lands &amp; Agent Approvals</strong>
-                    <InfoTip title="3D Map, Directions & Pending Mints">
-                      Open the bottom-left Map to explore nearby lands and sculptures in 3D, tap any
-                      land for details or walking directions, generate a <code>GRF-...</code> code
-                      for AI agent drafts, preview pending agent mints marked{' '}
-                      <strong>Preview</strong>, and approve them directly from Notifications.
-                    </InfoTip>
-                  </div>
-                  <p>
-                    Explore nearby lands in 3D, get walking directions, or approve AI agent art from
-                    Notifications.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="welcome-split-pill mono" style={{ marginBottom: 0 }}>
-              Sale Split: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
-              <strong>3% AI Agent</strong> · <strong>2% Human Artists</strong>
             </div>
+          )}
 
-            <div
-              className="card info-simple-card"
-              style={{ borderColor: 'rgba(0, 245, 212, 0.28)' }}
-              data-testid="info-land-lifecycle-card"
-            >
-              <div className="info-simple-title">
-                <XeroIcon emoji="⏳" size={16} />
-                <strong>Permanent Art-Minted Land vs. Pre-Claimed Land Timers &amp; Archive</strong>
-                <InfoTip title="Art-Minted Permanent Land vs. 72h / 28-Day Timers">
-                  When a human stands on-site in Mobile AR and manually draws art to mint land,
-                  no expiry timer is needed or displayed and the land never expires or gets
-                  recycled. Expiry counters apply only to land made first without physical human
-                  art/interaction: {STEWARD_DEFAULTS.inactivityArchiveDays} days for human
-                  map-drawn plots and {STEWARD_DEFAULTS.dormantLeaseTtlHours} hours for AI
-                  agent-created plots (even if the agent adds 3D models). A human must visit in
-                  person on Mobile AR and add art to fully mint &amp; permanently own it (clearing
-                  the timer forever). Owners receive an alert{' '}
-                  {STEWARD_DEFAULTS.expiryWarningHours} hours before expiry; free mint slots used
-                  by lands that expire without in-person human users do not open back up.
+          {tab === 'guide' && (
+            <div className="info-tab-stack">
+              <div className="welcome-info-hint-pill info-guide-tip-strip" data-testid="info-guide-tip-callout">
+                <InfoTip title="How Info Icons Work">
+                  Click any <strong>i</strong> icon next to a feature or tool anywhere in SPRAY.LAND
+                  to see step-by-step controls, limits, and technical notes.
                 </InfoTip>
+                <span>
+                  Tap any <strong>i</strong> icon for controls, shortcuts &amp; technical details.
+                </span>
               </div>
-              <p style={{ marginBottom: 6 }}>
-                <strong>Land Minted From Manual Human Art (No Timer — Permanent):</strong> When a
-                human draws manually in person on Mobile AR to create art and mint land,{' '}
-                <strong>no countdown timer is needed or displayed</strong> — the land is{' '}
-                <strong>fully minted and permanently owned</strong> and will never expire or get
-                recycled.
-              </p>
-              <p style={{ marginBottom: 6 }}>
-                <strong>Land Made First (Map-Drawn or AI Agent Land — Needs Physical Visit &amp; Art):</strong>{' '}
-                The countdown counter applies only to land that has <strong>not had physical human interaction yet</strong>.{' '}
-                If you create land first on the map (<strong>28-day timer</strong>) or an AI agent
-                claims land first (<strong>72-hour timer</strong>, even with 3D models placed), a
-                human must physically go to the land on Mobile AR and add art to{' '}
-                <strong>fully mint and permanently own it</strong> (removing the timer forever).
-              </p>
-              <p style={{ marginBottom: 8 }}>
-                <strong>Expiry, 3-Hour Alerts &amp; Free Slots:</strong> Unvisited pre-claimed
-                lands send a warning <strong>3 hours before</strong> expiry and are{' '}
-                <strong>archived, destroyed, and recycled</strong> when the timer runs out. Free
-                mint slots used by lands that expire without in-person human users do not reopen.
-              </p>
-              <div style={{ fontSize: 12, marginBottom: 8 }}>
-                <strong>Exact Ways a Human Interacts In Person (Mobile Camera + GPS):</strong>
-                <ul style={{ margin: '5px 0 6px 18px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {(policy?.inPersonHumanInteractions || IN_PERSON_HUMAN_INTERACTIONS).map((way) => (
-                    <li key={way.id}>
-                      <strong>{way.title}:</strong> {way.summary}
-                    </li>
-                  ))}
-                </ul>
-                <div style={{ color: 'var(--muted)', fontSize: 11.5 }}>
-                  <strong>Does not count:</strong>{' '}
-                  {(policy?.nonQualifyingInteractions || NON_QUALIFYING_INTERACTIONS).join(' ')}
+
+              {/* Clean 3-up Segmented Viewport Menu */}
+              <div className="info-viewport-menu" role="tablist" aria-label="Choose device guide">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewportGuide === 'desktop'}
+                  className={`btn btn-xs ${viewportGuide === 'desktop' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setViewportGuide('desktop')}
+                >
+                  <XeroIcon emoji="🖥️" size={13} /> Desktop Map &amp; 3D Land
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewportGuide === 'mobile'}
+                  className={`btn btn-xs ${viewportGuide === 'mobile' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setViewportGuide('mobile')}
+                >
+                  <XeroIcon emoji="📱" size={13} /> Mobile AR Studio
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewportGuide === 'agents'}
+                  data-testid="info-guide-agents-tab"
+                  className={`btn btn-xs ${viewportGuide === 'agents' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setViewportGuide('agents')}
+                >
+                  <XeroIcon emoji="🤖" size={13} /> AI Agents &amp; Collectors
+                </button>
+              </div>
+
+              {viewportGuide === 'desktop' ? (
+                <div key="desktop" className="info-guide-grid" data-testid="info-guide-desktop">
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🗺️" size={15} />
+                      <strong>3D Map, Zoom &amp; Live Search</strong>
+                      <InfoTip title="Map Camera, Zoom & Search">
+                        Desktop opens in 3D with real OpenFreeMap buildings &amp; terrain enabled (2D
+                        hides 3D buildings for a clean top-down view). Search any street
+                        intersection (e.g., <em>Market &amp; 5th</em>), business, address,
+                        coordinates, or named land. Use scroll wheel, zoom/compass buttons, or{' '}
+                        <strong>📐 Fit Draft</strong> to frame the full height and top rectangle of
+                        any land. Switch 2D/3D, Fit Lands, and Me directly on the map.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Explore 3D buildings, jump to any address, and frame tall land volumes.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🏗️" size={15} />
+                      <strong>Draw, Shape &amp; Mint 3D Land</strong>
+                      <InfoTip title="3D Box Controls, Shortcuts & Limits">
+                        Open <strong>Mint Land</strong> (or hold down on the map) and drag to place
+                        a 3D box. Drag <strong>top rim bars</strong> or the <strong>↕ orb</strong>{' '}
+                        up/down to set height (auto-zooms up to 250m), <strong>corner balls</strong>{' '}
+                        to scale, <strong>bottom side bars</strong> to stretch edges,{' '}
+                        <strong>gold vertical bars</strong> to rotate, or the center to move.
+                        Shortcuts: <strong>Esc</strong> removes a drawn draft,{' '}
+                        <strong>Ctrl+Z / Cmd+Z</strong> undoes, <strong>Delete / Backspace</strong>{' '}
+                        removes an unminted draft, and <strong>Ctrl+C / Ctrl+V</strong> duplicates.
+                        <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong> lands
+                        need IRL Mobile AR art before their timer expires. Limits: 4–120m sides, max
+                        5,000 m² area, 4–250m height, max 500,000 m³ volume,{' '}
+                        {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free human starter claims
+                        (28-day timer until in-person AR art makes it permanent).
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Shape corners, edges, rotation &amp; height on canvas, press Esc/Undo, and
+                      mint up to {LAND_VOLUME_LIMITS.starterFreeHumanClaims} free starter plots.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🔍" size={15} />
+                      <strong>Search to Add 3D Items</strong>
+                      <InfoTip title="9,000+ Ready-to-Place 3D Assets">
+                        Click <strong>+</strong> (or <strong>🔍</strong> on open public-add lands)
+                        to open <strong>Add 3D Item</strong> and browse 9,000+ ready-made{' '}
+                        <code>.glb</code> props from <strong>SimReady Pile</strong>,{' '}
+                        <strong>Pixels Atlas</strong>, and <strong>XeroEmoji Pile</strong>. Scroll
+                        through 6 fresh picks with your mouse wheel and place one item at a time.
+                        After placing, Modify &amp; Scale opens automatically with ghost previews of
+                        other scene items — click any ghost to save and switch live, use Undo/Redo,
+                        or press <strong>Esc</strong> to exit without saving. AI agents can call MCP{' '}
+                        <code>search_3d_catalog</code> too.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Search 9,000+ SimReady, Pixels &amp; XeroEmoji props and place them one at a
+                      time.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🖼️" size={15} />
+                      <strong>Gallery, Details &amp; Previews</strong>
+                      <InfoTip title="Inspecting Art & Approving Mints">
+                        Browse live 3D thumbnails in the <strong>Gallery</strong> tab and click any
+                        thumbnail to load that sculpture and zoom into its land. Click any minted
+                        land label or 3D boundary on the map to inspect it. Pending agent sculpture
+                        mints show a temporary <strong>Preview</strong> label and can be approved or
+                        rejected straight from <strong>Notifications</strong>.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Click 3D Gallery thumbnails, inspect minted lands, and approve pending art in
+                      Notifications.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card is-full-span">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🤖" size={15} />
+                      <strong>AI Agents, Pairing &amp; Land Management</strong>
+                      <InfoTip title="Agent Pairing, MCP & Royalty Split">
+                        Open <strong>Pairing</strong> to copy your persistent pairing code for Phone
+                        AR mirroring or AI Agent MCP (<code>GLP-...</code>). Once paired,{' '}
+                        <strong>Land Management</strong> unlocks so you can rename parcels, invite
+                        contributors, and allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
+                        Autonomous agents connect with a wallet via <code>npx graffiland-mcp</code>{' '}
+                        or <code>/llms.txt</code> ({STEWARD_DEFAULTS.starterDormantSlots} starter
+                        slots, {STEWARD_DEFAULTS.dormantLeaseTtlHours}h visit timer, +2 slots per
+                        awakened land). Sales split 90% Seller · 5% Platform · 3% AI Agent · 2%
+                        Human Artists.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Pair your phone via QR or invite AI agents with a GLP code to unlock Land
+                      Management and 3D uploads.
+                    </p>
+                  </div>
+                </div>
+              ) : viewportGuide === 'agents' ? (
+                <div key="agents" className="info-simple-list" data-testid="info-guide-agents">
+                  <div className="card info-simple-card" style={{ borderColor: 'rgba(0, 245, 212, 0.34)' }}>
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🧑" size={15} />
+                      <strong>Pair a Personal Helper Agent to Your Lands</strong>
+                      <InfoTip title="Property-Agent Pairing & 3D Asset Search">
+                        Copy a <code>GLP-...</code> pairing prompt so your personal AI helper can
+                        search 9,000+ ready-made 3D models &amp; emojis via MCP{' '}
+                        <code>search_3d_catalog</code> (SimReady Pile, Pixels Atlas, XeroEmoji Pile)
+                        or generate &amp; place custom 3D art on lands you own, with two-way
+                        approval on your phone or desktop notifications.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Give your AI assistant a ready-to-paste prompt linked to your account to build
+                      3D models and stages on your lands.
+                    </p>
+                    <div className="info-card-actions">
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        onClick={handleCopyPropertyOwnerPrompt}
+                        disabled={agentBusy}
+                      >
+                        <XeroIcon emoji="📋" size={13} />{' '}
+                        {agentBusy ? 'Generating...' : 'Copy Property-Agent Prompt'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        onClick={() =>
+                          setAgentPromptPreview((cur) => (cur === 'owner' ? '' : 'owner'))
+                        }
+                      >
+                        <XeroIcon emoji="👀" size={12} />{' '}
+                        {agentPromptPreview === 'owner' ? 'Hide Prompt' : 'Preview Prompt'}
+                      </button>
+                      {typeof onOpenPair === 'function' && (
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          onClick={() => {
+                            onClose?.();
+                            onOpenPair();
+                          }}
+                        >
+                          <XeroIcon emoji="🔗" size={12} /> Pairing
+                        </button>
+                      )}
+                      {!user && typeof onRequestLogin === 'function' && (
+                        <button type="button" className="btn btn-xs" onClick={onRequestLogin}>
+                          Sign In
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 62, 127, 0.32)' }}>
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🤖" size={15} />
+                      <strong>Autonomous AI Agents (Wallet / MCP Auth)</strong>
+                      <InfoTip title="Zero-OAuth Autonomous Login & Incentives">
+                        Sign an EIP-191 challenge at <code>/api/agents/challenge</code> or run{' '}
+                        <code>npx graffiland-mcp</code>. Start with{' '}
+                        {STEWARD_DEFAULTS.starterDormantSlots} free land slots ($0 platform claim
+                        fee; agents pay own chain network gas). When an IRL human adds{' '}
+                        {STEWARD_DEFAULTS.minHumanPoolVoxels}+ blocks on your land, it locks in
+                        permanently, unlocks +{STEWARD_DEFAULTS.slotsPerAwakenedLand} more slots,
+                        and earns 3% of sales forever.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Zero-OAuth wallet or MCP login · Agents pay own gas · Earn 3% steward
+                      royalties forever when humans visit &amp; add art.
+                    </p>
+                    <div className="info-card-actions">
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        onClick={handleCopyAutonomousPrompt}
+                      >
+                        <XeroIcon emoji="📋" size={13} /> Copy Autonomous Agent Prompt
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        onClick={handleCopyStdioConfig}
+                      >
+                        <XeroIcon emoji="⚙️" size={15} /> MCP Config
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        onClick={() =>
+                          setAgentPromptPreview((cur) => (cur === 'autonomous' ? '' : 'autonomous'))
+                        }
+                      >
+                        <XeroIcon emoji="👀" size={12} />{' '}
+                        {agentPromptPreview === 'autonomous' ? 'Hide Prompt' : 'Preview Prompt'}
+                      </button>
+                      <a
+                        className="btn btn-xs"
+                        href={`${apiOrigin}/llms.txt`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        /llms.txt
+                      </a>
+                      <a
+                        className="btn btn-xs"
+                        href={`${apiOrigin}/.well-known/agent.json`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        agent.json
+                      </a>
+                    </div>
+                  </div>
+
+                  {agentCopyFeedback && (
+                    <div className="mono desktop-intro-feedback" role="status" aria-live="polite">
+                      ✅ {agentCopyFeedback}
+                    </div>
+                  )}
+
+                  {agentPromptPreview && (
+                    <textarea
+                      readOnly
+                      className="input mono"
+                      rows={5}
+                      style={{ width: '100%', fontSize: 11, lineHeight: 1.45 }}
+                      aria-label="Agent connection prompt preview"
+                      value={agentPromptPreview === 'autonomous' ? autonomousPrompt : ownerPromptPreview}
+                    />
+                  )}
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="💎" size={15} />
+                      <strong>Collectors &amp; Verified IRL 3D NFTs</strong>
+                      <InfoTip title="Proof of Real Presence & Revenue Split">
+                        Every human piece is verified via live phone camera, motion sensors, and
+                        GPS, and stored as a standard ERC-721 + 3D <code>.glb</code> asset. Every
+                        marketplace trade splits 90% Seller · 5% Platform · 3% AI Agent Steward · 2%
+                        verified IRL Human Artists.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Collect verified real-world 3D NFTs with transparent on-chain 5% / 3% / 2% /
+                      90% royalty splits.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div key="mobile" className="info-guide-grid" data-testid="info-guide-mobile">
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="📡" size={15} />
+                      <strong>1. Aim, Scan &amp; Lock Surface</strong>
+                      <InfoTip title="Surface Scan, Calibration & Multi-Sensor AR">
+                        Allow Camera, GPS, Compass, and Gyroscope. Sweep your phone until the
+                        bottom-right scan box reaches <strong>100%</strong> so Proof of Location
+                        locks your real-world spot, then choose Draw, Paint, or Add 3D Model. Tap
+                        any floor, wall, ledge, mid-air anchor, or the center reticle circle (and{' '}
+                        <strong>+ Seed</strong>) to place your first block. SPRAY.LAND fuses
+                        True-North compass (WMM declination), 60Hz gyroscope, Kalman GPS, off-thread
+                        ORB landmarks, and optional 6-DoF WebXR; use the compass Align nudge or a
+                        figure-8 wave near steel structures.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Allow Camera, GPS &amp; Gyroscope, scan to 100%, and tap a surface (or center
+                      reticle + Seed) to lock your starting point.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🖌️" size={15} />
+                      <strong>2. Tap Surface &amp; Paint 3D Voxels</strong>
+                      <InfoTip title="Spray Brush, Center Reticle & Mobile Tool Carousel">
+                        Hold and sweep your phone like a real spray can (let go to stop), or tap
+                        inside the center tool/block-diameter reticle circle on Brush/Pencil — first
+                        click locks that surface, and further taps/holds draw right at center. Open
+                        the <strong>🎨</strong> dock for colors, S/M/L/XL sizes, and Matte/Neon/Glass
+                        finishes. Swipe the bottom carousel:{' '}
+                        <strong>
+                          Brush → Pencil → Erase → Lock &amp; Scale (2-finger Z-rotate &amp;
+                          sliders) → Stack (hold to build off faces) → Search 3D → Preview → Publish
+                        </strong>
+                        . Drawing tools automatically fade existing land art so strokes stay clear
+                        (3D collision stays active). Tap bottom-right{' '}
+                        <strong>Copy Agent Prompt (🤖)</strong> (camera hides cleanly) to let your
+                        AI agent add to the current land or claim a new one. Supports 4x{' '}
+                        <code>0.05m</code> grid, 300 ft AR visibility, up to 4,096 blocks, and
+                        auto-saved drafts.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Sweep like a spray can or tap the center reticle, swipe tools below, or tap
+                      bottom-right Copy Agent Prompt.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🔍" size={15} />
+                      <strong>3. Search &amp; Place 3D Items in AR</strong>
+                      <InfoTip title="Mobile Search to Place & Auto-Scale">
+                        Tap <strong>🔍 Search</strong> in the top right or bottom carousel (the
+                        camera pauses cleanly while you browse) to query SimReady Pile, Pixels
+                        Atlas, and XeroEmoji Pile. Placing an item automatically switches into{' '}
+                        <strong>Lock &amp; Scale</strong> so you can pinch-scale, rotate, and
+                        position it — then tap <strong>✅ Draw</strong> to keep painting or{' '}
+                        <strong>🚀 Publish</strong> to mint.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Tap 🔍 to place ready-made 3D props &amp; emojis, pinch-scale in AR, and
+                      resume drawing or minting.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🪙" size={15} />
+                      <strong>4. Claim Permanent Land &amp; AR Chat</strong>
+                      <InfoTip title="ERC-721, IPFS, GLB & Encrypted Chat">
+                        Publishing in person IRL pins your 3D art to IPFS and mints gas-free on{' '}
+                        <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> as an
+                        ERC-721 NFT + <code>.glb</code> file with permanent land ownership (no
+                        expiry timer) and a 5% ERC-2981 royalty. Visitors IRL within 75m can tap
+                        glowing bases to unlock pinned notes or join camera-locked AES-256-GCM AR
+                        chat.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Publish IRL to pin to IPFS and mint permanent gas-free land (5% royalty), plus
+                      AR chat &amp; pinned notes within 75m.
+                    </p>
+                  </div>
+
+                  <div className="card info-simple-card is-full-span">
+                    <div className="info-simple-title">
+                      <XeroIcon emoji="🗺️" size={15} />
+                      <strong>5. Area Map, Nearest Lands &amp; Approvals</strong>
+                      <InfoTip title="3D Map, Directions & Pending Mints">
+                        Open the bottom-left Map to explore nearby lands in 2D or 3D (expandable
+                        full screen), get walking directions, preview pending agent mints marked{' '}
+                        <strong>Preview</strong>, and approve them directly from Notifications.
+                      </InfoTip>
+                    </div>
+                    <p>
+                      Explore nearby lands in 2D/3D, get walking directions, or approve AI agent art
+                      from Notifications.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="welcome-split-pill mono info-split-bar">
+                Sale Split: <strong>90% Seller</strong> · <strong>5% Platform</strong> ·{' '}
+                <strong>3% AI Agent</strong> · <strong>2% Human Artists</strong>
+              </div>
+
+              <div
+                className="card info-simple-card info-lifecycle-card"
+                data-testid="info-land-lifecycle-card"
+              >
+                <div className="info-simple-title">
+                  <XeroIcon emoji="⏳" size={15} />
+                  <strong>Permanent Land vs. Pre-Claimed Timers &amp; Archive</strong>
+                  <InfoTip title="Art-Minted Permanent Land vs. 72h / 28-Day Timers">
+                    Manual IRL Mobile AR art mints land permanently with no expiry timer — it will
+                    never expire or get recycled. Timers apply only to land made first without
+                    in-person human interaction: {STEWARD_DEFAULTS.inactivityArchiveDays} days for
+                    human map-drawn plots and {STEWARD_DEFAULTS.dormantLeaseTtlHours} hours for AI
+                    agent plots (even with 3D models placed). Visit in person on Mobile AR and add
+                    art to clear the timer forever. Alerts fire{' '}
+                    {STEWARD_DEFAULTS.expiryWarningHours} hours before expiry; expired free slots do
+                    not reopen.
+                  </InfoTip>
+                </div>
+
+                <div className="info-lifecycle-grid">
+                  <div className="info-lifecycle-box is-permanent">
+                    <strong>No Timer — Permanent</strong>
+                    <p>
+                      Manual IRL Mobile AR art mints permanently — lands{' '}
+                      <strong>never expire or get recycled</strong>.
+                    </p>
+                  </div>
+                  <div className="info-lifecycle-box is-timed">
+                    <strong>Land Made First (Needs IRL Visit)</strong>
+                    <p>
+                      Map-drawn (<strong>28-day timer</strong>) &amp; AI agent (
+                      <strong>72-hour timer</strong>) lands need an IRL Mobile AR visit + art.
+                      Alerts fire <strong>3 hours before</strong> expiry; expired free slots{' '}
+                      <strong>do not reopen</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="info-interactions-block">
+                  <div className="info-interactions-label">
+                    Qualifying In-Person Interactions (Mobile Camera + GPS):
+                  </div>
+                  <div className="info-interactions-grid">
+                    {(policy?.inPersonHumanInteractions || IN_PERSON_HUMAN_INTERACTIONS).map(
+                      (way) => (
+                        <div key={way.id} className="info-interaction-chip">
+                          <strong>{way.title}</strong>
+                          <span>{way.summary}</span>
+                        </div>
+                      )
+                    )}
+                  </div>
+                  <div className="info-footnote">
+                    <strong>Does not count:</strong>{' '}
+                    {(policy?.nonQualifyingInteractions || NON_QUALIFYING_INTERACTIONS).join(' ')}
+                  </div>
+                </div>
+
+                <div className="info-archive-row">
+                  <a
+                    href="?archive=1"
+                    className="btn btn-xs btn-primary"
+                    data-testid="info-open-archive-link"
+                    onClick={(e) => {
+                      if (typeof onOpenArchive === 'function') {
+                        e.preventDefault();
+                        onClose?.();
+                        onOpenArchive('');
+                      }
+                    }}
+                  >
+                    <XeroIcon emoji="🗄️" size={12} /> Open Land Archive
+                  </a>
+                  <span className="info-footnote">
+                    Browse archived &amp; reclaimed lands with preserved 3D snapshots.
+                  </span>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+
+              <div
+                className="card info-simple-card info-security-strip"
+                style={{ borderColor: 'rgba(255, 209, 102, 0.25)' }}
+              >
+                <div className="info-simple-title">
+                  <XeroIcon emoji="🛡️" size={14} />
+                  <strong>Proof of Location Threat Model</strong>
+                  <InfoTip title="Transparency & Security Details">
+                    {policy?.threatModelSummary ||
+                      'SPRAY.LAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB landmarks, and optional ES256 WebAuthn Passkeys. Client sensors remain vulnerable to dedicated hardware replay rigs on public plots; enable Passkeys and ORB checks on high-value parcels.'}
+                  </InfoTip>
+                </div>
+                <p>
+                  Camera, motion, GPS, ORB landmarks &amp; optional Passkeys verify physical
+                  presence (tap <strong>i</strong> for full security notes).
+                </p>
+              </div>
+
+              <div className="info-guide-footer">
+                {typeof onOpenWelcome === 'function' && (
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    data-testid="info-reopen-intro-btn"
+                    onClick={() => {
+                      onClose?.();
+                      onOpenWelcome();
+                    }}
+                  >
+                    <XeroIcon emoji="👋" size={12} /> Intro Walkthrough
+                  </button>
+                )}
+                <span className="info-footnote">
+                  SPRAY.LAND Voxel Spray Can · Audiowide (SIL OFL 1.1) · Xero Emoji by Max Infeld
+                  (CC BY 4.0)
+                </span>
+              </div>
+            </div>
+          )}
+
+          {tab === 'terms' && (
+            <div className="info-tab-stack">
+              <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
+                <XeroIcon emoji="📜" size={14} /> Version {policy?.termsVersion}
+              </div>
+              {(policy?.termsText || []).map((line, i) => (
+                <div key={i} className="card" style={{ padding: '10px 12px', color: 'var(--text)' }}>
+                  {line}
+                </div>
+              ))}
+              <div className="card" style={{ padding: '10px 12px', color: 'var(--muted)', fontSize: 12 }}>
+                <strong>Limited Terms Rules:</strong> Title {policy?.titleMin}–{policy?.titleMax}{' '}
+                chars; Description {policy?.descriptionMin}–{policy?.descriptionMax} chars (max{' '}
+                {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs,
+                scams, or hate speech.
+              </div>
+              <div className="card" style={{ padding: '10px 12px', color: 'var(--muted)', fontSize: 12 }}>
+                <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong>{' '}
+                Every sale allocates <strong>5% Platform</strong>, <strong>3% Land Steward</strong>,{' '}
+                <strong>2% Human Contributor Pool</strong> (&ge;3 voxels IRL), and{' '}
+                <strong>90% Net Seller</strong>. Lands minted from manual human Mobile AR art are
+                permanently owned with no expiry timer and never recycle. Lands made first without
+                physical human interaction carry a timer (<strong>72 hours</strong> for AI agent
+                lands, even with 3D models placed; <strong>28 days</strong> for human map-drawn
+                lands) until a human visits in person on Mobile AR and adds art to fully mint &amp;
+                permanently own them. Unvisited lands are archived and destroyed when their timer
+                expires, consumed free slots without human users do not reopen, and owners receive a
+                notification <strong>3 hours</strong> before expiry.{' '}
                 <a
                   href="?archive=1"
-                  className="btn btn-sm btn-primary"
-                  data-testid="info-open-archive-link"
+                  style={{ color: 'var(--accent)', fontWeight: 600 }}
+                  data-testid="terms-open-archive-link"
                   onClick={(e) => {
                     if (typeof onOpenArchive === 'function') {
                       e.preventDefault();
@@ -881,231 +986,157 @@ export default function InfoTermsModal({
                     }
                   }}
                 >
-                  <XeroIcon emoji="🗄️" size={13} /> Open Land Archive
+                  View Land Archive ↗
                 </a>
-                <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                  Browse all archived &amp; reclaimed lands and their preserved 3D snapshots.
-                </span>
+              </div>
+              <div className="card" style={{ padding: '10px 12px', color: 'var(--muted)', fontSize: 12 }}>
+                <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}
+                {Array.isArray(policy?.takedownAndDisputePolicy)
+                  ? policy.takedownAndDisputePolicy.join(' ')
+                  : policy?.takedownAndDisputePolicy ||
+                    'SPRAY.LAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history.'}
               </div>
             </div>
+          )}
 
-            <div className="card info-simple-card" style={{ borderColor: 'rgba(255, 209, 102, 0.25)' }}>
-              <div className="info-simple-title">
-                <XeroIcon emoji="🛡️" size={15} />
-                <strong>Proof of Location Threat Model</strong>
-                <InfoTip title="Transparency & Security Details">
-                  {policy?.threatModelSummary ||
-                    'SPRAY.LAND combines live camera frames, optical flow, gyroscope motion, GPS/geohash checks, server-verified binary ORB landmarks, and optional ES256 WebAuthn Passkeys. Client sensors remain vulnerable to dedicated hardware replay rigs on public plots; enable Passkeys and ORB checks on high-value parcels.'}
-                </InfoTip>
-              </div>
-              <p>
-                Camera, motion, GPS, ORB landmarks, and optional Passkeys verify physical presence
-                (click <strong>i</strong> for full security notes).
-              </p>
-            </div>
+          {tab === 'account' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>
+              <MeasurementUnitSetting />
 
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingTop: 2 }}>
-              {typeof onOpenWelcome === 'function' && (
-                <button
-                  type="button"
-                  className="btn btn-xs"
-                  data-testid="info-reopen-intro-btn"
-                  onClick={() => {
-                    onClose?.();
-                    onOpenWelcome();
-                  }}
-                >
-                  <XeroIcon emoji="👋" size={12} /> Intro Walkthrough
-                </button>
-              )}
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                Brand: SPRAY.LAND Voxel Spray Can · Typeface: Audiowide (SIL OFL 1.1) · Icons: Xero
-                Emoji by Max Infeld (CC BY 4.0)
-              </span>
-            </div>
-          </div>
-        )}
-
-        {tab === 'terms' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.55 }}>
-            <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-              <XeroIcon emoji="📜" size={14} /> Version {policy?.termsVersion}
-            </div>
-            {(policy?.termsText || []).map((line, i) => (
-              <div key={i} className="card" style={{ padding: 11, color: 'var(--text)' }}>
-                {line}
-              </div>
-            ))}
-            <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
-              <strong>Limited Terms Rules:</strong> Title {policy?.titleMin}–{policy?.titleMax} chars;
-              Description {policy?.descriptionMin}–{policy?.descriptionMax} chars (max{' '}
-              {policy?.descriptionMaxWords} words); max {policy?.maxVoxels} voxels. No URLs, scams,
-              or hate speech.
-            </div>
-            <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
-              <strong>Marketplace &amp; Co-Creation Royalty Economics (5% / 3% / 2%):</strong> Every
-              sale allocates <strong>5% Platform</strong>, <strong>3% Land Steward</strong>,{' '}
-              <strong>2% Human Contributor Pool</strong> (&ge;3 voxels IRL), and{' '}
-              <strong>90% Net Seller</strong>. Lands minted from manual human Mobile AR art are
-              permanently owned with no expiry timer and never recycle. Lands made first without
-              physical human interaction carry a timer (<strong>72 hours</strong> for AI agent
-              lands, even with 3D models placed; <strong>28 days</strong> for human map-drawn
-              lands) until a human visits in person on Mobile AR and adds art to fully mint &amp;
-              permanently own them. Unvisited lands are archived and destroyed when their timer
-              expires, consumed free slots without human users do not reopen, and owners receive a
-              notification <strong>3 hours</strong> before expiry.{' '}
-              <a
-                href="?archive=1"
-                style={{ color: 'var(--accent)', fontWeight: 600 }}
-                data-testid="terms-open-archive-link"
-                onClick={(e) => {
-                  if (typeof onOpenArchive === 'function') {
-                    e.preventDefault();
-                    onClose?.();
-                    onOpenArchive('');
-                  }
-                }}
-              >
-                View Land Archive ↗
-              </a>
-            </div>
-            <div className="card" style={{ padding: 11, color: 'var(--muted)', fontSize: 12 }}>
-              <strong>Prohibited Content, Takedown &amp; Virtual Land Dispute Process:</strong>{' '}
-              {Array.isArray(policy?.takedownAndDisputePolicy)
-                ? policy.takedownAndDisputePolicy.join(' ')
-                : policy?.takedownAndDisputePolicy ||
-                  'SPRAY.LAND prohibits illegal content, harassment, impersonation, and unsafe physical-site lures. Verified property owners or safety reporters can request moderation review; admins suppress offending sculptures via visibility controls while preserving immutable on-chain history.'}
-            </div>
-          </div>
-        )}
-
-        {tab === 'account' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>
-            <MeasurementUnitSetting />
-
-            {!user ? (
-              <div className="card" style={{ textAlign: 'center' }}>
-                <p style={{ color: 'var(--muted)', marginTop: 0 }}>
-                  Sign in with Google to receive minted land &amp; sculptures in your wallet.
-                </p>
-                <button type="button" className="btn btn-primary" onClick={onRequestLogin}>
-                  <XeroIcon emoji="🔐" size={16} /> Sign in with Google
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
-                    <div>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        <UserHandleBadge user={user} fallback="Creator" size="md" />
-                      </div>
-                      <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
-                        {user.email}
-                      </div>
-                    </div>
-                    {onOpenProfile && (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={() => {
-                          onClose?.();
-                          onOpenProfile();
-                        }}
-                      >
-                        <XeroIcon emoji="👤" size={13} /> Edit Profile &amp; Public Page
-                      </button>
-                    )}
-                  </div>
-                  {user.bio && (
-                    <div style={{ marginTop: 8, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.4 }}>
-                      {user.bio}
-                    </div>
-                  )}
-                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
-                    Embedded Robinhood Chain Wallet:
-                  </div>
-                  <div
-                    className="mono"
-                    style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)' }}
-                  >
-                    {user.walletAddress}
-                  </div>
+              {!user ? (
+                <div className="card" style={{ textAlign: 'center' }}>
+                  <p style={{ color: 'var(--muted)', marginTop: 0 }}>
+                    Sign in with Google to receive minted land &amp; sculptures in your wallet.
+                  </p>
+                  <button type="button" className="btn btn-primary" onClick={onRequestLogin}>
+                    <XeroIcon emoji="🔐" size={16} /> Sign in with Google
+                  </button>
                 </div>
-
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="field-label">
-                    <span>
-                      Custom EVM Payout Address{' '}
-                      <InfoTip title="External Payout Wallet">
-                        Leave blank to use your embedded wallet. Saving an external address asks your wallet to sign a free message proving you control it (no gas, no transaction). For already-minted NFTs, open any
-                        sculpture you own to transfer it or download its <code>.glb</code> file.
-                      </InfoTip>
-                    </span>
-                  </div>
-                  <input
-                    className="input mono"
-                    value={payoutInput}
-                    onChange={(e) => setPayoutInput(e.target.value)}
-                    placeholder="0x... (optional)"
-                  />
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={savingPayout}
-                      onClick={savePayout}
+              ) : (
+                <>
+                  <div className="card">
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        gap: 8,
+                        flexWrap: 'wrap'
+                      }}
                     >
-                      <XeroIcon emoji="✅" size={15} /> Save Recipient
-                    </button>
-                    <button type="button" className="btn" disabled={exportBusy} onClick={revealKey}>
-                      <XeroIcon emoji="🔑" size={15} /> Export Embedded Key
-                    </button>
-                    {needsPasskey && (
+                      <div>
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          <UserHandleBadge user={user} fallback="Creator" size="md" />
+                        </div>
+                        <div className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                          {user.email}
+                        </div>
+                      </div>
+                      {onOpenProfile && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => {
+                            onClose?.();
+                            onOpenProfile();
+                          }}
+                        >
+                          <XeroIcon emoji="👤" size={13} /> Edit Profile &amp; Public Page
+                        </button>
+                      )}
+                    </div>
+                    {user.bio && (
+                      <div style={{ marginTop: 8, fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.4 }}>
+                        {user.bio}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+                      Embedded Robinhood Chain Wallet:
+                    </div>
+                    <div
+                      className="mono"
+                      style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)' }}
+                    >
+                      {user.walletAddress}
+                    </div>
+                  </div>
+
+                  <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div className="field-label">
+                      <span>
+                        Custom EVM Payout Address{' '}
+                        <InfoTip title="External Payout Wallet">
+                          Leave blank to use your embedded wallet. Saving an external address asks
+                          your wallet to sign a free message proving you control it (no gas, no
+                          transaction). For already-minted NFTs, open any sculpture you own to
+                          transfer it or download its <code>.glb</code> file.
+                        </InfoTip>
+                      </span>
+                    </div>
+                    <input
+                      className="input mono"
+                      value={payoutInput}
+                      onChange={(e) => setPayoutInput(e.target.value)}
+                      placeholder="0x... (optional)"
+                    />
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         className="btn btn-primary"
-                        disabled={exportBusy}
-                        onClick={enrollPasskeyForExport}
+                        disabled={savingPayout}
+                        onClick={savePayout}
                       >
-                        <XeroIcon emoji="🔐" size={15} /> Register Passkey
+                        <XeroIcon emoji="✅" size={15} /> Save Recipient
                       </button>
+                      <button type="button" className="btn" disabled={exportBusy} onClick={revealKey}>
+                        <XeroIcon emoji="🔑" size={15} /> Export Embedded Key
+                      </button>
+                      {needsPasskey && (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={exportBusy}
+                          onClick={enrollPasskeyForExport}
+                        >
+                          <XeroIcon emoji="🔐" size={15} /> Register Passkey
+                        </button>
+                      )}
+                    </div>
+                    {statusMsg && (
+                      <div
+                        className="mono settings-inline-saved"
+                        data-testid="account-settings-saved"
+                        role="status"
+                      >
+                        {statusMsg}
+                      </div>
+                    )}
+                    {exportedKey && (
+                      <div
+                        className="mono"
+                        style={{
+                          fontSize: 11,
+                          wordBreak: 'break-all',
+                          padding: 8,
+                          borderRadius: 8,
+                          background: 'rgba(255, 209, 102, 0.1)',
+                          border: '1px solid rgba(255, 209, 102, 0.35)',
+                          color: 'var(--accent-gold)'
+                        }}
+                      >
+                        Private Key (keep secret): {exportedKey}
+                      </div>
                     )}
                   </div>
-                  {statusMsg && (
-                    <div
-                      className="mono settings-inline-saved"
-                      data-testid="account-settings-saved"
-                      role="status"
-                    >
-                      {statusMsg}
-                    </div>
-                  )}
-                  {exportedKey && (
-                    <div
-                      className="mono"
-                      style={{
-                        fontSize: 11,
-                        wordBreak: 'break-all',
-                        padding: 8,
-                        borderRadius: 8,
-                        background: 'rgba(255, 209, 102, 0.1)',
-                        border: '1px solid rgba(255, 209, 102, 0.35)',
-                        color: 'var(--accent-gold)'
-                      }}
-                    >
-                      Private Key (keep secret): {exportedKey}
-                    </div>
-                  )}
-                </div>
 
-                <button type="button" className="btn btn-danger" onClick={onLogout}>
-                  <XeroIcon emoji="🚪" size={16} /> Sign Out
-                </button>
-              </>
-            )}
-          </div>
-        )}
+                  <button type="button" className="btn btn-danger" onClick={onLogout}>
+                    <XeroIcon emoji="🚪" size={16} /> Sign Out
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

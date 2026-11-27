@@ -27,8 +27,7 @@ import {
   loadBoolPreference,
   loadLocalDraft,
   saveBoolPreference,
-  SPRAY_BRUSH_GUIDE_SEEN_KEY,
-  TUTORIAL_SEEN_KEY
+  SPRAY_BRUSH_GUIDE_SEEN_KEY
 } from '../utils/clipboard.js';
 import { markModalOpenedFromPointerUp } from '../utils/modalBackdropGuard.js';
 import { shouldAutoFadeOtherArt } from '../utils/arLandGuidance.js';
@@ -59,7 +58,6 @@ import ARLandInspectorPanel, {
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import CameraFirstToolsPrompt from './studio/CameraFirstToolsPrompt.jsx';
 import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
-import FirstRunTutorialModal from './studio/FirstRunTutorialModal.jsx';
 import MobileCatalogSearchModal from './studio/MobileCatalogSearchModal.jsx';
 import MobileMapSheet from './studio/MobileMapSheet.jsx';
 import MobileParcelVisitView from './studio/MobileParcelVisitView.jsx';
@@ -85,8 +83,7 @@ export default function MobileStudio({
   user,
   onUserUpdate,
   onLogout,
-  isWelcomeOpen = false,
-  skipTutorialSignal = 0
+  isWelcomeOpen = false
 }) {
   const initialDraftRef = useRef(undefined);
   if (initialDraftRef.current === undefined) {
@@ -140,16 +137,6 @@ export default function MobileStudio({
   const [profileHandle, setProfileHandle] = useState(() =>
     parseProfileParamFromLocation(typeof window !== 'undefined' ? window.location.search : '')
   );
-  const [tutorialOpen, setTutorialOpen] = useState(
-    () => !loadBoolPreference(TUTORIAL_SEEN_KEY, false)
-  );
-  const [handledSkipSignal, setHandledSkipSignal] = useState(skipTutorialSignal);
-  if (skipTutorialSignal !== handledSkipSignal) {
-    setHandledSkipSignal(skipTutorialSignal);
-    if (skipTutorialSignal > 0 && tutorialOpen) {
-      setTutorialOpen(false);
-    }
-  }
   const [arSelectHint, setArSelectHint] = useState('');
   const [preferredDrawLandId, setPreferredDrawLandId] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
@@ -1409,8 +1396,6 @@ export default function MobileStudio({
     ? `archive:${archiveInitialId || 'all'}`
     : sprayBrushGuideOpen
     ? 'spray-guide'
-    : tutorialOpen && !isWelcomeOpen && !parcelVisit
-    ? 'tutorial'
     : dockOpen
     ? 'dock'
     : isInteractingWithLand
@@ -1478,10 +1463,6 @@ export default function MobileStudio({
       }
       if (sprayBrushGuideOpen) {
         setSprayBrushGuideOpen(false);
-        return true;
-      }
-      if (tutorialOpen) {
-        setTutorialOpen(false);
         return true;
       }
       if (dockOpen) {
@@ -2142,7 +2123,6 @@ export default function MobileStudio({
           onOpenAgentHandoff={openAgentPromptModal}
           onOpenLogin={() => setLoginOpen(true)}
           voxels={brush.voxels}
-          onOpenTutorial={() => setTutorialOpen(true)}
           onOpenInfo={() => {
             setInfoInitialTab('guide');
             setInfoOpen(true);
@@ -2317,7 +2297,6 @@ export default function MobileStudio({
 
         {!cameraFirstToolsSeen &&
           !isWelcomeOpen &&
-          !tutorialOpen &&
           !parcelVisit &&
           !hasFullscreenOverlay &&
           !isInteractingWithLand &&
@@ -2515,16 +2494,7 @@ export default function MobileStudio({
         </div>
       )}
 
-      {!isWelcomeOpen && !parcelVisit && tutorialOpen && (
-        <FirstRunTutorialModal
-          onClose={(dontShow) => {
-            if (dontShow) saveBoolPreference(TUTORIAL_SEEN_KEY, true);
-            setTutorialOpen(false);
-          }}
-        />
-      )}
-
-      {sprayBrushGuideOpen && !isWelcomeOpen && !parcelVisit && !tutorialOpen && (
+      {sprayBrushGuideOpen && !isWelcomeOpen && !parcelVisit && (
         <SprayBrushIntroModal onClose={() => setSprayBrushGuideOpen(false)} />
       )}
 
@@ -2740,7 +2710,6 @@ export default function MobileStudio({
             }
             brush.stopBrushPainting();
             setDockOpen(false);
-            setTutorialOpen(false);
             setArSelectHint('');
             setArViewSession({
               source: 'plot',
@@ -2775,7 +2744,6 @@ export default function MobileStudio({
               sculptures: parcelVisit?.sculptures || []
             };
             setParcelVisit(null);
-            setTutorialOpen(false);
             setPreferredDrawLandId(visitedParcel?.parcelId || '');
             brush.setMode('draw');
             maybeShowSprayBrushGuide();
