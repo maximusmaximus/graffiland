@@ -2381,6 +2381,28 @@ export function useVoxelBrush({
     ]);
   }, [applyVoxelBatch, assertOriginUnblockedForPaint, ensureToolUsable, surfaceAnchor]);
 
+  const drawAtCenter = useCallback(() => {
+    const curTool = toolRef.current === 'pencil' ? 'pencil' : 'brush';
+    if (!ensureToolUsable(curTool)) return false;
+    if (!assertOriginUnblockedForPaint()) return false;
+    if (modeRef.current === 'transform') {
+      commitTransformAndExit('draw', curTool);
+    } else if (modeRef.current !== 'draw') {
+      setMode('draw');
+      modeRef.current = 'draw';
+    }
+    const target = computeTargetVoxel(false, null);
+    if (!target) return false;
+    applyVoxelAction(target);
+    return true;
+  }, [
+    applyVoxelAction,
+    assertOriginUnblockedForPaint,
+    commitTransformAndExit,
+    computeTargetVoxel,
+    ensureToolUsable
+  ]);
+
   const handleCanvasPointerDown = useCallback(
     (e) => {
       activeCanvasPointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -2735,6 +2757,7 @@ export function useVoxelBrush({
     handleKeyPointerCancel,
     selectSurfaceAtScreenPoint,
     seedVoxelAtAnchor,
+    drawAtCenter,
     handleCanvasPointerDown,
     handleCanvasPointerMove,
     handleCanvasPointerCancel,

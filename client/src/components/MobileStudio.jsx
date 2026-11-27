@@ -2052,9 +2052,15 @@ export default function MobileStudio({
         cameraHidden={Boolean(catalogSearchOpen)}
         mode={brush.mode}
         modeRef={brush.modeRef}
+        tool={brush.tool}
         toolRef={brush.toolRef}
+        blockSize={brush.blockSize}
         blockSizeRef={brush.blockSizeRef}
+        color={brush.color}
         colorRef={brush.colorRef}
+        reachMeters={brush.reachMeters}
+        surfaceAnchor={brush.surfaceAnchor}
+        painting={brush.painting}
         voxelsRef={brush.voxelsRef}
         paintingRef={brush.paintingRef}
         strokeDeviceOriginRef={brush.strokeDeviceOriginRef}
@@ -2097,6 +2103,10 @@ export default function MobileStudio({
         onCanvasPointerMove={brush.handleCanvasPointerMove}
         onCanvasPointerUp={brush.handleCanvasPointerUp}
         onCanvasPointerCancel={brush.handleCanvasPointerCancel}
+        onSetCenterSurface={() => brush.selectSurfaceAtScreenPoint()}
+        onDrawAtCenter={brush.drawAtCenter}
+        onStartCenterBrushHold={() => brush.startContinuousHoldTool('brush')}
+        onStopCenterBrushHold={brush.stopBrushPainting}
       />
 
       <div
