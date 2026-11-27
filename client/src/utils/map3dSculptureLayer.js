@@ -14,6 +14,7 @@ import {
   enforceCrispTexturesAndShading,
   loadCustomModelObject
 } from './customModelLoader.js';
+import { resolveTerrainGroundMeters } from './map3dProjection.js';
 
 const ROTATION_X_90 = new THREE.Matrix4().makeRotationAxis(
   new THREE.Vector3(1, 0, 0),
@@ -684,9 +685,10 @@ export function createSculptureThreeLayer({
       for (const entry of entries.values()) {
         if (!entry.loaded || !entry.container || !entry.transform) continue;
         const t = entry.transform;
+        const groundAlt = resolveTerrainGroundMeters(mapInstance, t.lng, t.lat);
         const merc = maplibregl.MercatorCoordinate.fromLngLat(
           [t.lng, t.lat],
-          t.altitudeMeters
+          t.altitudeMeters + groundAlt
         );
         const meterScale = merc.meterInMercatorCoordinateUnits();
         if (!Number.isFinite(meterScale) || meterScale <= 0) continue;

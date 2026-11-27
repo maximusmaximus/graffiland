@@ -13,6 +13,22 @@ function resolveMercatorMatrix(map) {
 }
 
 /**
+ * Queries active MapLibre 3D terrain elevation (in exaggerated meters) at [lng, lat]
+ * so glowing 3D land wireframes and Three.js sculptures sit flush on top of terrain hills/valleys
+ * rather than sinking underground when `setTerrain` is enabled.
+ */
+export function resolveTerrainGroundMeters(map, lng, lat) {
+  if (!map || typeof map.queryTerrainElevation !== 'function') return 0;
+  try {
+    if (typeof map.getTerrain === 'function' && !map.getTerrain()) return 0;
+    const elev = map.queryTerrainElevation([Number(lng), Number(lat)], { exaggerated: true });
+    return Number.isFinite(elev) ? elev : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Projects a 3D [lng, lat, altitudeMeters] coordinate onto screen CSS pixel coordinates
  * matching MapLibre GL's current camera transform, strictly culling points behind the camera.
  */
@@ -20,7 +36,9 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
   if (!map || !Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
     return { x: 0, y: 0, depth: 0, visible: false };
   }
-  const alt = Number(altitudeMeters || 0);
+  const relAlt = Number(altitudeMeters || 0);
+  const groundAlt = resolveTerrainGroundMeters(map, lng, lat);
+  const alt = relAlt + groundAlt;
   const canvas = map.getCanvas?.();
   const width = canvas?.clientWidth || canvas?.width || 0;
   const height = canvas?.clientHeight || canvas?.height || 0;
@@ -119,14 +137,14 @@ export function projectLngLatAltToScreen(map, maplibregl, lng, lat, altitudeMete
     }
     const pitchDeg = Number(map.getPitch?.() || 0);
     const fallbackDepth = pitchDeg > 1 ? -pt.y : 0;
-    if (alt === 0) {
+    if (relAlt === 0) {
       return { x: pt.x, y: pt.y, depth: fallbackDepth, visible: true };
     }
     const pitchRad = (pitchDeg * Math.PI) / 180;
     const zoom = map.getZoom?.() || 14;
     const cosLat = Math.max(0.1, Math.cos((Number(lat) * Math.PI) / 180));
     const metersPerPixel = (40075016.686 * cosLat) / (512 * Math.pow(2, zoom));
-    const pxLift = (alt / Math.max(0.01, metersPerPixel)) * Math.sin(pitchRad);
+    const pxLift = (relAlt / Math.max(0.01, metersPerPixel)) * Math.sin(pitchRad);
     return { x: pt.x, y: pt.y - pxLift, depth: fallbackDepth, visible: true };
   } catch {
     return { x: 0, y: 0, depth: 0, visible: false };
