@@ -162,6 +162,7 @@ export default function AddLandItemModal({
   onSculptureUploaded = null,
   onSelectSculpture = null,
   onOpenLandManagement = null,
+  onRequestLogin = null,
   onClose
 }) {
   const [itemFormat, setItemFormat] = useState('glb');
@@ -439,6 +440,13 @@ export default function AddLandItemModal({
 
   async function handlePlaceCatalogItem(item) {
     if (!item) return;
+    if (!user?.id) {
+      const landDisplay = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+      setStatusIsError(true);
+      setStatusMsg(`Sign in with Google to place "${item.title}" on "${landDisplay}".`);
+      onRequestLogin?.();
+      return;
+    }
     if (isFrozen) {
       setStatusIsError(true);
       setStatusMsg('This land is frozen. Unfreeze it first to place a new 3D item.');

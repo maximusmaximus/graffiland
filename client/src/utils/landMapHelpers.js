@@ -772,3 +772,18 @@ export function isLandOwnedByUser(land, { user = null, ownedParcelIds = [] } = {
 
   return false;
 }
+
+/**
+ * Determines whether a land parcel is open for public item adding (not frozen,
+ * not requiring owner approval, and not expired/archived).
+ * @param {any} parcel
+ * @returns {boolean}
+ */
+export function isLandPubliclyAddable(parcel) {
+  if (!parcel || typeof parcel !== 'object') return false;
+  const isFrozen = Boolean(parcel.frozen || parcel.settings?.frozen);
+  const requiresApproval = Boolean(parcel.requireApproval || parcel.settings?.requireApproval);
+  const status = String(parcel.stewardStatus || '').toLowerCase();
+  if (status === 'expired' || status === 'archived') return false;
+  return !isFrozen && !requiresApproval;
+}

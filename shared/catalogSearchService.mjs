@@ -458,6 +458,59 @@ function attachApiOriginToItem(entry, apiOrigin = '') {
   };
 }
 
+function createSeededRng(seedStr) {
+  let h = 2166136261 >>> 0;
+  const s = String(seedStr || '');
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  let state = h || 0x9e3779b9;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pickRandomSample(list, count, rng) {
+  if (!Array.isArray(list) || list.length === 0 || count <= 0) return [];
+  const n = list.length;
+  const take = Math.min(n, count);
+  const chosenIndices = new Set();
+  const out = [];
+  // Fast collision-free sampling without cloning huge 6k-element arrays
+  let attempts = 0;
+  while (out.length < take && attempts < take * 12) {
+    attempts += 1;
+    const idx = Math.floor(rng() * n);
+    if (!chosenIndices.has(idx)) {
+      chosenIndices.add(idx);
+      out.push(list[idx]);
+    }
+  }
+  if (out.length < take) {
+    for (let i = 0; i < n && out.length < take; i += 1) {
+      if (!chosenIndices.has(i)) {
+        chosenIndices.add(i);
+        out.push(list[i]);
+      }
+    }
+  }
+  return out;
+}
+
+function shuffleArrayInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
 /**
  * Searches across maximusmaximus/simready-pile, maximusmaximus/pixels, and
  * maximusmaximus/xeroemoji-pile, returning ranked, preview-ready 3D catalog items.
@@ -466,6 +519,8 @@ export async function search3dAssetCatalog({
   query = '',
   source = 'all',
   limit = 12,
+  random = false,
+  seed = '',
   apiOrigin = '',
   fetchImpl = globalThis.fetch
 } = {}) {
@@ -476,6 +531,10 @@ export async function search3dAssetCatalog({
   const cleanQuery = String(query || '').trim();
   const queryLower = cleanQuery.toLowerCase();
   const queryTokens = queryLower.split(/[\s,]+/).filter(Boolean);
+  const isRandomMode =
+    Boolean(random) &&
+    String(random).toLowerCase() !== 'false' &&
+    String(random) !== '0';
 
   const wantedSources =
     cleanSource === 'all' ? ['simready', 'pixels', 'xeroemoji'] : [cleanSource];
@@ -493,6 +552,55 @@ export async function search3dAssetCatalog({
     (sum, list) => sum + (Array.isArray(list) ? list.length : 0),
     0
   );
+
+  // Empty query + random mode -> return fresh random items balanced across requested sources
+  if (!cleanQuery && isRandomMode) {
+    const rng = seed ? createSeededRng(String(seed)) : Math.random;
+    const perSourceBase = Math.floor(clampedLimit / wantedSources.length);
+    let remainder = clampedLimit - perSourceBase * wantedSources.length;
+    const shuffledSources = shuffleArrayInPlace([...wantedSources], rng);
+    const chosen = [];
+    const chosenIds = new Set();
+
+    for (const src of shuffledSources) {
+      const want = perSourceBase + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder -= 1;
+      const sample = pickRandomSample(loadedBySource[src] || [], want, rng);
+      for (const item of sample) {
+        if (!chosenIds.has(item.id)) {
+          chosenIds.add(item.id);
+          chosen.push(item);
+        }
+      }
+    }
+
+    if (chosen.length < clampedLimit) {
+      const pool = wantedSources
+        .flatMap((src) => loadedBySource[src] || [])
+        .filter((item) => !chosenIds.has(item.id));
+      for (const extra of pickRandomSample(pool, clampedLimit - chosen.length, rng)) {
+        chosen.push(extra);
+      }
+    }
+
+    shuffleArrayInPlace(chosen, rng);
+
+    return {
+      query: '',
+      source: cleanSource,
+      randomized: true,
+      totalMatches: totalCatalogCount,
+      totalCatalogCount,
+      sources: Object.values(CATALOG_SOURCES).map((s) => ({
+        id: s.id,
+        name: s.name,
+        repo: s.repo,
+        repoUrl: s.repoUrl,
+        count: loadedBySource[s.id]?.length || 0
+      })),
+      items: chosen.slice(0, clampedLimit).map((e) => attachApiOriginToItem(e, apiOrigin))
+    };
+  }
 
   // Empty query -> return balanced featured picks across requested sources
   if (!cleanQuery) {

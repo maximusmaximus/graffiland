@@ -3491,6 +3491,7 @@ export default function DesktopHub({
             setLandManageParcelId(pid || '');
             setLandManageOpen(true);
           }}
+          onRequestLogin={() => setLoginOpen(true)}
           onClose={() => setAddItemParcelId('')}
         />
       )}

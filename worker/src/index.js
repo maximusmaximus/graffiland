@@ -2695,17 +2695,21 @@ export default {
 
     if (pathname === '/api/catalog/search' && request.method === 'GET') {
       try {
+        const randomParam = String(url.searchParams.get('random') || '').trim().toLowerCase();
+        const isRandom = Boolean(randomParam && randomParam !== '0' && randomParam !== 'false');
         const result = await search3dAssetCatalog({
           query: url.searchParams.get('q') ?? url.searchParams.get('query') ?? '',
           source: url.searchParams.get('source') || 'all',
           limit: Number(url.searchParams.get('limit') || 12),
+          random: isRandom,
+          seed: url.searchParams.get('seed') || '',
           apiOrigin: url.origin
         });
         return new Response(JSON.stringify(result), {
           status: 200,
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'public, max-age=120',
+            'Cache-Control': isRandom ? 'no-store' : 'public, max-age=120',
             ...corsHeaders(request)
           }
         });

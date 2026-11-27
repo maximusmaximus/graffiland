@@ -461,11 +461,13 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/economy/splits${suffix}`);
   },
-  searchCatalog: ({ q = '', source = 'all', limit = 12 } = {}) => {
+  searchCatalog: ({ q = '', source = 'all', limit = 12, random = false, seed = '' } = {}) => {
     const qs = new URLSearchParams();
     if (q) qs.set('q', String(q));
     if (source && source !== 'all') qs.set('source', String(source));
     if (limit) qs.set('limit', String(limit));
+    if (random) qs.set('random', '1');
+    if (seed) qs.set('seed', String(seed));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/catalog/search${suffix}`);
   }
