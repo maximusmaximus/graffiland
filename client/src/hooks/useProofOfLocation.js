@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../utils/api.js';
+import {
+  CALIBRATION_MIN_SECTORS,
+  buildCalibrationLossDetails,
+  createCalibrationHealthState,
+  evaluateCalibrationReadiness,
+  isSessionOrbRelockMatch,
+  stepCalibrationHealthMonitor
+} from '../utils/arCalibrationManager.js';
 import {
   acquireRearCameraStream,
   flushVideoElement,
@@ -115,13 +123,14 @@ export function useProofOfLocation({
   const [sceneScan, setSceneScan] = useState({
     coveragePct: 0,
     scannedCount: 0,
-    targetCount: 9,
+    targetCount: CALIBRATION_MIN_SECTORS,
     sectors: Array(12).fill(false),
     cursorX: 0.5,
     cursorY: 0.5,
+    relYaw: 0,
     optimal: false,
     precisionMeters: 2.4,
-    hint: 'Move phone around scene'
+    hint: 'Pan phone slowly around your space'
   });
   const [scanBoxCollapsed, setScanBoxCollapsed] = useState(false);
   const [unmappedGrid, setUnmappedGrid] = useState(() => Array(48).fill(false));
@@ -133,6 +142,11 @@ export function useProofOfLocation({
     engine: 'Gyro+ORB'
   });
   const [mappingRestartPrompt, setMappingRestartPrompt] = useState(null);
+  const [calibrationState, setCalibrationState] = useState('calibrating'); // 'calibrating' | 'relocalizing' | 'calibrated' | 'lost'
+  const [calibrationLoss, setCalibrationLoss] = useState(null);
+  const [calibrationJustLocked, setCalibrationJustLocked] = useState(false);
+  const [calibrationStartedAt, setCalibrationStartedAt] = useState(() => Date.now());
+  const [calibrationElapsedTick, setCalibrationElapsedTick] = useState(0);
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [webxrSupported, setWebxrSupported] = useState(false);
@@ -144,6 +158,14 @@ export function useProofOfLocation({
   const lastUnmappedMaskRef = useRef('');
   const mappingCompletedNoticeShownRef = useRef(false);
   const mappingRestartPromptRef = useRef(null);
+  const calibrationStateRef = useRef('calibrating');
+  const calibrationHealthRef = useRef(createCalibrationHealthState());
+  const calibratedAnchorLocRef = useRef(null);
+  const lastOrientationEventTsRef = useRef(0);
+  const hasOrientationHardwareRef = useRef(false);
+  const lastLocationTsRef = useRef(0);
+  const orbRelockBusyRef = useRef(false);
+  const justLockedTimerRef = useRef(null);
   const leaveCheckpointRef = useRef(null);
   const pendingReturnCheckRef = useRef(false);
   const notifyMappingViewLeftRef = useRef(null);
@@ -160,6 +182,19 @@ export function useProofOfLocation({
   useEffect(() => {
     mappingRestartPromptRef.current = mappingRestartPrompt;
   }, [mappingRestartPrompt]);
+
+  useEffect(() => {
+    calibrationStateRef.current = calibrationState;
+  }, [calibrationState]);
+
+  useEffect(() => {
+    return () => {
+      if (justLockedTimerRef.current) {
+        clearTimeout(justLockedTimerRef.current);
+        justLockedTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     cameraReadyRef.current = cameraReady;
@@ -207,6 +242,7 @@ export function useProofOfLocation({
           : polRefined;
         setLocation(refined);
         locationRef.current = refined;
+        lastLocationTsRef.current = Date.now();
         setSensorBanner((prev) =>
           prev && /location|gps/i.test(prev) ? '' : prev
         );
@@ -801,13 +837,124 @@ export function useProofOfLocation({
     const initialVideoEl = videoRef.current;
     refreshCamera({ reason: 'initial', force: true });
 
+    let lastHealthCheckAt = 0;
     const samplerId = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const nowMs = Date.now();
+      const curCalState = calibrationStateRef.current;
       const checkPendingReturn = pendingReturnCheckRef.current && Boolean(leaveCheckpointRef.current);
+
+      // Periodic tick while calibrating so low-texture ORB fallback timer stays responsive
+      if (curCalState === 'calibrating') {
+        setCalibrationElapsedTick((n) => (n + 1) % 10000);
+      }
+
+      // Continuous lightweight health & silent ORB relocalization monitor while calibrated/relocalizing
+      if (
+        (curCalState === 'calibrated' || curCalState === 'relocalizing') &&
+        !mappingPausedBridgeRef.current?.current &&
+        !mappingRestartPromptRef.current
+      ) {
+        if (nowMs - lastHealthCheckAt >= 900) {
+          lastHealthCheckAt = nowMs;
+          const videoEl = videoRef.current;
+          const videoLive = Boolean(
+            videoEl &&
+              videoEl.readyState >= 2 &&
+              videoEl.videoWidth > 0 &&
+              !videoEl.paused
+          );
+          if (videoLive) {
+            polRef.current.sampleLightHealth(videoEl);
+          }
+
+          const hasSessionOrb = orbKeyframesRef.current.size > 0;
+          const healthResult = stepCalibrationHealthMonitor(calibrationHealthRef.current, {
+            nowMs,
+            isVisible: true,
+            cameraReady: cameraReadyRef.current && videoLive,
+            cameraRecovering: Boolean(inFlightCameraRef.current),
+            sceneContrast: polRef.current.sceneContrast,
+            horizonLuminance: polRef.current.horizonLuminance,
+            hasOrientationHardware: hasOrientationHardwareRef.current,
+            lastOrientationEventTs: lastOrientationEventTsRef.current,
+            webxrActive: webxrActiveRef.current,
+            magneticInterference: Boolean(orientationFusionRef.current?.magneticInterference),
+            anchorLocation: calibratedAnchorLocRef.current,
+            currentLocation: locationRef.current,
+            currentLocationTs: lastLocationTsRef.current,
+            hasSessionOrbKeyframes: hasSessionOrb,
+            orbRelockMatched: false
+          });
+
+          if (healthResult.status === 'relocalizing') {
+            if (calibrationStateRef.current !== 'relocalizing') {
+              calibrationStateRef.current = 'relocalizing';
+              setCalibrationState('relocalizing');
+            }
+            if (hasSessionOrb && videoLive && !orbRelockBusyRef.current) {
+              orbRelockBusyRef.current = true;
+              const sessionPack = {
+                descriptorDigest: 'session-local',
+                keyframes: Array.from(orbKeyframesRef.current.values())
+              };
+              orbTrackerRef.current
+                ?.matchLiveFrame(videoEl, sessionPack)
+                .then((matchRes) => {
+                  if (unmountedRef.current || calibrationStateRef.current !== 'relocalizing') return;
+                  if (isSessionOrbRelockMatch(matchRes)) {
+                    if (
+                      Number.isFinite(matchRes.poseCorrectionYawRad) &&
+                      Math.abs(matchRes.poseCorrectionYawRad) <= 0.45
+                    ) {
+                      orientationFusionRef.current.setOrbYawCorrectionRad(
+                        matchRes.poseCorrectionYawRad
+                      );
+                    }
+                    stepCalibrationHealthMonitor(calibrationHealthRef.current, {
+                      nowMs: Date.now(),
+                      orbRelockMatched: true
+                    });
+                    if (locationRef.current) {
+                      calibratedAnchorLocRef.current = { ...locationRef.current };
+                    }
+                    calibrationStateRef.current = 'calibrated';
+                    setCalibrationState('calibrated');
+                    setCalibrationLoss(null);
+                    setOrbStatus((prev) => ({
+                      ...prev,
+                      relocalizedInliers: matchRes.inlierCount || prev.relocalizedInliers,
+                      reprojErrPx:
+                        Number.isFinite(matchRes.reprojectionErrorPx)
+                          ? Math.round(matchRes.reprojectionErrorPx * 10) / 10
+                          : prev.reprojErrPx
+                    }));
+                  }
+                })
+                .catch(() => {})
+                .finally(() => {
+                  orbRelockBusyRef.current = false;
+                });
+            }
+          } else if (healthResult.status === 'lost' && healthResult.loss) {
+            calibrationStateRef.current = 'lost';
+            setCalibrationState('lost');
+            setCalibrationLoss(healthResult.loss);
+            mappingRestartPromptRef.current = healthResult.loss;
+            setMappingRestartPrompt(healthResult.loss);
+            setScanBoxCollapsed(false);
+            lastUnmappedMaskRef.current = '0'.repeat(48);
+            setUnmappedGrid(Array(48).fill(false));
+          }
+        }
+
+        if (!checkPendingReturn) return;
+      }
+
       if (mappingPausedBridgeRef.current?.current && !checkPendingReturn) return;
       if (mappingRestartPromptRef.current) return;
       const isAlreadyOptimal = polRef.current.getSceneCoverage().optimal;
-      if (isAlreadyOptimal && !checkPendingReturn) return;
+      if (isAlreadyOptimal && curCalState === 'calibrated' && !checkPendingReturn) return;
       if (
         videoRef.current &&
         videoRef.current.readyState >= 2 &&
@@ -818,30 +965,38 @@ export function useProofOfLocation({
         if (snap) {
           if (checkPendingReturn) {
             const checkpoint = leaveCheckpointRef.current;
-            const hasUsableVisual = Boolean(
-              polRef.current.sceneContrast >= 0.8 &&
-                snap.visualDHash &&
-                !/^0+$/.test(snap.visualDHash)
-            );
-            const waitedMs = checkpoint?.returnedAt ? Date.now() - checkpoint.returnedAt : 0;
-            if (!hasUsableVisual && waitedMs < 1600) {
-              return;
-            }
             pendingReturnCheckRef.current = false;
             leaveCheckpointRef.current = null;
             const moveCheck = polRef.current.evaluateMovementSince(checkpoint, {
               location: locationRef.current,
-              visualDHash: hasUsableVisual ? snap.visualDHash : ''
+              visualDHash: snap.visualDHash || ''
             });
             if (moveCheck.movedSubstantially) {
-              mappingRestartPromptRef.current = moveCheck;
-              setMappingRestartPrompt(moveCheck);
-              setScanBoxCollapsed(false);
-              lastUnmappedMaskRef.current = '0'.repeat(48);
-              setUnmappedGrid(Array(48).fill(false));
+              const lossDetails = buildCalibrationLossDetails('relocated', {
+                distanceMeters: moveCheck.distanceMeters
+              });
+              if (orbKeyframesRef.current.size > 0 && calibrationStateRef.current === 'calibrated') {
+                // Give session ORB a ~2.4s silent chance to confirm whether user is still in same room
+                calibrationHealthRef.current.relocalizingSinceMs = Date.now();
+                calibrationHealthRef.current.relocalizingReason = 'relocated';
+                calibrationHealthRef.current.relocalizingMeta = {
+                  distanceMeters: moveCheck.distanceMeters
+                };
+                calibrationStateRef.current = 'relocalizing';
+                setCalibrationState('relocalizing');
+              } else {
+                calibrationStateRef.current = 'lost';
+                setCalibrationState('lost');
+                setCalibrationLoss(lossDetails);
+                mappingRestartPromptRef.current = { ...moveCheck, ...lossDetails };
+                setMappingRestartPrompt({ ...moveCheck, ...lossDetails });
+                setScanBoxCollapsed(false);
+                lastUnmappedMaskRef.current = '0'.repeat(48);
+                setUnmappedGrid(Array(48).fill(false));
+              }
               return;
             }
-            if (isAlreadyOptimal) {
+            if (isAlreadyOptimal && calibrationStateRef.current === 'calibrated') {
               return;
             }
           }
@@ -1107,6 +1262,7 @@ export function useProofOfLocation({
           : polRefined;
         setLocation(refined);
         locationRef.current = refined;
+        lastLocationTsRef.current = Date.now();
         setSensorBanner((prev) =>
           prev && /location|gps/i.test(prev) ? '' : prev
         );
@@ -1152,14 +1308,26 @@ export function useProofOfLocation({
     const onAbsSensorReading = () => {
       if (!absSensor?.quaternion) return;
       absSensorActive = true;
+      lastOrientationEventTsRef.current = Date.now();
+      hasOrientationHardwareRef.current = true;
       orientationFusionRef.current.updateFromAbsoluteSensor(absSensor.quaternion, getScreenAngle());
       const headingDeg = orientationFusionRef.current.getTrueHeadingDeg();
+      const alpha = (360 - headingDeg) % 360;
+      const beta = rawOrientationRef.current?.beta ?? 90;
+      const gamma = rawOrientationRef.current?.gamma ?? 0;
       rawOrientationRef.current = {
-        alpha: (360 - headingDeg) % 360,
-        beta: rawOrientationRef.current?.beta ?? 90,
-        gamma: rawOrientationRef.current?.gamma ?? 0,
+        alpha,
+        beta,
+        gamma,
         absolute: true
       };
+      polRef.current.recordFusedHeading({
+        headingDeg,
+        pitchDeg: beta - 90,
+        source: 'absolute-sensor',
+        trueNorthLocked: true
+      });
+      polRef.current.recordGyro(alpha, beta, gamma);
       setGyroFallbackActive(false);
     };
 
@@ -1181,6 +1349,8 @@ export function useProofOfLocation({
 
     const absOrientationHandler = (e) => {
       if (e.alpha === null && e.beta === null) return;
+      lastOrientationEventTsRef.current = Date.now();
+      hasOrientationHardwareRef.current = true;
       if (!absSensorActive) {
         orientationFusionRef.current.updateFromDeviceOrientation(
           {
@@ -1198,12 +1368,22 @@ export function useProofOfLocation({
         gamma: e.gamma || 0,
         absolute: true
       };
+      if (orientationFusionRef.current.initialized) {
+        polRef.current.recordFusedHeading({
+          headingDeg: orientationFusionRef.current.getTrueHeadingDeg(),
+          pitchDeg: (e.beta || 90) - 90,
+          source: orientationFusionRef.current.source,
+          trueNorthLocked: orientationFusionRef.current.trueNorthLocked
+        });
+      }
       setGyroFallbackActive(false);
       polRef.current.recordGyro(e.alpha, e.beta, e.gamma);
     };
 
     const orientationHandler = (e) => {
       if (e.alpha === null && e.beta === null) return;
+      lastOrientationEventTsRef.current = Date.now();
+      hasOrientationHardwareRef.current = true;
       orientationFusionRef.current.updateFromDeviceOrientation(e, getScreenAngle());
       rawOrientationRef.current = {
         alpha: e.alpha || 0,
@@ -1213,6 +1393,14 @@ export function useProofOfLocation({
         webkitCompassHeading: e.webkitCompassHeading,
         webkitCompassAccuracy: e.webkitCompassAccuracy
       };
+      if (orientationFusionRef.current.initialized) {
+        polRef.current.recordFusedHeading({
+          headingDeg: orientationFusionRef.current.getTrueHeadingDeg(),
+          pitchDeg: (e.beta || 90) - 90,
+          source: orientationFusionRef.current.source,
+          trueNorthLocked: orientationFusionRef.current.trueNorthLocked
+        });
+      }
       setGyroFallbackActive(false);
       polRef.current.recordGyro(e.alpha, e.beta, e.gamma);
     };
@@ -1350,9 +1538,21 @@ export function useProofOfLocation({
 
   const setWebxrState = useCallback(
     (active) => {
+      const wasActive = webxrActiveRef.current;
       const next = Boolean(active);
       webxrActiveRef.current = next;
+      polRef.current.setWebxrActive(next);
       setWebxrActive(next);
+      setSceneScan(polRef.current.getSceneCoverage());
+      if (wasActive && !next && calibrationStateRef.current === 'calibrated') {
+        if (orbKeyframesRef.current.size > 0) {
+          calibrationHealthRef.current.relocalizingSinceMs = Date.now();
+          calibrationHealthRef.current.relocalizingReason = 'webxr_lost';
+          calibrationHealthRef.current.relocalizingMeta = {};
+          calibrationStateRef.current = 'relocalizing';
+          setCalibrationState('relocalizing');
+        }
+      }
       syncSensorStatus();
     },
     [syncSensorStatus]
@@ -1415,7 +1615,7 @@ export function useProofOfLocation({
       return;
     }
 
-    // Immediate GPS + orientation substantial-movement check (visual dHash checked on first fresh frame)
+    // Immediate accuracy-aware physical relocation check
     const immediateCheck = polRef.current.evaluateMovementSince(checkpoint, {
       location: locationRef.current,
       visualDHash: ''
@@ -1423,8 +1623,26 @@ export function useProofOfLocation({
     if (immediateCheck.movedSubstantially) {
       leaveCheckpointRef.current = null;
       pendingReturnCheckRef.current = false;
-      mappingRestartPromptRef.current = immediateCheck;
-      setMappingRestartPrompt(immediateCheck);
+      const lossDetails = buildCalibrationLossDetails('relocated', {
+        distanceMeters: immediateCheck.distanceMeters
+      });
+      if (orbKeyframesRef.current.size > 0 && calibrationStateRef.current === 'calibrated') {
+        calibrationHealthRef.current.relocalizingSinceMs = Date.now();
+        calibrationHealthRef.current.relocalizingReason = 'relocated';
+        calibrationHealthRef.current.relocalizingMeta = {
+          distanceMeters: immediateCheck.distanceMeters
+        };
+        calibrationStateRef.current = 'relocalizing';
+        setCalibrationState('relocalizing');
+        ensureCameraLiveRef.current?.({ reason: 'mapping_return_relocalizing', allowRestart: true });
+        return;
+      }
+      calibrationStateRef.current = 'lost';
+      setCalibrationState('lost');
+      setCalibrationLoss(lossDetails);
+      const mergedPrompt = { ...immediateCheck, ...lossDetails };
+      mappingRestartPromptRef.current = mergedPrompt;
+      setMappingRestartPrompt(mergedPrompt);
       setScanBoxCollapsed(false);
       lastUnmappedMaskRef.current = '0'.repeat(48);
       setUnmappedGrid(Array(48).fill(false));
@@ -1432,7 +1650,7 @@ export function useProofOfLocation({
       return;
     }
 
-    // Defer final visual-scene check until a fresh post-return camera frame arrives
+    // Defer secondary check until fresh post-return frame arrives (never interrupts unless GPS moved)
     leaveCheckpointRef.current = { ...checkpoint, returnedAt: Date.now() };
     pendingReturnCheckRef.current = true;
     const cov = polRef.current.getSceneCoverage();
@@ -1448,19 +1666,82 @@ export function useProofOfLocation({
   notifyMappingViewLeftRef.current = notifyMappingViewLeft;
   notifyMappingViewReturnedRef.current = notifyMappingViewReturned;
 
-  const prevSceneOptimalRef = useRef(Boolean(sceneScan?.optimal));
+  const orbWorkerSupported = typeof Worker !== 'undefined';
+  const calibrationReadiness = useMemo(
+    () =>
+      evaluateCalibrationReadiness({
+        cameraReady,
+        cameraFrames: Math.max(polStats.frames, polRef.current.cameraFrames || 0),
+        sceneContrast: polRef.current.sceneContrast || 0,
+        horizonLuminance: polRef.current.horizonLuminance ?? 128,
+        needsGyroTap,
+        orientationInitialized: Boolean(
+          orientationFusionRef.current?.initialized ||
+            rawOrientationRef.current ||
+            (polRef.current.gyroSamples || 0) > 0
+        ),
+        gyroSamples: Math.max(polStats.gyro, polRef.current.gyroSamples || 0),
+        gyroFallbackActive,
+        webxrActive,
+        scannedCount: sceneScan?.scannedCount || 0,
+        orbKeyframes: orbStatus?.keyframes || 0,
+        orbWorkerSupported,
+        elapsedScanningMs: Math.max(0, Date.now() - calibrationStartedAt),
+        gpsAccuracyM: location?.accuracy ?? null,
+        hasLocation: Boolean(location),
+        magneticInterference: Boolean(sensorStatus?.magneticInterference),
+        sweepHint: sceneScan?.hint
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      cameraReady,
+      polStats.frames,
+      polStats.gyro,
+      needsGyroTap,
+      gyroFallbackActive,
+      webxrActive,
+      sceneScan?.scannedCount,
+      sceneScan?.optimal,
+      sceneScan?.hint,
+      orbStatus?.keyframes,
+      orbWorkerSupported,
+      calibrationStartedAt,
+      calibrationElapsedTick,
+      location,
+      sensorStatus?.magneticInterference
+    ]
+  );
+
+  const prevCalibrationReadyRef = useRef(false);
   useEffect(() => {
-    const wasOptimal = prevSceneOptimalRef.current;
-    const isOptimal = Boolean(sceneScan?.optimal);
-    if (!wasOptimal && isOptimal) {
-      // Auto-close (collapse) the mapping window once 100% locked
+    const isSufficient = Boolean(calibrationReadiness.sufficient && !mappingRestartPrompt);
+    if (isSufficient && calibrationStateRef.current === 'calibrating') {
+      calibrationStateRef.current = 'calibrated';
+      setCalibrationState('calibrated');
+      setCalibrationLoss(null);
+      calibrationHealthRef.current = createCalibrationHealthState();
+      calibratedAnchorLocRef.current = locationRef.current ? { ...locationRef.current } : null;
       setScanBoxCollapsed(true);
-    } else if (wasOptimal && !isOptimal) {
-      // Auto-reopen whenever mapping unlocks and resync is needed
-      setScanBoxCollapsed(false);
+      setCalibrationJustLocked(true);
+      if (justLockedTimerRef.current) clearTimeout(justLockedTimerRef.current);
+      justLockedTimerRef.current = setTimeout(() => {
+        justLockedTimerRef.current = null;
+        setCalibrationJustLocked(false);
+      }, 1500);
+      prevCalibrationReadyRef.current = true;
+      return;
     }
-    prevSceneOptimalRef.current = isOptimal;
-  }, [sceneScan?.optimal]);
+
+    // Legacy direct-state sync compatibility (e.g. sceneScan.optimal set programmatically)
+    const wasReady = prevCalibrationReadyRef.current;
+    if (!wasReady && sceneScan?.optimal && !mappingRestartPrompt && calibrationReadiness.sufficient) {
+      setScanBoxCollapsed(true);
+      prevCalibrationReadyRef.current = true;
+    } else if (wasReady && (!sceneScan?.optimal || Boolean(mappingRestartPrompt))) {
+      setScanBoxCollapsed(false);
+      prevCalibrationReadyRef.current = false;
+    }
+  }, [calibrationReadiness.sufficient, mappingRestartPrompt, sceneScan?.optimal]);
 
   useEffect(() => {
     if (mappingRestartPrompt) {
@@ -1468,12 +1749,31 @@ export function useProofOfLocation({
     }
   }, [mappingRestartPrompt]);
 
+  const markCalibrationLost = useCallback((code = 'manual', meta = {}) => {
+    const loss = buildCalibrationLossDetails(code, meta);
+    calibrationStateRef.current = 'lost';
+    setCalibrationState('lost');
+    setCalibrationLoss(loss);
+    mappingRestartPromptRef.current = loss;
+    setMappingRestartPrompt(loss);
+    setScanBoxCollapsed(false);
+    lastUnmappedMaskRef.current = '0'.repeat(48);
+    setUnmappedGrid(Array(48).fill(false));
+  }, []);
+
   const restartSceneMapping = useCallback(
     async ({ reason = 'manual', refreshCameraFeed = true } = {}) => {
       leaveCheckpointRef.current = null;
       pendingReturnCheckRef.current = false;
       mappingRestartPromptRef.current = null;
       setMappingRestartPrompt(null);
+      setCalibrationLoss(null);
+      setCalibrationJustLocked(false);
+      calibrationHealthRef.current = createCalibrationHealthState();
+      calibratedAnchorLocRef.current = null;
+      calibrationStateRef.current = 'calibrating';
+      setCalibrationState('calibrating');
+      setCalibrationStartedAt(Date.now());
       mappingCompletedNoticeShownRef.current = false;
       invalidateScanPreviewCaches();
 
@@ -1529,6 +1829,8 @@ export function useProofOfLocation({
     [invalidateScanPreviewCaches, resetOrbKeyframes]
   );
 
+  const calibrationReady = calibrationState === 'calibrated';
+
   return {
     videoRef,
     polRef,
@@ -1581,6 +1883,12 @@ export function useProofOfLocation({
     lastScanUiRef,
     mappingRestartPrompt,
     setMappingRestartPrompt,
+    calibrationState,
+    calibrationReady,
+    calibrationReadiness,
+    calibrationLoss,
+    calibrationJustLocked,
+    markCalibrationLost,
     notifyMappingViewLeft,
     notifyMappingViewReturned,
     restartSceneMapping,

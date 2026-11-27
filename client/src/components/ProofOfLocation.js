@@ -1,3 +1,9 @@
+import {
+  CALIBRATION_MIN_SECTORS,
+  CALIBRATION_WEBXR_MIN_SECTORS,
+  computeRelocationThresholdMeters
+} from '../utils/arCalibrationManager.js';
+
 const POPCOUNT_4BIT = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
 
 /**
@@ -34,8 +40,14 @@ export function shortestAngleDeltaDeg(a, b) {
 }
 
 /**
- * Evaluates whether the mobile device moved substantially since `checkpoint` was captured
- * (physical GPS translation, large heading/pitch rotation, or major visual scene change).
+ * Evaluates whether the mobile device physically relocated since `checkpoint` was captured.
+ *
+ * Hardened against false positives:
+ * - Rotating or tilting the phone in place (e.g., looking down while checking Map/Publish)
+ *   NEVER invalidates calibration.
+ * - Single-frame perceptual hash jitter (auto-exposure, passersby) NEVER invalidates calibration.
+ * - Uses accuracy-aware physical GPS thresholds (`max(15m, min(35m, accuracy * 2.0))`) so
+ *   indoor/urban multipath jitter never causes spurious calibration drops.
  */
 export function evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs = Date.now() } = {}) {
   if (!checkpoint || !current) {
@@ -75,15 +87,15 @@ export function evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs =
       : null;
   const visualHammingBits = computeHexHammingDistance(checkpoint.visualDHash, current.visualDHash);
 
-  const accA = toFiniteNumber(checkpoint.accuracy) ?? 8;
-  const accB = toFiniteNumber(current.accuracy) ?? 8;
-  const gpsThresholdM = Math.max(6, Math.min(18, Math.max(accA, accB) * 0.85));
+  const accA = toFiniteNumber(checkpoint.accuracy) ?? 10;
+  const accB = toFiniteNumber(current.accuracy) ?? 10;
+  const gpsThresholdM = computeRelocationThresholdMeters(accA, accB);
 
   if (distanceMeters !== null && distanceMeters >= gpsThresholdM) {
     return {
       movedSubstantially: true,
       reason: 'gps_moved',
-      summary: `Device moved ~${Math.round(distanceMeters)}m — restart mapping for accurate placement.`,
+      summary: `Moved ~${Math.round(distanceMeters)}m — pan slowly to re-lock this spot.`,
       distanceMeters,
       yawDeltaDeg,
       pitchDeltaDeg,
@@ -92,45 +104,12 @@ export function evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs =
     };
   }
 
-  if (
-    (yawDeltaDeg !== null && yawDeltaDeg >= 55) ||
-    (pitchDeltaDeg !== null && pitchDeltaDeg >= 35)
-  ) {
-    return {
-      movedSubstantially: true,
-      reason: 'orientation_changed',
-      summary: 'Device orientation shifted substantially — restart mapping for this view.',
-      distanceMeters,
-      yawDeltaDeg,
-      pitchDeltaDeg,
-      visualHammingBits,
-      awayMs
-    };
-  }
-
-  if (visualHammingBits !== null && visualHammingBits >= 22) {
-    return {
-      movedSubstantially: true,
-      reason: 'scene_changed',
-      summary: 'Camera view changed substantially — restart mapping for the new space.',
-      distanceMeters,
-      yawDeltaDeg,
-      pitchDeltaDeg,
-      visualHammingBits,
-      awayMs
-    };
-  }
-
-  if (
-    awayMs >= 45000 &&
-    ((distanceMeters !== null && distanceMeters >= 4) ||
-      (yawDeltaDeg !== null && yawDeltaDeg >= 35) ||
-      (visualHammingBits !== null && visualHammingBits >= 16))
-  ) {
+  // Only flag away_stale after a long absence (>= 2 min) paired with meaningful physical travel (>= 10m)
+  if (awayMs >= 120000 && distanceMeters !== null && distanceMeters >= 10) {
     return {
       movedSubstantially: true,
       reason: 'away_stale',
-      summary: 'Device shifted while away — restart mapping to re-lock this space.',
+      summary: `Moved ~${Math.round(distanceMeters)}m while away — pan slowly to re-lock.`,
       distanceMeters,
       yawDeltaDeg,
       pitchDeltaDeg,
@@ -176,7 +155,9 @@ export class ProofOfLocationTracker {
     // Multi-angle Scene Analysis Coverage grid (4 yaw cols x 3 pitch rows = 12 sectors)
     this.scanCols = 4;
     this.scanRows = 3;
-    this.scanTargetCount = 9;
+    this.scanTargetCount = CALIBRATION_MIN_SECTORS;
+    this.webxrActive = false;
+    this.fusedHeading = null;
     this.scanSectors = new Array(this.scanCols * this.scanRows).fill(false);
     // Fine spatial grid for live grayscale-vs-color unmapped viewport preview
     this.fineCols = 16;
@@ -186,6 +167,25 @@ export class ProofOfLocationTracker {
     this.latestPose = null;
     this.sceneContrast = 0;
     this.latestGray = null;
+  }
+
+  setWebxrActive(active) {
+    this.webxrActive = Boolean(active);
+    this.scanTargetCount = this.webxrActive
+      ? CALIBRATION_WEBXR_MIN_SECTORS
+      : CALIBRATION_MIN_SECTORS;
+  }
+
+  recordFusedHeading({ headingDeg, pitchDeg = null, source = 'fused', trueNorthLocked = false } = {}) {
+    const h = toFiniteNumber(headingDeg);
+    if (h === null) return;
+    this.fusedHeading = {
+      headingDeg: h,
+      pitchDeg: toFiniteNumber(pitchDeg),
+      source,
+      trueNorthLocked: Boolean(trueNorthLocked),
+      t: Date.now()
+    };
   }
 
   /**
@@ -221,18 +221,26 @@ export class ProofOfLocationTracker {
       ? this.gpsSamples[this.gpsSamples.length - 1]
       : null;
     const cov = this.getSceneCoverage();
+    const fusedYaw = toFiniteNumber(this.fusedHeading?.headingDeg);
+    const fusedPitch = toFiniteNumber(this.fusedHeading?.pitchDeg);
     const gyroAlpha = toFiniteNumber(this.latestGyro?.alpha);
     const gyroBeta = toFiniteNumber(this.latestGyro?.beta);
     const poseYaw = toFiniteNumber(this.latestPose?.yawDeg);
     const posePitch = toFiniteNumber(this.latestPose?.pitchDeg);
+    const hasFused = fusedYaw !== null;
     const hasGyro = gyroAlpha !== null;
     return {
       lat: toFiniteNumber(location?.lat) ?? toFiniteNumber(latestGps?.lat),
       lng: toFiniteNumber(location?.lng) ?? toFiniteNumber(latestGps?.lng),
       accuracy: toFiniteNumber(location?.accuracy) ?? toFiniteNumber(latestGps?.accuracy),
-      yawSource: hasGyro ? 'gyro' : 'pose',
-      yawDeg: hasGyro ? gyroAlpha : poseYaw,
-      pitchDeg: hasGyro && gyroBeta !== null ? gyroBeta - 90 : posePitch,
+      yawSource: hasFused ? 'fused' : hasGyro ? 'gyro' : 'pose',
+      yawDeg: hasFused ? fusedYaw : hasGyro ? gyroAlpha : poseYaw,
+      pitchDeg:
+        hasFused && fusedPitch !== null
+          ? fusedPitch
+          : hasGyro && gyroBeta !== null
+            ? gyroBeta - 90
+            : posePitch,
       visualDHash: this.visualDHash || '',
       horizonLuminance: this.horizonLuminance,
       scannedCount: cov.scannedCount,
@@ -248,23 +256,30 @@ export class ProofOfLocationTracker {
     const latestGps = this.gpsSamples.length
       ? this.gpsSamples[this.gpsSamples.length - 1]
       : null;
+    const fusedYaw = toFiniteNumber(this.fusedHeading?.headingDeg);
+    const fusedPitch = toFiniteNumber(this.fusedHeading?.pitchDeg);
     const gyroAlpha = toFiniteNumber(this.latestGyro?.alpha);
     const gyroBeta = toFiniteNumber(this.latestGyro?.beta);
     const poseYaw = toFiniteNumber(this.latestPose?.yawDeg);
     const posePitch = toFiniteNumber(this.latestPose?.pitchDeg);
     const explicitYaw = toFiniteNumber(yawDeg);
     const explicitPitch = toFiniteNumber(pitchDeg);
+    const preferFused = checkpoint?.yawSource === 'fused' && fusedYaw !== null;
     const preferGyro = checkpoint?.yawSource === 'gyro' && gyroAlpha !== null;
     const current = {
       lat: toFiniteNumber(location?.lat) ?? toFiniteNumber(latestGps?.lat),
       lng: toFiniteNumber(location?.lng) ?? toFiniteNumber(latestGps?.lng),
       accuracy: toFiniteNumber(location?.accuracy) ?? toFiniteNumber(latestGps?.accuracy),
-      yawDeg: explicitYaw ?? (preferGyro ? gyroAlpha : poseYaw ?? gyroAlpha),
+      yawDeg:
+        explicitYaw ??
+        (preferFused ? fusedYaw : preferGyro ? gyroAlpha : fusedYaw ?? poseYaw ?? gyroAlpha),
       pitchDeg:
         explicitPitch ??
-        (preferGyro && gyroBeta !== null
-          ? gyroBeta - 90
-          : posePitch ?? (gyroBeta !== null ? gyroBeta - 90 : null)),
+        (preferFused && fusedPitch !== null
+          ? fusedPitch
+          : preferGyro && gyroBeta !== null
+            ? gyroBeta - 90
+            : posePitch ?? (gyroBeta !== null ? gyroBeta - 90 : null)),
       visualDHash: visualDHash !== null ? visualDHash : this.visualDHash || ''
     };
     return evaluateSubstantialDeviceMovement({ checkpoint, current, nowMs });
@@ -556,10 +571,55 @@ export class ProofOfLocationTracker {
       sectors: [...this.scanSectors],
       cursorX: this.latestPose?.cursorX ?? 0.5,
       cursorY: this.latestPose?.cursorY ?? 0.5,
+      relYaw: this.latestPose?.relYaw ?? 0,
       optimal,
       precisionMeters,
       hint
     };
+  }
+
+  /**
+   * Ultra-lightweight background camera health probe (contrast & luminance only)
+   * used while already calibrated to detect lens occlusion / dark stalls without heavy CPU.
+   */
+  sampleLightHealth(videoEl) {
+    if (
+      !videoEl ||
+      videoEl.readyState < 2 ||
+      !videoEl.videoWidth ||
+      !videoEl.videoHeight ||
+      !this.ctx
+    ) {
+      return null;
+    }
+    try {
+      this.ctx.drawImage(videoEl, 0, 0, 24, 18);
+      const data = this.ctx.getImageData(0, 0, 24, 18).data;
+      let lumSum = 0;
+      let edgeSum = 0;
+      let edgeSamples = 0;
+      const gray = new Float32Array(24 * 18);
+      for (let i = 0; i < 24 * 18; i += 1) {
+        const idx = i * 4;
+        const y = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+        gray[i] = y;
+        lumSum += y;
+      }
+      for (let y = 1; y < 17; y += 2) {
+        for (let x = 1; x < 23; x += 2) {
+          const c = gray[y * 24 + x];
+          edgeSum += Math.abs(c - gray[y * 24 + x + 1]) + Math.abs(c - gray[(y + 1) * 24 + x]);
+          edgeSamples += 2;
+        }
+      }
+      const meanLuminance = Math.round(lumSum / (24 * 18));
+      const sceneContrast = edgeSamples ? edgeSum / edgeSamples : 0;
+      this.horizonLuminance = meanLuminance;
+      this.sceneContrast = sceneContrast;
+      return { meanLuminance, sceneContrast };
+    } catch {
+      return null;
+    }
   }
 
   sampleCameraFrame(videoEl) {

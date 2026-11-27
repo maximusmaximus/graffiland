@@ -997,38 +997,233 @@ select {
   border-color: rgba(255, 62, 127, 0.36);
 }
 
-/* Bottom-Right Scene Analysis Coverage Window */
+/* AR Calibration Card (Front-and-Center during calibration/loss -> Bottom-Right Icon when locked) */
 .scene-scan-box {
   position: absolute;
   bottom: calc(max(18px, env(safe-area-inset-bottom)) + 64px);
   right: max(14px, env(safe-area-inset-right));
-  width: 146px;
-  padding: 8px;
-  border-radius: 12px;
-  background: rgba(8, 12, 22, 0.78);
-  border: 1px solid rgba(255, 209, 102, 0.48);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
-  z-index: 24;
+  width: 204px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(8, 12, 22, 0.84);
+  border: 1px solid rgba(255, 209, 102, 0.54);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.52);
+  z-index: 26;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  transition: border-color 0.2s ease, opacity 0.15s ease;
+  gap: 7px;
+  transition: border-color 0.22s ease, opacity 0.18s ease, box-shadow 0.22s ease;
+}
+
+.scene-scan-box.is-centered {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(306px, calc(100% - 34px));
+  padding: 14px 15px;
+  border-radius: 18px;
+  background: rgba(7, 11, 20, 0.86);
+  border: 1.5px solid rgba(0, 245, 212, 0.55);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  z-index: 30;
+  gap: 9px;
+  animation: calibration-card-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes calibration-card-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 .scene-scan-box.optimal {
-  border-color: rgba(0, 245, 212, 0.65);
+  border-color: rgba(0, 245, 212, 0.68);
+}
+
+.scene-scan-box.relocalizing {
+  border-color: rgba(56, 189, 248, 0.78);
+  box-shadow: 0 8px 24px rgba(56, 189, 248, 0.24);
 }
 
 .scene-scan-box.needs-restart {
-  width: 176px;
-  border-color: rgba(255, 110, 127, 0.85);
-  box-shadow: 0 8px 28px rgba(255, 62, 127, 0.28);
+  border-color: rgba(255, 110, 127, 0.88);
+  box-shadow: 0 14px 38px rgba(255, 62, 127, 0.3);
 }
 
 .scene-scan-box.collapsed {
   width: auto;
   padding: 5px 8px;
+}
+
+.scene-scan-box.collapsed.minimized-fab {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px 4px 5px;
+  border-radius: 999px;
+  background: rgba(8, 12, 22, 0.84);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.52);
+}
+
+.scene-scan-box.collapsed.minimized-fab.just-locked {
+  box-shadow: 0 0 0 3px rgba(0, 245, 212, 0.38), 0 10px 28px rgba(0, 245, 212, 0.28);
+}
+
+.calibration-minimized-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 245, 212, 0.45);
+  background: rgba(0, 245, 212, 0.14);
+  color: var(--text);
+  padding: 0;
+  cursor: pointer;
+}
+
+.scene-scan-box.relocalizing .calibration-minimized-icon-btn {
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.calibration-dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  border: 1px solid #060a14;
+}
+
+.calibration-dot.locked {
+  background: #00f5d4;
+}
+
+.calibration-dot.pulsing {
+  background: #38bdf8;
+  animation: scene-scan-pulse 1.2s ease-in-out infinite;
+}
+
+.calibration-just-locked-pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: #00f5d4;
+  padding: 0 4px 0 6px;
+  white-space: nowrap;
+}
+
+.calibration-mini-refresh {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+}
+
+.calibration-card-heading {
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #f8fafc;
+}
+
+.calibration-pct-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #00f5d4;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.14);
+  border: 1px solid rgba(0, 245, 212, 0.32);
+}
+
+.calibration-inline-cta {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 10px;
+}
+
+.calibration-preserved-note {
+  font-size: 11px;
+  font-weight: 600;
+  color: #a7f3d0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.34);
+}
+
+.calibration-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.calibration-action-row > * {
+  flex: 1 1 110px;
+}
+
+.calibration-start-fresh-btn {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 8px;
+}
+
+.calibration-signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cal-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.cal-chip.ok {
+  background: rgba(0, 245, 212, 0.14);
+  border-color: rgba(0, 245, 212, 0.42);
+  color: #99f6e4;
+}
+
+.cal-chip.warn {
+  background: rgba(255, 209, 102, 0.15);
+  border-color: rgba(255, 209, 102, 0.45);
+  color: #fde68a;
+}
+
+.cal-chip.muted {
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.calibration-gate-note {
+  font-size: 10px;
+  color: rgba(203, 213, 225, 0.78);
+  text-align: center;
+  padding-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .scene-scan-header {
@@ -1160,6 +1355,12 @@ select {
   padding: 3px;
 }
 
+.scene-scan-window.is-large {
+  height: 76px;
+  border-radius: 10px;
+  padding: 4px;
+}
+
 .scene-scan-grid {
   width: 100%;
   height: 100%;
@@ -1225,14 +1426,13 @@ select {
 }
 
 @media (max-width: 560px) {
-  .scene-scan-box {
+  .scene-scan-box:not(.is-centered) {
     bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 10px)) + 64px);
     right: max(12px, env(safe-area-inset-right));
-    width: 136px;
   }
 
-  .scene-scan-box.needs-restart {
-    width: 168px;
+  .scene-scan-box.is-popover {
+    width: 196px;
   }
 
   .scene-scan-box.hide-on-dock-mobile {

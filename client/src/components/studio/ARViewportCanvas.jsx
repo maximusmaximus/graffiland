@@ -29,6 +29,7 @@ import {
   DEFAULT_ATMOSPHERIC_HAZE_HEX
 } from '../../utils/arLandGuidance.js';
 import { estimateCameraVerticalFovDeg } from '../../utils/arSensorFusion.js';
+import { resolveRelativeOrbBucket } from '../../utils/arCalibrationManager.js';
 import { startWebXrArSession } from '../../utils/webxrArSession.js';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -108,6 +109,7 @@ function ARViewportCanvasInner({
   showTemporaryHint,
   cameraReady,
   sceneScanOptimal,
+  calibrationReady = true,
   unmappedGrid,
   onVideoMounted = null,
   onCameraRefreshNeeded = null,
@@ -133,6 +135,8 @@ function ARViewportCanvasInner({
   renderPausedRef.current = Boolean(renderPaused);
   const sceneScanOptimalRef = useRef(Boolean(sceneScanOptimal));
   sceneScanOptimalRef.current = Boolean(sceneScanOptimal);
+  const calibrationReadyRef = useRef(Boolean(calibrationReady));
+  calibrationReadyRef.current = Boolean(calibrationReady);
   const hasCapturedEnvRef = useRef(false);
   const onCameraRefreshNeededRef = useRef(onCameraRefreshNeeded);
   const onArLandGuidanceRef = useRef(onArLandGuidance);
@@ -570,7 +574,9 @@ function ARViewportCanvasInner({
       const arViewOnly = Boolean(
         isArViewOnlyRef?.current || interactingLand || modeRef.current === 'preview'
       );
-      const showCursor = !arViewOnly && modeRef.current === 'draw' && !interactingLand;
+      const isCalibratedForDraw = Boolean(calibrationReadyRef.current);
+      const showCursor =
+        !arViewOnly && modeRef.current === 'draw' && !interactingLand && isCalibratedForDraw;
       ghost.visible = showCursor;
       grid.visible = !arViewOnly;
       shadowCatcher.visible = !arViewOnly;
@@ -854,7 +860,7 @@ function ARViewportCanvasInner({
       let originZ = null;
       let originRequired = false;
 
-      if (arViewOnly || interactingLand) {
+      if (arViewOnly || interactingLand || !isCalibratedForDraw) {
         surfaceMarker.visible = false;
       } else if (anchor) {
         originX = anchor.x;
@@ -898,10 +904,12 @@ function ARViewportCanvasInner({
       );
       const isSceneLocked = Boolean(polRef.current.getSceneCoverage().optimal);
       sceneScanOptimalRef.current = isSceneLocked;
-      if (isSceneLocked) {
+      const needsMoreCalibration =
+        !isSceneLocked || !calibrationReadyRef.current || orbKeyframesRef.current.size < 3;
+      if (calibrationReadyRef.current) {
         if (!arViewOnly && !isTransform && !isMappingPaused && !mappingCompletedNoticeShownRef.current) {
           mappingCompletedNoticeShownRef.current = true;
-          showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
+          showTemporaryHint('AR Calibrated — ready to draw in 3D!');
         }
       }
 
@@ -909,7 +917,7 @@ function ARViewportCanvasInner({
         !arViewOnly &&
         !isTransform &&
         !isMappingPaused &&
-        !isSceneLocked &&
+        needsMoreCalibration &&
         now - lastScanPosePush > 110
       ) {
         lastScanPosePush = now;
@@ -928,10 +936,6 @@ function ARViewportCanvasInner({
           hasCamera: hasLiveCameraFrame
         });
         const prev = lastScanUiRef.current;
-        if (!prev.optimal && cov.optimal && !mappingCompletedNoticeShownRef.current) {
-          mappingCompletedNoticeShownRef.current = true;
-          showTemporaryHint('Mapping complete for this space — 100% precision lock active!');
-        }
         if (cov.optimal) {
           sceneScanOptimalRef.current = true;
         }
@@ -954,13 +958,13 @@ function ARViewportCanvasInner({
           setSceneScan(cov);
         }
 
-        if (cov.optimal) {
+        if (cov.optimal && calibrationReadyRef.current) {
           const clearKey = '0'.repeat(48);
           if (lastUnmappedMaskRef.current !== clearKey) {
             lastUnmappedMaskRef.current = clearKey;
             setUnmappedGrid(Array(48).fill(false));
           }
-        } else {
+        } else if (!cov.optimal) {
           const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
           const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
           if (lastUnmappedMaskRef.current !== vpKey) {
@@ -969,13 +973,15 @@ function ARViewportCanvasInner({
           }
         }
 
+        const orbIntervalMs = calibrationReadyRef.current ? 1100 : 520;
         if (
-          now - lastOrbExtractPush > 920 &&
+          now - lastOrbExtractPush > orbIntervalMs &&
           !orbExtractBusy &&
           hasLiveCameraFrame &&
           orbKeyframesRef.current.size < 3
         ) {
-          const bucket = yawDeg < -18 ? 'left' : yawDeg > 18 ? 'right' : 'center';
+          // Use scan-relative yaw so left/center/right ORB anchors capture facing ANY compass direction!
+          const bucket = resolveRelativeOrbBucket(cov.relYaw);
           if (!orbKeyframesRef.current.has(bucket)) {
             lastOrbExtractPush = now;
             orbExtractBusy = true;
@@ -1512,7 +1518,8 @@ function ARViewportCanvasInner({
         className="webgl-overlay"
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         data-transform-mode={isTransformMode ? 'true' : 'false'}
-        data-scene-locked={sceneScanOptimal ? 'true' : 'false'}
+        data-scene-locked={sceneScanOptimal && calibrationReady ? 'true' : 'false'}
+        data-calibration-ready={calibrationReady ? 'true' : 'false'}
         data-mapping-restart-required={mappingRestartRequired ? 'true' : 'false'}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
@@ -1526,7 +1533,9 @@ function ARViewportCanvasInner({
           data-testid="occlusion-overlay"
         />
       )}
-      {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && <div className="reticle" />}
+      {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
+        <div className="reticle" />
+      )}
       {contextLost && (
         <div className="scene-error-fallback" role="status">
           <div className="scene-error-card card">

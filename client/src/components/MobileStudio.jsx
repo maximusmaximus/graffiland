@@ -270,6 +270,12 @@ export default function MobileStudio({
     locationRef: pol.locationRef,
     cameraReady: pol.cameraReady,
     sceneScan: pol.sceneScan,
+    calibrationReady: pol.calibrationReady,
+    calibrationBlockReason:
+      pol.calibrationLoss?.summary ||
+      pol.calibrationReadiness?.subHint ||
+      'Calibrate AR space before adding art.',
+    onRequireCalibration: () => pol.setScanBoxCollapsed(false),
     polRef: pol.polRef,
     rawOrientationRef: pol.rawOrientationRef,
     fallbackEulerRef: pol.fallbackEulerRef,
@@ -1750,6 +1756,7 @@ export default function MobileStudio({
         showTemporaryHint={showTemporaryHint}
         cameraReady={pol.cameraReady}
         sceneScanOptimal={pol.sceneScan.optimal}
+        calibrationReady={pol.calibrationReady}
         unmappedGrid={pol.unmappedGrid}
         onVideoMounted={pol.reattachVideoStream}
         onCameraRefreshNeeded={pol.refreshCamera}
@@ -1830,6 +1837,13 @@ export default function MobileStudio({
           onClearSurfaceAnchor={() => brush.setSurfaceAnchor(null)}
           onSelectSurfaceCenter={() => brush.selectSurfaceAtScreenPoint()}
           needsGyroTap={pol.needsGyroTap}
+          calibrationOverlayVisible={
+            !isArViewOnly &&
+            !isTransformMode &&
+            (pol.calibrationState === 'calibrating' ||
+              pol.calibrationState === 'lost' ||
+              Boolean(pol.mappingRestartPrompt))
+          }
           gyroFallbackActive={pol.gyroFallbackActive}
           cameraReady={pol.cameraReady}
           cameraRecovering={pol.cameraRecovering}
@@ -1945,7 +1959,21 @@ export default function MobileStudio({
             dockOpen={dockOpen}
             mode={brush.mode}
             mappingRestartPrompt={pol.mappingRestartPrompt}
+            calibrationState={pol.calibrationState}
+            calibrationReadiness={pol.calibrationReadiness}
+            calibrationLoss={pol.calibrationLoss}
+            calibrationJustLocked={pol.calibrationJustLocked}
+            cameraReady={pol.cameraReady}
+            needsGyroTap={pol.needsGyroTap}
+            onEnableIosGyro={pol.enableIosGyro}
+            onRetryCameraAccess={pol.retryCameraAccess}
+            sensorStatus={pol.sensorStatus}
+            voxelCount={brush.voxels.length}
             onRestartMapping={handleRestartSceneMapping}
+            onStartFresh={() => {
+              brush.clearCanvas();
+              handleRestartSceneMapping('start_fresh');
+            }}
             onRefreshOrbRescan={async () => {
               await ensureArCameraLive({ reason: 'orb_rescan' });
               return ar.handleRefreshOrbRescan();

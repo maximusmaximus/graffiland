@@ -54,6 +54,7 @@ export default function StudioHudTopBar({
   onClearSurfaceAnchor,
   onSelectSurfaceCenter,
   needsGyroTap,
+  calibrationOverlayVisible = false,
   gyroFallbackActive,
   cameraReady,
   cameraRecovering = false,
@@ -844,7 +845,7 @@ export default function StudioHudTopBar({
         )}
       </div>
 
-      {needsGyroTap && (
+      {needsGyroTap && !calibrationOverlayVisible && (
         <button
           className="btn btn-primary"
           data-testid="enable-gyro-compass-btn"
