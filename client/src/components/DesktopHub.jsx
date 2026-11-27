@@ -3399,11 +3399,14 @@ export default function DesktopHub({
           userLocation={userLocation}
           isDesktop
           allParcels={parcels}
+          allSculptures={sculptures}
           onSelectParcel={openLandShowcase}
           onSelectSculpture={openSculpture}
           onRequestLogin={() => setLoginOpen(true)}
           onSculptureUpdated={(updated, extra = {}) => {
-            setSelected(updated);
+            if (!extra?.keepActiveSelection) {
+              setSelected(updated);
+            }
             setLastSculpture(updated);
             const pushedMap = new Map(
               (Array.isArray(extra?.pushedSiblings) ? extra.pushedSiblings : []).map((p) => [
@@ -3425,7 +3428,14 @@ export default function DesktopHub({
                 }
               };
             };
-            setSculptures((prev) => prev.map(applyRowUpdate));
+            setSculptures((prev) => {
+              let found = false;
+              const next = prev.map((s) => {
+                if (s.id === updated.id) found = true;
+                return applyRowUpdate(s);
+              });
+              return found ? next : [updated, ...next];
+            });
             setVisitedParcel((prev) =>
               prev
                 ? {
@@ -3483,7 +3493,15 @@ export default function DesktopHub({
           onMcpStateChange={setMcpState}
           onToggleFreeze={handleToggleFreezeParcel}
           onToggleSculptureVisibility={handleToggleSculptureVisibility}
-          onSculptureUploaded={async () => {
+          onSculptureUploaded={async (createdSculpture) => {
+            if (createdSculpture?.id) {
+              setSculptures((prev) => [
+                createdSculpture,
+                ...prev.filter((s) => s?.id !== createdSculpture.id)
+              ]);
+              setAddItemParcelId('');
+              openSculpture(createdSculpture);
+            }
             await Promise.all([refreshData(), refreshMyLands(), refreshVisitedParcelDetail()]);
           }}
           onSelectSculpture={(sc) => openSculpture(sc)}

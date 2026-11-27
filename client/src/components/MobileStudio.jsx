@@ -2780,14 +2780,18 @@ export default function MobileStudio({
           config={config}
           userLocation={pol.location}
           allParcels={ar.mapParcels}
+          allSculptures={ar.mapSculptures}
           onSelectParcel={(parcelObj) => {
             if (parcelObj?.parcelId) {
               navigateToLandById(parcelObj.parcelId);
             }
           }}
+          onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
           onRequestLogin={() => setLoginOpen(true)}
           onSculptureUpdated={(updated, extra = {}) => {
-            ar.setMapSelectedSculpture(updated);
+            if (!extra?.keepActiveSelection) {
+              ar.setMapSelectedSculpture(updated);
+            }
             const pushedMap = new Map(
               (Array.isArray(extra?.pushedSiblings) ? extra.pushedSiblings : []).map((p) => [
                 p.id,
