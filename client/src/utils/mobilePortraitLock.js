@@ -125,6 +125,49 @@ export function resetMobileViewportAnchor(
 }
 
 /**
+ * Syncs `--mobile-app-height` and `--mobile-app-width` on `:root` to the exact visible
+ * viewport dimensions so bottom-anchored HUD controls (Map button, ToolCarouselBar, Palette FAB)
+ * NEVER fall off the bottom edge after orientation changes, fullscreen toggles, or Android
+ * Chrome address-bar height transitions where CSS `100dvh` can desync by 50-90px.
+ */
+export function syncMobileViewportDimensions(
+  win = typeof window !== 'undefined' ? window : null,
+  doc = typeof document !== 'undefined' ? document : null
+) {
+  if (!win || !doc?.documentElement?.style) return null;
+  const vv = win.visualViewport;
+  const innerW = Number(win.innerWidth || 0);
+  const innerH = Number(win.innerHeight || 0);
+  const vvW = Number(vv?.width || 0);
+  const vvH = Number(vv?.height || 0);
+  const editingInput = isEditableElementFocused(doc);
+
+  let visibleH = innerH;
+  if (!editingInput && vvH > 0) {
+    visibleH = innerH > 0 ? Math.min(vvH, innerH) : vvH;
+  } else if (visibleH <= 0 && vvH > 0) {
+    visibleH = vvH;
+  }
+
+  let visibleW = innerW;
+  if (!editingInput && vvW > 0) {
+    visibleW = innerW > 0 ? Math.min(vvW, innerW) : vvW;
+  } else if (visibleW <= 0 && vvW > 0) {
+    visibleW = vvW;
+  }
+
+  const roundedH = Math.round(visibleH);
+  const roundedW = Math.round(visibleW);
+  if (roundedH > 0) {
+    doc.documentElement.style.setProperty('--mobile-app-height', `${roundedH}px`);
+  }
+  if (roundedW > 0) {
+    doc.documentElement.style.setProperty('--mobile-app-width', `${roundedW}px`);
+  }
+  return { width: roundedW, height: roundedH };
+}
+
+/**
  * Locks mobile viewport against pinch-zoom, double-tap zoom, input auto-zoom drift,
  * overscroll shift, and landscape rotation so HUD buttons stay firmly anchored.
  * Returns a cleanup callback.
@@ -139,14 +182,30 @@ export function installMobileViewportLock({
   doc.body?.classList?.add('mobile-portrait-locked');
 
   tryLockPortraitOrientation(win);
+  syncMobileViewportDimensions(win, doc);
   resetMobileViewportAnchor(win, doc);
 
   let lastTapAt = 0;
   let lastTapX = 0;
   let lastTapY = 0;
+  const settleTimers = new Set();
+
+  const scheduleSettleSync = () => {
+    syncMobileViewportDimensions(win, doc);
+    resetMobileViewportAnchor(win, doc);
+    for (const delayMs of [120, 360]) {
+      const id = setTimeout(() => {
+        settleTimers.delete(id);
+        syncMobileViewportDimensions(win, doc);
+        resetMobileViewportAnchor(win, doc);
+      }, delayMs);
+      settleTimers.add(id);
+    }
+  };
 
   const onFirstGesture = () => {
     tryLockPortraitOrientation(win);
+    syncMobileViewportDimensions(win, doc);
   };
 
   const preventPageGesture = (ev) => {
@@ -201,11 +260,17 @@ export function installMobileViewportLock({
   };
 
   const onAnchorCheck = () => {
+    syncMobileViewportDimensions(win, doc);
     resetMobileViewportAnchor(win, doc);
   };
 
   win.addEventListener('pointerdown', onFirstGesture, { passive: true, once: true });
   win.addEventListener('touchstart', onFirstGesture, { passive: true, once: true });
+  win.addEventListener('resize', onAnchorCheck, { passive: true });
+  win.addEventListener('orientationchange', scheduleSettleSync, { passive: true });
+  win.addEventListener('pageshow', scheduleSettleSync, { passive: true });
+  doc.addEventListener('fullscreenchange', scheduleSettleSync, { passive: true });
+  doc.addEventListener('webkitfullscreenchange', scheduleSettleSync, { passive: true });
   doc.addEventListener('gesturestart', preventPageGesture, { passive: false });
   doc.addEventListener('gesturechange', preventPageGesture, { passive: false });
   doc.addEventListener('gestureend', preventPageGesture, { passive: false });
@@ -213,15 +278,24 @@ export function installMobileViewportLock({
   doc.addEventListener('touchmove', onTouchMove, { passive: false });
   doc.addEventListener('touchend', onTouchEnd, { passive: false });
   doc.addEventListener('wheel', onWheel, { passive: false });
-  doc.addEventListener('focusout', onAnchorCheck, { passive: true });
+  doc.addEventListener('focusout', scheduleSettleSync, { passive: true });
   win.visualViewport?.addEventListener?.('resize', onAnchorCheck);
   win.visualViewport?.addEventListener?.('scroll', onAnchorCheck);
 
   return () => {
+    for (const id of settleTimers) clearTimeout(id);
+    settleTimers.clear();
     doc.documentElement?.classList?.remove('mobile-portrait-locked');
     doc.body?.classList?.remove('mobile-portrait-locked');
+    doc.documentElement?.style?.removeProperty('--mobile-app-height');
+    doc.documentElement?.style?.removeProperty('--mobile-app-width');
     win.removeEventListener('pointerdown', onFirstGesture);
     win.removeEventListener('touchstart', onFirstGesture);
+    win.removeEventListener('resize', onAnchorCheck);
+    win.removeEventListener('orientationchange', scheduleSettleSync);
+    win.removeEventListener('pageshow', scheduleSettleSync);
+    doc.removeEventListener('fullscreenchange', scheduleSettleSync);
+    doc.removeEventListener('webkitfullscreenchange', scheduleSettleSync);
     doc.removeEventListener('gesturestart', preventPageGesture);
     doc.removeEventListener('gesturechange', preventPageGesture);
     doc.removeEventListener('gestureend', preventPageGesture);
@@ -229,7 +303,7 @@ export function installMobileViewportLock({
     doc.removeEventListener('touchmove', onTouchMove);
     doc.removeEventListener('touchend', onTouchEnd);
     doc.removeEventListener('wheel', onWheel);
-    doc.removeEventListener('focusout', onAnchorCheck);
+    doc.removeEventListener('focusout', scheduleSettleSync);
     win.visualViewport?.removeEventListener?.('resize', onAnchorCheck);
     win.visualViewport?.removeEventListener?.('scroll', onAnchorCheck);
   };

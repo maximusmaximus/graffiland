@@ -7,6 +7,7 @@ import {
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import { API_BASE } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
+import { useSafeBackdropClose } from '../../utils/modalBackdropGuard.js';
 import { parseDesktopPairQrText } from '../../utils/qrPairScanner.js';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -48,8 +49,10 @@ export function PairDesktopMcpModal({
     onConnectPairCode(rawInput);
   };
 
+  const backdropCloseProps = useSafeBackdropClose(onClose);
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdropCloseProps}>
       <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
@@ -247,8 +250,9 @@ export function AgentHandoffModal({
   onPublishOnPhone,
   onClose
 }) {
+  const backdropCloseProps = useSafeBackdropClose(onClose);
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdropCloseProps}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
@@ -369,8 +373,9 @@ export function SavedDraftsModal({
   onOpenLogin,
   onClose
 }) {
+  const backdropCloseProps = useSafeBackdropClose(onClose);
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdropCloseProps}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">

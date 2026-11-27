@@ -47,6 +47,7 @@ import {
   describeCameraNeededAction,
   describeLocationNeededAction
 } from '../utils/permissionMessages.js';
+import { markModalOpenedFromPointerUp } from '../utils/modalBackdropGuard.js';
 
 export const KEY_TOOLS = [
   { id: 'brush', emoji: '🖌️', label: 'Brush', hint: 'Hold & sweep phone like a spray can' },
@@ -1558,7 +1559,7 @@ export function useVoxelBrush({
       const check = evaluateStaleDrawErase({
         hasDrawnContent,
         isActivelyDrawing: Boolean(paintingRef.current),
-        isPublishing: Boolean(isPublishingRef?.current),
+        isPublishing: Boolean(isPublishingRef?.current || modeRef.current === 'publish'),
         lastDrawAt: lastDrawAtRef.current,
         drawLocation: drawLocationRef.current,
         currentLocation: currentLoc,
@@ -1861,7 +1862,7 @@ export function useVoxelBrush({
       ) {
         if (modeRef.current === 'transform') {
           commitTransformAndExit('draw');
-        } else {
+        } else if (!(toolId === 'publish' && modeRef.current === 'publish')) {
           setMode('draw');
         }
         if (
@@ -1870,6 +1871,7 @@ export function useVoxelBrush({
           voxelsRef.current.length > 0 &&
           !userRef.current
         ) {
+          markModalOpenedFromPointerUp();
           openPublishSheetRef?.current?.();
         }
       }
@@ -1889,8 +1891,14 @@ export function useVoxelBrush({
   );
 
   const triggerActiveKeyTool = useCallback(() => {
-    enterFullscreen();
     const curTool = activeKeyToolRef.current;
+    const isModalTool =
+      curTool === 'publish' || curTool === 'drafts' || curTool === 'pair' || curTool === 'agent';
+    // Never request fullscreen right as a form modal opens (Android Chrome immediately exits
+    // fullscreen on keyboard focus and causes viewport/backdrop glitches).
+    if (!isModalTool) {
+      enterFullscreen();
+    }
     if (!ensureToolUsable(curTool)) {
       return;
     }
@@ -2033,7 +2041,7 @@ export function useVoxelBrush({
       g.lastX = e.clientX;
       g.lastT = now;
 
-      if (!g.swiped && Math.abs(e.clientX - g.startX) >= 7) {
+      if (!g.swiped && Math.abs(e.clientX - g.startX) >= 12) {
         g.swiped = true;
         stopBrushPainting();
       }
@@ -2097,13 +2105,25 @@ export function useVoxelBrush({
               voxelsRef.current.length > 0 &&
               !userRef.current
             ) {
+              e.preventDefault?.();
+              markModalOpenedFromPointerUp();
               openPublishSheetRef?.current?.();
             }
           }
-        } else if (movedPx < 8) {
+        } else if (movedPx < 16) {
           if (targetRel !== 0) {
             stepKeyTool(targetRel, { visibleTools });
           } else {
+            const curTool = activeKeyToolRef.current;
+            if (
+              curTool === 'publish' ||
+              curTool === 'drafts' ||
+              curTool === 'pair' ||
+              curTool === 'agent'
+            ) {
+              e.preventDefault?.();
+              markModalOpenedFromPointerUp();
+            }
             triggerActiveKeyTool();
           }
         }

@@ -50,9 +50,13 @@ select {
 /* Mobile Full-Screen Studio */
 .mobile-fullscreen {
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100dvh;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: var(--mobile-app-height, 100%);
+  max-height: 100%;
   overflow: hidden;
   background: #000;
   touch-action: none;
@@ -313,7 +317,7 @@ select {
 
 .floating-tools-toggle {
   position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
+  bottom: max(18px, calc(env(safe-area-inset-bottom) + 10px));
   right: max(16px, env(safe-area-inset-right));
   width: 48px;
   height: 48px;
@@ -330,7 +334,7 @@ select {
 
 .floating-map-btn {
   position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
+  bottom: max(18px, calc(env(safe-area-inset-bottom) + 10px));
   left: max(16px, env(safe-area-inset-left));
   width: 48px;
   height: 48px;
@@ -676,7 +680,7 @@ select {
 
 .key-carousel {
   position: absolute;
-  bottom: max(16px, env(safe-area-inset-bottom));
+  bottom: max(14px, calc(env(safe-area-inset-bottom) + 8px));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -1222,7 +1226,7 @@ select {
 
 @media (max-width: 560px) {
   .scene-scan-box {
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 114px);
+    bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 10px)) + 64px);
     right: max(12px, env(safe-area-inset-right));
     width: 136px;
   }
@@ -10888,7 +10892,6 @@ select {
   align-items: center;
   justify-content: center;
   gap: 0;
-  position: fixed;
 }
 
 .palette-fab-btn.is-open {
@@ -13339,10 +13342,13 @@ html.desktop-map-pinch-locked .land-preview-stage {
 html.mobile-portrait-locked,
 body.mobile-portrait-locked {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
-  height: 100%;
-  height: 100dvh;
+  height: var(--mobile-app-height, 100%);
+  max-height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-text-size-adjust: 100%;
@@ -13352,10 +13358,13 @@ body.mobile-portrait-locked {
 
 html.mobile-portrait-locked #root {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
-  height: 100%;
-  height: 100dvh;
+  height: var(--mobile-app-height, 100%);
+  max-height: 100%;
   overflow: hidden;
 }
 
