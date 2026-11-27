@@ -118,6 +118,9 @@ export function useVoxelBrush({
   locationRef,
   cameraReady,
   sceneScan,
+  calibrationReady,
+  calibrationBlockReason = '',
+  onRequireCalibration = null,
   polRef,
   rawOrientationRef,
   fallbackEulerRef,
@@ -346,12 +349,27 @@ export function useVoxelBrush({
     );
   }, []);
 
+  const effectiveCalibrationReady =
+    typeof calibrationReady === 'boolean'
+      ? calibrationReady
+      : Boolean(sceneScan?.optimal ?? true);
+  const calibrationReadyRef = useRef(effectiveCalibrationReady);
+  calibrationReadyRef.current = effectiveCalibrationReady;
+  const calibrationBlockReasonRef = useRef(calibrationBlockReason);
+  calibrationBlockReasonRef.current =
+    calibrationBlockReason || 'Finish calibrating AR space before adding art.';
+  const onRequireCalibrationRef = useRef(onRequireCalibration);
+  onRequireCalibrationRef.current = onRequireCalibration;
+
   const hasVoxels = voxels.length > 0;
   const toolAvailability = useMemo(() => {
     const originBlocked = Boolean(originStatus.originBlocked);
     const originMsg =
       originStatus.reason ||
       'View blocked. Move object away from camera.';
+    const calBlocked = !effectiveCalibrationReady;
+    const calMsg =
+      calibrationBlockReason || 'Finish calibrating AR space before adding art.';
     const hasLoc = Boolean(location);
     const needBlocksMsg = 'Draw at least 1 block first.';
     const locationNeededMsg = describeLocationNeededAction();
@@ -368,16 +386,27 @@ export function useVoxelBrush({
       publishReason = locationNeededMsg;
     } else if (!cameraReady) {
       publishReason = cameraNeededMsg;
-    } else if (!sceneScan.optimal) {
-      publishReason = `Scan space to 100% (${sceneScan.scannedCount}/${sceneScan.targetCount}). Pan phone around.`;
+    } else if (calBlocked || !sceneScan?.optimal) {
+      publishReason = calBlocked
+        ? calMsg
+        : `Scan space to 100% (${sceneScan.scannedCount}/${sceneScan.targetCount}). Pan phone around.`;
     }
 
     return {
-      brush: { usable: !originBlocked, reason: originBlocked ? originMsg : '' },
-      pencil: { usable: !originBlocked, reason: originBlocked ? originMsg : '' },
+      brush: {
+        usable: !calBlocked && !originBlocked,
+        reason: calBlocked ? calMsg : originBlocked ? originMsg : '',
+        needsCalibration: calBlocked
+      },
+      pencil: {
+        usable: !calBlocked && !originBlocked,
+        reason: calBlocked ? calMsg : originBlocked ? originMsg : '',
+        needsCalibration: calBlocked
+      },
       stack: {
-        usable: !originBlocked && hasVoxels,
-        reason: originBlocked ? originMsg : !hasVoxels ? needBlocksMsg : ''
+        usable: !calBlocked && !originBlocked && hasVoxels,
+        reason: calBlocked ? calMsg : originBlocked ? originMsg : !hasVoxels ? needBlocksMsg : '',
+        needsCalibration: calBlocked
       },
       erase: {
         usable: true,
@@ -414,22 +443,25 @@ export function useVoxelBrush({
       publish: {
         usable: !publishReason,
         reason: publishReason,
-        needsAuth: publishNeedsAuth
+        needsAuth: publishNeedsAuth,
+        needsCalibration: Boolean(hasVoxels && user && hasLoc && cameraReady && calBlocked)
       },
       recenter: { usable: true, reason: '' },
       drafts: { usable: true, reason: '' },
       pair: { usable: true, reason: '' }
     };
   }, [
+    effectiveCalibrationReady,
+    calibrationBlockReason,
     originStatus.originBlocked,
     originStatus.reason,
     hasVoxels,
     hasClearedBackup,
     location,
     cameraReady,
-    sceneScan.optimal,
-    sceneScan.scannedCount,
-    sceneScan.targetCount,
+    sceneScan?.optimal,
+    sceneScan?.scannedCount,
+    sceneScan?.targetCount,
     user,
     mode
   ]);
@@ -876,6 +908,11 @@ export function useVoxelBrush({
   const applyVoxelBatch = useCallback(
     (targets, { enforceOriginLimit = false, originPoint = null } = {}) => {
       if (!Array.isArray(targets) || targets.length === 0) return;
+      if (!calibrationReadyRef.current) {
+        onRequireCalibrationRef.current?.();
+        showTemporaryHint(calibrationBlockReasonRef.current);
+        return;
+      }
       const halfSpan = config?.policy?.areaHalfSpanMeters || AREA_HALF_SPAN_METERS;
       const maxHumanSpan =
         config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
@@ -1149,7 +1186,8 @@ export function useVoxelBrush({
       markDrawActivity,
       notifyBlockedByPlacedItem,
       notifyOutOfDrawRange,
-      setSensorBanner
+      setSensorBanner,
+      showTemporaryHint
     ]
   );
 
@@ -1201,10 +1239,21 @@ export function useVoxelBrush({
         return;
       }
       if (target.action === 'add' || target.action === 'replace') {
+        if (!calibrationReadyRef.current) {
+          onRequireCalibrationRef.current?.();
+          showTemporaryHint(calibrationBlockReasonRef.current);
+          return;
+        }
         applyVoxelBatch([target], { enforceOriginLimit: true });
       }
     },
-    [applyVoxelBatch, eraseTargetVoxel, notifyBlockedByPlacedItem, notifyOutOfDrawRange]
+    [
+      applyVoxelBatch,
+      eraseTargetVoxel,
+      notifyBlockedByPlacedItem,
+      notifyOutOfDrawRange,
+      showTemporaryHint
+    ]
   );
 
   // Keep transform mesh + bounding box + surface anchor synchronized
@@ -1327,9 +1376,19 @@ export function useVoxelBrush({
     }
   }, [draftGroupRef, transformBoxRef]);
 
+  // Immediately pause active spraying if calibration drops mid-stroke (preserving placed blocks!)
+  useEffect(() => {
+    if (!effectiveCalibrationReady && (paintingRef.current || canvasSprayingRef.current)) {
+      stopBrushPainting();
+    }
+  }, [effectiveCalibrationReady, stopBrushPainting]);
+
   const notifyToolUnavailable = useCallback(
     (toolId, reasonOverride = '') => {
       const info = toolAvailabilityRef.current?.[toolId];
+      if (info?.needsCalibration) {
+        onRequireCalibrationRef.current?.();
+      }
       const msg =
         reasonOverride ||
         info?.reason ||
@@ -2143,6 +2202,11 @@ export function useVoxelBrush({
 
   const selectSurfaceAtScreenPoint = useCallback(
     (clientX, clientY) => {
+      if (!calibrationReadyRef.current) {
+        onRequireCalibrationRef.current?.();
+        showTemporaryHint(calibrationBlockReasonRef.current);
+        return;
+      }
       const host = canvasHostRef.current;
       const cam = cameraRef.current;
       if (!host || !cam) return;
@@ -2306,9 +2370,10 @@ export function useVoxelBrush({
       dragStartRef.current = { x: e.clientX, y: e.clientY };
       tapStartRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
 
-      // Spray-can feel: when gyro is active in Brush mode, holding thumb anywhere on the
-      // live camera screen starts fluid continuous spraying until finger lifts!
+      // Spray-can feel: when calibrated & gyro is active in Brush mode, holding thumb anywhere on
+      // the live camera screen starts fluid continuous spraying until finger lifts!
       if (
+        calibrationReadyRef.current &&
         modeRef.current === 'draw' &&
         toolRef.current === 'brush' &&
         !isInteractingWithLandRef?.current &&

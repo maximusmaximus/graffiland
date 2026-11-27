@@ -692,7 +692,7 @@ describe('AR Camera Refresh on Disconnect & Reconnect (React Hooks + UI)', () =>
     assert.equal(gpsMoved.reason, 'gps_moved');
     assert.ok(gpsMoved.distanceMeters >= 12);
 
-    // Turning device >= 55 deg triggers orientation_changed
+    // Turning or tilting the phone in place while checking Map/Publish must NOT drop calibration
     const turned = evaluateSubstantialDeviceMovement({
       checkpoint: baseCheckpoint,
       current: {
@@ -700,17 +700,16 @@ describe('AR Camera Refresh on Disconnect & Reconnect (React Hooks + UI)', () =>
         lng: -121.8375,
         accuracy: 5,
         yawDeg: 175,
-        pitchDeg: 0,
+        pitchDeg: -42,
         visualDHash: 'a5a5a5a5a5a5a5a5'
       },
       nowMs: 15000
     });
-    assert.equal(turned.movedSubstantially, true);
-    assert.equal(turned.reason, 'orientation_changed');
+    assert.equal(turned.movedSubstantially, false);
     assert.equal(turned.yawDeltaDeg, 75);
 
-    // Completely different camera view (dHash >= 22 bits) triggers scene_changed
-    const sceneChanged = evaluateSubstantialDeviceMovement({
+    // Single-frame auto-exposure / dHash flicker in place must NOT drop calibration
+    const sceneFlicker = evaluateSubstantialDeviceMovement({
       checkpoint: baseCheckpoint,
       current: {
         lat: 39.7285,
@@ -722,9 +721,24 @@ describe('AR Camera Refresh on Disconnect & Reconnect (React Hooks + UI)', () =>
       },
       nowMs: 15000
     });
-    assert.equal(sceneChanged.movedSubstantially, true);
-    assert.equal(sceneChanged.reason, 'scene_changed');
-    assert.equal(sceneChanged.visualHammingBits, 64);
+    assert.equal(sceneFlicker.movedSubstantially, false);
+    assert.equal(sceneFlicker.visualHammingBits, 64);
+
+    // Long absence (>= 2 min) paired with real physical walking (>= 10m) triggers away_stale
+    const awayMoved = evaluateSubstantialDeviceMovement({
+      checkpoint: baseCheckpoint,
+      current: {
+        lat: 39.7286,
+        lng: -121.8375,
+        accuracy: 5,
+        yawDeg: 105,
+        pitchDeg: 1,
+        visualDHash: '5a5a5a5a5a5a5a5a'
+      },
+      nowMs: 150000
+    });
+    assert.equal(awayMoved.movedSubstantially, true);
+    assert.equal(awayMoved.reason, 'away_stale');
 
     // Tracker resetSceneScan clears sectors, fine grid, and anchor while keeping GPS fix
     const tracker = new ProofOfLocationTracker();

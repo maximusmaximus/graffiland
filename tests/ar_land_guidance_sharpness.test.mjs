@@ -419,7 +419,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly;/);
     assert.match(
       viewportSrc,
-      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*!isMappingPaused &&\s*!isSceneLocked &&\s*now - lastScanPosePush > 110\s*\)/
+      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*!isMappingPaused &&\s*(?:!isSceneLocked|needsMoreCalibration) &&\s*now - lastScanPosePush > 110\s*\)/
     );
     assert.match(
       viewportSrc,
@@ -481,7 +481,10 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
       'utf8'
     );
     assert.match(polSrc, /const isAlreadyOptimal = polRef\.current\.getSceneCoverage\(\)\.optimal;/);
-    assert.match(polSrc, /if \(isAlreadyOptimal && !checkPendingReturn\) return;/);
+    assert.match(
+      polSrc,
+      /if \(isAlreadyOptimal && curCalState === 'calibrated' && !checkPendingReturn\) return;/
+    );
 
     // 5) useVoxelBrush defaults foreground occlusion OFF (opt-in) so camera background stays flicker-free
     const brushSrc = fs.readFileSync(
