@@ -28,10 +28,19 @@ interface IRoyaltyRouter {
  */
 contract GraffilandMarketplace is Ownable, ReentrancyGuard {
     IERC721 public immutable graffilandNft;
+    IERC721 public landDeedNft;
     IRoyaltyRouter public immutable royaltyRouter;
     address public relayer;
 
     struct Listing {
+        uint256 tokenId;
+        bytes32 parcelId;
+        address seller;
+        uint256 priceWei;
+        bool active;
+    }
+
+    struct LandListing {
         uint256 tokenId;
         bytes32 parcelId;
         address seller;
@@ -48,10 +57,31 @@ contract GraffilandMarketplace is Ownable, ReentrancyGuard {
     }
 
     uint256 public nextListingId = 1;
+    uint256 public nextLandListingId = 1;
     uint256 public nextBountyId = 1;
     mapping(uint256 => Listing) public listings;
+    mapping(uint256 => LandListing) public landListings;
     mapping(uint256 => QuestBounty) public bounties;
     mapping(address => uint256) public pendingSellerProceeds;
+
+    event LandDeedNftUpdated(address indexed previousLandDeedNft, address indexed newLandDeedNft);
+    event LandDeedListingCreated(
+        uint256 indexed listingId,
+        uint256 indexed tokenId,
+        bytes32 indexed parcelId,
+        address seller,
+        uint256 priceWei
+    );
+    event LandDeedListingCancelled(uint256 indexed listingId);
+    event LandDeedSold(
+        uint256 indexed listingId,
+        uint256 indexed tokenId,
+        bytes32 indexed parcelId,
+        address buyer,
+        uint256 grossPriceWei,
+        uint256 sellerNetWei,
+        uint256 totalFeeWei
+    );
 
     event ListingCreated(
         uint256 indexed listingId,
@@ -154,6 +184,64 @@ contract GraffilandMarketplace is Ownable, ReentrancyGuard {
         }
 
         emit SculptureSold(listingId, l.tokenId, l.parcelId, msg.sender, msg.value, sellerNet, totalFee);
+    }
+
+    function setLandDeedNft(address newLandDeedNft) external onlyOwner {
+        require(newLandDeedNft != address(0), "Marketplace: zero land deed");
+        emit LandDeedNftUpdated(address(landDeedNft), newLandDeedNft);
+        landDeedNft = IERC721(newLandDeedNft);
+    }
+
+    function listLandDeed(uint256 tokenId, bytes32 parcelId, uint256 priceWei) external returns (uint256 listingId) {
+        require(address(landDeedNft) != address(0), "Marketplace: land deed not configured");
+        require(priceWei > 0, "Marketplace: zero price");
+        require(parcelId != bytes32(0), "Marketplace: invalid parcel");
+        require(landDeedNft.ownerOf(tokenId) == msg.sender, "Marketplace: not land owner");
+        require(
+            landDeedNft.getApproved(tokenId) == address(this) ||
+                landDeedNft.isApprovedForAll(msg.sender, address(this)),
+            "Marketplace: approve marketplace first"
+        );
+
+        listingId = nextLandListingId++;
+        landListings[listingId] = LandListing({
+            tokenId: tokenId,
+            parcelId: parcelId,
+            seller: msg.sender,
+            priceWei: priceWei,
+            active: true
+        });
+        emit LandDeedListingCreated(listingId, tokenId, parcelId, msg.sender, priceWei);
+    }
+
+    function cancelLandListing(uint256 listingId) external {
+        LandListing storage l = landListings[listingId];
+        require(l.active, "Marketplace: inactive land listing");
+        require(l.seller == msg.sender || msg.sender == owner(), "Marketplace: not seller");
+        l.active = false;
+        emit LandDeedListingCancelled(listingId);
+    }
+
+    function buyLandDeed(uint256 listingId) external payable nonReentrant {
+        LandListing storage l = landListings[listingId];
+        require(l.active, "Marketplace: inactive land listing");
+        require(address(landDeedNft) != address(0), "Marketplace: land deed not configured");
+        require(msg.value == l.priceWei, "Marketplace: exact price required");
+        require(landDeedNft.ownerOf(l.tokenId) == l.seller, "Marketplace: seller no longer owns land");
+
+        l.active = false;
+
+        (uint256 sellerNet, uint256 totalFee, , , ) = royaltyRouter.computeFeeSplit(msg.value);
+
+        royaltyRouter.depositParcelFee{value: totalFee}(l.parcelId, l.seller);
+        landDeedNft.safeTransferFrom(l.seller, msg.sender, l.tokenId);
+
+        (bool sent, ) = payable(l.seller).call{value: sellerNet}("");
+        if (!sent) {
+            pendingSellerProceeds[l.seller] += sellerNet;
+        }
+
+        emit LandDeedSold(listingId, l.tokenId, l.parcelId, msg.sender, msg.value, sellerNet, totalFee);
     }
 
     function fundQuestBounty(bytes32 parcelId, uint256 payoutPerWinnerWei)

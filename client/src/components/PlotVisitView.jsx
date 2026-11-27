@@ -70,6 +70,8 @@ function getApprovalActionEmoji(action = '') {
   if (action === 'update_land_settings') return '❄️';
   if (action === 'update_land_volume') return '📐';
   if (action === 'update_parcel') return '🏷️';
+  if (action === 'transfer_land_deed') return '🏷️';
+  if (action === 'list_land_for_sale') return '💎';
   return '✍️';
 }
 
@@ -172,6 +174,7 @@ export default function PlotVisitView({
   }, []);
   const [landDescDraft, setLandDescDraft] = useState('');
   const [landBusy, setLandBusy] = useState('');
+  const [buyLandBusy, setBuyLandBusy] = useState(false);
 
   // Inline artwork management states
   const [editingArtworkId, setEditingArtworkId] = useState('');
@@ -525,6 +528,61 @@ export default function PlotVisitView({
       flashStatus(err?.message || 'Could not reject transaction.', true);
     } finally {
       setApprovalBusyId('');
+    }
+  }
+
+  async function handleBuyLandDeed() {
+    const listing = activeParcel?.activeLandListing;
+    if (!listing?.id || buyLandBusy) return;
+    if (!user?.id) {
+      if (typeof onRequestLogin === 'function') {
+        onRequestLogin();
+      } else {
+        flashStatus('Sign in to buy this Virtual Land Deed NFT.', true);
+      }
+      return;
+    }
+    setBuyLandBusy(true);
+    try {
+      const res = await api.buyLandListing(listing.id);
+      const bundledCount = Number(res?.bundledArtworks?.length || 0);
+      const msg =
+        bundledCount > 0
+          ? `Purchased Land Deed #${res?.deed?.tokenId || listing.tokenId} (+${bundledCount} bundled artwork${bundledCount === 1 ? '' : 's'}) for ${listing.priceEth} ETH!`
+          : `Purchased Land Deed #${res?.deed?.tokenId || listing.tokenId} for ${listing.priceEth} ETH!`;
+      flashStatus(msg);
+      notifySettingsSaved(msg);
+      recordUserAction(user.id, {
+        type: 'buy_land_deed',
+        icon: '💎',
+        title: `Bought ${landDisplayName} (${listing.priceEth} ETH)`,
+        detail: `Deed #${res?.deed?.tokenId || listing.tokenId}`,
+        parcelId: activeParcel?.parcelId || ''
+      });
+      let nextParcel = {
+        ...activeParcel,
+        landDeed: res?.deed || activeParcel?.landDeed || null,
+        activeLandListing: null,
+        ownerSub: res?.deed?.ownerSub || user.id,
+        ownerAddress: res?.deed?.ownerAddress || user.walletAddress || activeParcel?.ownerAddress
+      };
+      let nextSculptures = activeSculptures;
+      if (activeParcel?.parcelId) {
+        const refreshed = await api.getLandDetail(activeParcel.parcelId).catch(() => null);
+        if (refreshed?.parcel) {
+          nextParcel = refreshed.parcel;
+          nextSculptures = refreshed.sculptures || activeSculptures;
+        }
+      }
+      setLocalParcel(nextParcel);
+      setLocalSculptures(nextSculptures);
+      onPlotUpdated?.({ parcel: nextParcel, sculptures: nextSculptures });
+    } catch (err) {
+      const errMsg = err?.message || 'Could not complete Land Deed purchase.';
+      flashStatus(errMsg, true);
+      notifySettingsSaved(`⚠️ ${errMsg}`, { tone: 'error', durationMs: 6500 });
+    } finally {
+      setBuyLandBusy(false);
     }
   }
 
@@ -1434,6 +1492,32 @@ export default function PlotVisitView({
                   🛡️ Approval Required
                 </span>
               )}
+              {activeParcel.landDeed?.tokenId ? (
+                <span
+                  className="badge teal mono"
+                  data-testid="plot-land-deed-badge"
+                  style={{ fontSize: 10, flexShrink: 0 }}
+                  title={`Permanent ERC-721 Virtual Land Deed NFT #${activeParcel.landDeed.tokenId}`}
+                >
+                  🏷️ Deed #{activeParcel.landDeed.tokenId}
+                </span>
+              ) : null}
+              {activeParcel.activeLandListing ? (
+                <button
+                  type="button"
+                  className="badge gold mono"
+                  data-testid="plot-land-forsale-badge"
+                  style={{ fontSize: 10, flexShrink: 0, cursor: 'pointer', border: 'none' }}
+                  title={`Land Deed listed for ${activeParcel.activeLandListing.priceEth} ETH — tap to inspect`}
+                  onClick={() => {
+                    setSelectedTarget('land');
+                    setSelectedSculptureId('');
+                    setDetailsExpanded(true);
+                  }}
+                >
+                  💎 {activeParcel.activeLandListing.priceEth} ETH
+                </button>
+              ) : null}
               <span
                 className="plot-views-counter mono"
                 data-testid="plot-views-counter"
@@ -2567,6 +2651,48 @@ export default function PlotVisitView({
                           </button>
                         )}
                       </div>
+
+                      {/* Transferable Land Deed Marketplace Purchase Card */}
+                      {activeParcel.activeLandListing && !isLandOwner && (
+                        <div className="plot-buy-land-card" data-testid="plot-buy-land-card">
+                          <div className="plot-buy-land-info">
+                            <div className="plot-buy-land-title">
+                              <XeroIcon emoji="💎" size={14} />
+                              <strong>
+                                Land Deed #{activeParcel.activeLandListing.tokenId || activeParcel.landDeed?.tokenId} For Sale
+                              </strong>
+                              <span className="badge gold mono" style={{ fontSize: 11 }}>
+                                {activeParcel.activeLandListing.priceEth} ETH
+                              </span>
+                            </div>
+                            <div className="plot-buy-land-meta">
+                              Includes full curation control &amp; future 3% Land Steward royalties
+                              {(activeParcel.activeLandListing.includeSellerArtworks ||
+                                activeParcel.activeLandListing.includeOwnedArtworks) &&
+                              Array.isArray(activeParcel.activeLandListing.bundledSculptureIds) &&
+                              activeParcel.activeLandListing.bundledSculptureIds.length > 0
+                                ? ` · +${activeParcel.activeLandListing.bundledSculptureIds.length} bundled owner artwork${
+                                    activeParcel.activeLandListing.bundledSculptureIds.length === 1 ? '' : 's'
+                                  }`
+                                : ''}
+                              . 10% protocol split (5% Treasury / 3% Steward / 2% IRL Artists).
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            data-testid="plot-buy-land-btn"
+                            disabled={buyLandBusy}
+                            onClick={handleBuyLandDeed}
+                          >
+                            {buyLandBusy
+                              ? 'Purchasing…'
+                              : user
+                                ? `Buy Land (${activeParcel.activeLandListing.priceEth} ETH)`
+                                : `Sign In to Buy (${activeParcel.activeLandListing.priceEth} ETH)`}
+                          </button>
+                        </div>
+                      )}
 
                       {/* Mobile Proximity & AR Actions */}
                       {!isDesktop && (

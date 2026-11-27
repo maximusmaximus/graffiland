@@ -37,3 +37,17 @@ export function getSculptureChainLinks(sculpture, config) {
         : ''
   };
 }
+
+export function getTxExplorerUrl(txHash, chainId, config) {
+  const cleanHash = String(txHash || '').trim();
+  if (!cleanHash) return '';
+  const base = String(getExplorerBaseUrl({ chainId }, config) || '').replace(/\/$/, '');
+  return base ? `${base}/tx/${cleanHash}` : '';
+}
+
+export function getAddressExplorerUrl(address, chainId, config) {
+  const cleanAddr = String(address || '').trim();
+  if (!cleanAddr) return '';
+  const base = String(getExplorerBaseUrl({ chainId }, config) || '').replace(/\/$/, '');
+  return base ? `${base}/address/${cleanAddr}` : '';
+}

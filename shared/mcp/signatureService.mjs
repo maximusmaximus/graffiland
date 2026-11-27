@@ -27,6 +27,7 @@ import {
 } from './helpers.mjs';
 import { resolvePublicUserHandle } from '../userDisplay.mjs';
 import { listMcpPairings, requireActiveMcpPairing } from './pairingService.mjs';
+import { listLandDeedForSale, transferLandDeed } from '../landDeedService.mjs';
 import {
   applyCreateSculptureOnLand,
   applyDeleteSculpture,
@@ -334,6 +335,23 @@ export function describeSignatureAction({
     return {
       summaryTitle: `Publish "${title}"`,
       summaryDescription: `Sign & mint mobile artwork on ${target}${desc ? ` — ${desc}` : ''}.`
+    };
+  }
+  if (action === 'transfer_land_deed') {
+    const to = String(p.toAddress || '').trim();
+    const shortTo = to.length > 14 ? `${to.slice(0, 8)}…${to.slice(-4)}` : to || '0x…';
+    const bundleText = p.includeOwnedArtworks ? ' + your artworks on this land' : ' (land deed only)';
+    return {
+      summaryTitle: `⚠️ Transfer Land Deed to ${shortTo}`,
+      summaryDescription: `Transfer permanent Land Deed NFT for ${target}${bundleText}. Moves land ownership & future 3% steward royalties.`
+    };
+  }
+  if (action === 'list_land_for_sale') {
+    const price = Number(p.priceEth || 0);
+    const bundleText = p.includeSellerArtworks ? ' + your artworks' : ' (land deed only)';
+    return {
+      summaryTitle: `List Land Deed for ${price} ETH`,
+      summaryDescription: `List permanent Land Deed NFT for ${target}${bundleText} on the SPRAY.LAND Marketplace (5%/3%/2% split).`
     };
   }
   const readable = String(action || 'land_action').replace(/_/g, ' ');
@@ -686,6 +704,20 @@ export async function executeValidatedSignatureRow(
       pinSculptureFn,
       mintSculptureFn,
       proofSignature: signature
+    });
+  } else if (reqRow.action === 'transfer_land_deed') {
+    result = await transferLandDeed(db, {
+      parcelId: reqRow.parcel_id,
+      callerUser: ownerUser,
+      toAddress: payload.toAddress,
+      includeOwnedArtworks: Boolean(payload.includeOwnedArtworks)
+    });
+  } else if (reqRow.action === 'list_land_for_sale') {
+    result = await listLandDeedForSale(db, {
+      parcelId: reqRow.parcel_id,
+      sellerUser: ownerUser,
+      priceEth: Number(payload.priceEth),
+      includeSellerArtworks: Boolean(payload.includeSellerArtworks)
     });
   } else {
     throw new McpServiceError(`Unsupported signed action: ${reqRow.action}`, 400);
@@ -1241,6 +1273,15 @@ export async function signRequestByAgent(
   }
   if (new Date(row.expires_at).getTime() < Date.now()) {
     throw new McpServiceError('Signature request has expired.', 410);
+  }
+  if (
+    (row.action === 'transfer_land_deed' || row.action === 'list_land_for_sale') &&
+    !String(ownerUser?.id || '').startsWith('agent:')
+  ) {
+    throw new McpServiceError(
+      'Land Deed NFT transfer/listing requests require explicit human owner approval in the SPRAY.LAND app and cannot be self-signed by a paired agent.',
+      403
+    );
   }
   if (!signature) {
     throw new McpServiceError('Agent EIP-191 signature over canonicalMessage is required.', 400);

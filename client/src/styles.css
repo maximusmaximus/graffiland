@@ -13693,6 +13693,137 @@ html.mobile-portrait-locked .mobile-map-sheet {
   }
 }
 
+/* Transferable Virtual Land Deed NFT (SLAND) & Marketplace UI */
+.land-deed-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-color: rgba(0, 245, 212, 0.32);
+}
+
+.land-deed-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(0, 245, 212, 0.06);
+  border: 1px solid rgba(0, 245, 212, 0.16);
+}
+
+.land-deed-meta-row a {
+  color: var(--accent, #00f5d4);
+  text-decoration: none;
+}
+
+.land-deed-meta-row a:hover {
+  text-decoration: underline;
+}
+
+.land-deed-subcard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 11px;
+  background: rgba(12, 18, 34, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.land-deed-bundle-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.land-deed-bundle-toggle input[type='checkbox'] {
+  accent-color: var(--accent, #00f5d4);
+  width: 14px;
+  height: 14px;
+}
+
+.land-deed-active-listing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(245, 196, 81, 0.09);
+  border: 1px solid rgba(245, 196, 81, 0.28);
+}
+
+.land-deed-unminted-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(245, 196, 81, 0.08);
+  border: 1px dashed rgba(245, 196, 81, 0.35);
+}
+
+.land-deed-history {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.land-deed-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.plot-buy-land-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(245, 196, 81, 0.12), rgba(0, 245, 212, 0.08));
+  border: 1px solid rgba(245, 196, 81, 0.34);
+}
+
+.plot-buy-land-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.plot-buy-land-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.plot-buy-land-meta {
+  font-size: 11px;
+  line-height: 1.38;
+  color: var(--muted);
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,

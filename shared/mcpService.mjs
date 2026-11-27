@@ -8,6 +8,12 @@ import {
   scoutLands
 } from './agentQuestService.mjs';
 import { listArchivedLands } from './landArchiveService.mjs';
+import {
+  buyLandDeed,
+  getLandDeedSummary,
+  listLandDeedForSale,
+  transferLandDeed
+} from './landDeedService.mjs';
 import { getLandSecurityPolicy } from './landmarkService.mjs';
 import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
@@ -66,6 +72,7 @@ import {
   compactSignatureResult,
   createPublishSignatureRequestForMobile,
   enqueueGuestProposalForLandOwner,
+  enqueueSignatureRequest,
   getSignatureRequest,
   getSignatureRequestPreviewModel,
   handlePairedLandMutationViaMcp,
@@ -795,6 +802,136 @@ export async function handleMcpJsonRpc(
         q: args.q || '',
         reason: args.reason || '',
         limit: args.limit || 30
+      });
+    } else if (toolName === 'get_land_deed') {
+      toolResult = await getLandDeedSummary(db, {
+        parcelId: args.parcelId,
+        callerUser: ownerUser
+      });
+    } else if (toolName === 'transfer_land_deed') {
+      const isAutonomousAgent =
+        ownerUser?.actorType === 'agent' ||
+        Boolean(ownerUser?.is_agent) ||
+        String(ownerUser?.id || '').startsWith('agent:');
+      if (isAutonomousAgent) {
+        toolResult = await transferLandDeed(db, {
+          parcelId: args.parcelId,
+          callerUser: ownerUser,
+          toAddress: args.toAddress,
+          includeOwnedArtworks: Boolean(args.includeOwnedArtworks)
+        });
+      } else {
+        // Human Approval Guard: paired agents acting on a human's Land Deed MUST obtain explicit human approval
+        const summary = await getLandDeedSummary(db, {
+          parcelId: args.parcelId,
+          callerUser: ownerUser
+        });
+        if (!summary.eligible || !summary.deed) {
+          throw new McpServiceError(
+            summary.eligibilityReason || 'This land does not have a permanent Land Deed NFT yet.',
+            409
+          );
+        }
+        if (!summary.isOwner) {
+          throw new McpServiceError('Paired human owner does not hold this Land Deed NFT.', 403);
+        }
+        if (!args.toAddress || !/^0x[0-9a-fA-F]{40}$/.test(String(args.toAddress).trim())) {
+          throw new McpServiceError('A valid 0x destination EVM address is required.', 400);
+        }
+        const reqItem = await enqueueSignatureRequest(db, {
+          pairingCode: pairing.code,
+          ownerUser,
+          ownerAddress: summary.deed.ownerAddress || resolvePreferredOwnerWallet(ownerUser),
+          action: 'transfer_land_deed',
+          parcelId: summary.parcelId,
+          payload: {
+            parcelId: summary.parcelId,
+            toAddress: String(args.toAddress).trim(),
+            includeOwnedArtworks: Boolean(args.includeOwnedArtworks)
+          },
+          requestedBy: 'agent',
+          agentName: pairing.agentName || 'paired-agent'
+        });
+        notifyMobileFn?.({
+          userId: ownerUser.id,
+          type: 'signature_request',
+          request: reqItem
+        });
+        toolResult = {
+          status: 'pending_human_approval',
+          requiresHumanApproval: true,
+          parcelId: summary.parcelId,
+          requestId: reqItem.id,
+          request: reqItem,
+          message:
+            'Land Deed NFT transfer requires explicit human owner approval in the SPRAY.LAND mobile/web approval hub.'
+        };
+      }
+    } else if (toolName === 'list_land_for_sale') {
+      const isAutonomousAgent =
+        ownerUser?.actorType === 'agent' ||
+        Boolean(ownerUser?.is_agent) ||
+        String(ownerUser?.id || '').startsWith('agent:');
+      if (isAutonomousAgent) {
+        toolResult = await listLandDeedForSale(db, {
+          parcelId: args.parcelId,
+          sellerUser: ownerUser,
+          priceEth: Number(args.priceEth),
+          includeSellerArtworks: Boolean(args.includeSellerArtworks)
+        });
+      } else {
+        const summary = await getLandDeedSummary(db, {
+          parcelId: args.parcelId,
+          callerUser: ownerUser
+        });
+        if (!summary.eligible || !summary.deed) {
+          throw new McpServiceError(
+            summary.eligibilityReason || 'This land does not have a permanent Land Deed NFT yet.',
+            409
+          );
+        }
+        if (!summary.isOwner) {
+          throw new McpServiceError('Paired human owner does not hold this Land Deed NFT.', 403);
+        }
+        const priceEth = Number(args.priceEth);
+        if (!Number.isFinite(priceEth) || priceEth <= 0) {
+          throw new McpServiceError('priceEth must be greater than 0.', 400);
+        }
+        const reqItem = await enqueueSignatureRequest(db, {
+          pairingCode: pairing.code,
+          ownerUser,
+          ownerAddress: summary.deed.ownerAddress || resolvePreferredOwnerWallet(ownerUser),
+          action: 'list_land_for_sale',
+          parcelId: summary.parcelId,
+          payload: {
+            parcelId: summary.parcelId,
+            priceEth,
+            includeSellerArtworks: Boolean(args.includeSellerArtworks)
+          },
+          requestedBy: 'agent',
+          agentName: pairing.agentName || 'paired-agent'
+        });
+        notifyMobileFn?.({
+          userId: ownerUser.id,
+          type: 'signature_request',
+          request: reqItem
+        });
+        toolResult = {
+          status: 'pending_human_approval',
+          requiresHumanApproval: true,
+          parcelId: summary.parcelId,
+          requestId: reqItem.id,
+          request: reqItem,
+          message:
+            'Listing a human-owned Land Deed NFT for sale requires explicit human approval.'
+        };
+      }
+    } else if (toolName === 'buy_land_deed') {
+      toolResult = await buyLandDeed(db, {
+        listingId: args.listingId,
+        buyerUser: ownerUser,
+        buyerAddress: args.buyerAddress || '',
+        txHash: args.txHash || ''
       });
     } else {
       throw new McpServiceError(`Unknown MCP tool: ${toolName}`, 404);

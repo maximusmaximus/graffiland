@@ -23,6 +23,7 @@ import {
   notifyLandMinted
 } from './notificationService.mjs';
 import { resolveAuthorHandleForStorage } from './userDisplay.mjs';
+import { ensureLandDeedMinted } from './landDeedService.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -1408,9 +1409,22 @@ export async function awakenParcelByHumanVisit(
     // Non-fatal notification failure must never break publish
   }
 
+  // Auto-mint permanent ERC-721 Land Deed NFT once the parcel is awakened / permanently anchored
+  let landDeed = null;
+  try {
+    const deedRes = await ensureLandDeedMinted(db, {
+      parcelId: cleanParcel,
+      trigger: awakenedNow ? 'awakened' : 'human_art_permanent'
+    });
+    landDeed = deedRes?.deed || null;
+  } catch {
+    // Non-fatal: deed will lazily backfill on next detail/management query
+  }
+
   return {
     parcelId: cleanParcel,
     awakenedParcel: awakenedNow,
+    landDeed,
     slotsUnlockedForAgent,
     qualifiesForContributorPool: qualifiesForPool,
     minVoxelsRequired: STEWARD_DEFAULTS.minHumanPoolVoxels,

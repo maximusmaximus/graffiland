@@ -9,6 +9,7 @@ const outDir = path.join(__dirname, 'build');
 
 const CONTRACT_SOURCES = [
   { file: 'GraffilandNFT.sol', contractName: 'GraffilandNFT' },
+  { file: 'GraffilandLandDeed.sol', contractName: 'GraffilandLandDeed' },
   { file: 'GraffilandRoyaltyRouter.sol', contractName: 'GraffilandRoyaltyRouter' },
   { file: 'GraffilandMarketplace.sol', contractName: 'GraffilandMarketplace' }
 ];
@@ -75,7 +76,7 @@ export function compileAllContracts() {
     artifacts[item.contractName] = artifact;
   }
   console.log(
-    'Compiled GraffilandNFT.sol, GraffilandRoyaltyRouter.sol, GraffilandMarketplace.sol -> contracts/build/'
+    'Compiled GraffilandNFT.sol, GraffilandLandDeed.sol, GraffilandRoyaltyRouter.sol, GraffilandMarketplace.sol -> contracts/build/'
   );
   return artifacts;
 }

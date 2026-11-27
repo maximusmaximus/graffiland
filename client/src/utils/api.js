@@ -420,6 +420,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  getLandDeed: (parcelId) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/deed`),
+  transferLandDeed: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  syncLandDeed: (parcelId) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/deed/sync`, {
+      method: 'POST'
+    }),
+  listLandMarketplace: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.parcel) qs.set('parcel', params.parcel);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/marketplace/lands${suffix}`);
+  },
+  listLandForSale: (payload) =>
+    request('/api/marketplace/lands/list', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  cancelLandListing: (listingId) =>
+    request(`/api/marketplace/lands/listings/${encodeURIComponent(listingId)}/cancel`, {
+      method: 'POST'
+    }),
+  buyLandListing: (listingId, payload = {}) =>
+    request(`/api/marketplace/lands/listings/${encodeURIComponent(listingId)}/buy`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   getAgentLeaderboard: (limit = 25) =>
     request(`/api/agents/leaderboard?limit=${encodeURIComponent(String(limit))}`),
   getEconomySplits: (params = {}) => {
