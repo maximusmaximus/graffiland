@@ -1804,13 +1804,17 @@ export function createAppServer(serverOptions = {}) {
   app.get('/api/catalog/search', async (req, res) => {
     try {
       const apiOrigin = `${req.protocol}://${req.get('host')}`;
+      const randomParam = String(req.query?.random || '').trim().toLowerCase();
+      const isRandom = Boolean(randomParam && randomParam !== '0' && randomParam !== 'false');
       const result = await search3dAssetCatalog({
         query: String(req.query?.q ?? req.query?.query ?? ''),
         source: String(req.query?.source || 'all'),
         limit: Number(req.query?.limit || 12),
+        random: isRandom,
+        seed: String(req.query?.seed || ''),
         apiOrigin
       });
-      res.set('Cache-Control', 'public, max-age=120');
+      res.set('Cache-Control', isRandom ? 'no-store' : 'public, max-age=120');
       return res.json(result);
     } catch (err) {
       return res.status(500).json({ error: err?.message || 'Catalog search failed.' });

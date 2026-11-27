@@ -18,6 +18,7 @@ import {
   computeClosestLandsPerimeterFit,
   extractParcelPerimeterPoints,
   formatSimpleLandLabel,
+  isLandPubliclyAddable,
   resolveLandColorTheme
 } from '../utils/landMapHelpers.js';
 import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
@@ -54,6 +55,7 @@ export default function MapView({
   config = null,
   onSelectSculpture,
   onSelectParcel = null,
+  onAdd3DItemForParcel = null,
   onToggle3D = null,
   isFullExpanded = false,
   onToggleFullMap = null
@@ -66,6 +68,8 @@ export default function MapView({
   const initialUserLocationRef = useRef(userLocation);
   const onViewportChangeRef = useRef(onViewportChange);
   const onSelectParcelRef = useRef(onSelectParcel);
+  const onAdd3DItemForParcelRef = useRef(onAdd3DItemForParcel);
+  onAdd3DItemForParcelRef.current = onAdd3DItemForParcel;
   const isFullExpandedRef = useRef(Boolean(isFullExpanded));
   const lastHandledFocusTickRef = useRef(focusParcelTick);
   const userAdjustedViewRef = useRef(
@@ -445,15 +449,27 @@ export default function MapView({
           ? `<img src="${copyIconUrl}" width="15" height="15" class="xero-icon" alt="" aria-hidden="true" style="width:15px;height:15px;object-fit:contain;" />`
           : '📋';
         const idleCopyHtml = `${copyIconHtml}${isEmptyLand ? ' Copy' : ''}`;
+        const canPublicAdd = isLandPubliclyAddable(p) && Boolean(onAdd3DItemForParcelRef.current);
+        const searchIconUrl = xeroemoji.get('🔍')?.svgUrl || '';
+        const searchIconHtml = searchIconUrl
+          ? `<img src="${searchIconUrl}" width="14" height="14" class="xero-icon" alt="" aria-hidden="true" style="width:14px;height:14px;object-fit:contain;" />`
+          : '🔍';
+        const searchBtnHtml = canPublicAdd
+          ? `<button type="button" class="map-land-label-search-btn" data-testid="map-land-search-add-btn" data-parcel-id="${escapeHtml(
+              p.parcelId
+            )}" aria-label="Search and add 3D item to ${escapeHtml(
+              landTitle
+            )}" title="Open to public — Search &amp; add 3D items">${searchIconHtml}</button>`
+          : '';
         const labelIcon = L.divIcon({
           className: 'map-land-simple-label-marker',
           html: `<span class="map-land-simple-label ${stateCls} ${
             isEmptyLand ? 'is-empty-land' : ''
           }" data-testid="map-land-label" data-parcel-id="${escapeHtml(
             p.parcelId
-          )}"><span class="map-land-simple-label-text">${escapeHtml(
+          )}" data-public-add="${canPublicAdd ? 'true' : 'false'}"><span class="map-land-simple-label-text">${escapeHtml(
             simpleLabel
-          )}</span><button type="button" class="map-land-label-copy-btn" data-testid="map-land-copy-btn" data-parcel-id="${escapeHtml(
+          )}</span>${searchBtnHtml}<button type="button" class="map-land-label-copy-btn" data-testid="map-land-copy-btn" data-parcel-id="${escapeHtml(
             p.parcelId
           )}" aria-label="Copy share link for ${escapeHtml(
             landTitle
@@ -465,6 +481,12 @@ export default function MapView({
           zIndexOffset: isSelectedParcel ? 500 : 200
         });
         labelMarker.on('click', async (ev) => {
+          const searchBtn = ev?.originalEvent?.target?.closest?.('.map-land-label-search-btn');
+          if (searchBtn) {
+            ev.originalEvent?.stopPropagation?.();
+            onAdd3DItemForParcelRef.current?.(p);
+            return;
+          }
           const copyBtn = ev?.originalEvent?.target?.closest?.('.map-land-label-copy-btn');
           if (copyBtn) {
             ev.originalEvent?.stopPropagation?.();

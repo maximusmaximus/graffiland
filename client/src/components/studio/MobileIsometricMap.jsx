@@ -13,6 +13,7 @@ import {
   buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel,
+  isLandPubliclyAddable,
   resolveLandColorTheme
 } from '../../utils/landMapHelpers.js';
 import {
@@ -124,6 +125,7 @@ function MobileIsoSvgFallback({
   landLabelCopied = false,
   onSelectLand = null,
   onCopyLandShareLink = null,
+  onOpenAddLandItem = null,
   onSelectSculpture = null,
   onOpenSculptureView = null,
   unitSystem = 'metric'
@@ -360,6 +362,21 @@ function MobileIsoSvgFallback({
                   <span className="plot-iso-land-dot" aria-hidden="true" />
                   <span>{landName}</span>
                 </button>
+                {onOpenAddLandItem && isLandPubliclyAddable(primaryEntry.parcel) && (
+                  <button
+                    type="button"
+                    className="plot-iso-land-search-btn"
+                    data-testid="plot-land-label-search-add-btn"
+                    aria-label={`Search and add 3D item to ${landName}`}
+                    title={`Open to public — Search & add 3D items to ${landName}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenAddLandItem(primaryEntry.parcel.parcelId);
+                    }}
+                  >
+                    <XeroIcon emoji="🔍" size={14} />
+                  </button>
+                )}
                 {navUrl && (
                   <a
                     href={navUrl}
@@ -527,6 +544,7 @@ export default function MobileIsometricMap({
   onSelectParcel = null,
   onSelectLand = null,
   onCopyLandShareLink = null,
+  onOpenAddLandItem = null,
   onSelectSculpture = null,
   onOpenSculptureView = null
 }) {
@@ -2023,6 +2041,21 @@ export default function MobileIsometricMap({
                     <span className="plot-iso-land-dot" aria-hidden="true" />
                     <span>{primaryLandLabel}</span>
                   </button>
+                  {onOpenAddLandItem && isLandPubliclyAddable(primaryEntry.parcel) && (
+                    <button
+                      type="button"
+                      className="plot-iso-land-search-btn"
+                      data-testid="plot-land-label-search-add-btn"
+                      aria-label={`Search and add 3D item to ${primaryLandLabel}`}
+                      title={`Open to public — Search & add 3D items to ${primaryLandLabel}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenAddLandItem(primaryEntry.parcel.parcelId);
+                      }}
+                    >
+                      <XeroIcon emoji="🔍" size={14} />
+                    </button>
+                  )}
                   {primaryLandNavUrl && (
                     <a
                       href={primaryLandNavUrl}
@@ -2192,6 +2225,7 @@ export default function MobileIsometricMap({
           landLabelCopied={landLabelCopied}
           onSelectLand={onSelectLand}
           onCopyLandShareLink={handleCopyPrimaryLandLink}
+          onOpenAddLandItem={onOpenAddLandItem}
           onSelectSculpture={onSelectSculpture}
           onOpenSculptureView={onOpenSculptureView}
           unitSystem={unitSystem}

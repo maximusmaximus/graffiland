@@ -31,6 +31,7 @@ import {
   buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel,
+  isLandPubliclyAddable,
   resolveLandColorTheme,
   resolveLandCoords
 } from '../utils/landMapHelpers.js';
@@ -2280,12 +2281,14 @@ export default function MapView3D({
       }
 
       const landTheme = resolveLandColorTheme(p);
+      const isPublicAdd = isLandPubliclyAddable(p);
       const labelPill = document.createElement('div');
       labelPill.className = `map3d-land-label-pill map3d-ui-stop ${
         landTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
       } ${isEmptyLand ? 'is-empty-land' : ''}`.trim();
       labelPill.dataset.emptyLand = isEmptyLand ? 'true' : 'false';
       labelPill.dataset.landLifecycle = landTheme.status;
+      labelPill.dataset.publicAdd = isPublicAdd ? 'true' : 'false';
       labelPill.style.setProperty('--land-tag-accent', landTheme.outerColor);
       labelPill.style.setProperty('--land-tag-text', landTheme.textColor);
 
@@ -2302,6 +2305,38 @@ export default function MapView3D({
         ev.stopPropagation();
         onSelectParcelRef.current?.(p);
       });
+
+      let searchAddBtn = null;
+      if (isPublicAdd && onAdd3DItemForParcelRef.current) {
+        searchAddBtn = document.createElement('button');
+        searchAddBtn.type = 'button';
+        searchAddBtn.className = 'map3d-land-label-search-btn map3d-ui-stop';
+        searchAddBtn.dataset.testid = 'map3d-land-search-add-btn';
+        searchAddBtn.dataset.parcelId = pid;
+        searchAddBtn.setAttribute('aria-label', `Search and add 3D item to ${landName}`);
+        searchAddBtn.title = `Open to public — Search & add a 3D item to ${landName}`;
+        const searchIconUrl = xeroemoji.get('🔍')?.svgUrl || '';
+        if (searchIconUrl) {
+          const img = document.createElement('img');
+          img.src = searchIconUrl;
+          img.alt = '';
+          img.setAttribute('aria-hidden', 'true');
+          img.width = 14;
+          img.height = 14;
+          img.className = 'xero-icon';
+          img.style.width = '14px';
+          img.style.height = '14px';
+          img.style.objectFit = 'contain';
+          searchAddBtn.appendChild(img);
+        } else {
+          searchAddBtn.appendChild(document.createTextNode('🔍'));
+        }
+        searchAddBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        searchAddBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          onAdd3DItemForParcelRef.current?.(p);
+        });
+      }
 
       const shareBtn = document.createElement('button');
       shareBtn.type = 'button';
@@ -2419,11 +2454,11 @@ export default function MapView3D({
         navLink.addEventListener('click', (ev) => ev.stopPropagation());
       }
 
-      if (navLink) {
-        labelPill.append(badge, navLink, shareBtn, xShareLink);
-      } else {
-        labelPill.append(badge, shareBtn, xShareLink);
-      }
+      const pillChildren = [badge];
+      if (searchAddBtn) pillChildren.push(searchAddBtn);
+      if (navLink) pillChildren.push(navLink);
+      pillChildren.push(shareBtn, xShareLink);
+      labelPill.append(...pillChildren);
       wrap.appendChild(labelPill);
       wrap.style.display = 'none';
       pinLayer.appendChild(wrap);

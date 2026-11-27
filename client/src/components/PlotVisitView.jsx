@@ -20,6 +20,7 @@ import {
   formatSculptureAssetMeta,
   formatShortDate,
   isLandOwnedByUser,
+  isLandPubliclyAddable,
   resolveLandColorTheme
 } from '../utils/landMapHelpers.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
@@ -1659,6 +1660,7 @@ export default function PlotVisitView({
                 onToggleFullMap={() => setIsMapFull((v) => !v)}
                 onSelectLand={handleSelectLandTarget}
                 onCopyLandShareLink={handleCopyShareLink}
+                onOpenAddLandItem={onOpenAddLandItem}
                 onSelectParcel={handleSelectNeighborOnMap}
                 onSelectSculpture={handleSelectArtworkTarget}
                 onOpenSculptureView={onSelectSculpture}
@@ -1764,6 +1766,21 @@ export default function PlotVisitView({
                           <span className="plot-iso-land-dot" aria-hidden="true" />
                           <span>{landDisplayName}</span>
                         </button>
+                        {onOpenAddLandItem && isLandPubliclyAddable(activeParcel) && (
+                          <button
+                            type="button"
+                            className="plot-iso-land-search-btn"
+                            data-testid="plot-land-label-search-add-btn"
+                            aria-label={`Search and add 3D item to ${landDisplayName}`}
+                            title={`Open to public — Search & add 3D items to ${landDisplayName}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenAddLandItem(activeParcel.parcelId);
+                            }}
+                          >
+                            <XeroIcon emoji="🔍" size={14} />
+                          </button>
+                        )}
                         {directionsUrl && (
                           <a
                             href={directionsUrl}
