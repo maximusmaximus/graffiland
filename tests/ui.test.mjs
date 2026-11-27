@@ -2390,13 +2390,16 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       false
     );
 
-    // 2) Defaults to 3D isometric map immediately with 2D toggle, 90° orbit, Fit, Me & Full buttons
+    // 2) Defaults to 3D isometric map immediately with 2D toggle, Fit, pin-only location & Full buttons (no 90° or All)
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
     assert.ok(view.getByTestId('mobile-map-2d-toggle-btn'));
     assert.equal(view.queryByTestId('mobile-map-3d-toggle-btn'), null);
-    assert.ok(view.getByTestId('mobile-map-orbit-btn'));
+    assert.equal(view.queryByTestId('mobile-map-orbit-btn'), null);
+    assert.equal(view.queryByTestId('mobile-map-fit-all-btn'), null);
     assert.ok(view.getByTestId('mobile-map-fit-btn'));
-    assert.ok(view.getByTestId('mobile-map-me-btn'));
+    const mePinBtn = view.getByTestId('mobile-map-me-btn');
+    assert.ok(mePinBtn);
+    assert.equal((mePinBtn.textContent || '').trim(), '', 'Map pin button should not render the word "Me"');
     assert.ok(view.getByTestId('mobile-map-fullscreen-btn'));
 
     // 3) Switching 3D -> 2D -> 3D toggles cleanly in compact mode
@@ -2406,12 +2409,6 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     RTL.fireEvent.click(view.getByTestId('mobile-map-3d-toggle-btn'));
     assert.ok(view.getByTestId('mobile-iso-3d-map'));
     assert.ok(view.getByTestId('mobile-map-2d-toggle-btn'));
-
-    // Orbit 90° updates compass bearing cleanly
-    const beforeOrbitText = view.getByTestId('mobile-iso-3d-map').textContent;
-    RTL.fireEvent.click(view.getByTestId('mobile-map-orbit-btn'));
-    const afterOrbitText = view.getByTestId('mobile-iso-3d-map').textContent;
-    assert.notEqual(beforeOrbitText, afterOrbitText);
 
     // 4) Expand Full Map -> full-screen state keeps ALL 3D & 2D toggle buttons working!
     RTL.fireEvent.click(view.getByTestId('mobile-map-expand-header-btn'));

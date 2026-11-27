@@ -129,7 +129,7 @@ export function drawFloatingLandLabel(
     innerColor = '#eafffc',
     liftPx = 20,
     minY = 12,
-    font = '700 10.5px "JetBrains Mono", ui-monospace, monospace',
+    font = '',
     stageWidth = 0,
     stageHeight = 0,
     reservedRects = null,
@@ -141,12 +141,17 @@ export function drawFloatingLandLabel(
   const anchor = getPrismLabelAnchor(geom);
   if (!anchor || !anchor.visible) return null;
 
+  const fontSizePx = isPrimary ? 12.5 : 10.5;
+  const resolvedFont =
+    font ||
+    `${isPrimary ? 800 : 700} ${fontSizePx}px "JetBrains Mono", ui-monospace, monospace`;
+
   ctx.save();
-  ctx.font = font;
+  ctx.font = resolvedFont;
   const textW = ctx.measureText(label).width;
-  const padX = 8;
+  const padX = isPrimary ? 11 : 8;
   const boxW = textW + padX * 2;
-  const boxH = 20;
+  const boxH = isPrimary ? 25 : 20;
   let bx = anchor.roofCenter.x - boxW / 2;
   let by = Math.max(minY, anchor.highestTopY - boxH - liftPx);
 
@@ -191,14 +196,14 @@ export function drawFloatingLandLabel(
   });
 
   // Floating pill container (drawn strictly on top of stem and all wireframes)
-  ctx.fillStyle = 'rgba(6, 10, 20, 0.94)';
+  ctx.fillStyle = isPrimary ? 'rgba(6, 10, 22, 0.96)' : 'rgba(6, 10, 20, 0.92)';
   ctx.strokeStyle = outerColor;
-  ctx.lineWidth = 1.15;
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-  ctx.shadowBlur = 8;
+  ctx.lineWidth = isPrimary ? 1.75 : 1.15;
+  ctx.shadowColor = isPrimary ? outerColor : 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = isPrimary ? 12 : 8;
   ctx.beginPath();
   if (typeof ctx.roundRect === 'function') {
-    ctx.roundRect(bx, by, boxW, boxH, 6);
+    ctx.roundRect(bx, by, boxW, boxH, isPrimary ? 8 : 6);
   } else {
     ctx.rect(bx, by, boxW, boxH);
   }
@@ -212,7 +217,7 @@ export function drawFloatingLandLabel(
   ctx.fillText(label, pillCenterX, by + boxH / 2 + 0.5);
   ctx.restore();
 
-  return { x: bx, y: by, width: boxW, height: boxH, anchor };
+  return { x: bx, y: by, width: boxW, height: boxH, fontSizePx, isPrimary, anchor };
 }
 
 /**

@@ -1602,7 +1602,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
         Math.abs(default3dMetrics.width - default3dMetrics.height) <= 4,
       `Expected mobile Nearest Lands map to be a 1:1 square, got ${default3dMetrics.width}x${default3dMetrics.height}`
     );
-    await hubPage.getByTestId('mobile-map-orbit-btn').click();
+    await hubPage.getByTestId('mobile-map-fit-btn').click();
 
     // Switch 3D -> 2D in compact mode -> verify square Leaflet map focused on #1 with neighbor edge arrows, then back to 3D
     await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
@@ -1652,7 +1652,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
       full3dMetrics.mapHeight >= 480,
       `Expected full-screen 3D mobile map height >= 480px, got ${full3dMetrics.mapHeight}`
     );
-    await hubPage.getByTestId('mobile-map-orbit-btn').click();
+    await hubPage.getByTestId('mobile-map-fit-btn').click();
     await hubPage.getByTestId('mobile-map-2d-toggle-btn').click();
     await hubPage.getByTestId('mobile-map-3d-toggle-btn').waitFor({ state: 'visible', timeout: 5000 });
     const full2dHeight = await hubPage.evaluate(

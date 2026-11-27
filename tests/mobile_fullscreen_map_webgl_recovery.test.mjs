@@ -295,9 +295,10 @@ describe('Mobile Full-Screen Map Refactor & WebGL Context-Loss / Delay Preventio
     );
     assert.equal(document.querySelector('[data-testid="mobile-nearest-lands-list"]'), null);
 
-    // Full-screen 3D map toolbar includes Fit, All (cluster fit), 2D toggle, Orbit, Me, Theme, Exit Full, Info
+    // Full-screen 3D map toolbar includes Fit, 2D toggle, pin-only location, Theme, Exit Full, Info (no redundant All or 90°)
     assert.ok(document.querySelector('[data-testid="mobile-map-fit-btn"]'));
-    assert.ok(document.querySelector('[data-testid="mobile-map-fit-all-btn"]'));
+    assert.equal(document.querySelector('[data-testid="mobile-map-fit-all-btn"]'), null);
+    assert.equal(document.querySelector('[data-testid="mobile-map-orbit-btn"]'), null);
     assert.ok(document.querySelector('[data-testid="mobile-map-2d-toggle-btn"]'));
     assert.ok(document.querySelector('[data-testid="mobile-iso-map-info"]'));
 
