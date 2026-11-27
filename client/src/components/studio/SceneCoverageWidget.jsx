@@ -22,7 +22,12 @@ export default function SceneCoverageWidget({
   onEnableIosGyro = null,
   onRetryCameraAccess = null,
   sensorStatus = null,
-  voxelCount = 0
+  voxelCount = 0,
+  showWebXrPreCalPrompt = false,
+  webxrActive = false,
+  webxrStarting = false,
+  onStartWebXrPreCal = null,
+  onSkipWebXrPreCal = null
 }) {
   const { unitSystem } = useMeasurementUnits();
   const activeLoss = mappingRestartPrompt || calibrationLoss || null;
@@ -32,7 +37,10 @@ export default function SceneCoverageWidget({
     : calibrationState || (sceneScan?.optimal ? 'calibrated' : 'calibrating');
   const isCalibrated = resolvedState === 'calibrated';
   const isRelocalizing = resolvedState === 'relocalizing';
-  const isCenteredOverlay = resolvedState === 'calibrating' || resolvedState === 'lost';
+  const isWebXrPreCal = Boolean(
+    showWebXrPreCalPrompt && !needsRestart && !isCalibrated && !webxrActive
+  );
+  const isCenteredOverlay = isWebXrPreCal || resolvedState === 'calibrating' || resolvedState === 'lost';
 
   const progressPct = Number.isFinite(calibrationReadiness?.progressPct)
     ? calibrationReadiness.progressPct
@@ -105,6 +113,63 @@ export default function SceneCoverageWidget({
             <XeroIcon emoji="🔄" size={11} />
           </button>
         )}
+      </div>
+    );
+  }
+
+  // Default pre-calibration 6-DoF ARCore prompt shown FIRST on ARCore-capable devices
+  // before standard sweep calibration (configurable on/off in Profile ⚙️ Settings).
+  if (isWebXrPreCal) {
+    return (
+      <div
+        className={`scene-scan-box hud-interactive is-centered is-webxr-precal scanning ${
+          dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''
+        }`}
+        data-testid="scene-coverage-widget"
+        data-placement="center"
+        data-calibration-state="webxr-precalibration"
+        data-calibration-phase="webxr-precalibration"
+        data-needs-restart="false"
+        role="dialog"
+        aria-label="Enable 6-DoF ARCore for calibration"
+      >
+        <div className="scene-scan-header" data-testid="webxr-precalibration-prompt">
+          <div className="scene-scan-title">
+            <XeroIcon emoji="✨" size={15} />
+            <span className="calibration-card-heading">6-DoF ARCore Ready</span>
+            <span className="scene-scan-tag">6-DoF</span>
+          </div>
+        </div>
+        <div className="webxr-precal-body">
+          <p className="webxr-precal-copy">
+            Your device supports <strong>6-DoF ARCore</strong> for faster calibration and tighter
+            real-world tracking. Turn it on first before calibrating your space.
+          </p>
+          <div className="webxr-precal-actions">
+            <button
+              type="button"
+              className="btn btn-primary calibration-inline-cta"
+              data-testid="webxr-precalibration-start-btn"
+              disabled={webxrStarting}
+              onClick={() => onStartWebXrPreCal?.()}
+            >
+              <XeroIcon emoji="✨" size={14} />{' '}
+              {webxrStarting ? 'Starting 6-DoF ARCore…' : 'Enable 6-DoF ARCore & Calibrate'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs webxr-precal-skip-btn"
+              data-testid="webxr-precalibration-skip-btn"
+              disabled={webxrStarting}
+              onClick={() => onSkipWebXrPreCal?.()}
+            >
+              Use Standard Calibration
+            </button>
+          </div>
+          <div className="calibration-gate-note">
+            Manage 6-DoF ARCore anytime in Profile ⚙️ Settings.
+          </div>
+        </div>
       </div>
     );
   }
@@ -290,6 +355,11 @@ export default function SceneCoverageWidget({
           <div className="scene-scan-hint">{activeHint}</div>
 
           <div className="calibration-signal-chips">
+            {webxrActive && (
+              <span className="cal-chip ok" data-testid="cal-chip-webxr">
+                ✓ 6-DoF
+              </span>
+            )}
             <span className={`cal-chip ${cameraReady && !calibrationReadiness?.lensOccluded ? 'ok' : 'warn'}`}>
               {cameraReady ? '✓' : '·'} Cam
             </span>

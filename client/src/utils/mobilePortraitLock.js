@@ -72,12 +72,39 @@ export function isMobileLandscapeOrientation(
     return width > height * 1.15;
   }
 
+  // Media query landscape hint + aspect guard
+  if (typeof win.matchMedia === 'function') {
+    try {
+      if (win.matchMedia('(orientation: landscape)')?.matches && width > 0 && height > 0) {
+        return width > height * 1.15;
+      }
+    } catch {
+      // ignore matchMedia errors in headless environments
+    }
+  }
+
   // Fallback for browsers without orientation APIs
   if (width > 0 && height > 0) {
     return width > height * 1.15;
   }
 
   return false;
+}
+
+/**
+ * Synchronously toggles the `mobile-landscape-blocked` class on `<html>` / `<body>`
+ * whenever a mobile viewport is turned horizontally so underlying AR/HUD content is
+ * immediately locked out until the phone returns to Portrait.
+ */
+export function syncPortraitLockClass(
+  win = typeof window !== 'undefined' ? window : null,
+  doc = typeof document !== 'undefined' ? document : null
+) {
+  if (!win || !doc) return false;
+  const isLandscape = isMobileLandscapeOrientation(win, doc);
+  doc.documentElement?.classList?.toggle('mobile-landscape-blocked', isLandscape);
+  doc.body?.classList?.toggle('mobile-landscape-blocked', isLandscape);
+  return isLandscape;
 }
 
 /**
@@ -184,6 +211,7 @@ export function installMobileViewportLock({
   tryLockPortraitOrientation(win);
   syncMobileViewportDimensions(win, doc);
   resetMobileViewportAnchor(win, doc);
+  syncPortraitLockClass(win, doc);
 
   let lastTapAt = 0;
   let lastTapX = 0;
@@ -191,21 +219,30 @@ export function installMobileViewportLock({
   const settleTimers = new Set();
 
   const scheduleSettleSync = () => {
+    tryLockPortraitOrientation(win);
     syncMobileViewportDimensions(win, doc);
     resetMobileViewportAnchor(win, doc);
+    syncPortraitLockClass(win, doc);
     for (const delayMs of [120, 360]) {
       const id = setTimeout(() => {
         settleTimers.delete(id);
         syncMobileViewportDimensions(win, doc);
         resetMobileViewportAnchor(win, doc);
+        syncPortraitLockClass(win, doc);
       }, delayMs);
       settleTimers.add(id);
     }
   };
 
-  const onFirstGesture = () => {
-    tryLockPortraitOrientation(win);
+  let orientationLockedOnce = false;
+  const onGestureTryLock = () => {
     syncMobileViewportDimensions(win, doc);
+    const landscapeNow = syncPortraitLockClass(win, doc);
+    if (!orientationLockedOnce || landscapeNow) {
+      tryLockPortraitOrientation(win).then((ok) => {
+        if (ok) orientationLockedOnce = true;
+      });
+    }
   };
 
   const preventPageGesture = (ev) => {
@@ -262,15 +299,29 @@ export function installMobileViewportLock({
   const onAnchorCheck = () => {
     syncMobileViewportDimensions(win, doc);
     resetMobileViewportAnchor(win, doc);
+    syncPortraitLockClass(win, doc);
   };
 
-  win.addEventListener('pointerdown', onFirstGesture, { passive: true, once: true });
-  win.addEventListener('touchstart', onFirstGesture, { passive: true, once: true });
+  const onVisibilityChange = () => {
+    if (doc.visibilityState === 'visible') {
+      scheduleSettleSync();
+    }
+  };
+
+  const screenOrient = win.screen?.orientation;
+  const landscapeMq =
+    typeof win.matchMedia === 'function' ? win.matchMedia('(orientation: landscape)') : null;
+
+  win.addEventListener('pointerdown', onGestureTryLock, { passive: true });
+  win.addEventListener('touchstart', onGestureTryLock, { passive: true });
   win.addEventListener('resize', onAnchorCheck, { passive: true });
   win.addEventListener('orientationchange', scheduleSettleSync, { passive: true });
   win.addEventListener('pageshow', scheduleSettleSync, { passive: true });
+  screenOrient?.addEventListener?.('change', scheduleSettleSync);
+  landscapeMq?.addEventListener?.('change', scheduleSettleSync);
   doc.addEventListener('fullscreenchange', scheduleSettleSync, { passive: true });
   doc.addEventListener('webkitfullscreenchange', scheduleSettleSync, { passive: true });
+  doc.addEventListener('visibilitychange', onVisibilityChange, { passive: true });
   doc.addEventListener('gesturestart', preventPageGesture, { passive: false });
   doc.addEventListener('gesturechange', preventPageGesture, { passive: false });
   doc.addEventListener('gestureend', preventPageGesture, { passive: false });
@@ -285,17 +336,20 @@ export function installMobileViewportLock({
   return () => {
     for (const id of settleTimers) clearTimeout(id);
     settleTimers.clear();
-    doc.documentElement?.classList?.remove('mobile-portrait-locked');
-    doc.body?.classList?.remove('mobile-portrait-locked');
+    doc.documentElement?.classList?.remove('mobile-portrait-locked', 'mobile-landscape-blocked');
+    doc.body?.classList?.remove('mobile-portrait-locked', 'mobile-landscape-blocked');
     doc.documentElement?.style?.removeProperty('--mobile-app-height');
     doc.documentElement?.style?.removeProperty('--mobile-app-width');
-    win.removeEventListener('pointerdown', onFirstGesture);
-    win.removeEventListener('touchstart', onFirstGesture);
+    win.removeEventListener('pointerdown', onGestureTryLock);
+    win.removeEventListener('touchstart', onGestureTryLock);
     win.removeEventListener('resize', onAnchorCheck);
     win.removeEventListener('orientationchange', scheduleSettleSync);
     win.removeEventListener('pageshow', scheduleSettleSync);
+    screenOrient?.removeEventListener?.('change', scheduleSettleSync);
+    landscapeMq?.removeEventListener?.('change', scheduleSettleSync);
     doc.removeEventListener('fullscreenchange', scheduleSettleSync);
     doc.removeEventListener('webkitfullscreenchange', scheduleSettleSync);
+    doc.removeEventListener('visibilitychange', onVisibilityChange);
     doc.removeEventListener('gesturestart', preventPageGesture);
     doc.removeEventListener('gesturechange', preventPageGesture);
     doc.removeEventListener('gestureend', preventPageGesture);

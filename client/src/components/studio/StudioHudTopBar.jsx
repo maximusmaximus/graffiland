@@ -88,9 +88,7 @@ export default function StudioHudTopBar({
   nearbyCameraLand = null,
   nearbyCameraLandCount = 0,
   sensorStatus = null,
-  webxrSupported = false,
   webxrActive = false,
-  onToggleWebxr = null,
   onInspectArLand = null,
   onExitArLand = null,
   arExitLabel = 'Back to Draw',
@@ -418,29 +416,16 @@ export default function StudioHudTopBar({
                       }`}
                 </span>
                 <InfoTip title="Multi-Sensor AR Alignment">
-                  Fuses True-North compass, gyroscope, gravity horizon, geomagnetic declination (
-                  {sensorStatus.declinationDeg >= 0 ? '+' : ''}
-                  {sensorStatus.declinationDeg ?? 0}°), Kalman GPS + step motion, and visual ORB
-                  landmarks so lands stay locked in real-world position and direction.
+                  Automatically fuses True-North compass, gyroscope, gravity horizon, geomagnetic
+                  declination ({sensorStatus.declinationDeg >= 0 ? '+' : ''}
+                  {sensorStatus.declinationDeg ?? 0}°), Kalman GPS + step motion, visual ORB
+                  landmarks, and 6-DoF ARCore (manageable in Profile ⚙️ Settings) so lands stay
+                  locked in real-world position and direction.
                   {sensorStatus.needsCompassCalibration
                     ? ' Move your phone smoothly in a figure-8 away from steel or cars to recalibrate.'
                     : ''}
                 </InfoTip>
               </div>
-
-              {webxrSupported && typeof onToggleWebxr === 'function' && (isInteractingWithLand || mode === 'preview') && (
-                <button
-                  type="button"
-                  className={`ar-webxr-pill ${webxrActive ? 'is-active' : ''}`}
-                  data-testid="ar-webxr-toggle-btn"
-                  aria-pressed={webxrActive}
-                  onClick={onToggleWebxr}
-                  title="Toggle ARCore 6-DoF WebXR tracking for centimeter walking stability"
-                >
-                  <XeroIcon emoji="📐" size={12} />
-                  <span>{webxrActive ? 'Exit 6-DoF' : '6-DoF AR'}</span>
-                </button>
-              )}
             </div>
           )}
 

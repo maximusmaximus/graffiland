@@ -35,6 +35,7 @@ import {
   recordUserAction,
   subscribeUserHistory
 } from '../utils/userHistory.js';
+import ArTrackingSettings from './ArTrackingSettings.jsx';
 import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
@@ -68,6 +69,10 @@ export default function ProfileModal({
   onOpenWalletSettings = null,
   onLogout = null,
   onShowHint = null,
+  webxrSupported = null,
+  webxrActive = false,
+  onEnableWebxr = null,
+  onDisableWebxr = null,
   onClose,
   fetchProfileFn = null,
   checkUsernameFn = null,
@@ -947,6 +952,13 @@ export default function ProfileModal({
                     </div>
 
                     <MeasurementUnitSetting />
+
+                    <ArTrackingSettings
+                      webxrSupported={webxrSupported}
+                      webxrActive={webxrActive}
+                      onEnableWebxr={onEnableWebxr}
+                      onDisableWebxr={onDisableWebxr}
+                    />
 
                     <div className="profile-settings-agent-note" data-testid="profile-agent-sync-note">
                       <XeroIcon emoji="🤖" size={13} />

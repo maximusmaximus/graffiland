@@ -472,12 +472,11 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     }
   });
 
-  test('StudioHudTopBar displays True North lock, figure-8 calibration warning & 6-DoF AR toggle', async () => {
+  test('StudioHudTopBar displays True North / 6-DoF ARCore status pill without on-screen 6-DoF toggle button', async () => {
     const { default: StudioHudTopBar } = await loadJsxModule(
       'client/src/components/studio/StudioHudTopBar.jsx'
     );
 
-    let webxrClicks = 0;
     const baseProps = {
       user: null,
       mode: 'preview',
@@ -489,11 +488,7 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
       originStatus: { originBlocked: false, reason: '' },
       sceneScan: { optimal: true, coveragePct: 100, scannedCount: 9, targetCount: 9 },
       isInteractingWithLand: true,
-      webxrSupported: true,
       webxrActive: false,
-      onToggleWebxr: () => {
-        webxrClicks += 1;
-      },
       sensorStatus: {
         source: 'ios-compass-fused',
         trueNorthLocked: true,
@@ -511,11 +506,11 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     const pill = view.getByTestId('ar-sensor-status-pill');
     assert.ok(pill.textContent.includes('True North ±6° · GPS ±4m'));
     assert.equal(pill.getAttribute('data-true-north'), 'true');
-
-    const xrBtn = view.getByTestId('ar-webxr-toggle-btn');
-    assert.ok(xrBtn.textContent.includes('6-DoF AR'));
-    RTL.fireEvent.click(xrBtn);
-    assert.equal(webxrClicks, 1);
+    assert.equal(
+      view.queryByTestId('ar-webxr-toggle-btn'),
+      null,
+      'On-screen 6-DoF AR button must be removed from StudioHudTopBar'
+    );
 
     // Rerender in magnetic-interference calibration warning state
     view.rerender(
@@ -532,7 +527,7 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
       view.getByTestId('ar-sensor-status-pill').textContent.includes('figure-8')
     );
 
-    // Rerender in active WebXR 6-DoF state
+    // Rerender in active WebXR 6-DoF state: status telemetry shows lock, still zero on-screen button
     view.rerender(
       React.createElement(StudioHudTopBar, {
         ...baseProps,
@@ -542,63 +537,15 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     assert.ok(
       view.getByTestId('ar-sensor-status-pill').textContent.includes('6-DoF ARCore Lock')
     );
-    assert.ok(view.getByTestId('ar-webxr-toggle-btn').textContent.includes('Exit 6-DoF'));
+    assert.equal(view.queryByTestId('ar-webxr-toggle-btn'), null);
     view.unmount();
   });
 
-  test('ARLandInspectorPanel exposes Compass Fine-Align (−5°/−1°/Reset/+1°/+5°) and 6-DoF button', async () => {
+  test('ARLandInspectorPanel removes manual Align AR button, compass nudge controls, and on-screen 6-DoF button', async () => {
     const { default: ARLandInspectorPanel } = await loadJsxModule(
       'client/src/components/studio/ARLandInspectorPanel.jsx'
     );
 
-    const deltas = [];
-    let resets = 0;
-    let xrToggles = 0;
-
-    const view = RTL.render(
-      React.createElement(ARLandInspectorPanel, {
-        land: {
-          parcelId: 'GLAND-ALIGN1',
-          displayName: 'Mission Plaza',
-          centerLat: 37.7749,
-          centerLng: -122.4194,
-          isInside: true,
-          isOwned: false,
-          sculptures: []
-        },
-        sensorStatus: {
-          trueNorthLocked: true,
-          manualYawNudgeDeg: 3
-        },
-        onAdjustCompassNudge: (d) => deltas.push(d),
-        onResetCompassNudge: () => {
-          resets += 1;
-        },
-        webxrSupported: true,
-        webxrActive: false,
-        onToggleWebxr: () => {
-          xrToggles += 1;
-        },
-        onClose: () => {}
-      })
-    );
-
-    const nudgeBar = view.getByTestId('ar-compass-nudge-controls');
-    assert.ok(nudgeBar.textContent.includes('+3°'));
-
-    RTL.fireEvent.click(view.getByTestId('ar-compass-nudge-left5'));
-    RTL.fireEvent.click(view.getByTestId('ar-compass-nudge-left1'));
-    RTL.fireEvent.click(view.getByTestId('ar-compass-nudge-right1'));
-    RTL.fireEvent.click(view.getByTestId('ar-compass-nudge-right5'));
-    RTL.fireEvent.click(view.getByTestId('ar-compass-nudge-reset'));
-    RTL.fireEvent.click(view.getByTestId('ar-inspector-webxr-btn'));
-
-    assert.deepEqual(deltas, [-5, -1, 1, 5]);
-    assert.equal(resets, 1);
-    assert.equal(xrToggles, 1);
-    view.unmount();
-
-    // Verify clean 3-zone hierarchy (Informational vs Actions vs Art) and collapsed Align AR by default when nudge is 0
     const organizedView = RTL.render(
       React.createElement(ARLandInspectorPanel, {
         land: {
@@ -612,14 +559,11 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
           dimensionsLabel: '14×14×9.8 ft · 206 ft²',
           sculptures: [{ id: 'sc-1', title: 'PARKING LOT 🚗', voxelCount: 2406, creatorUsername: 'bigdog' }]
         },
-        sensorStatus: { trueNorthLocked: true, manualYawNudgeDeg: 0, needsCompassCalibration: false },
         onDrawHere: () => {},
         onOpenLandChat: () => {},
         onOpen3DMap: () => {},
         onManageLand: () => {},
         onInspectSculpture: () => {},
-        onAdjustCompassNudge: (d) => deltas.push(d),
-        onResetCompassNudge: () => {},
         onClose: () => {}
       })
     );
@@ -638,10 +582,10 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     assert.ok(secondaryActions.querySelector('[data-testid="ar-land-manage-btn"]'));
     assert.ok(sculpturesZone.textContent.includes('Art on This Land (1)'));
 
-    // Align AR fine-nudge bar stays neatly tucked until tapped when nudge is 0 & compass is healthy
+    // Align AR button, manual compass nudge controls, and on-screen 6-DoF button must be removed
+    assert.equal(organizedView.queryByTestId('ar-compass-align-toggle-btn'), null);
     assert.equal(organizedView.queryByTestId('ar-compass-nudge-controls'), null);
-    RTL.fireEvent.click(organizedView.getByTestId('ar-compass-align-toggle-btn'));
-    assert.ok(organizedView.getByTestId('ar-compass-nudge-controls'));
+    assert.equal(organizedView.queryByTestId('ar-inspector-webxr-btn'), null);
     organizedView.unmount();
   });
 });

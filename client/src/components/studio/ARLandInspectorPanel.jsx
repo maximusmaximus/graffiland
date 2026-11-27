@@ -20,7 +20,6 @@ import {
 import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../../utils/toastNotice.js';
 import { EmojiInput } from '../EmojiField.jsx';
-import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -141,12 +140,6 @@ export default function ARLandInspectorPanel({
   onOpenLandChat = null,
   onOpenSculptureChat = null,
   onShowHint = null,
-  sensorStatus = null,
-  onAdjustCompassNudge = null,
-  onResetCompassNudge = null,
-  webxrSupported = false,
-  webxrActive = false,
-  onToggleWebxr = null,
   expanded = undefined,
   defaultExpanded = true,
   onToggleExpanded = null,
@@ -177,24 +170,9 @@ export default function ARLandInspectorPanel({
     edgeDistM,
     canDrawAtLand,
     canCheckInAtLand,
-    canChatAtLand,
-    canAlignAtLand
+    canChatAtLand
   } = proximity;
-  const hasAlignTool = typeof onAdjustCompassNudge === 'function';
-  const autoExpandAlign = Boolean(
-    canAlignAtLand &&
-      (sensorStatus?.manualYawNudgeDeg || sensorStatus?.needsCompassCalibration || webxrActive)
-  );
-  const [alignExpanded, setAlignExpanded] = useState(autoExpandAlign);
   const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
-
-  useEffect(() => {
-    if (!canAlignAtLand) {
-      setAlignExpanded(false);
-    } else if (autoExpandAlign) {
-      setAlignExpanded(true);
-    }
-  }, [autoExpandAlign, canAlignAtLand]);
 
   // Reset inline rename & check-in state when switching to a different nearby land
   useEffect(() => {
@@ -206,8 +184,7 @@ export default function ARLandInspectorPanel({
     setCheckedInDone(false);
     setVisitLockNotice('');
     setVisitLockPulse(false);
-    setAlignExpanded(autoExpandAlign);
-  }, [land?.parcelId, autoExpandAlign]);
+  }, [land?.parcelId]);
 
   useEffect(() => {
     return () => {
@@ -364,8 +341,7 @@ export default function ARLandInspectorPanel({
   const hasAnyLockedAction = Boolean(
     (hasPrimaryDraw && !canDrawAtLand) ||
       (canOpenLandChat && !canChatAtLand) ||
-      (hasPrimaryCheckIn && !canCheckInAtLand) ||
-      (hasAlignTool && !canAlignAtLand)
+      (hasPrimaryCheckIn && !canCheckInAtLand)
   );
   const defaultVisitLockMessage =
     edgeDistM !== null
@@ -895,126 +871,7 @@ export default function ARLandInspectorPanel({
               <span>Navigate</span>
             </a>
           )}
-          {hasAlignTool && (
-            <button
-              type="button"
-              className={`ar-land-tool-btn ${
-                !canAlignAtLand
-                  ? 'is-action-locked'
-                  : alignExpanded || sensorStatus?.manualYawNudgeDeg
-                  ? 'is-active'
-                  : ''
-              }`}
-              data-testid="ar-compass-align-toggle-btn"
-              data-locked={canAlignAtLand ? 'false' : 'true'}
-              aria-disabled={canAlignAtLand ? undefined : 'true'}
-              aria-expanded={canAlignAtLand ? alignExpanded : false}
-              title={
-                canAlignAtLand
-                  ? 'Fine-align compass bearing and AR tracking'
-                  : `Visit ${displayName} in person to view & align it in AR`
-              }
-              onClick={() => {
-                if (!canAlignAtLand) {
-                  notifyVisitRequired('align this land in AR', AR_MAX_VISIBLE_DISTANCE_METERS);
-                  return;
-                }
-                setAlignExpanded((prev) => !prev);
-              }}
-            >
-              <XeroIcon emoji={canAlignAtLand ? '🎯' : '🔒'} size={14} />
-              <span>
-                {canAlignAtLand && sensorStatus?.manualYawNudgeDeg
-                  ? `Align ${sensorStatus.manualYawNudgeDeg > 0 ? '+' : ''}${
-                      sensorStatus.manualYawNudgeDeg
-                    }°`
-                  : 'Align AR'}
-              </span>
-            </button>
-          )}
         </div>
-
-        {/* Collapsible Compass Fine-Align Nudge & 6-DoF ARCore Controls */}
-        {hasAlignTool && canAlignAtLand && alignExpanded && (
-          <div
-            className="ar-compass-nudge-bar"
-            data-testid="ar-compass-nudge-controls"
-            aria-label="Compass fine alignment"
-          >
-            <div className="ar-compass-nudge-head">
-              <span className="ar-compass-nudge-label">
-                <XeroIcon emoji="🧭" size={12} /> Fine-Align Bearing
-                <InfoTip title="Fine-Align Compass Bearing">
-                  Near steel buildings or cars, phone magnetometers can drift by a few degrees. Tap
-                  −5° / −1° / +1° / +5° to fine-align lands to your real-world view, or wave your
-                  phone in a figure-8 to recalibrate.
-                </InfoTip>
-              </span>
-              <span className="mono ar-compass-nudge-readout">
-                {sensorStatus?.manualYawNudgeDeg
-                  ? `${sensorStatus.manualYawNudgeDeg > 0 ? '+' : ''}${sensorStatus.manualYawNudgeDeg}°`
-                  : '0°'}
-              </span>
-            </div>
-            <div className="ar-compass-nudge-btns">
-              <button
-                type="button"
-                className="btn btn-xs"
-                data-testid="ar-compass-nudge-left5"
-                onClick={() => onAdjustCompassNudge(-5)}
-                aria-label="Nudge compass left 5 degrees"
-              >
-                −5°
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs"
-                data-testid="ar-compass-nudge-left1"
-                onClick={() => onAdjustCompassNudge(-1)}
-                aria-label="Nudge compass left 1 degree"
-              >
-                −1°
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs"
-                data-testid="ar-compass-nudge-reset"
-                disabled={!sensorStatus?.manualYawNudgeDeg}
-                onClick={() => onResetCompassNudge?.()}
-              >
-                Reset
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs"
-                data-testid="ar-compass-nudge-right1"
-                onClick={() => onAdjustCompassNudge(1)}
-                aria-label="Nudge compass right 1 degree"
-              >
-                +1°
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs"
-                data-testid="ar-compass-nudge-right5"
-                onClick={() => onAdjustCompassNudge(5)}
-                aria-label="Nudge compass right 5 degrees"
-              >
-                +5°
-              </button>
-              {webxrSupported && typeof onToggleWebxr === 'function' && (
-                <button
-                  type="button"
-                  className={`btn btn-xs ${webxrActive ? 'btn-primary' : ''}`}
-                  data-testid="ar-inspector-webxr-btn"
-                  onClick={onToggleWebxr}
-                >
-                  {webxrActive ? '6-DoF ON' : '6-DoF'}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ZONE 3: ART ON THIS LAND */}

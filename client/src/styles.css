@@ -6773,32 +6773,162 @@ select {
   max-width: 740px;
 }
 
+.land-mgmt-selector-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .land-mgmt-selector-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.land-mgmt-selector-pills {
+.land-mgmt-unfold-btn {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(15, 24, 46, 0.9);
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  color: var(--text);
 }
 
-.land-mgmt-parcel-tab {
+.land-mgmt-unfold-btn.is-open {
+  border-color: rgba(0, 245, 212, 0.78);
+  background: rgba(0, 245, 212, 0.12);
+}
+
+.land-mgmt-unfold-main {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  max-width: 100%;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.land-mgmt-tab-count {
-  opacity: 0.78;
+.land-mgmt-unfold-label {
+  font-weight: 700;
+  font-size: 12.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.land-mgmt-unfold-current {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.land-mgmt-unfold-caret {
   font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.land-mgmt-lands-panel {
+  border-radius: 12px;
+  border: 1px solid rgba(0, 245, 212, 0.36);
+  background: rgba(8, 14, 28, 0.96);
+  overflow: hidden;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.land-mgmt-lands-panel-head {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(15, 24, 46, 0.72);
+}
+
+.land-mgmt-lands-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.land-mgmt-land-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.land-mgmt-land-row:last-child {
+  border-bottom: none;
+}
+
+.land-mgmt-land-row:hover {
+  background: rgba(0, 245, 212, 0.08);
+}
+
+.land-mgmt-land-row.is-active {
+  background: rgba(0, 245, 212, 0.14);
+}
+
+.land-mgmt-land-idx {
+  font-size: 10.5px;
+  color: var(--muted);
+  min-width: 24px;
+  flex-shrink: 0;
+}
+
+.land-mgmt-land-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.land-mgmt-land-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.land-mgmt-land-active-pill {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(0, 245, 212, 0.2);
+  border: 1px solid rgba(0, 245, 212, 0.52);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.land-mgmt-preview-anchor {
+  outline: none;
+  scroll-margin-top: 8px;
 }
 
 .land-mgmt-selector-nav {
@@ -14408,10 +14538,13 @@ body.mobile-portrait-locked {
   right: 0;
   bottom: 0;
   width: 100%;
+  max-width: 100%;
   height: var(--mobile-app-height, 100%);
   max-height: 100%;
   overflow: hidden;
+  overflow-x: hidden;
   overscroll-behavior: none;
+  overscroll-behavior-x: none;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   touch-action: manipulation;
@@ -14424,9 +14557,23 @@ html.mobile-portrait-locked #root {
   right: 0;
   bottom: 0;
   width: 100%;
+  max-width: 100%;
   height: var(--mobile-app-height, 100%);
   max-height: 100%;
   overflow: hidden;
+  overflow-x: hidden;
+}
+
+html.mobile-landscape-blocked .mobile-fullscreen,
+html.mobile-landscape-blocked .modal-backdrop {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+@media (orientation: landscape) and (pointer: coarse) and (min-aspect-ratio: 6/5) {
+  html.mobile-portrait-locked .mobile-fullscreen {
+    pointer-events: none;
+  }
 }
 
 /* Keep all mobile form controls >=16px so iOS Safari never auto-zooms the viewport on focus */
@@ -14465,7 +14612,7 @@ html.mobile-portrait-locked .mobile-map-sheet {
   width: 100vw;
   height: 100vh;
   height: 100dvh;
-  z-index: 2147483000;
+  z-index: 2147483647;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -15930,6 +16077,74 @@ html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {
   color: var(--muted);
   font-size: 9.5px;
   pointer-events: none;
+}
+
+/* 6-DoF ARCore Pre-Calibration Prompt & User Settings Toggles */
+.webxr-precal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.webxr-precal-copy {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #e2e8f0;
+  text-align: center;
+}
+
+.webxr-precal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.webxr-precal-skip-btn {
+  width: 100%;
+  justify-content: center;
+  opacity: 0.88;
+}
+
+.ar-settings-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ar-settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.ar-settings-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ar-settings-toggle-copy strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.ar-settings-toggle-copy span {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.ar-setting-switch-btn {
+  min-width: 52px;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 700;
 }
 
 /* Respect the OS "reduce motion" setting. */

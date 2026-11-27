@@ -40,6 +40,10 @@ import {
   shouldAutoFadeOtherArt,
   shouldIsolatePublishArtView
 } from '../utils/arLandGuidance.js';
+import {
+  shouldShowWebXrPreCalibrationPrompt,
+  useArSettings
+} from '../utils/arSettings.js';
 import { captureIsolatedDraftSnapshot } from '../utils/publishArtPreview.js';
 import { useARPreview } from '../hooks/useARPreview.js';
 import { useChat } from '../hooks/useChat.js';
@@ -164,6 +168,9 @@ export default function MobileStudio({
   const [cameraFirstToolsSeen, setCameraFirstToolsSeen] = useState(() =>
     loadBoolPreference(CAMERA_FIRST_TOOLS_SEEN_KEY, false)
   );
+  const { settings: arSettings } = useArSettings();
+  const [webxrPromptDismissed, setWebxrPromptDismissed] = useState(false);
+  const [webxrStarting, setWebxrStarting] = useState(false);
   const placedCatalogItemRef = useRef(null);
   placedCatalogItemRef.current = placedCatalogItem;
   const placedCatalogPivotRef = useRef(null);
@@ -1132,24 +1139,58 @@ export default function MobileStudio({
     setEditingSculptureIdState(editId);
   }, [lands.editingSculpture?.id]);
 
-  const handleToggleWebxr = useCallback(async () => {
+  const handleStartWebxr = useCallback(async () => {
     const ctrl = webxrControllerRef.current;
     if (!ctrl) {
-      showTemporaryHint('6-DoF WebXR is not available on this device.');
-      return;
+      showTemporaryHint('6-DoF ARCore is not available on this device.');
+      return false;
     }
+    if (pol.webxrActiveRef?.current) return true;
+    setWebxrStarting(true);
     try {
-      if (pol.webxrActiveRef?.current) {
-        await ctrl.stop();
-        showTemporaryHint('Switched back to True-North multi-sensor AR.');
-      } else {
-        await ctrl.start();
-        showTemporaryHint('✨ 6-DoF ARCore WebXR tracking active!');
-      }
+      await ctrl.start();
+      setWebxrPromptDismissed(true);
+      showTemporaryHint('✨ 6-DoF ARCore active — quick sweep to lock calibration!');
+      return true;
     } catch (err) {
-      showTemporaryHint(err?.message || 'Could not start 6-DoF WebXR session on this browser.');
+      showTemporaryHint(
+        err?.message || '6-DoF ARCore could not start — continuing with standard calibration.'
+      );
+      return false;
+    } finally {
+      setWebxrStarting(false);
     }
   }, [pol.webxrActiveRef, showTemporaryHint]);
+
+  const handleStopWebxr = useCallback(async () => {
+    const ctrl = webxrControllerRef.current;
+    if (!ctrl || !pol.webxrActiveRef?.current) return;
+    try {
+      await ctrl.stop();
+      showTemporaryHint('Switched to standard multi-sensor AR calibration.');
+    } catch {
+      // ignore stop error
+    }
+  }, [pol.webxrActiveRef, showTemporaryHint]);
+
+  const handleStartWebxrPreCalibration = useCallback(async () => {
+    const started = await handleStartWebxr();
+    if (!started) {
+      setWebxrPromptDismissed(true);
+    }
+  }, [handleStartWebxr]);
+
+  const handleSkipWebxrPreCalibration = useCallback(() => {
+    setWebxrPromptDismissed(true);
+    showTemporaryHint('Using standard AR calibration — toggle 6-DoF anytime in Profile ⚙️ Settings.');
+  }, [showTemporaryHint]);
+
+  // If the user disables 6-DoF ARCore in Settings while a WebXR session is running, stop it cleanly
+  useEffect(() => {
+    if (!arSettings.useWebXr6Dof && pol.webxrActive) {
+      handleStopWebxr();
+    }
+  }, [arSettings.useWebXr6Dof, pol.webxrActive, handleStopWebxr]);
 
   const handleRenameLandSynced = useCallback(
     async (land, nextCustomName) => {
@@ -1452,10 +1493,20 @@ export default function MobileStudio({
       archiveOpen ||
       loginOpen
   );
+  const showWebXrPreCalPrompt = shouldShowWebXrPreCalibrationPrompt({
+    webxrSupported: pol.webxrSupported,
+    webxrActive: pol.webxrActive,
+    arSettings,
+    dismissed: webxrPromptDismissed,
+    calibrationReady: pol.calibrationReady,
+    isWelcomeOpen
+  });
   const isAwayFromMappingView = Boolean(
     hasFullscreenOverlay || isArViewOnly || isTransformMode
   );
-  mappingPausedRef.current = Boolean(isAwayFromMappingView || pol.mappingRestartPrompt);
+  mappingPausedRef.current = Boolean(
+    isAwayFromMappingView || pol.mappingRestartPrompt || showWebXrPreCalPrompt
+  );
 
   const mobileActiveViewKey = loginOpen
     ? 'login'
@@ -2337,9 +2388,7 @@ export default function MobileStudio({
           nearbyCameraLand={activeInsideLand || ar.primaryCameraLand}
           nearbyCameraLandCount={ar.immediateCameraLands.length}
           sensorStatus={pol.sensorStatus}
-          webxrSupported={pol.webxrSupported}
           webxrActive={pol.webxrActive}
-          onToggleWebxr={handleToggleWebxr}
           onInspectArLand={(land) => handleInspectArLand(land, { expandDetails: true })}
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
@@ -2429,6 +2478,11 @@ export default function MobileStudio({
             onRetryCameraAccess={pol.retryCameraAccess}
             sensorStatus={pol.sensorStatus}
             voxelCount={brush.voxels.length}
+            showWebXrPreCalPrompt={showWebXrPreCalPrompt}
+            webxrActive={pol.webxrActive}
+            webxrStarting={webxrStarting}
+            onStartWebXrPreCal={handleStartWebxrPreCalibration}
+            onSkipWebXrPreCal={handleSkipWebxrPreCalibration}
             onRestartMapping={handleRestartSceneMapping}
             onStartFresh={() => {
               brush.clearCanvas();
@@ -2607,12 +2661,6 @@ export default function MobileStudio({
               );
             }}
             onShowHint={showTemporaryHint}
-            sensorStatus={pol.sensorStatus}
-            onAdjustCompassNudge={pol.adjustCompassNudge}
-            onResetCompassNudge={pol.resetCompassNudge}
-            webxrSupported={pol.webxrSupported}
-            webxrActive={pol.webxrActive}
-            onToggleWebxr={handleToggleWebxr}
             onClose={handleExitArLand}
           />
         )}
@@ -3182,6 +3230,10 @@ export default function MobileStudio({
             setProfileHandle('');
           }}
           onShowHint={showTemporaryHint}
+          webxrSupported={pol.webxrSupported}
+          webxrActive={pol.webxrActive}
+          onEnableWebxr={handleStartWebxr}
+          onDisableWebxr={handleStopWebxr}
           onClose={() => setProfileHandle('')}
         />
       )}
@@ -3214,6 +3266,10 @@ export default function MobileStudio({
             setInfoOpen(false);
             setLoginOpen(true);
           }}
+          webxrSupported={pol.webxrSupported}
+          webxrActive={pol.webxrActive}
+          onEnableWebxr={handleStartWebxr}
+          onDisableWebxr={handleStopWebxr}
           onClose={() => {
             setInfoOpen(false);
             setInfoInitialTab('guide');

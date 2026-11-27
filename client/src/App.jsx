@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { parseParcelParamFromLocation } from '../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../shared/profileRules.mjs';
 import DirectLinkIntroOverlay from './components/DirectLinkIntroOverlay.jsx';
@@ -20,7 +20,8 @@ import { isMobileDevice } from './utils/device.js';
 import { installDesktopMapPinchZoom } from './utils/desktopMapPinchZoom.js';
 import {
   installMobileViewportLock,
-  isMobileLandscapeOrientation
+  isMobileLandscapeOrientation,
+  syncPortraitLockClass
 } from './utils/mobilePortraitLock.js';
 
 const DesktopHub = lazy(() => import('./components/DesktopHub.jsx'));
@@ -47,6 +48,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isMobile, setIsMobile] = useState(() => isMobileDevice());
+  const wasMobileRef = useRef(isMobile);
   const [isLandscapeLocked, setIsLandscapeLocked] = useState(() =>
     isMobileDevice() ? isMobileLandscapeOrientation() : false
   );
@@ -64,19 +66,30 @@ export default function App() {
 
   useEffect(() => {
     const syncViewportState = () => {
-      const mobile = isMobileDevice();
+      const detectedMobile = isMobileDevice();
+      if (detectedMobile) wasMobileRef.current = true;
+      const mobile = detectedMobile || wasMobileRef.current;
       setIsMobile(mobile);
-      setIsLandscapeLocked(mobile ? isMobileLandscapeOrientation() : false);
+      const locked = mobile ? syncPortraitLockClass(window, document) : false;
+      setIsLandscapeLocked(locked);
     };
     syncViewportState();
     window.addEventListener('resize', syncViewportState);
     window.addEventListener('orientationchange', syncViewportState);
+    window.visualViewport?.addEventListener?.('resize', syncViewportState);
     const screenOrient = window.screen?.orientation;
     screenOrient?.addEventListener?.('change', syncViewportState);
+    const landscapeMq =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(orientation: landscape)')
+        : null;
+    landscapeMq?.addEventListener?.('change', syncViewportState);
     return () => {
       window.removeEventListener('resize', syncViewportState);
       window.removeEventListener('orientationchange', syncViewportState);
+      window.visualViewport?.removeEventListener?.('resize', syncViewportState);
       screenOrient?.removeEventListener?.('change', syncViewportState);
+      landscapeMq?.removeEventListener?.('change', syncViewportState);
     };
   }, []);
 

@@ -28,6 +28,7 @@ import {
 } from '../../utils/arLandGuidance.js';
 import { estimateCameraVerticalFovDeg } from '../../utils/arSensorFusion.js';
 import { resolveRelativeOrbBucket } from '../../utils/arCalibrationManager.js';
+import { tryLockPortraitOrientation } from '../../utils/mobilePortraitLock.js';
 import { startWebXrArSession } from '../../utils/webxrArSession.js';
 import XeroIcon from '../XeroIcon.jsx';
 import ToolCenterReticle from './ToolCenterReticle.jsx';
@@ -1354,7 +1355,9 @@ function ARViewportCanvasInner({
             ? orientationFusionRef.current.getTrueHeadingDeg()
             : 0;
           const overlayRoot =
-            typeof document !== 'undefined' ? document.querySelector('.mobile-fullscreen') : null;
+            typeof document !== 'undefined'
+              ? document.getElementById('root') || document.querySelector('.mobile-fullscreen')
+              : null;
           try {
             const sessionCtrl = await startWebXrArSession({
               renderer,
@@ -1369,6 +1372,7 @@ function ARViewportCanvasInner({
                 startStandardLoop();
               }
             });
+            tryLockPortraitOrientation();
             activeXrSession = sessionCtrl;
             onWebxrStateChange?.(true);
             renderer.setAnimationLoop((_t, xrFrame) => {
