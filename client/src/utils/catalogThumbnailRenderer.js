@@ -14,10 +14,29 @@ let sharedScene = null;
 let sharedCamera = null;
 let webglUnavailable = false;
 
+function resetThumbRig() {
+  const prev = sharedRenderer;
+  sharedRenderer = null;
+  sharedScene = null;
+  sharedCamera = null;
+  if (prev) {
+    try {
+      prev.dispose();
+    } catch {
+      // ignore disposal error on lost context
+    }
+  }
+}
+
 function ensureThumbRig() {
   if (webglUnavailable || typeof document === 'undefined') return null;
   if (sharedRenderer && sharedScene && sharedCamera) {
-    return { renderer: sharedRenderer, scene: sharedScene, camera: sharedCamera };
+    const gl = sharedRenderer.getContext?.();
+    if (typeof gl?.isContextLost === 'function' && gl.isContextLost()) {
+      resetThumbRig();
+    } else {
+      return { renderer: sharedRenderer, scene: sharedScene, camera: sharedCamera };
+    }
   }
   try {
     const canvas = document.createElement('canvas');
@@ -30,6 +49,16 @@ function ensureThumbRig() {
       preserveDrawingBuffer: true,
       powerPreference: 'low-power'
     });
+    canvas.addEventListener(
+      'webglcontextlost',
+      (ev) => {
+        ev.preventDefault();
+        if (sharedRenderer === renderer) {
+          resetThumbRig();
+        }
+      },
+      false
+    );
     renderer.setPixelRatio(1);
     renderer.setSize(THUMB_SIZE, THUMB_SIZE, false);
     renderer.setClearColor(0x000000, 0);
@@ -140,6 +169,10 @@ async function pumpQueue() {
       const dataUrl = await renderSingleGlbThumb(job.url);
       if (dataUrl) cacheSet(job.url, dataUrl);
       job.resolve(dataUrl);
+      if (queue.length > 0) {
+        // Yield briefly to keep mobile touch scrolling & search typing responsive
+        await new Promise((r) => setTimeout(r, 16));
+      }
     }
   } finally {
     pumping = false;

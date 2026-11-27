@@ -49,7 +49,8 @@ export function useProofOfLocation({
   onLocationUpdate,
   onCameraRefreshed = null,
   onNetworkReconnect = null,
-  mappingPausedRef = null
+  mappingPausedRef = null,
+  cameraSuspendedRef = null
 }) {
   const videoRef = useRef(null);
   const polRef = useRef(new ProofOfLocationTracker());
@@ -74,6 +75,7 @@ export function useProofOfLocation({
   const onCameraRefreshedRef = useRef(onCameraRefreshed);
   const onNetworkReconnectRef = useRef(onNetworkReconnect);
   const mappingPausedBridgeRef = useRef(mappingPausedRef);
+  const cameraSuspendedBridgeRef = useRef(cameraSuspendedRef);
 
   const cameraOpIdRef = useRef(0);
   const unmountedRef = useRef(false);
@@ -108,7 +110,8 @@ export function useProofOfLocation({
     onCameraRefreshedRef.current = onCameraRefreshed;
     onNetworkReconnectRef.current = onNetworkReconnect;
     mappingPausedBridgeRef.current = mappingPausedRef;
-  }, [onLocationUpdate, onCameraRefreshed, onNetworkReconnect, mappingPausedRef]);
+    cameraSuspendedBridgeRef.current = cameraSuspendedRef;
+  }, [onLocationUpdate, onCameraRefreshed, onNetworkReconnect, mappingPausedRef, cameraSuspendedRef]);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraRecovering, setCameraRecovering] = useState(false);
@@ -401,6 +404,7 @@ export function useProofOfLocation({
 
       const onPause = () => {
         if (unmountedRef.current || tearingDownCameraRef.current) return;
+        if (cameraSuspendedBridgeRef.current?.current) return;
         if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
           needsRefreshOnVisibleRef.current = true;
           return;
@@ -427,6 +431,7 @@ export function useProofOfLocation({
 
       const onStalledOrError = (ev) => {
         if (unmountedRef.current || tearingDownCameraRef.current) return;
+        if (cameraSuspendedBridgeRef.current?.current) return;
         if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
           needsRefreshOnVisibleRef.current = true;
           return;
@@ -704,6 +709,7 @@ export function useProofOfLocation({
   const ensureCameraLive = useCallback(
     async ({ reason = 'health_check', allowRestart = true } = {}) => {
       if (unmountedRef.current || inFlightCameraRef.current) return false;
+      if (cameraSuspendedBridgeRef.current?.current) return false;
       if (permissionBlockedRef.current) return false;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
       if (!navigator.mediaDevices?.getUserMedia) return false;
@@ -840,6 +846,7 @@ export function useProofOfLocation({
     let lastHealthCheckAt = 0;
     const samplerId = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (cameraSuspendedBridgeRef.current?.current) return;
       const nowMs = Date.now();
       const curCalState = calibrationStateRef.current;
       const checkPendingReturn = pendingReturnCheckRef.current && Boolean(leaveCheckpointRef.current);

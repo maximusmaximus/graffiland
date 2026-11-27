@@ -87,6 +87,7 @@ function ARViewportCanvasInner({
   isArViewOnly = false,
   isArViewOnlyRef = null,
   renderPaused = false,
+  cameraHidden = false,
   mode,
   modeRef,
   toolRef,
@@ -138,8 +139,10 @@ function ARViewportCanvasInner({
   const onRequestContextRecoverRef = useRef(onRequestContextRecover);
   onRequestContextRecoverRef.current = onRequestContextRecover;
   const isTransformMode = mode === 'transform';
-  const renderPausedRef = useRef(Boolean(renderPaused));
-  renderPausedRef.current = Boolean(renderPaused);
+  const effectiveRenderPaused = Boolean(renderPaused || cameraHidden);
+  const renderPausedRef = useRef(effectiveRenderPaused);
+  renderPausedRef.current = effectiveRenderPaused;
+  const wasCameraHiddenRef = useRef(Boolean(cameraHidden));
   const sceneScanOptimalRef = useRef(Boolean(sceneScanOptimal));
   sceneScanOptimalRef.current = Boolean(sceneScanOptimal);
   const calibrationReadyRef = useRef(Boolean(calibrationReady));
@@ -1519,9 +1522,36 @@ function ARViewportCanvasInner({
     yawOffsetRef
   ]);
 
+  // Pause live camera video element while camera view is intentionally hidden (e.g. Search 3D models)
+  // so mobile GPUs & decoders have full headroom without tearing down stream permissions.
+  useEffect(() => {
+    const videoEl = videoRef?.current;
+    if (cameraHidden) {
+      wasCameraHiddenRef.current = true;
+      if (videoEl && typeof videoEl.pause === 'function' && !videoEl.paused) {
+        try {
+          videoEl.pause();
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+    if (wasCameraHiddenRef.current) {
+      wasCameraHiddenRef.current = false;
+      onVideoMounted?.();
+      if (videoEl && typeof videoEl.play === 'function') {
+        const playRes = videoEl.play();
+        if (playRes && typeof playRes.catch === 'function') {
+          playRes.catch(() => {});
+        }
+      }
+    }
+  }, [cameraHidden, onVideoMounted, videoRef]);
+
   // Resume AR RAF loop & auto-recover any WebGL context evicted while full-screen map/modal was open
   useEffect(() => {
-    if (renderPaused) return undefined;
+    if (effectiveRenderPaused) return undefined;
     resumeLoopRef.current?.();
     const gl = rendererRef?.current?.getContext?.();
     const isLostNow = Boolean(
@@ -1545,35 +1575,51 @@ function ARViewportCanvasInner({
     return () => {
       clearTimeout(contextRecoverTimerRef.current);
     };
-  }, [renderPaused, rendererRef]);
+  }, [effectiveRenderPaused, rendererRef]);
 
   return (
     <>
-      <video ref={videoRef} className="camera-feed" playsInline muted autoPlay />
-      {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && (
-        <div
-          className="mapping-grayscale-grid"
-          data-testid="mapping-grayscale-grid"
-          aria-hidden="true"
-        >
-          {unmappedGrid.map((isUnmapped, i) => (
+      <video
+        ref={videoRef}
+        className={`camera-feed${cameraHidden ? ' is-camera-hidden' : ''}`}
+        data-testid="ar-camera-video"
+        data-camera-hidden={cameraHidden ? 'true' : 'false'}
+        aria-hidden={cameraHidden || undefined}
+        playsInline
+        muted
+        autoPlay
+      />
+      {!cameraHidden && (
+        <>
+          {!isArViewOnly && !isTransformMode && cameraReady && !sceneScanOptimal && !mappingRestartRequired && (
             <div
-              key={i}
-              className={`mapping-grayscale-cell ${isUnmapped ? 'unmapped' : 'mapped'}`}
+              className="mapping-grayscale-grid"
+              data-testid="mapping-grayscale-grid"
+              aria-hidden="true"
+            >
+              {unmappedGrid.map((isUnmapped, i) => (
+                <div
+                  key={i}
+                  className={`mapping-grayscale-cell ${isUnmapped ? 'unmapped' : 'mapped'}`}
+                />
+              ))}
+            </div>
+          )}
+          {!isArViewOnly && isTransformMode && (
+            <div
+              className="transform-camera-fade"
+              data-testid="transform-camera-fade"
+              aria-hidden="true"
             />
-          ))}
-        </div>
-      )}
-      {!isArViewOnly && isTransformMode && (
-        <div
-          className="transform-camera-fade"
-          data-testid="transform-camera-fade"
-          aria-hidden="true"
-        />
+          )}
+        </>
       )}
       <div
         ref={canvasHostRef}
-        className="webgl-overlay"
+        className={`webgl-overlay${cameraHidden ? ' is-camera-hidden' : ''}`}
+        data-testid="ar-webgl-overlay"
+        data-camera-hidden={cameraHidden ? 'true' : 'false'}
+        aria-hidden={cameraHidden || undefined}
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         data-transform-mode={isTransformMode ? 'true' : 'false'}
         data-scene-locked={sceneScanOptimal && calibrationReady ? 'true' : 'false'}
@@ -1584,36 +1630,40 @@ function ARViewportCanvasInner({
         onPointerUp={onCanvasPointerUp}
         onPointerCancel={onCanvasPointerCancel}
       />
-      {!isArViewOnly && !isTransformMode && occlusionEnabled && (
-        <canvas
-          ref={occlusionCanvasRef}
-          className="occlusion-overlay"
-          data-testid="occlusion-overlay"
-        />
-      )}
-      {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
-        <div className="reticle" />
-      )}
-      {contextLost && !renderPaused && (
-        <div
-          className="scene-error-fallback is-ar-viewport-recovery"
-          data-testid="ar-webgl-recovery-overlay"
-          role="status"
-        >
-          <div className="scene-error-card card">
-            <XeroIcon emoji="⏳" size={20} />
-            <p style={{ fontSize: 13 }}>Recovering mobile WebGL AR context...</p>
-            <button
-              type="button"
-              className="btn btn-xs btn-primary"
-              data-testid="ar-webgl-reload-btn"
-              onClick={() => onRequestContextRecover?.()}
-              style={{ marginTop: 8 }}
+      {!cameraHidden && (
+        <>
+          {!isArViewOnly && !isTransformMode && occlusionEnabled && (
+            <canvas
+              ref={occlusionCanvasRef}
+              className="occlusion-overlay"
+              data-testid="occlusion-overlay"
+            />
+          )}
+          {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
+            <div className="reticle" />
+          )}
+          {contextLost && !renderPaused && (
+            <div
+              className="scene-error-fallback is-ar-viewport-recovery"
+              data-testid="ar-webgl-recovery-overlay"
+              role="status"
             >
-              Reload AR View
-            </button>
-          </div>
-        </div>
+              <div className="scene-error-card card">
+                <XeroIcon emoji="⏳" size={20} />
+                <p style={{ fontSize: 13 }}>Recovering mobile WebGL AR context...</p>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-primary"
+                  data-testid="ar-webgl-reload-btn"
+                  onClick={() => onRequestContextRecover?.()}
+                  style={{ marginTop: 8 }}
+                >
+                  Reload AR View
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </>
   );
