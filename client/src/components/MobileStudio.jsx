@@ -2774,6 +2774,14 @@ export default function MobileStudio({
             lands.setLandManageParcelId(pid || '');
             lands.setLandManageOpen(true);
           }}
+          onOpenSearchAdd={(land) => {
+            ar.setMapOpen(false);
+            if (land?.parcelId) {
+              setPreferredDrawLandId(land.parcelId);
+            }
+            setDockOpen(false);
+            setCatalogSearchOpen(true);
+          }}
           onRenameLand={handleRenameLandSynced}
           onShowHint={showTemporaryHint}
           onClose={() => ar.setMapOpen(false)}

@@ -251,7 +251,9 @@ export function createSculptureThreeLayer({
   id = 'sculptures-three-3d',
   maplibregl,
   resolveUrlFn = (u) => u,
-  onStatsChange = null
+  onStatsChange = null,
+  maxConcurrentLoads = 6,
+  maxAnisotropyCap = 16
 } = {}) {
   let mapInstance = null;
   let renderer = null;
@@ -260,8 +262,35 @@ export function createSculptureThreeLayer({
   let envRT = null;
   let pmremGenerator = null;
   let envAttempted = false;
-  let maxAnisotropy = 8;
+  let maxAnisotropy = Math.min(maxAnisotropyCap, 8);
   let disposed = false;
+  let inFlightLoads = 0;
+  const loadQueue = [];
+  const loadConcurrency = Math.max(1, Math.floor(Number(maxConcurrentLoads) || 6));
+
+  function drainLoadQueue() {
+    while (!disposed && inFlightLoads < loadConcurrency && loadQueue.length > 0) {
+      const task = loadQueue.shift();
+      if (!task || task.entry.cancelled) continue;
+      inFlightLoads += 1;
+      loadCustomModelObject(task.sc, resolveUrlFn, { maxAnisotropy, applyCustomScale: false })
+        .then((loaded) => {
+          if (!loaded || disposed || task.entry.cancelled) {
+            if (loaded?.object3d) disposeObject3D(loaded.object3d);
+            return;
+          }
+          enforceCrispTexturesAndShading(loaded.object3d, maxAnisotropy);
+          mountModelIntoEntry(task.entry, loaded.object3d, loaded.bounds, task.sc, task.parcelVolume);
+        })
+        .catch(() => {
+          // Leave cleanly unloaded if asset is unreachable
+        })
+        .finally(() => {
+          inFlightLoads = Math.max(0, inFlightLoads - 1);
+          drainLoadQueue();
+        });
+    }
+  }
 
   function ensureStudioEnvironment(gl) {
     if (envAttempted || disposed || !renderer || !scene || !gl) return;
@@ -565,18 +594,8 @@ export function createSculptureThreeLayer({
       entries.set(scId, entry);
 
       if (isCustom3d) {
-        loadCustomModelObject(sc, resolveUrlFn, { maxAnisotropy, applyCustomScale: false })
-          .then((loaded) => {
-            if (!loaded || disposed || entry.cancelled) {
-              if (loaded?.object3d) disposeObject3D(loaded.object3d);
-              return;
-            }
-            enforceCrispTexturesAndShading(loaded.object3d, maxAnisotropy);
-            mountModelIntoEntry(entry, loaded.object3d, loaded.bounds, sc, parcelVolume);
-          })
-          .catch(() => {
-            // Leave cleanly unloaded if asset is unreachable
-          });
+        loadQueue.push({ entry, sc, parcelVolume });
+        drainLoadQueue();
       } else {
         const voxelGroup = buildVoxelGroup(sc.voxels, { simplifyLod: false });
         const bounds = new THREE.Box3().setFromObject(voxelGroup);
@@ -655,7 +674,10 @@ export function createSculptureThreeLayer({
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.08;
-        maxAnisotropy = Math.min(16, Math.max(1, renderer.capabilities?.getMaxAnisotropy?.() || 8));
+        maxAnisotropy = Math.min(
+          maxAnisotropyCap,
+          Math.max(1, renderer.capabilities?.getMaxAnisotropy?.() || 4)
+        );
         // Defer PMREMGenerator initialization to the first render() frame so we never
         // mutate MapLibre's WebGL2 state outside MapLibre's custom-layer render guard.
       } catch {
@@ -717,6 +739,7 @@ export function createSculptureThreeLayer({
     onRemove() {
       disposed = true;
       envAttempted = false;
+      loadQueue.length = 0;
       for (const scId of Array.from(entries.keys())) {
         removeEntry(scId);
       }

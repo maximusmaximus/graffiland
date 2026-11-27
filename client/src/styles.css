@@ -2047,16 +2047,45 @@ select {
   border-radius: 14px;
 }
 
+.mobile-map-overlay.is-fullscreen-mode {
+  padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+  gap: 6px;
+}
+
+.mobile-map-fullscreen-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .mobile-map-fullscreen-dock {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 10px;
   border-radius: 12px;
-  background: rgba(12, 18, 32, 0.92);
+  background: rgba(12, 18, 32, 0.94);
   border: 1px solid rgba(0, 245, 212, 0.28);
+}
+
+.mobile-map-fullscreen-dock-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mobile-map-dock-lifecycle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px currentColor;
 }
 
 .mobile-map-fullscreen-dock-info {
@@ -2897,6 +2926,10 @@ select {
   justify-content: center;
   padding: 20px;
   background: rgba(7, 9, 15, 0.85);
+}
+
+.scene-error-fallback.is-ar-viewport-recovery {
+  z-index: 45;
 }
 
 .scene-error-card {

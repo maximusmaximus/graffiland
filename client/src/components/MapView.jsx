@@ -28,6 +28,7 @@ import {
 } from '../utils/neighborEdgeArrows.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
+import InfoTip from './InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -645,19 +646,34 @@ export default function MapView({
     }
     const map = mapRef.current;
     if (!map) return undefined;
-    const t = setTimeout(() => {
-      map.invalidateSize({ animate: false, pan: false });
-      if (!isFullExpanded && !userAdjustedViewRef.current && lastAutoBoundsRef.current) {
-        map.fitBounds(lastAutoBoundsRef.current, {
-          paddingTopLeft: [14, 42],
-          paddingBottomRight: [14, 28],
-          maxZoom: 21,
-          animate: false
-        });
+    const syncSize = (allowAutoFit = false) => {
+      try {
+        map.invalidateSize({ animate: false, pan: false });
+        recomputeFocusedNeighborArrows();
+        if (allowAutoFit && !isFullExpanded && !userAdjustedViewRef.current && lastAutoBoundsRef.current) {
+          map.fitBounds(lastAutoBoundsRef.current, {
+            paddingTopLeft: [14, 42],
+            paddingBottomRight: [14, 28],
+            maxZoom: 21,
+            animate: false
+          });
+        }
+      } catch {
+        // ignore during teardown
       }
-    }, 80);
-    return () => clearTimeout(t);
-  }, [isFullExpanded]);
+    };
+    const raf =
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(() => syncSize(false))
+        : 0;
+    const t1 = setTimeout(() => syncSize(true), 80);
+    const t2 = setTimeout(() => syncSize(false), 240);
+    return () => {
+      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [isFullExpanded, recomputeFocusedNeighborArrows]);
 
   function fitClosestLands() {
     const map = mapRef.current;
@@ -824,6 +840,12 @@ export default function MapView({
                 {isFullExpanded ? '⤡' : '⤢'}
               </button>
             )}
+            <span className="land-preview-map-info" data-testid="mobile-2d-map-info">
+              <InfoTip title="How to Navigate This Map" mode="popover" align="right">
+                Drag to pan, pinch to zoom, tap any land to focus it, tap <strong>🧊 3D</strong>{' '}
+                for 3D buildings &amp; prisms, or <strong>🔍</strong> on open lands to add 3D items.
+              </InfoTip>
+            </span>
           </div>
         )}
         {sculptures.length === 0 && parcels.length === 0 && (

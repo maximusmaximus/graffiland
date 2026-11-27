@@ -39,6 +39,14 @@ import {
 import { buildDefaultHudReservedRects } from '../../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../../utils/map3dSculptureLayer.js';
 import {
+  DESKTOP_3D_MAP_MAX_ANISOTROPY,
+  DESKTOP_3D_MAP_MAX_CONCURRENT_LOADS,
+  MOBILE_3D_MAP_MAX_ANISOTROPY,
+  MOBILE_3D_MAP_MAX_CONCURRENT_LOADS,
+  resolveMapLibrePixelRatio,
+  selectPrioritizedThreeLayerSculptures
+} from '../../utils/mobileMapPerformance.js';
+import {
   applyGraffilandMapLibreTheme,
   getFallbackMapLibreStyleForTheme,
   getMapLibreStyleForTheme,
@@ -586,7 +594,13 @@ export default function MobileIsometricMap({
   }, [onViewportChange]);
 
   const [webglAvailable, setWebglAvailable] = useState(() => hasWebGLSupport());
+  const [webglLost, setWebglLost] = useState(false);
+  const [mapRemountNonce, setMapRemountNonce] = useState(0);
   const [mapReady, setMapReady] = useState(false);
+  const lowPowerModeRef = useRef(false);
+  const contextLossCountRef = useRef(0);
+  const lastCameraViewRef = useRef(null);
+  const prevFullExpandedRef = useRef(Boolean(isFullExpanded));
   const { mapTheme, isDarkMap, toggleMapTheme } = useMapTheme();
   const mapThemeRef = useRef(mapTheme);
   const appliedMapThemeRef = useRef(mapTheme);
@@ -1113,11 +1127,31 @@ export default function MobileIsometricMap({
             (s) => !s?.parcelId || s.parcelId === primaryPid
           )
         : hydratedSculpturesRef.current || [];
+    const threeSculptures = selectPrioritizedThreeLayerSculptures(focusedSculptures, {
+      isDesktop: isDesktopRef.current,
+      isFullExpanded: isFullExpandedRef.current,
+      focusedParcelId: primaryPid,
+      selectedSculptureId: selectedSculptureIdRef.current || '',
+      focusCoords: primary?.volume
+        ? { lat: primary.volume.centerLat, lng: primary.volume.centerLng }
+        : userLocationRef.current || null
+    });
+    const threeIdSet = new Set(threeSculptures.map((s) => s.id));
     const sc3d = buildSculptures3DGeoJson(
       focusedSculptures,
       selectedSculptureIdRef.current || '',
       parcelsWithVolumes
     );
+    const annotatedScGeoJson = {
+      type: 'FeatureCollection',
+      features: (sc3d.geojson?.features || []).map((feat) => ({
+        ...feat,
+        properties: {
+          ...(feat.properties || {}),
+          inThreeLayer: threeIdSet.has(feat.properties?.sculptureId) ? 1 : 0
+        }
+      }))
+    };
 
     const landSrc = map.getSource('mobile-iso-lands');
     if (landSrc && typeof landSrc.setData === 'function') {
@@ -1126,11 +1160,11 @@ export default function MobileIsometricMap({
 
     const scSrc = map.getSource('mobile-iso-sculptures');
     if (scSrc && typeof scSrc.setData === 'function') {
-      scSrc.setData(sc3d.geojson);
+      scSrc.setData(annotatedScGeoJson);
     }
     if (threeLayerRef.current && typeof threeLayerRef.current.setData === 'function') {
       threeLayerRef.current.setData({
-        sculptures: focusedSculptures,
+        sculptures: threeSculptures,
         parcels: parcelsWithVolumes,
         selectedSculptureId: selectedSculptureIdRef.current || ''
       });
@@ -1368,6 +1402,12 @@ export default function MobileIsometricMap({
               id: 'mobile-iso-sculptures-three-3d',
               maplibregl: maplibreRef.current,
               resolveUrlFn: resolveApiUrl,
+              maxConcurrentLoads: isDesktopRef.current
+                ? DESKTOP_3D_MAP_MAX_CONCURRENT_LOADS
+                : MOBILE_3D_MAP_MAX_CONCURRENT_LOADS,
+              maxAnisotropyCap: isDesktopRef.current
+                ? DESKTOP_3D_MAP_MAX_ANISOTROPY
+                : MOBILE_3D_MAP_MAX_ANISOTROPY,
               onStatsChange: (stats) => {
                 setLoadedThree3dCount(stats?.loadedCount || 0);
                 drawWireframes();
@@ -1394,7 +1434,9 @@ export default function MobileIsometricMap({
               'fill-extrusion-color': ['get', 'color'],
               'fill-extrusion-height': ['get', 'heightMeters'],
               'fill-extrusion-base': ['get', 'baseMeters'],
-              'fill-extrusion-opacity': threeMounted ? 0.001 : 0.96,
+              'fill-extrusion-opacity': threeMounted
+                ? ['case', ['==', ['get', 'inThreeLayer'], 1], 0.001, 0.92]
+                : 0.96,
               'fill-extrusion-vertical-gradient': true
             }
           });
@@ -1444,7 +1486,8 @@ export default function MobileIsometricMap({
         const initLoc = userLocationRef.current;
         const vw = rootRef.current?.clientWidth || 360;
         const vh = rootRef.current?.clientHeight || 220;
-        const savedView = isFullExpandedRef.current ? initialViewRef.current : null;
+        const savedView =
+          lastCameraViewRef.current || (isFullExpandedRef.current ? initialViewRef.current : null);
         const hasSavedView = Boolean(
           savedView &&
             Number.isFinite(Number(savedView.lat)) &&
@@ -1485,6 +1528,12 @@ export default function MobileIsometricMap({
           userMovedRef.current = true;
         }
 
+        const safePixelRatio = resolveMapLibrePixelRatio({
+          isDesktop: isDesktopRef.current,
+          devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
+          lowPowerFallback: lowPowerModeRef.current
+        });
+
         let map;
         try {
           appliedMapThemeRef.current = mapThemeRef.current;
@@ -1498,7 +1547,8 @@ export default function MobileIsometricMap({
             minZoom: 1,
             maxZoom: 22.5,
             maxPitch: 72,
-            antialias: true,
+            pixelRatio: safePixelRatio,
+            antialias: isDesktopRef.current || !lowPowerModeRef.current,
             attributionControl: false,
             dragRotate: true,
             pitchWithRotate: true,
@@ -1557,19 +1607,40 @@ export default function MobileIsometricMap({
         const glCanvas = map.getCanvas?.();
         const onContextLost = (ev) => {
           ev.preventDefault();
+          if (cancelled) return;
+          setWebglLost(true);
+          try {
+            const c = map.getCenter?.();
+            if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
+              lastCameraViewRef.current = {
+                lat: Number(c.lat.toFixed(6)),
+                lng: Number(c.lng.toFixed(6)),
+                zoom: Number((map.getZoom?.() ?? startZoom).toFixed(2)),
+                pitch: Number((map.getPitch?.() ?? startPitch).toFixed(1)),
+                bearing: Number((map.getBearing?.() ?? startBearing).toFixed(1))
+              };
+            }
+          } catch {
+            // ignore
+          }
           clearTimeout(contextLostTimer);
           contextLostTimer = setTimeout(() => {
             if (cancelled) return;
-            if (typeof onToggle2DRef.current === 'function') {
+            if (contextLossCountRef.current < 1) {
+              contextLossCountRef.current += 1;
+              lowPowerModeRef.current = true;
+              setMapRemountNonce((n) => n + 1);
+            } else if (typeof onToggle2DRef.current === 'function') {
               onToggle2DRef.current();
             } else {
               setWebglAvailable(false);
             }
-          }, 2600);
+          }, 450);
         };
         const onContextRestored = () => {
           clearTimeout(contextLostTimer);
           contextLostTimer = null;
+          setWebglLost(false);
           try {
             map.triggerRepaint?.();
             drawWireframes();
@@ -1589,12 +1660,14 @@ export default function MobileIsometricMap({
 
         map.on('style.load', () => {
           clearTimeout(styleTimeout);
+          setWebglLost(false);
           ensureLayers(map);
           setMapReady(true);
         });
 
         map.on('load', () => {
           clearTimeout(styleTimeout);
+          setWebglLost(false);
           ensureLayers(map);
           setMapReady(true);
           if (!userMovedRef.current && !isFullExpandedRef.current && primaryEntryRef.current) {
@@ -1626,13 +1699,15 @@ export default function MobileIsometricMap({
           setLiveBearing(b);
           setLiveZoom(z);
           if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
-            onViewportChangeRef.current?.({
+            const vp = {
               lat: Number(c.lat.toFixed(6)),
               lng: Number(c.lng.toFixed(6)),
               zoom: z,
               pitch: p,
               bearing: b
-            });
+            };
+            lastCameraViewRef.current = vp;
+            onViewportChangeRef.current?.(vp);
           }
           drawWireframes();
         });
@@ -1744,7 +1819,7 @@ export default function MobileIsometricMap({
       }
       setMapReady(false);
     };
-  }, [drawWireframes, fitCameraToTarget, syncMapSources, webglAvailable]);
+  }, [drawWireframes, fitCameraToTarget, mapRemountNonce, syncMapSources, webglAvailable]);
 
   // Live Dark / Light basemap theme switching
   useEffect(() => {
@@ -1846,22 +1921,53 @@ export default function MobileIsometricMap({
     }
   }, [webglAvailable, mapReady, primaryEntry, otherEntries, stageDims.width, stageDims.height, liveBearing, showcaseMode, unitSystem]);
 
-  // Entering Full View unlocks free 3D/2D camera navigation (no isometric snapping!)
+  // Entering Full View unlocks free 3D/2D camera navigation & crisply resizes canvas/wireframes
   useEffect(() => {
+    const enteringFull = isFullExpanded && !prevFullExpandedRef.current;
+    prevFullExpandedRef.current = Boolean(isFullExpanded);
     if (isFullExpanded) {
       userMovedRef.current = true;
     }
-    const t = setTimeout(() => {
-      if (mapRef.current) {
-        mapRef.current.resize();
+
+    const syncAfterResize = ({ allowReframe = false } = {}) => {
+      const map = mapRef.current;
+      if (!map) return;
+      try {
+        map.resize();
         drawWireframes();
-        if (!isFullExpanded && !userMovedRef.current && primaryEntryRef.current) {
-          fitCameraToTarget({ targetEntry: primaryEntryRef.current, animate: true });
-        }
+        map.triggerRepaint?.();
+      } catch {
+        // ignore if mid-teardown
       }
-    }, 80);
-    return () => clearTimeout(t);
+      if (!allowReframe) return;
+      if (enteringFull && !showcaseModeRef.current && (entriesRef.current || []).length > 1) {
+        fitCameraToTarget({ targetEntry: primaryEntryRef.current, fitCluster: true, animate: true });
+      } else if (!isFullExpanded && !userMovedRef.current && primaryEntryRef.current) {
+        fitCameraToTarget({ targetEntry: primaryEntryRef.current, animate: true });
+      }
+    };
+
+    const raf =
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(() => syncAfterResize({ allowReframe: false }))
+        : 0;
+    const t1 = setTimeout(() => syncAfterResize({ allowReframe: true }), 90);
+    const t2 = setTimeout(() => syncAfterResize({ allowReframe: false }), 260);
+    return () => {
+      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [isFullExpanded, drawWireframes, fitCameraToTarget]);
+
+  function handleFitAllLands() {
+    userMovedRef.current = true;
+    fitCameraToTarget({
+      targetEntry: primaryEntry,
+      fitCluster: (entriesRef.current || []).length > 1,
+      animate: true
+    });
+  }
 
   function handleOrbit90() {
     const nextOffset = (bearingOffset + 90) % 360;
@@ -2005,10 +2111,15 @@ export default function MobileIsometricMap({
     >
       {webglAvailable ? (
         <>
-          <div ref={mapHostRef} className="mobile-iso-map-canvas" />
+          <div
+            ref={mapHostRef}
+            className="mobile-iso-map-canvas"
+            style={webglLost ? { visibility: 'hidden' } : undefined}
+          />
           <canvas
             ref={wireCanvasRef}
             className="mobile-iso-wire-canvas"
+            style={webglLost ? { visibility: 'hidden' } : undefined}
             aria-hidden="true"
           />
           {(showcaseMode || visibleShowcaseSculptures.length > 0) && (
@@ -2209,8 +2320,18 @@ export default function MobileIsometricMap({
               })}
             </div>
           )}
-          {!mapReady && (
-            <div className="mobile-iso-loading-pill mono">Loading 3D Isometric…</div>
+          {webglLost ? (
+            <div
+              className="mobile-iso-loading-pill mono"
+              data-testid="mobile-iso-recovering-pill"
+              role="status"
+            >
+              Refreshing 3D map…
+            </div>
+          ) : (
+            !mapReady && (
+              <div className="mobile-iso-loading-pill mono">Loading 3D Isometric…</div>
+            )
           )}
         </>
       ) : (
@@ -2271,6 +2392,18 @@ export default function MobileIsometricMap({
             onClick={handleFitLand}
           >
             <XeroIcon emoji="🎯" size={13} /> Fit
+          </button>
+        )}
+        {isFullExpanded && !showcaseMode && resolvedEntries.length > 1 && (
+          <button
+            type="button"
+            className="btn map-recenter-fab"
+            data-testid="mobile-map-fit-all-btn"
+            aria-label="Fit all nearby lands in 3D view"
+            title="Zoom out to fit nearby lands"
+            onClick={handleFitAllLands}
+          >
+            <XeroIcon emoji="🗺️" size={13} /> All
           </button>
         )}
         {userLocation && (
