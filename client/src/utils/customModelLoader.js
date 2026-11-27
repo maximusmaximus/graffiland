@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
@@ -19,6 +20,54 @@ function getSharedDracoLoader() {
     );
   }
   return sharedDracoLoader;
+}
+
+let sharedKtx2Loader = null;
+let ktx2SupportDetected = false;
+export function registerKtx2Renderer(renderer) {
+  if (!renderer || ktx2SupportDetected) return;
+  try {
+    if (!sharedKtx2Loader) {
+      sharedKtx2Loader = new KTX2Loader();
+      sharedKtx2Loader.setTranscoderPath(
+        'https://cdn.jsdelivr.net/gh/pmndrs/drei-assets@master/basis/'
+      );
+    }
+    sharedKtx2Loader.detectSupport(renderer);
+    ktx2SupportDetected = true;
+  } catch {
+    // KTX2 optional when WebGL context lacks extensions or in jsdom
+  }
+}
+
+function getSharedKtx2Loader() {
+  if (sharedKtx2Loader && ktx2SupportDetected) return sharedKtx2Loader;
+  if (typeof document === 'undefined') return null;
+  try {
+    if (!sharedKtx2Loader) {
+      sharedKtx2Loader = new KTX2Loader();
+      sharedKtx2Loader.setTranscoderPath(
+        'https://cdn.jsdelivr.net/gh/pmndrs/drei-assets@master/basis/'
+      );
+    }
+    if (!ktx2SupportDetected) {
+      const probeCanvas = document.createElement('canvas');
+      const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+      if (gl) {
+        const fakeRenderer = {
+          capabilities: { isWebGL2: typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext },
+          extensions: {
+            has: (ext) => Boolean(gl.getExtension(ext))
+          }
+        };
+        sharedKtx2Loader.detectSupport(fakeRenderer);
+        ktx2SupportDetected = true;
+      }
+    }
+    return ktx2SupportDetected ? sharedKtx2Loader : null;
+  } catch {
+    return null;
+  }
 }
 
 const TEXTURE_SLOTS = [
@@ -176,6 +225,12 @@ export async function parseCustomModelBytes(
       loader.setDRACOLoader(getSharedDracoLoader());
     } catch {
       // Draco optional in non-browser unit environments
+    }
+    try {
+      const ktx2 = getSharedKtx2Loader();
+      if (ktx2) loader.setKTX2Loader(ktx2);
+    } catch {
+      // KTX2 optional
     }
     loader.setMeshoptDecoder(MeshoptDecoder);
 

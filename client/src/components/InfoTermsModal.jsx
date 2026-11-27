@@ -514,6 +514,25 @@ export default function InfoTermsModal({
 
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
+                    <XeroIcon emoji="🔍" size={16} />
+                    <strong>Search to Add 3D Items (SimReady · Pixels · XeroEmoji)</strong>
+                    <InfoTip title="9,000+ Ready-to-Place 3D Assets">
+                      Click <strong>+</strong> on any minted land to open <strong>Add 3D Item</strong>{' '}
+                      and use the <strong>Search to Add</strong> box to search &amp; preview 9,000+
+                      3D `.glb` props from <strong>SimReady Pile</strong>,{' '}
+                      <strong>Pixels Atlas</strong>, and <strong>XeroEmoji Pile</strong> — pick and
+                      place one item at a time. AI agents can also call MCP tool{' '}
+                      <code>search_3d_catalog</code> instead of building every item from scratch.
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Search thousands of ready-made 3D props, pixel-art models, and 3D emojis and
+                    place them onto your land one at a time.
+                  </p>
+                </div>
+
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
                     <XeroIcon emoji="🤖" size={16} />
                     <strong>AI Agents, Pairing &amp; Land Management</strong>
                     <InfoTip title="Agent Pairing, MCP & Royalty Split">
@@ -540,10 +559,12 @@ export default function InfoTermsModal({
                   <div className="info-simple-title">
                     <XeroIcon emoji="🧑" size={16} />
                     <strong>Pair a Personal Helper Agent to Your Lands</strong>
-                    <InfoTip title="Property-Agent Pairing">
+                    <InfoTip title="Property-Agent Pairing & 3D Asset Search">
                       Copy a <code>GLP-...</code> pairing prompt so your personal AI helper can
-                      generate &amp; place 3D art on lands you own, with two-way approval on your
-                      phone or desktop notifications.
+                      search 9,000+ ready-made 3D models &amp; emojis via MCP{' '}
+                      <code>search_3d_catalog</code> (SimReady Pile, Pixels Atlas, XeroEmoji Pile)
+                      or generate &amp; place custom 3D art on lands you own, with two-way approval
+                      on your phone or desktop notifications.
                     </InfoTip>
                   </div>
                   <p>
@@ -688,6 +709,24 @@ export default function InfoTermsModal({
               </div>
             ) : (
               <div key="mobile" className="info-simple-list" data-testid="info-guide-mobile">
+                <div className="card info-simple-card">
+                  <div className="info-simple-title">
+                    <XeroIcon emoji="🔍" size={16} />
+                    <strong>Search &amp; Place 3D Items in AR</strong>
+                    <InfoTip title="Mobile Search to Place & Auto-Scale">
+                      Tap the top-right <strong>Search (🔍)</strong> icon to query SimReady Pile,
+                      Pixels Atlas, and XeroEmoji Pile. When you place an item, SPRAY.LAND
+                      automatically switches into <strong>Lock &amp; Scale</strong> tooling so you
+                      can pinch-scale, rotate, and position it — then tap <strong>✅ Draw</strong>{' '}
+                      to keep painting or <strong>🚀 Publish</strong> to mint!
+                    </InfoTip>
+                  </div>
+                  <p>
+                    Tap 🔍 to search &amp; place ready-made 3D props and emojis, scale them in AR,
+                    and resume drawing or minting.
+                  </p>
+                </div>
+
                 <div className="card info-simple-card">
                   <div className="info-simple-title">
                     <XeroIcon emoji="📡" size={16} />

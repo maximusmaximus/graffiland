@@ -12,6 +12,7 @@ export default function ToolCarouselBar({
   mode,
   dockOpen,
   voxelsLength,
+  placedCatalogItem = null,
   artTransform,
   onSetArtTransform,
   onToggleTransformLock,
@@ -130,7 +131,11 @@ export default function ToolCarouselBar({
           <div className="transform-bar-top">
             <span className="transform-bar-title">
               <XeroIcon emoji="📐" size={14} />
-              <span>Lock &amp; Scale ({voxelsLength})</span>
+              <span>
+                {placedCatalogItem
+                  ? `Scale ${placedCatalogItem.title}${voxelsLength > 0 ? ` (+${voxelsLength})` : ''}`
+                  : `Lock & Scale (${voxelsLength})`}
+              </span>
             </span>
             <button
               type="button"

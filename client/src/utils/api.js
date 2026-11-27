@@ -460,5 +460,13 @@ export const api = {
     if (params.address) qs.set('address', params.address);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request(`/api/economy/splits${suffix}`);
+  },
+  searchCatalog: ({ q = '', source = 'all', limit = 12 } = {}) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set('q', String(q));
+    if (source && source !== 'all') qs.set('source', String(source));
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/api/catalog/search${suffix}`);
   }
 };

@@ -151,7 +151,11 @@ export function useVoxelBrush({
   refreshLocationNow = null,
   isPublishingRef = null,
   onAutoEraseStaleDrawing = null,
-  onResetSpatialOrigin = null
+  onResetSpatialOrigin = null,
+  hasPlacedCatalogItem = false,
+  placedCatalogPivotRef = null,
+  onCommitCatalogTransform = null,
+  onClearCatalogItem = null
 }) {
   const occlusionRef = useRef(new ForegroundOcclusionCompositor());
 
@@ -362,6 +366,14 @@ export function useVoxelBrush({
   onRequireCalibrationRef.current = onRequireCalibration;
 
   const hasVoxels = voxels.length > 0;
+  const hasDraftArt = hasVoxels || Boolean(hasPlacedCatalogItem);
+  const hasPlacedCatalogRef = useRef(Boolean(hasPlacedCatalogItem));
+  hasPlacedCatalogRef.current = Boolean(hasPlacedCatalogItem);
+  const onCommitCatalogTransformRef = useRef(onCommitCatalogTransform);
+  onCommitCatalogTransformRef.current = onCommitCatalogTransform;
+  const onClearCatalogItemRef = useRef(onClearCatalogItem);
+  onClearCatalogItemRef.current = onClearCatalogItem;
+
   const toolAvailability = useMemo(() => {
     const originBlocked = Boolean(originStatus.originBlocked);
     const originMsg =
@@ -371,13 +383,13 @@ export function useVoxelBrush({
     const calMsg =
       calibrationBlockReason || 'Finish calibrating AR space before adding art.';
     const hasLoc = Boolean(location);
-    const needBlocksMsg = 'Draw at least 1 block first.';
+    const needBlocksMsg = 'Draw at least 1 block or place a 3D item first.';
     const locationNeededMsg = describeLocationNeededAction();
     const cameraNeededMsg = describeCameraNeededAction();
 
     let publishReason = '';
-    const publishNeedsAuth = hasVoxels && !user;
-    if (!hasVoxels) {
+    const publishNeedsAuth = hasDraftArt && !user;
+    if (!hasDraftArt) {
       publishReason = needBlocksMsg;
     } else if (!user) {
       // Allow tapping/selecting Publish when drawn & logged out so Google Sign-In pops up immediately
@@ -405,7 +417,7 @@ export function useVoxelBrush({
       },
       stack: {
         usable: !calBlocked && !originBlocked && hasVoxels,
-        reason: calBlocked ? calMsg : originBlocked ? originMsg : !hasVoxels ? needBlocksMsg : '',
+        reason: calBlocked ? calMsg : originBlocked ? originMsg : !hasVoxels ? 'Draw at least 1 block first.' : '',
         needsCalibration: calBlocked
       },
       erase: {
@@ -413,12 +425,12 @@ export function useVoxelBrush({
         reason: ''
       },
       clear: {
-        usable: hasVoxels,
-        reason: !hasVoxels ? 'Nothing to clear yet.' : ''
+        usable: hasDraftArt,
+        reason: !hasDraftArt ? 'Nothing to clear yet.' : ''
       },
       transform: {
-        usable: hasVoxels || mode === 'transform',
-        reason: !hasVoxels && mode !== 'transform' ? needBlocksMsg : ''
+        usable: hasDraftArt || mode === 'transform',
+        reason: !hasDraftArt && mode !== 'transform' ? needBlocksMsg : ''
       },
       undo: {
         usable: hasVoxels || hasClearedBackup,
@@ -444,7 +456,7 @@ export function useVoxelBrush({
         usable: !publishReason,
         reason: publishReason,
         needsAuth: publishNeedsAuth,
-        needsCalibration: Boolean(hasVoxels && user && hasLoc && cameraReady && calBlocked)
+        needsCalibration: Boolean(hasDraftArt && user && hasLoc && cameraReady && calBlocked)
       },
       recenter: { usable: true, reason: '' },
       drafts: { usable: true, reason: '' },
@@ -456,6 +468,7 @@ export function useVoxelBrush({
     originStatus.originBlocked,
     originStatus.reason,
     hasVoxels,
+    hasDraftArt,
     hasClearedBackup,
     location,
     cameraReady,
@@ -1288,14 +1301,14 @@ export function useVoxelBrush({
     group.updateMatrixWorld(true);
 
     if (cage) {
-      if (voxels.length > 0) {
+      if (voxels.length > 0 || hasPlacedCatalogItem) {
         cage.box.setFromObject(group);
-        cage.visible = true;
+        cage.visible = !cage.box.isEmpty();
       } else {
         cage.visible = false;
       }
     }
-  }, [mode, artTransform, transformPivot, voxels, draftGroupRef, transformBoxRef]);
+  }, [mode, artTransform, transformPivot, voxels, hasPlacedCatalogItem, draftGroupRef, transformBoxRef]);
 
   useEffect(() => {
     const marker = surfaceMarkerRef.current;
@@ -1416,37 +1429,46 @@ export function useVoxelBrush({
     [notifyToolUnavailable]
   );
 
-  const enterTransformMode = useCallback(() => {
-    stopBrushPainting();
-    setPaletteOpen(false);
-    occlusionRef.current?.reset?.();
-    if (originStatusRef.current?.originBlocked) {
-      const clearStatus = { originBlocked: false, originVisible: true, reason: '' };
-      originStatusRef.current = clearStatus;
-      setOriginStatus(clearStatus);
-    }
-    const pivot = computeVoxelCentroid(voxelsRef.current);
-    setTransformPivot(pivot);
-    transformPivotRef.current = pivot;
-    resetArtTransformState();
-    setMode('transform');
-    modeRef.current = 'transform';
-    showTemporaryHint(
-      voxelsRef.current.length
-        ? 'Art locked — pinch to scale, 2-finger twist for Z-rotate, drag to move, or use sliders · tap ✅ to draw'
-        : 'Transform locked — tap ✅ again to return to drawing mode'
-    );
-  }, [resetArtTransformState, showTemporaryHint, stopBrushPainting]);
+  const enterTransformMode = useCallback(
+    ({ pivotOverride = null, hintOverride = '' } = {}) => {
+      stopBrushPainting();
+      setPaletteOpen(false);
+      occlusionRef.current?.reset?.();
+      if (originStatusRef.current?.originBlocked) {
+        const clearStatus = { originBlocked: false, originVisible: true, reason: '' };
+        originStatusRef.current = clearStatus;
+        setOriginStatus(clearStatus);
+      }
+      const pivot =
+        pivotOverride ||
+        (voxelsRef.current.length > 0
+          ? computeVoxelCentroid(voxelsRef.current)
+          : placedCatalogPivotRef?.current || { x: 0, y: 0, z: 0 });
+      setTransformPivot(pivot);
+      transformPivotRef.current = pivot;
+      resetArtTransformState();
+      setMode('transform');
+      modeRef.current = 'transform';
+      showTemporaryHint(
+        hintOverride ||
+          (voxelsRef.current.length || hasPlacedCatalogRef.current
+            ? 'Art locked — pinch to scale, 2-finger twist for Z-rotate, drag to move, or use sliders · tap ✅ to draw'
+            : 'Transform locked — tap ✅ again to return to drawing mode')
+      );
+    },
+    [placedCatalogPivotRef, resetArtTransformState, showTemporaryHint, stopBrushPainting]
+  );
 
   const commitTransformAndExit = useCallback(
     (nextMode = 'draw', nextTool = null) => {
       const tr = artTransformRef.current;
       const pivot = transformPivotRef.current;
-      if (
-        modeRef.current === 'transform' &&
-        voxelsRef.current.length > 0 &&
-        hasNonIdentityTransform(tr)
-      ) {
+      const hadTransform = modeRef.current === 'transform' && hasNonIdentityTransform(tr);
+      if (hadTransform && hasPlacedCatalogRef.current) {
+        onCommitCatalogTransformRef.current?.(tr, pivot);
+        markDrawActivity({ forceState: true });
+      }
+      if (hadTransform && voxelsRef.current.length > 0) {
         const maxHumanSpan =
           config?.policy?.humanMaxDrawSpanMeters || HUMAN_MAX_DRAW_SPAN_METERS;
         const maxAllowedScale = computeMaxHumanDrawScale(voxelsRef.current, {
@@ -1547,6 +1569,7 @@ export function useVoxelBrush({
     lastErasedKeyRef.current = { key: '', ts: 0 };
     resetArtTransformState();
     onResetSpatialOriginRef.current?.();
+    onClearCatalogItemRef.current?.();
     setVoxels([]);
     if (toolRef.current === 'erase' || toolRef.current === 'stack') {
       setTool('brush');
@@ -1643,7 +1666,8 @@ export function useVoxelBrush({
     [eraseStaleDrawingView, isPublishingRef, location, locationRef]
   );
 
-  const hasAnyDrawnContent = voxels.length > 0 || Boolean(surfaceAnchor) || hasClearedBackup;
+  const hasAnyDrawnContent =
+    voxels.length > 0 || Boolean(hasPlacedCatalogItem) || Boolean(surfaceAnchor) || hasClearedBackup;
 
   // Keep draw activity anchored to the first valid GPS fix and cleared when canvas is emptied
   useEffect(() => {

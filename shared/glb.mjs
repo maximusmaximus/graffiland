@@ -301,3 +301,283 @@ export function buildSculptureGlb(voxels = [], meta = {}) {
 
   return glb;
 }
+
+/**
+ * Generates a self-contained glTF 2.0 binary (.glb) for a 3D embossed Xero Emoji from PNG bytes.
+ * Pure JS / TypedArray implementation compatible with Node.js, Cloudflare Workers, and Browsers.
+ *
+ * Geometry: 1.0m × 1.0m × 0.12m resting flush on y = 0 (y in [0, 1], x in [-0.5, 0.5], z in [-0.06, 0.06]),
+ * built from bright front/back emoji artwork faces plus 6 shaded interior alpha-masked slices so the
+ * silhouette reads with authentic 3D extruded depth from every angle.
+ */
+export function buildEmojiGlbFromPngBytes(pngBytes, meta = {}) {
+  const imgBytes =
+    pngBytes instanceof Uint8Array
+      ? pngBytes
+      : ArrayBuffer.isView(pngBytes)
+      ? new Uint8Array(pngBytes.buffer, pngBytes.byteOffset, pngBytes.byteLength)
+      : pngBytes instanceof ArrayBuffer
+      ? new Uint8Array(pngBytes)
+      : null;
+  if (!imgBytes || imgBytes.byteLength < 8) {
+    throw new Error('Valid PNG image bytes are required to build a 3D emoji GLB.');
+  }
+
+  const size = Number.isFinite(Number(meta.sizeMeters)) && Number(meta.sizeMeters) > 0
+    ? Number(meta.sizeMeters)
+    : 1.0;
+  const thick = Number.isFinite(Number(meta.thicknessMeters)) && Number(meta.thicknessMeters) > 0
+    ? Number(meta.thicknessMeters)
+    : size * 0.12;
+  const halfW = size / 2;
+  const halfT = thick / 2;
+
+  // Build front (+Z), back (-Z, U-flipped), and 6 interior depth-extrusion slices
+  const buildQuadMeshData = (planes) => {
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+    let vOff = 0;
+
+    for (const p of planes) {
+      const z = p.z;
+      const flipU = Boolean(p.flipU);
+      const uL = flipU ? 1 : 0;
+      const uR = flipU ? 0 : 1;
+      // glTF UV origin is top-left (v=0 top, v=1 bottom)
+      if (p.normalZ >= 0) {
+        positions.push(
+          -halfW, 0, z,
+          halfW, 0, z,
+          halfW, size, z,
+          -halfW, size, z
+        );
+        normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1);
+        uvs.push(uL, 1, uR, 1, uR, 0, uL, 0);
+      } else {
+        positions.push(
+          halfW, 0, z,
+          -halfW, 0, z,
+          -halfW, size, z,
+          halfW, size, z
+        );
+        normals.push(0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1);
+        uvs.push(uL, 1, uR, 1, uR, 0, uL, 0);
+      }
+      indices.push(vOff, vOff + 1, vOff + 2, vOff, vOff + 2, vOff + 3);
+      vOff += 4;
+    }
+
+    return {
+      pos: new Float32Array(positions),
+      norm: new Float32Array(normals),
+      uv: new Float32Array(uvs),
+      idx: new Uint16Array(indices)
+    };
+  };
+
+  const faceData = buildQuadMeshData([
+    { z: halfT, normalZ: 1, flipU: false },
+    { z: -halfT, normalZ: -1, flipU: false }
+  ]);
+
+  const sliceCount = 6;
+  const slicePlanes = [];
+  for (let i = 1; i <= sliceCount; i += 1) {
+    const t = i / (sliceCount + 1);
+    const z = -halfT + t * thick;
+    slicePlanes.push({ z, normalZ: 1, flipU: false });
+  }
+  const sliceData = buildQuadMeshData(slicePlanes);
+
+  const bufferViews = [];
+  const accessors = [];
+  const binChunks = [];
+  let byteOffset = 0;
+
+  const pushChunk = (u8, target = undefined) => {
+    const start = byteOffset;
+    const padded = align4(u8.byteLength);
+    if (padded === u8.byteLength) {
+      binChunks.push(u8);
+    } else {
+      const copy = new Uint8Array(padded);
+      copy.set(u8);
+      binChunks.push(copy);
+    }
+    byteOffset += padded;
+    const bv = { buffer: 0, byteOffset: start, byteLength: u8.byteLength };
+    if (target) bv.target = target;
+    bufferViews.push(bv);
+    return bufferViews.length - 1;
+  };
+
+  const pushPrimitive = (data, materialIndex) => {
+    const posBv = pushChunk(
+      new Uint8Array(data.pos.buffer, data.pos.byteOffset, data.pos.byteLength),
+      34962
+    );
+    const normBv = pushChunk(
+      new Uint8Array(data.norm.buffer, data.norm.byteOffset, data.norm.byteLength),
+      34962
+    );
+    const uvBv = pushChunk(
+      new Uint8Array(data.uv.buffer, data.uv.byteOffset, data.uv.byteLength),
+      34962
+    );
+    const idxBv = pushChunk(
+      new Uint8Array(data.idx.buffer, data.idx.byteOffset, data.idx.byteLength),
+      34963
+    );
+
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let i = 2; i < data.pos.length; i += 3) {
+      if (data.pos[i] < minZ) minZ = data.pos[i];
+      if (data.pos[i] > maxZ) maxZ = data.pos[i];
+    }
+
+    const posAcc = accessors.length;
+    accessors.push({
+      bufferView: posBv,
+      componentType: 5126,
+      count: data.pos.length / 3,
+      type: 'VEC3',
+      min: [-halfW, 0, minZ],
+      max: [halfW, size, maxZ]
+    });
+    const normAcc = accessors.length;
+    accessors.push({
+      bufferView: normBv,
+      componentType: 5126,
+      count: data.norm.length / 3,
+      type: 'VEC3'
+    });
+    const uvAcc = accessors.length;
+    accessors.push({
+      bufferView: uvBv,
+      componentType: 5126,
+      count: data.uv.length / 2,
+      type: 'VEC2'
+    });
+    const idxAcc = accessors.length;
+    accessors.push({
+      bufferView: idxBv,
+      componentType: 5123,
+      count: data.idx.length,
+      type: 'SCALAR'
+    });
+
+    return {
+      attributes: {
+        POSITION: posAcc,
+        NORMAL: normAcc,
+        TEXCOORD_0: uvAcc
+      },
+      indices: idxAcc,
+      material: materialIndex
+    };
+  };
+
+  const primitives = [pushPrimitive(faceData, 0), pushPrimitive(sliceData, 1)];
+  const imageBv = pushChunk(imgBytes);
+
+  const label = String(meta.title || meta.name || meta.emojiId || 'Xero Emoji').slice(0, 64);
+  const gltf = {
+    asset: {
+      version: '2.0',
+      generator: 'SPRAY.LAND 3D Emoji GLB Exporter'
+    },
+    scene: 0,
+    scenes: [{ name: label, nodes: [0] }],
+    nodes: [
+      {
+        name: label,
+        mesh: 0,
+        extras: {
+          schema: 'graffiland.xeroemoji.glb.v1',
+          emojiId: meta.emojiId || null,
+          source: 'maximusmaximus/xeroemoji-pile'
+        }
+      }
+    ],
+    meshes: [
+      {
+        name: 'XeroEmoji3D',
+        primitives
+      }
+    ],
+    samplers: [
+      {
+        magFilter: 9729,
+        minFilter: 9987,
+        wrapS: 33071,
+        wrapT: 33071
+      }
+    ],
+    images: [
+      {
+        bufferView: imageBv,
+        mimeType: 'image/png'
+      }
+    ],
+    textures: [{ sampler: 0, source: 0 }],
+    materials: [
+      {
+        name: 'EmojiFaces',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 0 },
+          baseColorFactor: [1, 1, 1, 1],
+          metallicFactor: 0.08,
+          roughnessFactor: 0.38
+        },
+        alphaMode: 'MASK',
+        alphaCutoff: 0.25,
+        doubleSided: false
+      },
+      {
+        name: 'EmojiExtrudeCore',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 0 },
+          baseColorFactor: [0.76, 0.76, 0.82, 1],
+          metallicFactor: 0.14,
+          roughnessFactor: 0.45
+        },
+        alphaMode: 'MASK',
+        alphaCutoff: 0.35,
+        doubleSided: true
+      }
+    ],
+    accessors,
+    bufferViews,
+    buffers: [{ byteLength: byteOffset }]
+  };
+
+  const jsonRaw = new TextEncoder().encode(JSON.stringify(gltf));
+  const jsonPaddedLen = align4(jsonRaw.byteLength);
+  const totalLen = 12 + 8 + jsonPaddedLen + 8 + byteOffset;
+
+  const glb = new Uint8Array(totalLen);
+  const dv = new DataView(glb.buffer);
+  dv.setUint32(0, 0x46546c67, true);
+  dv.setUint32(4, 2, true);
+  dv.setUint32(8, totalLen, true);
+
+  dv.setUint32(12, jsonPaddedLen, true);
+  dv.setUint32(16, 0x4e4f534a, true);
+  glb.set(jsonRaw, 20);
+  for (let i = jsonRaw.byteLength; i < jsonPaddedLen; i += 1) {
+    glb[20 + i] = 0x20;
+  }
+
+  const binHeaderOffset = 20 + jsonPaddedLen;
+  dv.setUint32(binHeaderOffset, byteOffset, true);
+  dv.setUint32(binHeaderOffset + 4, 0x004e4942, true);
+  let writeCursor = binHeaderOffset + 8;
+  for (const chunk of binChunks) {
+    glb.set(chunk, writeCursor);
+    writeCursor += chunk.byteLength;
+  }
+  return glb;
+}

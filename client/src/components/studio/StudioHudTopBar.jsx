@@ -38,6 +38,8 @@ export default function StudioHudTopBar({
   voxels,
   onOpenTutorial,
   onOpenInfo,
+  onOpenCatalogSearch = null,
+  hasPlacedCatalogItem = false,
   onOpenProfile = null,
   hasOwnedLand,
   ownedLandCount,
@@ -279,6 +281,19 @@ export default function StudioHudTopBar({
               </span>
             )}
           </button>
+
+          {typeof onOpenCatalogSearch === 'function' && (
+            <button
+              type="button"
+              className={`info-fab-inline mobile-search-fab ${hasPlacedCatalogItem ? 'is-active' : ''}`}
+              data-testid="mobile-catalog-search-btn"
+              onClick={onOpenCatalogSearch}
+              aria-label="Search 3D items to place"
+              title="Search & place 3D models & emojis (SimReady, Pixels, XeroEmoji)"
+            >
+              <XeroIcon emoji="🔍" size={18} label="Search 3D" />
+            </button>
+          )}
 
           <button
             type="button"

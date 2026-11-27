@@ -13,6 +13,7 @@ import { api, API_BASE } from '../utils/api.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { isLandOwnedByUser } from '../utils/landMapHelpers.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import Catalog3DSearchBox from './Catalog3DSearchBox.jsx';
 import InfoTip from './InfoTip.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -436,6 +437,87 @@ export default function AddLandItemModal({
     }
   }
 
+  async function handlePlaceCatalogItem(item) {
+    if (!item) return;
+    if (isFrozen) {
+      setStatusIsError(true);
+      setStatusMsg('This land is frozen. Unfreeze it first to place a new 3D item.');
+      return;
+    }
+    setUploadBusy(true);
+    setStatusMsg('');
+    setStatusIsError(false);
+    setServerFitHint(null);
+    try {
+      const landDisplay = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
+      const offsetObj = {
+        dx: Number(dx || 0),
+        dy: Number(dy || 0),
+        dz: Number(dz || 0),
+        yaw: Number(yaw || 0)
+      };
+      let chosenScale = Number(modelScale || item.recommendedScale || 1);
+      if (!Number.isFinite(chosenScale) || chosenScale <= 0) chosenScale = 1;
+
+      const validated = await api
+        .validateModelUrl({
+          catalogItemId: item.id,
+          modelUrl: item.modelUrl,
+          modelFormat: item.modelFormat || 'glb',
+          parcelId: parcel.parcelId,
+          modelScale: chosenScale,
+          anchorOffset: offsetObj
+        })
+        .catch(() => null);
+
+      if (
+        validated?.landFit &&
+        !validated.landFit.fits &&
+        Number(validated.landFit.maxSafeScale) >= 0.001
+      ) {
+        chosenScale = Math.min(chosenScale, Number(validated.landFit.maxSafeScale));
+      }
+
+      const finalTitle = String(item.title || '3D Catalog Item').trim().slice(0, 48);
+      const finalDescription = `${finalTitle} from ${item.sourceName || 'SPRAY.LAND 3D Catalog'} placed on "${landDisplay}".`.slice(
+        0,
+        240
+      );
+
+      const res = await api.createSculptureOnLand(parcel.parcelId, {
+        title: finalTitle,
+        description: finalDescription,
+        catalogItemId: item.id,
+        modelFormat: item.modelFormat || 'glb',
+        modelUrl: item.modelUrl,
+        modelScale: chosenScale,
+        anchorOffset: offsetObj
+      });
+
+      setStatusIsError(false);
+      setStatusMsg(
+        res?.requiresOwnerApproval
+          ? res.message ||
+              `Submitted "${finalTitle}" to the land holder for approval on "${landDisplay}"! Once approved, the NFT will mint to your wallet.`
+          : `Placed "${res?.sculpture?.title || finalTitle}" onto "${landDisplay}"!`
+      );
+      if (!res?.requiresOwnerApproval) {
+        await onSculptureUploaded?.(res?.sculpture);
+      }
+    } catch (err) {
+      setStatusIsError(true);
+      if (err?.data?.maxSafeScale !== undefined) {
+        setServerFitHint({
+          maxSafeScale: Number(err.data.maxSafeScale || 0),
+          message: err?.data?.error || err?.message || '3D model exceeds land bounds.'
+        });
+      }
+      setStatusMsg(err?.data?.error || err?.message || 'Could not place 3D item on land.');
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
   async function handleCopyShareLink() {
     const shareUrl = buildParcelShareUrl({
       origin: typeof window !== 'undefined' ? window.location.origin : 'https://spray.land',
@@ -572,10 +654,12 @@ export default function AddLandItemModal({
           <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="add-item-plus-badge">+</span>
             <span>Add 3D Item to {landDisplayName}</span>
-            <InfoTip title="AI Agent Prompt & Manual 3D Upload">
-              Copy the ready-to-paste MCP prompt below so your AI agent can build and place 3D
-              artworks directly on this land, or expand Add Manually to upload a 3D model URL
-              (.glb/.gltf/.obj/.stl/.ply) and customize placement.
+            <InfoTip title="AI Agent Prompt, Search to Add & Manual Upload">
+              Copy the ready-to-paste MCP prompt below so your AI agent can search &amp; place 3D
+              items, use <strong>Search to Add</strong> to pick ready-made 3D props &amp; emojis
+              from SimReady Pile, Pixels Atlas, and XeroEmoji Pile one at a time, or expand{' '}
+              <strong>Add Manually</strong> to upload any custom 3D model URL
+              (.glb/.gltf/.obj/.stl/.ply).
             </InfoTip>
           </h2>
           <div className="modal-header-actions">
@@ -761,6 +845,18 @@ export default function AddLandItemModal({
             onFocus={(e) => e.target.select()}
           />
         </section>
+
+        {/* MIDDLE SECTION: Search to Add (SimReady Pile, Pixels Atlas & XeroEmoji Pile — pick & place one at a time) */}
+        <Catalog3DSearchBox
+          title="Search to Add"
+          subtitle={`Query SimReady Pile, Pixels Atlas & XeroEmoji Pile — preview and place one item at a time on ${landDisplayName}`}
+          actionLabel={requiresApproval && !isLandOwner ? '+ Propose Item' : '+ Place on Land'}
+          busy={uploadBusy}
+          disabled={isFrozen}
+          disabledReason={isFrozen ? 'Unfreeze this land first to place items.' : ''}
+          limit={6}
+          onPlaceItem={handlePlaceCatalogItem}
+        />
 
         {statusMsg && (
           <div

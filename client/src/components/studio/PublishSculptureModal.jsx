@@ -15,6 +15,7 @@ export default function PublishSculptureModal({
   config,
   user,
   voxels,
+  placedCatalogItem = null,
   polStats,
   location,
   orbStatus,
@@ -201,6 +202,11 @@ export default function PublishSculptureModal({
         ) : (
           <form onSubmit={onSubmitPublish} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {placedCatalogItem && (
+                <span className="badge gold" data-testid="publish-catalog-item-badge">
+                  <XeroIcon emoji="🧊" size={13} /> {placedCatalogItem.title} ({placedCatalogItem.sourceName || '.GLB'})
+                </span>
+              )}
               <span className="badge teal">
                 <XeroIcon emoji="🧱" size={13} /> {voxels.length} voxels
               </span>

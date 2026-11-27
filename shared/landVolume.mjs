@@ -374,6 +374,7 @@ export function centerVoxelsHorizontally(voxels = []) {
  *   lat?: number,
  *   lng?: number,
  *   voxels?: any[],
+ *   modelBbox?: { width?: number, depth?: number, height?: number } | null,
  *   anchorOffset?: { dx?: number, dy?: number, dz?: number, yaw?: number } | null,
  *   scale?: number,
  *   paddingFraction?: number,
@@ -386,6 +387,7 @@ export function buildObjectFittedLandVolume({
   lat = NaN,
   lng = NaN,
   voxels = [],
+  modelBbox = null,
   anchorOffset = null,
   scale = 1,
   paddingFraction = 0.1,
@@ -407,6 +409,10 @@ export function buildObjectFittedLandVolume({
   const mPerDegLng = metersPerDegLngAtLat(baseLat);
 
   const bounds = computeObjectVoxelBoundsMeters(voxels);
+  const modelW = Number(modelBbox?.width || 0);
+  const modelD = Number(modelBbox?.depth || 0);
+  const modelH = Number(modelBbox?.height || 0);
+  const hasModelBbox = modelW > 0 && modelD > 0 && modelH > 0;
 
   // Center the land directly on the object anchor (lat, lng) + (dx, dz).
   // All 3D renderers (AR camera, 3D map layer, GeoJSON map extrusions, and 3D viewer)
@@ -415,9 +421,18 @@ export function buildObjectFittedLandVolume({
   const centerLat = baseLat + (-dz / METERS_PER_DEG_LAT);
   const centerLng = baseLng + (dx / mPerDegLng);
 
-  const rawW = (bounds ? bounds.widthMeters : 1.0) * objScale;
-  const rawD = (bounds ? bounds.depthMeters : 1.0) * objScale;
-  const rawH = (bounds ? bounds.heightMeters : 1.0) * objScale;
+  const voxelW = bounds ? bounds.widthMeters : 0;
+  const voxelD = bounds ? bounds.depthMeters : 0;
+  const voxelH = bounds ? bounds.heightMeters : 0;
+  const rawW = hasModelBbox
+    ? Math.max(voxelW, modelW * objScale)
+    : (bounds ? voxelW : 1.0) * objScale;
+  const rawD = hasModelBbox
+    ? Math.max(voxelD, modelD * objScale)
+    : (bounds ? voxelD : 1.0) * objScale;
+  const rawH = hasModelBbox
+    ? Math.max(voxelH, modelH * objScale)
+    : (bounds ? voxelH : 1.0) * objScale;
 
   let widthMeters = Math.max(
     minDimensionMeters,

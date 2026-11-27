@@ -169,18 +169,25 @@ import {
   signRequestByAgent,
   signRequestByMobile,
   updateLandSettings,
-  upsertAnchorAndRevision
+  upsertAnchorAndRevision,
+  upsertSculptureModelRow
 } from '../../shared/mcpService.mjs';
 import { buildViewerDedupKey, recordLandView } from '../../shared/landViewService.mjs';
 import {
   b64ToModelBytes,
   CUSTOM_MODEL_MAX_BYTES,
+  extractCustomModelInput,
   fetchModelBytesFromGateways,
   FORMAT_MIME_TYPES,
   modelBytesToB64,
   validate3dModelUrl,
   validateAnchorOffset
 } from '../../shared/model3d.mjs';
+import {
+  buildCatalogEmojiGlb,
+  resolveCatalogItemReference,
+  search3dAssetCatalog
+} from '../../shared/catalogSearchService.mjs';
 import {
   checkAndConsumeRelayerQuota,
   fetchParcelLandmarkAnchor,
@@ -2686,6 +2693,46 @@ export default {
       }
     }
 
+    if (pathname === '/api/catalog/search' && request.method === 'GET') {
+      try {
+        const result = await search3dAssetCatalog({
+          query: url.searchParams.get('q') ?? url.searchParams.get('query') ?? '',
+          source: url.searchParams.get('source') || 'all',
+          limit: Number(url.searchParams.get('limit') || 12),
+          apiOrigin: url.origin
+        });
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=120',
+            ...corsHeaders(request)
+          }
+        });
+      } catch (err) {
+        return jsonResponse({ error: err?.message || 'Catalog search failed.' }, 500, request);
+      }
+    }
+
+    const catalogEmojiMatch = pathname.match(/^\/api\/catalog\/emoji\/([^/]+)$/);
+    if (catalogEmojiMatch && request.method === 'GET') {
+      try {
+        const rawId = decodeURIComponent(catalogEmojiMatch[1]).replace(/\.glb$/i, '').trim();
+        const built = await buildCatalogEmojiGlb(rawId);
+        return new Response(built.bytes, {
+          status: 200,
+          headers: {
+            'Content-Type': 'model/gltf-binary',
+            'Cache-Control': 'public, max-age=86400',
+            'X-Content-Type-Options': 'nosniff',
+            ...corsHeaders(request)
+          }
+        });
+      } catch (err) {
+        return jsonResponse({ error: err?.message || 'Could not generate 3D emoji model.' }, 400, request);
+      }
+    }
+
     if (pathname === '/api/models/validate-url' && request.method === 'POST') {
       const user = await getAuthUser(request, env, cfg);
       if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
@@ -2700,8 +2747,19 @@ export default {
         return jsonResponse({ error: err.message }, err?.statusCode || 429, request);
       }
       const body = await request.json().catch(() => ({}));
-      const modelUrl = String(body?.modelUrl || body?.url || '').trim();
-      const formatHint = String(body?.modelFormat || body?.format || '').trim();
+      const catalogItemId = String(body?.catalogItemId || '').trim();
+      const catItem = catalogItemId
+        ? resolveCatalogItemReference({ catalogItemId, apiOrigin: url.origin })
+        : null;
+      if (catalogItemId && !catItem) {
+        return jsonResponse(
+          { valid: false, error: `Invalid catalogItemId "${catalogItemId}".` },
+          400,
+          request
+        );
+      }
+      const modelUrl = String(body?.modelUrl || body?.url || catItem?.modelUrl || '').trim();
+      const formatHint = String(body?.modelFormat || body?.format || catItem?.modelFormat || '').trim();
       const parcelId = String(body?.parcelId || '').trim();
       const modelScale = Number(body?.modelScale ?? body?.scale ?? 1);
       const anchorOffset = body?.anchorOffset && typeof body.anchorOffset === 'object' ? body.anchorOffset : {};
@@ -2723,8 +2781,9 @@ export default {
           mimeType: checked.mimeType || '',
           byteLength: checked.byteLength || 0,
           stats: checked.stats || null,
-          suggestedTitle: checked.suggestedTitle || '',
+          suggestedTitle: catItem?.title || checked.suggestedTitle || '',
           modelUrl,
+          ...(catItem ? { catalogItem: catItem } : {}),
           ...(landFit ? { landFit } : {})
         },
         checked.valid ? 200 : 400,
@@ -3345,6 +3404,38 @@ export default {
           return jsonResponse({ error: anchorCheck.error }, 400, request);
         }
 
+        let resolvedCustomModel = null;
+        if (validation.hasCustomModel) {
+          const modelExtract = extractCustomModelInput(body || {});
+          if (modelExtract.error) {
+            return jsonResponse({ error: modelExtract.error }, 400, request);
+          }
+          if (modelExtract.provided && modelExtract.customModel) {
+            if (modelExtract.customModel.bytes?.length) {
+              resolvedCustomModel = modelExtract.customModel;
+            } else if (modelExtract.customModel.externalUrl) {
+              const urlCheck = await validate3dModelUrl(modelExtract.customModel.externalUrl, {
+                formatHint:
+                  modelExtract.customModel.format && modelExtract.customModel.format !== 'auto'
+                    ? modelExtract.customModel.format
+                    : ''
+              });
+              if (!urlCheck.valid || !urlCheck.customModel) {
+                return jsonResponse(
+                  { error: urlCheck.error || 'Could not load placed 3D catalog model.' },
+                  400,
+                  request
+                );
+              }
+              resolvedCustomModel = {
+                ...urlCheck.customModel,
+                scale: modelExtract.customModel.scale,
+                rotationY: modelExtract.customModel.rotationY
+              };
+            }
+          }
+        }
+
         await checkRateLimit(d1Adapter, {
           scope: 'publish',
           key: user.id,
@@ -3423,6 +3514,8 @@ export default {
           lat: publishedLat,
           lng: publishedLng,
           voxels: publishedVoxels,
+          modelBbox: resolvedCustomModel?.stats?.bbox || null,
+          scale: resolvedCustomModel ? resolvedCustomModel.scale || 1 : 1,
           anchorOffset: anchorCheck.offset,
           paddingFraction: 0.1
         });
@@ -3502,6 +3595,7 @@ export default {
               title: validation.title,
               description: validation.description,
               voxels: publishedVoxels,
+              customModel: resolvedCustomModel,
               previewDataUrl: body?.previewDataUrl || '',
               locationBundle: publishedLocationBundle,
               creatorAddress: recipientAddress
@@ -3693,15 +3787,32 @@ export default {
             .run();
         }
 
+        if (resolvedCustomModel) {
+          await upsertSculptureModelRow(d1Adapter, {
+            sculptureId,
+            parcelId: effectiveParcelId,
+            customModel: resolvedCustomModel,
+            ipfsResult
+          });
+        }
+
         await upsertAnchorAndRevision(d1Adapter, {
           sculptureId,
           parcelId: effectiveParcelId,
           revNum: 1,
-          anchorOffset: anchorCheck.offset,
+          anchorOffset: resolvedCustomModel
+            ? { ...anchorCheck.offset, scale: resolvedCustomModel.scale || 1 }
+            : anchorCheck.offset,
           erc4906TxHash: mintResult.txHash || '',
+          meshStats: resolvedCustomModel
+            ? {
+                ...(resolvedCustomModel.stats || {}),
+                transformScale: resolvedCustomModel.scale || 1
+              }
+            : null,
           editorUser: user,
           editorRole: 'owner',
-          modelType: 'voxel',
+          modelType: resolvedCustomModel ? 'custom-3d' : 'voxel',
           voxels: validation.cleanVoxels,
           title: validation.title,
           description: validation.description,
@@ -3717,7 +3828,7 @@ export default {
           artistUser: user,
           artistAddress: recipientAddress,
           voxelCount: validation.cleanVoxels.length,
-          isCustomModel: false,
+          isCustomModel: Boolean(resolvedCustomModel),
           questId: body?.questId || '',
           plinthSlotId: body?.plinthSlotId || '',
           platformAddress: cfg.royaltyReceiver

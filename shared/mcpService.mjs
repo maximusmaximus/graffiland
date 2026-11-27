@@ -19,6 +19,10 @@ import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
 import { serializeSculptureRow } from './sculpture.mjs';
 import { extractCustomModelInput, validate3dModelUrl } from './model3d.mjs';
+import {
+  resolveCatalogItemReference,
+  search3dAssetCatalog
+} from './catalogSearchService.mjs';
 import { buildParcelShareUrl, slugifyLandTitle } from './landVolume.mjs';
 import {
   McpServiceError,
@@ -64,7 +68,8 @@ import {
   preflightCreateSculptureOnLand,
   preflightUpdateSculpture,
   removeLandContributor,
-  updateLandSettings
+  updateLandSettings,
+  upsertSculptureModelRow
 } from './mcp/landMutations.mjs';
 import {
   compactSignaturePayload,
@@ -172,7 +177,8 @@ export {
   signRequestByAgent,
   signRequestByMobile,
   updateLandSettings,
-  upsertAnchorAndRevision
+  upsertAnchorAndRevision,
+  upsertSculptureModelRow
 };
 
 export async function handleMcpJsonRpc(
@@ -323,9 +329,26 @@ export async function handleMcpJsonRpc(
           })
         )
       };
+    } else if (toolName === 'search_3d_catalog') {
+      toolResult = await search3dAssetCatalog({
+        query: args.query ?? args.q ?? '',
+        source: args.source || 'all',
+        limit: args.limit ?? 12,
+        apiOrigin
+      });
     } else if (toolName === 'validate_3d_model_url') {
-      const checked = await validate3dModelUrl(args.modelUrl, {
-        formatHint: args.modelFormat || ''
+      const catItem = args.catalogItemId
+        ? resolveCatalogItemReference({ catalogItemId: args.catalogItemId, apiOrigin })
+        : null;
+      if (args.catalogItemId && !catItem) {
+        throw new McpServiceError(
+          `Invalid catalogItemId "${args.catalogItemId}". Expected simready:<id>, pixels:<id>, or xeroemoji:<id>.`,
+          400
+        );
+      }
+      const targetModelUrl = String(args.modelUrl || catItem?.modelUrl || '').trim();
+      const checked = await validate3dModelUrl(targetModelUrl, {
+        formatHint: args.modelFormat || catItem?.modelFormat || ''
       });
       let landFit = null;
       if (checked.valid && args.parcelId) {
@@ -343,8 +366,9 @@ export async function handleMcpJsonRpc(
         mimeType: checked.mimeType || '',
         byteLength: checked.byteLength || 0,
         stats: checked.stats || null,
-        suggestedTitle: checked.suggestedTitle || '',
-        modelUrl: args.modelUrl,
+        suggestedTitle: catItem?.title || checked.suggestedTitle || '',
+        modelUrl: targetModelUrl,
+        ...(catItem ? { catalogItem: catItem } : {}),
         ...(landFit ? { landFit } : {})
       };
     } else if (toolName === 'get_parcel_share_link') {
@@ -376,14 +400,17 @@ export async function handleMcpJsonRpc(
       const modelPayloadFields = modelCheck.provided
         ? {
             modelFormat: modelCheck.customModel.format,
+            ...(args.catalogItemId || args.model?.catalogItemId
+              ? { catalogItemId: args.catalogItemId || args.model?.catalogItemId }
+              : {}),
             ...(args.modelBase64 || args.model?.dataBase64
               ? { modelBase64: args.modelBase64 || args.model?.dataBase64 }
               : {}),
             ...(args.modelData || args.model?.data || args.model?.dataText
               ? { modelData: args.modelData || args.model?.data || args.model?.dataText }
               : {}),
-            ...(args.modelUrl || args.model?.url
-              ? { modelUrl: args.modelUrl || args.model?.url }
+            ...(args.modelUrl || args.model?.url || modelCheck.customModel.externalUrl
+              ? { modelUrl: args.modelUrl || args.model?.url || modelCheck.customModel.externalUrl }
               : {}),
             modelScale: modelCheck.customModel.scale,
             modelRotationY: modelCheck.customModel.rotationY

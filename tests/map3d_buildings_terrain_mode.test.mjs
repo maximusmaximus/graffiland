@@ -5,7 +5,10 @@ import { after, before, describe, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import esbuild from 'esbuild';
 import { JSDOM } from 'jsdom';
-import { resolveTerrainGroundMeters } from '../client/src/utils/map3dProjection.js';
+import {
+  projectLngLatAltToScreen,
+  resolveTerrainGroundMeters
+} from '../client/src/utils/map3dProjection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -167,5 +170,87 @@ describe('MapView3D Default Buildings & Terrain (3D ON, 2D Buildings OFF, No Tog
     assert.match(src, /map\.setTerrain\(\{ source: 'terrarium-dem', exaggeration: 1\.25 \}\)/);
     assert.doesNotMatch(src, /🏢.*Buildings/);
     assert.doesNotMatch(src, /🏔️.*Terrain/);
+  });
+
+  test('4. projectLngLatAltToScreen keeps 3D wireframes flush on ground at high terrain elevation (75m+) without double-lifting via mercatorMatrix', () => {
+    // Reproduces MapLibre GL v6 camera at Chico CA (elevation ~75m):
+    // - pixelMatrix3D subtracts camera.elevation (-75m) -> z_net = alt - 75m
+    // - mercatorMatrix omits -camera.elevation!
+    const width = 1000;
+    const height = 800;
+    const worldSize = 1000;
+    const camElevation = 75;
+    const lng = -121.84;
+    const lat = 39.73;
+
+    const MC = {
+      fromLngLat: ([lo, la], alt = 0) => ({
+        x: (lo + 180) / 360,
+        y: (90 - la) / 180,
+        z: alt / 1000 // 1000m = 1.0 mercator unit in this test harness
+      })
+    };
+    const mc0 = MC.fromLngLat([lng, lat], 0);
+    const px0 = mc0.x * worldSize;
+    const py0 = mc0.y * worldSize;
+
+    // Column-major pixelMatrix3D: sx = px - px0 + 500, sy = py - py0 + 400 - 2 * (alt - camElevation)
+    const pixelMatrix3D = [
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, -2, 1, 0,
+      500 - px0, 400 - py0 + 2 * camElevation, 0, 1
+    ];
+    // Column-major mercatorMatrix WITHOUT -camElevation (as MapLibre v6 constructs it):
+    // ndcX = 0, ndcY = 2 * (mc.z * 1000) / (height/2) -> sy = 400 - 2 * alt
+    const mercatorMatrix = [
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, (2 * 1000) / (height * 0.5), 1, 0,
+      0, 0, 0, 1
+    ];
+
+    const mapWithPixel3D = {
+      getCanvas: () => ({ clientWidth: width, clientHeight: height }),
+      getTerrain: () => ({ source: 'terrarium-dem', exaggeration: 1.25 }),
+      queryTerrainElevation: () => camElevation,
+      _camera: {
+        projectedCamera: {
+          elevation: camElevation,
+          worldSize,
+          pixelMatrix3D,
+          mercatorMatrix
+        }
+      }
+    };
+
+    // Ground point (relAlt = 0) MUST project to exact ground footprint center (500, 400), NOT 400 - 150 = 250!
+    const groundPt = projectLngLatAltToScreen(mapWithPixel3D, { MercatorCoordinate: MC }, lng, lat, 0);
+    assert.equal(groundPt.visible, true);
+    assert.ok(Math.abs(groundPt.x - 500) < 0.01, `Expected ground x=500, got ${groundPt.x}`);
+    assert.ok(Math.abs(groundPt.y - 400) < 0.01, `Expected ground y=400 (flush on footprint), got ${groundPt.y}`);
+
+    // Roof point (relAlt = 20m) MUST lift by exactly 20m * 2px/m = 40px above ground footprint (y = 360)
+    const roofPt = projectLngLatAltToScreen(mapWithPixel3D, { MercatorCoordinate: MC }, lng, lat, 20);
+    assert.equal(roofPt.visible, true);
+    assert.ok(Math.abs(roofPt.y - 360) < 0.01, `Expected roof y=360, got ${roofPt.y}`);
+
+    // Fallback mercatorMatrix path (without pixelMatrix3D) MUST ALSO subtract camElevation and stay flush at y=400!
+    const mapMercatorOnly = {
+      getCanvas: () => ({ clientWidth: width, clientHeight: height }),
+      getTerrain: () => ({ source: 'terrarium-dem', exaggeration: 1.25 }),
+      queryTerrainElevation: () => camElevation,
+      _camera: {
+        projectedCamera: {
+          elevation: camElevation,
+          mercatorMatrix
+        }
+      }
+    };
+    const mercGround = projectLngLatAltToScreen(mapMercatorOnly, { MercatorCoordinate: MC }, lng, lat, 0);
+    assert.equal(mercGround.visible, true);
+    assert.ok(Math.abs(mercGround.y - 400) < 0.01, `Expected mercator fallback ground y=400, got ${mercGround.y}`);
+    const mercRoof = projectLngLatAltToScreen(mapMercatorOnly, { MercatorCoordinate: MC }, lng, lat, 20);
+    assert.ok(Math.abs(mercRoof.y - 360) < 0.01, `Expected mercator fallback roof y=360, got ${mercRoof.y}`);
   });
 });
