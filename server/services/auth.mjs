@@ -120,6 +120,10 @@ export function sanitizeUser(userRow) {
     picture: avatarImage || '',
     avatarImage,
     headerImage,
+    profilePublic:
+      userRow.profile_public === undefined || userRow.profile_public === null
+        ? true
+        : Number(userRow.profile_public) !== 0,
     userNumber,
     walletAddress: userRow.wallet_address,
     customPayoutAddress: userRow.custom_payout_address || '',

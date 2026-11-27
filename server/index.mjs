@@ -451,7 +451,8 @@ export function createAppServer(serverOptions = {}) {
         getPublicProfile(chatDb, {
           identifier: req.user.id,
           origin,
-          pathname: '/'
+          pathname: '/',
+          viewerUserId: req.user.id
         }),
         getUserMintCapacityStatus(chatDb, req.user.id).catch(() => null)
       ]);
@@ -468,14 +469,17 @@ export function createAppServer(serverOptions = {}) {
         username: req.body?.username,
         bio: req.body?.bio,
         avatarImage: req.body?.avatarImage,
-        headerImage: req.body?.headerImage
+        headerImage: req.body?.headerImage,
+        profilePublic:
+          typeof req.body?.profilePublic === 'boolean' ? req.body.profilePublic : undefined
       });
       const origin = `${req.protocol}://${req.get('host')}`;
       const [pub, mintStatus] = await Promise.all([
         getPublicProfile(chatDb, {
           identifier: updated.id,
           origin,
-          pathname: '/'
+          pathname: '/',
+          viewerUserId: updated.id
         }),
         getUserMintCapacityStatus(chatDb, updated.id).catch(() => null)
       ]);
@@ -489,11 +493,13 @@ export function createAppServer(serverOptions = {}) {
 
   app.get('/api/profiles/:handle', async (req, res) => {
     try {
+      const viewer = getAuthUserFromRequest(req);
       const origin = `${req.protocol}://${req.get('host')}`;
       const pub = await getPublicProfile(chatDb, {
         identifier: decodeURIComponent(req.params.handle || ''),
         origin,
-        pathname: '/'
+        pathname: '/',
+        viewerUserId: viewer?.id || ''
       });
       res.json(pub);
     } catch (err) {

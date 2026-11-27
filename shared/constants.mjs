@@ -145,7 +145,7 @@ export const LAND_VOLUME_LIMITS = {
 };
 
 export const POLICY = {
-  termsVersion: '2026-11-24.v4',
+  termsVersion: '2026-11-27.v5',
   titleMin: 3,
   titleMax: 48,
   descriptionMin: 10,
@@ -185,6 +185,8 @@ export const POLICY = {
   ],
   threatModelSummary:
     'Proof of Location combines live camera-gyro optical flow, solar elevation checks, GPS trajectory sanity, non-reversible ORB visual landmarks, and optional ES256 hardware Passkeys. Because client browsers still supply raw sensor streams, ultra-high-value or adversarial scenarios remain vulnerable to physical camera-replay rigs unless paired with WebXR hardware depth / remote visual verification.',
+  experimentalSafetyDisclaimer:
+    'SPRAY.LAND is highly experimental technology that continuously uses your device camera, GPS, compass, gyroscope, WebGL, and optional 6-DoF ARCore sensors — this can drain your battery quickly and heat your device. You use SPRAY.LAND entirely at your own risk. We are not liable for any unexpected malfunctions, rapid battery drain, data or device loss, or any personal harm, injury, or property damage caused from going to places where you may not be able to safely or legally physically go.',
   takedownAndDisputePolicy: [
     'Prohibited Content: Hate speech, harassment, doxxing, CSAM, threats of violence, explicit fraud/phishing links, and malicious 3D assets exceeding safety budgets are strictly prohibited.',
     'Takedown Process: Property owners, rights holders, and citizens may flag any sculpture ID + Geohash parcel for moderation review. Verified violations are immediately hidden from public maps, gallery feeds, and AR previews via admin visibility controls while preserving audit logs.',
@@ -197,6 +199,7 @@ export const POLICY = {
     '4. Gas Sponsorship & Daily Quotas: Platform relayers currently sponsor gas up to daily per-account quotas on Robinhood Chain and deliver the ERC-721 NFT directly to your Google-linked embedded wallet (or custom payout address).',
     '5. 5% Secondary Resale Royalty: Every SPRAY.LAND NFT embeds an ERC-2981 5% (500 bps) resale fee honored by compatible Robinhood Chain marketplaces.',
     '6. Permanent Art-Minted Land vs. Land Made First (Expiry Counters, Archive & Free Slots): When a human stands physically on-site in Mobile AR and manually draws art to mint land, no expiry timer is needed or displayed and the land is permanently owned (never expires or recycles). Expiry countdown timers apply only to land created first without physical human art/interaction: human map-drawn land has 28 days and AI agent-created land has 72 hours (even if the agent adds 3D models) for a human to physically visit on Mobile AR and add art to fully mint and permanently own it (clearing the timer forever). Unvisited lands with active timers trigger a 3-hour pre-expiry alert and are archived, destroyed, and recycled upon expiry; free mint slots consumed by lands that expire without in-person human users do not reopen.',
-    '7. Limited Terms Policy: Titles must be 3–48 characters and descriptions must be 10–240 characters (max 45 words) with no links, scams, hate speech, or personal doxxing.'
+    '7. Limited Terms Policy: Titles must be 3–48 characters and descriptions must be 10–240 characters (max 45 words) with no links, scams, hate speech, or personal doxxing.',
+    '8. Experimental Tech, Battery Drain & Physical Safety Disclaimer: SPRAY.LAND is highly experimental tech that actively uses many device sensors (camera, GPS, compass, gyroscope, WebGL, and optional 6-DoF ARCore) and can drain your battery quickly. By using SPRAY.LAND, you accept full responsibility for your device and physical safety: we are not liable for any unexpected malfunctions, battery degradation or device loss, or any personal harm or injury caused from going to places where you may not be able to physically, safely, or legally go.'
   ]
 };

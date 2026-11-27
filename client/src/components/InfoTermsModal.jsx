@@ -4,6 +4,7 @@ import {
   IN_PERSON_HUMAN_INTERACTIONS,
   LAND_VOLUME_LIMITS,
   NON_QUALIFYING_INTERACTIONS,
+  POLICY as DEFAULT_POLICY,
   STEWARD_DEFAULTS
 } from '../../../shared/constants.mjs';
 import {
@@ -742,7 +743,11 @@ export default function InfoTermsModal({
                         <strong>+ Seed</strong> to lock a specific spot). SPRAY.LAND fuses
                         True-North compass (WMM declination), 60Hz gyroscope, Kalman GPS, off-thread
                         ORB landmarks, and automatic 6-DoF ARCore calibration when supported by your
-                        device (toggleable anytime in Profile ⚙️ Settings).
+                        device (toggleable anytime in Profile ⚙️ Settings). Pro tip: slipping off
+                        your phone case (especially magnetic or thick cases) often gives much
+                        cleaner compass &amp; AR calibration — and if calibration is still playing
+                        hard to get, just hand the prompt to your AI sidekick and let your bot drop
+                        fresh 3D models onto the land for you!
                       </InfoTip>
                     </div>
                     <p>
@@ -750,6 +755,18 @@ export default function InfoTermsModal({
                       above your tools and surfaces reconcile automatically (or use center reticle +
                       Seed).
                     </p>
+                    <div
+                      className="guide-calibration-pro-tip"
+                      data-testid="guide-calibration-case-ai-tip"
+                    >
+                      <XeroIcon emoji="💡" size={13} />
+                      <span>
+                        <strong>Calibration Trick:</strong> Many users get way sharper calibration
+                        by taking off their phone case! Still fighting a stubborn calibration? Let
+                        your AI sidekick flex — send the prompt and have your bot drop crisp 3D
+                        models straight onto the land for you! 🤖✨
+                      </span>
+                    </div>
                   </div>
 
                   <div className="card info-simple-card">
@@ -963,9 +980,22 @@ export default function InfoTermsModal({
           {tab === 'terms' && (
             <div className="info-tab-stack">
               <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-                <XeroIcon emoji="📜" size={14} /> Version {policy?.termsVersion}
+                <XeroIcon emoji="📜" size={14} /> Version {policy?.termsVersion || DEFAULT_POLICY.termsVersion}
               </div>
-              {(policy?.termsText || []).map((line, i) => (
+              <div
+                className="card terms-safety-warning-card"
+                data-testid="terms-experimental-safety-card"
+                role="note"
+              >
+                <div className="terms-safety-warning-head">
+                  <XeroIcon emoji="⚠️" size={15} />
+                  <strong>Experimental Tech, Battery Drain &amp; Physical Safety Disclaimer</strong>
+                </div>
+                <p>
+                  {policy?.experimentalSafetyDisclaimer || DEFAULT_POLICY.experimentalSafetyDisclaimer}
+                </p>
+              </div>
+              {(policy?.termsText?.length ? policy.termsText : DEFAULT_POLICY.termsText).map((line, i) => (
                 <div key={i} className="card" style={{ padding: '10px 12px', color: 'var(--text)' }}>
                   {line}
                 </div>

@@ -258,11 +258,12 @@ export async function handleMcpJsonRpc(
       const detail = await getPublicProfile(db, {
         identifier: ownerUser.username || ownerUser.id,
         origin: publicOrigin,
-        pathname: '/'
+        pathname: '/',
+        viewerUserId: ownerUser.id
       });
       const shareUrl =
         detail?.profile?.profileUrl ||
-        (detail?.profile?.username
+        (detail?.profile?.username && detail?.profile?.profilePublic !== false
           ? buildPublicProfileUrl({
               origin: publicOrigin,
               pathname: '/',
@@ -280,10 +281,11 @@ export async function handleMcpJsonRpc(
         args.username !== undefined ||
         args.bio !== undefined ||
         args.avatarImage !== undefined ||
-        args.headerImage !== undefined;
+        args.headerImage !== undefined ||
+        typeof args.profilePublic === 'boolean';
       if (!hasAnyField) {
         throw new McpServiceError(
-          'Provide at least one profile field to update (username, bio, avatarImage, or headerImage).',
+          'Provide at least one profile field to update (username, bio, avatarImage, headerImage, or profilePublic).',
           400
         );
       }
@@ -294,7 +296,8 @@ export async function handleMcpJsonRpc(
           ...(args.username !== undefined ? { username: args.username } : {}),
           ...(args.bio !== undefined ? { bio: args.bio } : {}),
           ...(args.avatarImage !== undefined ? { avatarImage: args.avatarImage } : {}),
-          ...(args.headerImage !== undefined ? { headerImage: args.headerImage } : {})
+          ...(args.headerImage !== undefined ? { headerImage: args.headerImage } : {}),
+          ...(typeof args.profilePublic === 'boolean' ? { profilePublic: args.profilePublic } : {})
         });
       } catch (err) {
         throw new McpServiceError(
@@ -306,11 +309,12 @@ export async function handleMcpJsonRpc(
       const detail = await getPublicProfile(db, {
         identifier: updatedRow?.username || ownerUser.id,
         origin: publicOrigin,
-        pathname: '/'
+        pathname: '/',
+        viewerUserId: ownerUser.id
       });
       const shareUrl =
         detail?.profile?.profileUrl ||
-        (detail?.profile?.username
+        (detail?.profile?.username && detail?.profile?.profilePublic !== false
           ? buildPublicProfileUrl({
               origin: publicOrigin,
               pathname: '/',

@@ -8,6 +8,7 @@ import {
   BIO_MAX_LEN,
   PROFILE_HEADER_PRESETS,
   buildPublicProfileUrl,
+  computeProfileFeatureScore,
   findHeaderPreset,
   formatUserNumber,
   normalizeUsername,
@@ -116,6 +117,7 @@ export default function ProfileModal({
     message: ''
   });
   const [saving, setSaving] = useState(false);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
@@ -124,16 +126,20 @@ export default function ProfileModal({
   const headerFileInputRef = useRef(null);
 
   const profile = data?.profile || null;
-  const stats = data?.stats || {
-    landCount: 0,
-    sculptureCount: 0,
-    activeListingCount: 0,
-    questCount: 0,
-    actionCount: 0,
-    totalBlocks: 0,
-    awakenedLands: 0,
-    totalXp: 0
-  };
+  const stats = useMemo(
+    () =>
+      data?.stats || {
+        landCount: 0,
+        sculptureCount: 0,
+        activeListingCount: 0,
+        questCount: 0,
+        actionCount: 0,
+        totalBlocks: 0,
+        awakenedLands: 0,
+        totalXp: 0
+      },
+    [data?.stats]
+  );
   const lands = useMemo(() => data?.lands || [], [data?.lands]);
   const sculptures = useMemo(() => data?.sculptures || [], [data?.sculptures]);
   const listings = useMemo(() => data?.listings || [], [data?.listings]);
@@ -409,10 +415,81 @@ export default function ProfileModal({
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
+  const isProfilePublic = profile
+    ? profile.profilePublic !== false
+    : user?.profilePublic !== false;
+  const isLockedPrivate = Boolean(
+    !isOwner && (data?.isPrivate || profile?.isPrivate || profile?.profilePublic === false)
+  );
+
+  const featureRating = useMemo(
+    () =>
+      computeProfileFeatureScore({
+        profile,
+        stats,
+        lands,
+        sculptures,
+        listings,
+        quests: data?.quests || [],
+        actions,
+        localActions: isOwner ? localActions : [],
+        lastViewed: isOwner ? lastViewedItems : []
+      }),
+    [profile, stats, lands, sculptures, listings, data?.quests, actions, isOwner, localActions, lastViewedItems]
+  );
+
   const publicProfileUrl = useMemo(() => {
-    if (!profile?.username) return '';
+    if (!profile?.username || !isProfilePublic) return '';
     return buildPublicProfileUrl({ origin, pathname, username: profile.username });
-  }, [origin, pathname, profile?.username]);
+  }, [origin, pathname, profile?.username, isProfilePublic]);
+
+  async function handleTogglePublicProfile() {
+    if (!isOwner || privacyBusy) return;
+    const nextPublic = !isProfilePublic;
+    setPrivacyBusy(true);
+    setSaveError('');
+    try {
+      const saver = saveProfileFn || ((payload) => api.updateProfile(payload));
+      const res = await saver({ profilePublic: nextPublic });
+      if (res?.user) {
+        onUserUpdate?.(res.user);
+      }
+      if (res?.profile) {
+        setData(res);
+      } else {
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                isPrivate: !nextPublic,
+                profile: {
+                  ...(prev.profile || {}),
+                  profilePublic: nextPublic,
+                  profileUrl: nextPublic
+                    ? prev.profile?.username
+                      ? buildPublicProfileUrl({
+                          origin,
+                          pathname,
+                          username: prev.profile.username
+                        })
+                      : ''
+                    : ''
+                }
+              }
+            : prev
+        );
+      }
+      const msg = nextPublic
+        ? 'Public profile turned ON — visible to anyone with your link.'
+        : 'Public profile turned OFF — hidden from other visitors.';
+      setSaveNotice(msg);
+      notifySettingsSaved(msg);
+    } catch (err) {
+      setSaveError(err?.message || 'Could not update public profile setting.');
+    } finally {
+      setPrivacyBusy(false);
+    }
+  }
 
   function flashCopy(key, message) {
     setCopiedKey(key);
@@ -698,6 +775,21 @@ export default function ProfileModal({
           <div className="card" style={{ padding: 16, textAlign: 'center', color: '#fda4af', fontSize: 13 }}>
             <XeroIcon emoji="⚠️" size={16} /> {loadError || 'Profile not found.'}
           </div>
+        ) : isLockedPrivate ? (
+          <div
+            className="card profile-private-gate"
+            data-testid="profile-private-gate"
+            role="status"
+          >
+            <XeroIcon emoji="🔒" size={28} />
+            <strong>
+              {profile.username ? `@${profile.username}` : 'This profile'} is private
+            </strong>
+            <p>
+              This creator has turned off their public profile in Settings. Only they can view
+              their profile details, lands, and activity history.
+            </p>
+          </div>
         ) : (
           <div className="profile-modal-body">
             {/* Hidden file inputs always mounted for owner so banner/avatar + buttons work immediately */}
@@ -886,6 +978,14 @@ export default function ProfileModal({
 
                 {/* Share Public Profile Bar */}
                 <div className="profile-share-bar">
+                  {isOwner && !isProfilePublic && (
+                    <span
+                      className="badge profile-private-owner-badge"
+                      data-testid="profile-private-owner-badge"
+                    >
+                      <XeroIcon emoji="🔒" size={12} /> Private Profile (hidden from others)
+                    </span>
+                  )}
                   {publicProfileUrl && (
                     <button
                       type="button"
@@ -917,12 +1017,23 @@ export default function ProfileModal({
                     </a>
                   )}
                   <InfoTip title="Share Profile & Paired Agent Updates">
-                    Copy your public profile link (<code>?u=@{profile.username || 'handle'}</code>)
-                    to share your lands, sculptures, and bio anywhere. When your account is paired
-                    with an AI agent (<code>GLP-...</code>), your paired agent can also inspect and
-                    update your <code>@username</code>, <code>bio</code>, <code>avatarImage</code>,
-                    and <code>headerImage</code> directly via MCP tools <code>get_my_profile</code>{' '}
-                    and <code>update_profile</code>.
+                    {isProfilePublic ? (
+                      <>
+                        Copy your public profile link (
+                        <code>?u=@{profile.username || 'handle'}</code>) to share your lands,
+                        sculptures, and bio anywhere. When your account is paired with an AI agent (
+                        <code>GLP-...</code>), your paired agent can also inspect and update your{' '}
+                        <code>@username</code>, <code>bio</code>, <code>avatarImage</code>, and{' '}
+                        <code>headerImage</code> directly via MCP tools <code>get_my_profile</code>{' '}
+                        and <code>update_profile</code>.
+                      </>
+                    ) : (
+                      <>
+                        Your public profile is currently turned <strong>OFF</strong> — other
+                        visitors only see a private lock notice. Turn <strong>Public Profile</strong>{' '}
+                        back ON anytime inside ⚙️ Settings to re-enable your shareable link.
+                      </>
+                    )}
                   </InfoTip>
                 </div>
 
@@ -944,11 +1055,45 @@ export default function ProfileModal({
                         <XeroIcon emoji="⚙️" size={13} /> User Settings
                       </strong>
                       <InfoTip title="User Settings & Paired Agent Profile Sync">
-                        Customize your Measurement Units (Auto by location, US Imperial ft/mi, or
-                        Metric m/km), manage your Wallet &amp; Payout address, or let your paired
-                        MCP agent update your public profile using <code>get_my_profile</code> and{' '}
-                        <code>update_profile</code>.
+                        Toggle your Public Profile visibility, customize your Measurement Units,
+                        toggle 6-DoF ARCore calibration, manage your Wallet &amp; Payout address, or
+                        let your paired MCP agent update your profile using{' '}
+                        <code>get_my_profile</code> and <code>update_profile</code>.
                       </InfoTip>
+                    </div>
+
+                    <div
+                      className="unit-setting-card profile-public-setting-card"
+                      data-testid="profile-public-setting"
+                      data-public-profile={isProfilePublic ? 'true' : 'false'}
+                    >
+                      <div className="ar-settings-toggle-row" style={{ borderTop: 'none', paddingTop: 0 }}>
+                        <div className="ar-settings-toggle-copy">
+                          <strong>
+                            <XeroIcon emoji={isProfilePublic ? '🌐' : '🔒'} size={13} /> Public
+                            Profile
+                          </strong>
+                          <span>
+                            {isProfilePublic
+                              ? 'Anyone with your profile link can view your bio, lands, sculptures & score.'
+                              : 'Private — hidden from other visitors. Only you can view your profile.'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isProfilePublic}
+                          aria-label="Toggle Public Profile"
+                          data-testid="setting-toggle-public-profile"
+                          disabled={privacyBusy}
+                          className={`btn btn-xs ar-setting-switch-btn ${
+                            isProfilePublic ? 'btn-primary is-on' : ''
+                          }`}
+                          onClick={handleTogglePublicProfile}
+                        >
+                          {privacyBusy ? '…' : isProfilePublic ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
                     </div>
 
                     <MeasurementUnitSetting />
@@ -1279,6 +1424,71 @@ export default function ProfileModal({
                 </div>
               </form>
             )}
+
+            {/* Simple Feature Rating (X / 100) with "i" guide on what else to try */}
+            <div
+              className="profile-feature-rating-bar"
+              data-testid="profile-feature-rating"
+              data-feature-score={featureRating.score}
+            >
+              <div className="profile-feature-rating-left">
+                <XeroIcon emoji="⭐" size={14} />
+                <span className="profile-feature-rating-label">Feature Rating</span>
+                <strong className="profile-feature-rating-score mono" data-testid="profile-feature-score-value">
+                  {featureRating.score}/100
+                </strong>
+                <InfoTip
+                  title={`Feature Rating (${featureRating.score} / 100)`}
+                  mode="inline"
+                >
+                  <div className="profile-feature-tip-body" data-testid="profile-feature-rating-tips">
+                    <div className="profile-feature-tip-summary">
+                      You&apos;ve used{' '}
+                      <strong>
+                        {featureRating.completedCount} of {featureRating.totalFeatures}
+                      </strong>{' '}
+                      SPRAY.LAND features ({featureRating.score}/100).
+                    </div>
+                    {featureRating.nextToTry.length > 0 ? (
+                      <div className="profile-feature-tip-section">
+                        <div className="profile-feature-tip-heading">
+                          Try next to raise your score:
+                        </div>
+                        <ul className="profile-feature-tip-list">
+                          {featureRating.nextToTry.map((item) => (
+                            <li key={item.id}>
+                              <strong>
+                                +{item.points} {item.label}:
+                              </strong>{' '}
+                              {item.tip}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      <div className="profile-feature-tip-maxed">
+                        🎉 Maxed out! You&apos;ve explored every SPRAY.LAND feature (100/100).
+                      </div>
+                    )}
+                    {featureRating.completed.length > 0 && (
+                      <div className="profile-feature-tip-done">
+                        {featureRating.completed.map((item) => (
+                          <span key={item.id} className="profile-feature-done-chip">
+                            ✓ {item.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </InfoTip>
+              </div>
+              <div className="profile-feature-rating-track" aria-hidden="true">
+                <div
+                  className="profile-feature-rating-fill"
+                  style={{ width: `${featureRating.score}%` }}
+                />
+              </div>
+            </div>
 
             {/* Stats Row */}
             <div className="profile-stats-grid">

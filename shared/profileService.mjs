@@ -100,11 +100,11 @@ export async function checkUsernameAvailability(db, { username = '', excludeUser
  * Update an authenticated user's unique username, bio, custom bio image (avatar), and/or profile header.
  * Enforces format rules + case-insensitive uniqueness across all accounts + strict raster image validation.
  * @param {any} db
- * @param {{ user?: any, username?: string, bio?: string, avatarImage?: string, headerImage?: string }} [params]
+ * @param {{ user?: any, username?: string, bio?: string, avatarImage?: string, headerImage?: string, profilePublic?: boolean }} [params]
  */
 export async function updateUserProfile(
   db,
-  { user = null, username, bio, avatarImage, headerImage } = {}
+  { user = null, username, bio, avatarImage, headerImage, profilePublic } = {}
 ) {
   if (!user?.id) {
     throw makeError('Authentication required.', 401);
@@ -132,7 +132,7 @@ export async function updateUserProfile(
     }
     usernameChanged = check.username.toLowerCase() !== nextUsername.toLowerCase();
     nextUsername = check.username;
-  } else if (!nextUsername) {
+  } else if (!nextUsername && profilePublic === undefined) {
     throw makeError('Username is required to complete onboarding.', 400);
   }
 
@@ -163,6 +163,15 @@ export async function updateUserProfile(
     nextHeaderImage = hdrCheck.value;
   }
 
+  const currentProfilePublic =
+    currentRow.profile_public === undefined || currentRow.profile_public === null
+      ? 1
+      : Number(currentRow.profile_public) === 0
+      ? 0
+      : 1;
+  const nextProfilePublic =
+    typeof profilePublic === 'boolean' ? (profilePublic ? 1 : 0) : currentProfilePublic;
+
   const ensuredUserNumber = await ensureUserNumber(db, currentRow);
 
   const now = new Date().toISOString();
@@ -173,13 +182,14 @@ export async function updateUserProfile(
   try {
     await db.run(
       `UPDATE users
-       SET username = ?, bio = ?, avatar_image = ?, header_image = ?, user_number = ?, username_updated_at = ?
+       SET username = ?, bio = ?, avatar_image = ?, header_image = ?, profile_public = ?, user_number = ?, username_updated_at = ?
        WHERE id = ?`,
       [
         nextUsername,
         nextBio,
         nextAvatarImage,
         nextHeaderImage,
+        nextProfilePublic,
         ensuredUserNumber,
         nextUpdatedAt,
         user.id
@@ -187,10 +197,26 @@ export async function updateUserProfile(
     );
   } catch (err) {
     const msg = String(err?.message || '');
-    if (/UNIQUE|constraint/i.test(msg)) {
+    if (/no such column.*profile_public/i.test(msg)) {
+      await db.run(
+        `UPDATE users
+         SET username = ?, bio = ?, avatar_image = ?, header_image = ?, user_number = ?, username_updated_at = ?
+         WHERE id = ?`,
+        [
+          nextUsername,
+          nextBio,
+          nextAvatarImage,
+          nextHeaderImage,
+          ensuredUserNumber,
+          nextUpdatedAt,
+          user.id
+        ]
+      );
+    } else if (/UNIQUE|constraint/i.test(msg)) {
       throw makeError(`@${nextUsername} is already taken. Choose a different username.`, 409);
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   const updated = await db.get('SELECT * FROM users WHERE id = ?', [user.id]);
@@ -202,36 +228,98 @@ export async function updateUserProfile(
  * including public links to all lands, sculptures, active listings, quests, and recent actions.
  * Never returns private fields (email, encrypted keys, auth tokens).
  * @param {any} db
- * @param {{ identifier?: string, origin?: string, pathname?: string }} [params]
+ * @param {{ identifier?: string, origin?: string, pathname?: string, viewerUserId?: string }} [params]
  */
-export async function getPublicProfile(db, { identifier = '', origin = '', pathname = '/' } = {}) {
+export async function getPublicProfile(
+  db,
+  { identifier = '', origin = '', pathname = '/', viewerUserId = '' } = {}
+) {
   const raw = String(identifier || '').trim();
   if (!raw) {
     throw makeError('Profile handle is required.', 400);
   }
   const normalizedHandle = normalizeUsername(raw);
 
+  const loadUserRow = async (whereSql, param) => {
+    try {
+      return await db.get(
+        `SELECT id, name, username, bio, picture, avatar_image, header_image, profile_public, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE ${whereSql} LIMIT 1`,
+        [param]
+      );
+    } catch (err) {
+      if (!/no such column.*profile_public/i.test(String(err?.message || ''))) throw err;
+      return await db.get(
+        `SELECT id, name, username, bio, picture, avatar_image, header_image, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE ${whereSql} LIMIT 1`,
+        [param]
+      );
+    }
+  };
+
   let userRow = null;
   if (normalizedHandle) {
-    userRow = await db.get(
-      'SELECT id, name, username, bio, picture, avatar_image, header_image, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
-      [normalizedHandle]
-    );
+    userRow = await loadUserRow('LOWER(username) = LOWER(?)', normalizedHandle);
   }
   if (!userRow) {
-    userRow = await db.get(
-      'SELECT id, name, username, bio, picture, avatar_image, header_image, user_number, wallet_address, custom_payout_address, created_at FROM users WHERE id = ? LIMIT 1',
-      [raw]
-    );
+    userRow = await loadUserRow('id = ?', raw);
   }
   if (!userRow) {
     throw makeError('Profile not found.', 404);
   }
 
   const userNumber = await ensureUserNumber(db, userRow);
-
   const userId = String(userRow.id);
   const accountType = userId.startsWith('agent:') ? 'agent' : 'human';
+  const isProfilePublic =
+    userRow.profile_public === undefined || userRow.profile_public === null
+      ? true
+      : Number(userRow.profile_public) !== 0;
+  const isViewerOwner = Boolean(viewerUserId && String(viewerUserId) === userId);
+  const publicHandle = String(userRow.username || '').trim();
+  const safeDisplayName = publicHandle
+    ? `@${publicHandle}`
+    : accountType === 'agent'
+    ? userRow.name || 'AI Agent'
+    : `Creator ${formatUserNumber(userNumber)}`;
+
+  // When the user has turned Public Profile OFF, hide profile details, lands, sculptures,
+  // stats, and history from other visitors while still letting the owner view & manage it.
+  if (!isProfilePublic && !isViewerOwner) {
+    return {
+      isPrivate: true,
+      profile: {
+        id: userId,
+        userNumber,
+        userNumberLabel: formatUserNumber(userNumber),
+        username: publicHandle,
+        displayName: safeDisplayName,
+        bio: '',
+        picture: '',
+        avatarImage: '',
+        headerImage: '',
+        walletAddress: '',
+        accountType,
+        joinedAt: '',
+        profilePublic: false,
+        isPrivate: true,
+        profileUrl: ''
+      },
+      stats: {
+        landCount: 0,
+        sculptureCount: 0,
+        activeListingCount: 0,
+        questCount: 0,
+        actionCount: 0,
+        totalBlocks: 0,
+        awakenedLands: 0,
+        totalXp: 0
+      },
+      lands: [],
+      sculptures: [],
+      listings: [],
+      quests: [],
+      actions: []
+    };
+  }
   const walletSet = new Set(
     [userRow.wallet_address, userRow.custom_payout_address]
       .filter(Boolean)
@@ -574,17 +662,12 @@ export async function getPublicProfile(db, { identifier = '', origin = '', pathn
   const totalBlocks = sculptures.reduce((sum, sc) => sum + Number(sc.voxelCount || 0), 0);
   const baseXp = Number(xpRow?.xp || 0);
   const totalXp = baseXp > 0 ? baseXp : sculptures.length * 100;
-  const publicHandle = String(userRow.username || '').trim();
   const avatarImage = String(userRow.avatar_image || '');
   const headerImage = String(userRow.header_image || '');
   const effectivePicture = avatarImage || '';
-  const safeDisplayName = publicHandle
-    ? `@${publicHandle}`
-    : accountType === 'agent'
-    ? userRow.name || 'AI Agent'
-    : `Creator ${formatUserNumber(userNumber)}`;
 
   return {
+    isPrivate: false,
     profile: {
       id: userId,
       userNumber,
@@ -598,9 +681,12 @@ export async function getPublicProfile(db, { identifier = '', origin = '', pathn
       walletAddress: userRow.custom_payout_address || userRow.wallet_address || '',
       accountType,
       joinedAt: userRow.created_at,
-      profileUrl: publicHandle
-        ? buildPublicProfileUrl({ origin, pathname, username: publicHandle })
-        : ''
+      profilePublic: isProfilePublic,
+      isPrivate: false,
+      profileUrl:
+        publicHandle && isProfilePublic
+          ? buildPublicProfileUrl({ origin, pathname, username: publicHandle })
+          : ''
     },
     stats: {
       landCount: ownedLands.length,

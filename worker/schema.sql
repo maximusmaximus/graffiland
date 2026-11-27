@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   picture TEXT DEFAULT '',
   avatar_image TEXT NOT NULL DEFAULT '',
   header_image TEXT NOT NULL DEFAULT '',
+  profile_public INTEGER NOT NULL DEFAULT 1,
   user_number INTEGER NOT NULL DEFAULT 0,
   wallet_address TEXT NOT NULL,
   encrypted_wallet_json TEXT NOT NULL,
