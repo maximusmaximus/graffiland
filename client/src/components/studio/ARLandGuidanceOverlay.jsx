@@ -16,8 +16,8 @@ function ChevronSvg({ direction = 'right' }) {
     <svg
       className="ar-guide-chevron-svg"
       viewBox="0 0 24 24"
-      width="22"
-      height="22"
+      width="26"
+      height="26"
       aria-hidden="true"
       style={{ transform: `rotate(${rotation}deg)` }}
     >
@@ -25,7 +25,7 @@ function ChevronSvg({ direction = 'right' }) {
         d="M8.5 4.5 L16.5 12 L8.5 19.5"
         fill="none"
         stroke="currentColor"
-        strokeWidth="3.2"
+        strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -136,11 +136,19 @@ export default function ARLandGuidanceOverlay({
 
           <div className="ar-guide-pill" data-testid="ar-land-guide-pill">
             <div className="ar-guide-pill-top">
-              <span className="ar-guide-land-name">{displayName}</span>
-              <span className="ar-guide-land-dist mono">{distText}</span>
+              <span className="ar-guide-pill-title-wrap">
+                <span
+                  className={`ar-guide-live-dot ${land.isInside ? 'is-inside' : ''}`}
+                  aria-hidden="true"
+                />
+                <span className="ar-guide-land-name">{displayName}</span>
+              </span>
+              <span className={`ar-guide-land-dist mono ${land.isInside ? 'is-inside' : ''}`}>
+                {distText}
+              </span>
             </div>
             <div className="ar-guide-pill-cue">
-              <span>{guidance.instruction}</span>
+              <span className="ar-guide-instruction">{guidance.instruction}</span>
               {Number(guidance.turnDegrees || 0) > 0 && (
                 <span className="mono ar-guide-angle">{guidance.turnDegrees}°</span>
               )}

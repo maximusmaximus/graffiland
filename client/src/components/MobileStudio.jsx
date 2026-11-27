@@ -146,6 +146,7 @@ export default function MobileStudio({
   const [preferredDrawLandId, setPreferredDrawLandId] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
+  const [arInspectorExpanded, setArInspectorExpanded] = useState(false);
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
   const [ownedParcelIdsState, setOwnedParcelIdsState] = useState([]);
   const [editingSculptureIdState, setEditingSculptureIdState] = useState('');
@@ -410,14 +411,16 @@ export default function MobileStudio({
   );
 
   const handleInspectArLand = useCallback(
-    (land) => {
+    (land, { expandDetails = false } = {}) => {
       if (!land?.parcelId) {
         ar.setArSelectedLandId('');
+        setArInspectorExpanded(false);
         return;
       }
       markSeenLand(land.parcelId, Array.isArray(land.sculptures) ? land.sculptures.length : null);
       brush.stopBrushPainting();
       setDockOpen(false);
+      setArInspectorExpanded(Boolean(expandDetails));
       ar.selectArLand(land, land.sculptures || []);
     },
     [ar, brush, markSeenLand]
@@ -426,6 +429,7 @@ export default function MobileStudio({
   const handleExitArLand = useCallback(() => {
     const session = arViewSessionRef.current;
     setArViewSession(null);
+    setArInspectorExpanded(false);
     ar.setArSelectedLandId('');
     if (session?.source === 'plot' && session.parcel) {
       setParcelVisit({
@@ -1728,7 +1732,7 @@ export default function MobileStudio({
           webxrSupported={pol.webxrSupported}
           webxrActive={pol.webxrActive}
           onToggleWebxr={handleToggleWebxr}
-          onInspectArLand={handleInspectArLand}
+          onInspectArLand={(land) => handleInspectArLand(land, { expandDetails: true })}
           onExitArLand={handleExitArLand}
           arExitLabel={arExitLabel}
           notifRefreshSignal={lands.ownedLandCount + notifRefreshBump}
@@ -1832,13 +1836,15 @@ export default function MobileStudio({
             land={ar.activeArLand}
             guidance={ar.arLandGuidance}
             loadState={ar.selectedLandLoadState}
-            hasBottomInspector={isInteractingWithLand}
+            hasBottomInspector={arInspectorExpanded}
           />
         )}
 
         {isInteractingWithLand && (
           <ARLandInspectorPanel
             land={ar.activeArLand}
+            expanded={arInspectorExpanded}
+            onToggleExpanded={(next) => setArInspectorExpanded(Boolean(next))}
             nearbyLands={
               focusedArLandId
                 ? ar.activeArLand
@@ -2186,6 +2192,7 @@ export default function MobileStudio({
               parcel: visitedParcel || null,
               sculptures: list
             });
+            setArInspectorExpanded(false);
             brush.setMode('preview');
             if (visitedParcel?.parcelId) {
               ar.setNearbyParcels((prev) => {
@@ -2285,6 +2292,7 @@ export default function MobileStudio({
               parcel: land,
               sculptures: Array.isArray(land.sculptures) ? land.sculptures : []
             });
+            setArInspectorExpanded(false);
             ar.setMapOpen(false);
             brush.setMode('preview');
             ar.selectArLand(land, land.sculptures || []);
