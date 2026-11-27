@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import {
   buildSculptureShareUrl,
@@ -63,6 +63,7 @@ export default function PublishSculptureModal({
     : '';
   const targetLandFrozen = Boolean(activeTargetLand?.isFrozen);
   const backdropCloseProps = useSafeBackdropClose(onClose);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
 
   return (
     <div className="modal-backdrop" {...backdropCloseProps}>
@@ -82,6 +83,25 @@ export default function PublishSculptureModal({
           </h3>
           <div className="modal-header-actions">
             <GlobalNotificationBell compact testId="publish-modal-notif-bell-btn" />
+            {mintReceipt?.sculpture?.id && (
+              <button
+                type="button"
+                className={`btn ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
+                data-testid="publish-header-copy-link-btn"
+                aria-label="Copy shareable link to published sculpture"
+                title="Copy shareable link to published sculpture"
+                onClick={async () => {
+                  const ok = await copyToClipboard(buildSculptureShareUrl(mintReceipt.sculpture.id));
+                  if (ok) {
+                    setShareLinkCopied(true);
+                    setTimeout(() => setShareLinkCopied(false), 1800);
+                  }
+                  onShowHint?.(ok ? 'Copied shareable deep link!' : 'Copy unavailable');
+                }}
+              >
+                {shareLinkCopied ? '✓' : <XeroIcon emoji="📋" size={16} />}
+              </button>
+            )}
             <button className="btn" onClick={onClose} aria-label="Close publish sheet">
               <XeroIcon emoji="❌" size={15} />
             </button>
@@ -155,16 +175,6 @@ export default function PublishSculptureModal({
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn btn-primary" onClick={onViewInARPreview}>
                 <XeroIcon emoji="👁️" size={16} /> View in AR Preview
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={async () => {
-                  const ok = await copyToClipboard(buildSculptureShareUrl(mintReceipt.sculpture.id));
-                  onShowHint?.(ok ? 'Copied shareable deep link!' : 'Copy unavailable');
-                }}
-              >
-                <XeroIcon emoji="📋" size={19} /> Copy Link
               </button>
               <a
                 className="btn"

@@ -73,9 +73,6 @@ export default function AdminPanel({ user, config, onModerationChange, onSelectS
             Resale Royalty: {config?.chain?.resaleFeePercent || 5}% ({config?.chain?.resaleFeeBps || 500} bps)
           </span>
           <span className="badge">IPFS: {config?.ipfsProvider}</span>
-          <button className="btn" onClick={loadAll}>
-            <XeroIcon emoji="🔄" size={14} /> Refresh
-          </button>
         </div>
       </div>
 

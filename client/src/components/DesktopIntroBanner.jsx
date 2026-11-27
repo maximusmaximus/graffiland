@@ -20,7 +20,6 @@ export default function DesktopIntroBanner({
   onOpenPair,
   onOpenQuests,
   onOpenMarket,
-  onOpenLeaders,
   onOpenWelcome,
   onOpenInfo,
   onRequestLogin,
@@ -327,11 +326,6 @@ export default function DesktopIntroBanner({
             {onOpenQuests && (
               <button type="button" className="btn btn-xs" onClick={onOpenQuests}>
                 <XeroIcon emoji="🔥" size={12} /> Quests
-              </button>
-            )}
-            {onOpenLeaders && (
-              <button type="button" className="btn btn-xs" onClick={onOpenLeaders}>
-                <XeroIcon emoji="🏆" size={12} /> Leaders
               </button>
             )}
             <button type="button" className="btn btn-xs" onClick={handleCopyAutonomousPrompt}>

@@ -7982,8 +7982,10 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       // 2) Quests tab is removed
       assert.equal(Boolean(view.queryByRole('button', { name: /Quests/i })), false);
 
-      // 3) Leaders tab omits "Human Street Artists (2% Contributor Pool)" and "AI Land Stewards (3% Steward Royalties)"
-      RTL.fireEvent.click(view.getByRole('button', { name: /Leaders/i }));
+      // 3) Leaders button is removed and replaced by top-menu trophy icon (nav-leaderboard-btn);
+      //    Leaderboard omits "Human Street Artists (2% Contributor Pool)" and "AI Land Stewards (3% Steward Royalties)"
+      assert.equal(Boolean(view.queryByRole('button', { name: /Leaders/i })), false);
+      RTL.fireEvent.click(view.getByTestId('nav-leaderboard-btn'));
       const leadersText = view.getByLabelText('Creator Leaderboard').textContent || '';
       assert.equal(leadersText.includes('Human Street Artists (2% Contributor Pool)'), false);
       assert.equal(leadersText.includes('AI Land Stewards (3% Steward Royalties)'), false);

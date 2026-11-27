@@ -158,6 +158,7 @@ export default function SculptureModal({
   const [studioOpen, setStudioOpen] = useState(true);
   const [showLandBoundsPreview, setShowLandBoundsPreview] = useState(true);
   const [showGizmoHandles, setShowGizmoHandles] = useState(true);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [studioCameraFocus, setStudioCameraFocus] = useState('model'); // 'model' | 'land'
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
@@ -1249,6 +1250,25 @@ export default function SculptureModal({
             </div>
             <div className="modal-header-actions sculpture-modal-top-actions">
               <GlobalNotificationBell compact testId="sculpture-modal-notif-bell-btn" />
+              {!isPendingPreview && sculpture?.id && (
+                <button
+                  type="button"
+                  className={`btn ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
+                  data-testid="sculpture-header-copy-link-btn"
+                  onClick={async () => {
+                    const ok = await copyToClipboard(buildSculptureShareUrl(sculpture.id));
+                    if (ok) {
+                      setShareLinkCopied(true);
+                      setTimeout(() => setShareLinkCopied(false), 1800);
+                    }
+                    setPropNotice(ok ? 'Copied shareable deep link (?sculpture=...)!' : 'Copy unavailable');
+                  }}
+                  aria-label="Copy direct share link to this sculpture"
+                  title="Copy direct share link to this sculpture"
+                >
+                  {shareLinkCopied ? '✓' : <XeroIcon emoji="📋" size={16} />}
+                </button>
+              )}
               <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
                 <XeroIcon emoji="❌" size={16} />
               </button>
@@ -2178,17 +2198,6 @@ export default function SculptureModal({
               </span>
             </a>
           )}
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={async () => {
-              const ok = await copyToClipboard(buildSculptureShareUrl(sculpture.id));
-              setPropNotice(ok ? 'Copied shareable deep link (?sculpture=...)!' : 'Copy unavailable');
-            }}
-            title="Copy direct share link to this sculpture"
-          >
-            <XeroIcon emoji="📋" size={15} /> Copy Link
-          </button>
           <a
             className="btn btn-sm"
             href={buildShareToXUrl({

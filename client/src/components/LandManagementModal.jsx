@@ -83,6 +83,7 @@ export default function LandManagementModal({
   const [manualContribInput, setManualContribInput] = useState('');
   const [eraseConfirmInput, setEraseConfirmInput] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [showLocalUpload, setShowLocalUpload] = useState(false);
 
   // Direct browser custom 3D model uploader + anchorOffset calibration
@@ -477,6 +478,38 @@ export default function LandManagementModal({
           </h2>
           <div className="modal-header-actions">
             <GlobalNotificationBell compact testId="land-mgmt-notif-bell-btn" />
+            {activeParcel && (
+              <button
+                type="button"
+                className={`btn ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
+                data-testid="land-mgmt-header-copy-link-btn"
+                aria-label={`Copy share link for ${resolveLandDisplayName(
+                  { ...activeParcel, customName: customName || activeParcel.customName },
+                  { defaultName: 'Virtual Land' }
+                )}`}
+                title={`Copy share link for ${resolveLandDisplayName(
+                  { ...activeParcel, customName: customName || activeParcel.customName },
+                  { defaultName: 'Virtual Land' }
+                )}`}
+                onClick={async () => {
+                  const shareUrl = buildParcelShareUrl({
+                    origin: window.location.origin,
+                    pathname: window.location.pathname,
+                    parcelId: activeParcel.parcelId,
+                    customName: customName || activeParcel.customName || '',
+                    compact: true
+                  });
+                  const ok = await copyToClipboard(shareUrl);
+                  if (ok) {
+                    setShareLinkCopied(true);
+                    setTimeout(() => setShareLinkCopied(false), 1800);
+                  }
+                  setNotice(ok ? `Copied share link: ${shareUrl}` : shareUrl);
+                }}
+              >
+                {shareLinkCopied ? '✓' : <XeroIcon emoji="📋" size={16} />}
+              </button>
+            )}
             <button type="button" className="btn" onClick={onClose} aria-label="Close land management">
               <XeroIcon emoji="✕" size={15} />
             </button>
@@ -611,27 +644,6 @@ export default function LandManagementModal({
                       </InfoTip>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        className="btn btn-xs"
-                        aria-label={`Copy share link for ${resolveLandDisplayName(
-                          { ...activeParcel, customName: customName || activeParcel.customName },
-                          { defaultName: 'Virtual Land' }
-                        )}`}
-                        onClick={async () => {
-                          const shareUrl = buildParcelShareUrl({
-                            origin: window.location.origin,
-                            pathname: window.location.pathname,
-                            parcelId: activeParcel.parcelId,
-                            customName: customName || activeParcel.customName || '',
-                            compact: true
-                          });
-                          const ok = await copyToClipboard(shareUrl);
-                          setNotice(ok ? `Copied share link: ${shareUrl}` : shareUrl);
-                        }}
-                      >
-                        <XeroIcon emoji="📋" size={16} /> Copy Link
-                      </button>
                       <button
                         type="button"
                         className="btn btn-xs btn-outline"

@@ -499,7 +499,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Close sculpture details/i }).click();
     await page.waitForSelector('[data-testid="sculpture-modal"]', { state: 'detached' });
 
-    await page.getByRole('button', { name: /Leaders/i }).click();
+    await page.getByTestId('nav-leaderboard-btn').click();
     await page.waitForSelector('[aria-label="Creator Leaderboard"]');
     const leaderText = await page.textContent('[aria-label="Creator Leaderboard"]');
     // Must refer to human creators ONLY by chosen @username (never raw Google display name)
@@ -531,7 +531,7 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.waitForSelector('[data-testid="direct-link-intro-card"]');
     await page.locator('[data-testid="direct-link-intro-close-btn"]').click();
     await page.waitForSelector('[data-testid="direct-link-intro-card"]', { state: 'detached' });
-    await page.waitForSelector('text=Copy Link');
+    await page.waitForSelector('[data-testid="sculpture-header-copy-link-btn"]');
     const modalText = await page.textContent('.modal-card');
     assert.ok(modalText.includes('E2E Lighthouse Cube'));
     assert.ok(modalText.includes('Share to X'));

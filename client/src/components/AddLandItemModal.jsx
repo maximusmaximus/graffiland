@@ -582,6 +582,16 @@ export default function AddLandItemModal({
             <GlobalNotificationBell compact testId="add-item-notif-bell-btn" />
             <button
               type="button"
+              className={`btn ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
+              data-testid="add-item-header-copy-link-btn"
+              aria-label={`Copy share link for ${landDisplayName}`}
+              title="Copy shareable visit link for this minted parcel"
+              onClick={handleCopyShareLink}
+            >
+              {shareLinkCopied ? '✓' : <XeroIcon emoji="📋" size={16} />}
+            </button>
+            <button
+              type="button"
               className="btn"
               aria-label="Close add 3D item modal"
               onClick={onClose}
@@ -599,21 +609,6 @@ export default function AddLandItemModal({
               : ''}
           </span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className={`btn btn-xs ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
-              aria-label={`Copy share link for ${landDisplayName}`}
-              title="Copy shareable visit link for this minted parcel"
-              onClick={handleCopyShareLink}
-            >
-              {shareLinkCopied ? (
-                '✓ Link Copied'
-              ) : (
-                <>
-                  <XeroIcon emoji="📋" size={16} /> Copy Link
-                </>
-              )}
-            </button>
             <span
               className={`badge ${
                 isFrozen ? 'badge-error' : !isLandOwner && requiresApproval ? 'gold' : 'teal'

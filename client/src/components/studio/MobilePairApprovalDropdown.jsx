@@ -759,13 +759,6 @@ export default function MobilePairApprovalDropdown({
               <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
                 Past approved, rejected &amp; expired items
               </span>
-              <button
-                type="button"
-                className="btn btn-xs btn-outline"
-                onClick={() => onRefreshSignatures?.({ includeHistory: true })}
-              >
-                🔄 Refresh
-              </button>
             </div>
 
             {!user ? (
