@@ -6215,7 +6215,7 @@ select {
 }
 
 .land-mgmt-inliers-input {
-  width: 48px;
+  width: 54px;
   background: rgba(0, 0, 0, 0.35);
   color: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -6223,6 +6223,38 @@ select {
   padding: 2px 5px;
   font-size: 11.5px;
   font-family: var(--font-mono);
+}
+
+.land-mgmt-inliers-input:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.land-mgmt-orb-calibration-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11.5px;
+}
+
+.land-mgmt-orb-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.land-mgmt-orb-nopack-note {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  background: rgba(255, 209, 102, 0.08);
+  border: 1px solid rgba(255, 209, 102, 0.25);
+  border-radius: 7px;
+  padding: 5px 8px;
 }
 
 .land-mgmt-row {

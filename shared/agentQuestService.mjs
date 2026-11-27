@@ -37,7 +37,7 @@ import {
   getParcelQualifiedHumanContributors,
   recordFeeLedgerSplit
 } from './marketplaceService.mjs';
-import { seedLandSecurityPolicy } from './landmarkService.mjs';
+import { getLandSecurityPolicy, seedLandSecurityPolicy } from './landmarkService.mjs';
 
 function parseSlotOffsets(rawJson) {
   try {
@@ -1439,13 +1439,17 @@ export async function getLandTelemetry(db, parcelId) {
     [cleanParcel]
   );
   const counts = Object.fromEntries((layerCounts || []).map((r) => [r.role, Number(r.cnt || 0)]));
-  const contributors = await getParcelQualifiedHumanContributors(db, cleanParcel);
+  const [contributors, securityPolicy] = await Promise.all([
+    getParcelQualifiedHumanContributors(db, cleanParcel),
+    getLandSecurityPolicy(db, cleanParcel)
+  ]);
 
   return {
     parcelId: cleanParcel,
     customName: curation?.custom_name || '',
     displayName: resolveLandDisplayName({ customName: curation?.custom_name || '' }),
     curationNote: curation?.curation_note || '',
+    securityPolicy,
     steward: steward
       ? {
           stewardSub: steward.steward_sub,

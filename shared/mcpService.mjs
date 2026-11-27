@@ -8,6 +8,7 @@ import {
   scoutLands
 } from './agentQuestService.mjs';
 import { listArchivedLands } from './landArchiveService.mjs';
+import { getLandSecurityPolicy } from './landmarkService.mjs';
 import { generateVoxelPrefab } from './proceduralSculpt.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../server/services/moderation.mjs';
 import { serializeSculptureRow } from './sculpture.mjs';
@@ -269,7 +270,10 @@ export async function handleMcpJsonRpc(
         [parcelId]
       );
       const cur = await db.get('SELECT * FROM parcel_curations WHERE parcel_id = ?', [parcelId]);
-      const settings = await getLandSettingsInternal(db, parcelId);
+      const [settings, securityPolicy] = await Promise.all([
+        getLandSettingsInternal(db, parcelId),
+        getLandSecurityPolicy(db, parcelId)
+      ]);
       const slug = slugifyLandTitle(cur?.custom_name || '') || parcelId.toLowerCase();
       toolResult = {
         parcelId,
@@ -283,6 +287,7 @@ export async function handleMcpJsonRpc(
           compact: true
         }),
         settings,
+        securityPolicy,
         permissions: {
           isOwner,
           isContributor,

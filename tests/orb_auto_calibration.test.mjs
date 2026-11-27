@@ -30,7 +30,8 @@ const {
   verifyMatchedDescriptorsGeometry,
   verifyOrbProofAgainstParcel
 } = await import('../shared/landmarkService.mjs');
-const { claimDormantLand } = await import('../shared/agentQuestService.mjs');
+const { claimDormantLand, getLandTelemetry } = await import('../shared/agentQuestService.mjs');
+const { handleMcpJsonRpc } = await import('../shared/mcpService.mjs');
 const { encodeGeohash } = await import('../server/services/pol.mjs');
 
 function wrapSqlite(rawDb) {
@@ -740,5 +741,32 @@ describe('Hybrid ORB Auto-Calibration, Per-Origin Lifecycle & Security Hardening
     assert.equal(autoRes.body.policy.minOrbInliers, autoRes.body.policy.autoMinOrbInliers);
     assert.equal(autoRes.body.policy.maxReprojErrPx, autoRes.body.policy.autoMaxReprojErrPx);
     assert.equal(autoRes.body.policy.lightingAdaptive, true);
+
+    // Verify MCP get_land and get_land_telemetry expose full securityPolicy fields
+    const mcpGetLand = await handleMcpJsonRpc(dbAdapter, {
+      rpcBody: {
+        jsonrpc: '2.0',
+        id: 'orb-mcp-1',
+        method: 'tools/call',
+        params: { name: 'get_land', arguments: { parcelId } }
+      },
+      callerUser: {
+        id: 'agent:orb-policy-inspector',
+        name: 'ORB Inspector Agent',
+        actorType: 'agent',
+        wallet_address: authRes.body.user.walletAddress
+      }
+    });
+    const mcpPol = mcpGetLand.result.structuredContent.securityPolicy;
+    assert.equal(mcpPol.parcelId, parcelId);
+    assert.equal(mcpPol.originSource, 'browser_map');
+    assert.equal(mcpPol.isAuto, true);
+    assert.equal(mcpPol.lightingAdaptive, true);
+    assert.equal(mcpPol.hasLandmarkPack, false);
+
+    const telemetry = await getLandTelemetry(dbAdapter, parcelId);
+    assert.equal(telemetry.securityPolicy.parcelId, parcelId);
+    assert.equal(telemetry.securityPolicy.originSource, 'browser_map');
+    assert.equal(telemetry.securityPolicy.isAuto, true);
   });
 });
