@@ -158,6 +158,7 @@ export default function SculptureModal({
   const [studioOpen, setStudioOpen] = useState(true);
   const [showLandBoundsPreview, setShowLandBoundsPreview] = useState(true);
   const [showGizmoHandles, setShowGizmoHandles] = useState(true);
+  const [studioCameraFocus, setStudioCameraFocus] = useState('model'); // 'model' | 'land'
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
   const [showAllMetadata, setShowAllMetadata] = useState(false);
@@ -561,6 +562,7 @@ export default function SculptureModal({
   useEffect(() => {
     setPreviewViewMode('isometric');
     setPreviewSpin(false);
+    setStudioCameraFocus('model');
     setPreviewResetTick((t) => t + 1);
   }, [initialSculpture?.id]);
 
@@ -1205,14 +1207,13 @@ export default function SculptureModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className={`modal-card sculpture-modal-card ${
-          isPendingPreview ? 'is-pending-preview' : ''
+          isPendingPreview ? 'is-pending-preview' : 'is-studio-split'
         }`.trim()}
-        style={{ maxWidth: isPendingPreview ? 680 : 820 }}
         data-testid="sculpture-modal"
         data-pending-preview={isPendingPreview ? 'true' : undefined}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Pinned Top 3D Model Window — Stays in view while modifiers scroll smoothly behind it */}
+        {/* Left Studio Stage (Desktop) / Pinned Top 3D Model Window (Mobile) */}
         <div className="sculpture-modal-sticky-stage" data-testid="sculpture-sticky-stage">
           <div className="modal-header sculpture-modal-header">
             <div className="sculpture-modal-title-group">
@@ -1222,7 +1223,7 @@ export default function SculptureModal({
                     Preview
                   </span>
                 ) : (
-                  <XeroIcon emoji="🧊" size={22} />
+                  <XeroIcon emoji="🧊" size={20} />
                 )}
                 <span className="sculpture-modal-title-text">{sculpture.title}</span>
               </h2>
@@ -1246,7 +1247,7 @@ export default function SculptureModal({
                 )
               )}
             </div>
-            <div className="modal-header-actions">
+            <div className="modal-header-actions sculpture-modal-top-actions">
               <GlobalNotificationBell compact testId="sculpture-modal-notif-bell-btn" />
               <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
                 <XeroIcon emoji="❌" size={16} />
@@ -1264,11 +1265,15 @@ export default function SculptureModal({
                     ? 268
                     : 360
                   : isCompactViewport
-                  ? 224
-                  : 284
+                  ? 250
+                  : 520
               }
-              autoRotate={isPendingPreview ? previewSpin : true}
-              isometricFocus={isPendingPreview && !showPendingLandView}
+              fillHeight={!isPendingPreview}
+              autoRotate={isPendingPreview ? previewSpin : !canModifySculpture && studioCameraFocus === 'model'}
+              isometricFocus={isPendingPreview ? !showPendingLandView : studioCameraFocus === 'model'}
+              cameraFocus={
+                isPendingPreview ? (showPendingLandView ? 'land' : 'model') : studioCameraFocus
+              }
               resetViewTick={previewResetTick}
               liveTransform={
                 isPendingPreview
@@ -1280,13 +1285,164 @@ export default function SculptureModal({
               parcelVolume={placementVolume}
               siblingBoxes={viewerSiblingBoxes}
               showLandBounds={
-                isPendingPreview ? showPendingLandView : canModifySculpture && showLandBoundsPreview
+                isPendingPreview
+                  ? showPendingLandView
+                  : hasLandVolumeForPreview && showLandBoundsPreview
               }
               showEditGizmo={!isPendingPreview && canModifySculpture && showGizmoHandles}
               maxSafeScale={maxSafeScale}
               moveRanges={moveRanges}
               placementBlocked={Boolean(!isPendingPreview && canModifySculpture && livePlacement && !livePlacement.ok)}
               unitSystem={unitSystem}
+              cornerTopLeftExtra={
+                !isPendingPreview ? (
+                  <div className="viewer-corner-subrow">
+                    <span className="viewer-corner-pill is-teal mono" data-testid="sculpture-corner-land-pill">
+                      <XeroIcon emoji="📍" size={11} /> {scLandDisplayName}
+                    </span>
+                    {canModifySculpture ? (
+                      <span className="viewer-corner-pill mono" data-testid="sculpture-corner-transform-pill">
+                        {Number(editScale || 1).toFixed(2)}× · {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m · Yaw{' '}
+                        {Math.round(Number(editOffset.yaw || 0))}°
+                      </span>
+                    ) : (
+                      <span className="viewer-corner-pill mono">
+                        {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m
+                      </span>
+                    )}
+                  </div>
+                ) : null
+              }
+              cornerTopRight={
+                !isPendingPreview ? (
+                  <div className="viewer-corner-stats" data-testid="sculpture-corner-stats">
+                    {sculpture.modelType === 'custom-3d' && sculpture.customModel ? (
+                      <span className="viewer-corner-pill is-teal mono">
+                        <XeroIcon emoji="🗿" size={11} /> {String(sculpture.customModel.format || 'glb').toUpperCase()}
+                        {sculpture.meshStats?.triangleCount > 0 &&
+                          ` · ${sculpture.meshStats.triangleCount.toLocaleString()} tris`}
+                        {sculpture.meshStats?.hasDraco && ' · Draco'}
+                        {sculpture.meshStats?.hasMeshopt && ' · Meshopt'}
+                      </span>
+                    ) : (
+                      <span className="viewer-corner-pill mono">
+                        <XeroIcon emoji="🧱" size={11} /> {sculpture.voxelCount} voxels
+                      </span>
+                    )}
+                    <span className="viewer-corner-pill is-teal mono">v{sculpture.currentRev || 1}</span>
+                    {sculpture.polScore != null && (
+                      <span className="viewer-corner-pill is-gold mono">
+                        <XeroIcon emoji="✅" size={11} /> PoL {sculpture.polScore}/100
+                      </span>
+                    )}
+                    <span className="viewer-corner-pill is-pink mono">
+                      <XeroIcon emoji="🪙" size={11} /> {sculpture.chain?.royaltyPercent || 5}% Fee
+                    </span>
+                    <span
+                      className={`viewer-corner-pill ${
+                        sculpture.layerRole === 'steward_stage' ? 'is-gold' : 'is-teal'
+                      }`}
+                    >
+                      {sculpture.layerRole === 'steward_stage'
+                        ? '🤖 Steward Stage'
+                        : sculpture.qualifiesForContributorPool !== false
+                        ? '🎨 2% Pool'
+                        : '🌱 Micro (<3)'}
+                    </span>
+                    {Math.abs(currentSavedScale - 1) > 0.01 && (
+                      <span className="viewer-corner-pill is-gold mono" data-testid="sculpture-scale-badge">
+                        📐 {currentSavedScale.toFixed(2)}×
+                      </span>
+                    )}
+                    {(sculpture.anchorOffset?.dx ||
+                      sculpture.anchorOffset?.dy ||
+                      sculpture.anchorOffset?.dz ||
+                      sculpture.anchorOffset?.yaw) ? (
+                      <span className="viewer-corner-pill mono">
+                        📌 {sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m
+                      </span>
+                    ) : null}
+                    {sculpture.hidden && (
+                      <span className="viewer-corner-pill is-danger">🙈 Hidden</span>
+                    )}
+                    {parcelFrozen && (
+                      <span className="viewer-corner-pill is-danger">❄️ Frozen</span>
+                    )}
+                    {isLandOwner && !isPropertyOwner && (
+                      <span className="viewer-corner-pill is-gold">🏠 Land Owner</span>
+                    )}
+                    {isContributor && (
+                      <span className="viewer-corner-pill is-gold">🤝 Contributor</span>
+                    )}
+                  </div>
+                ) : null
+              }
+              cornerBottomLeft={
+                !isPendingPreview ? (
+                  <div className="viewer-corner-controls" data-testid="sculpture-camera-controls">
+                    <button
+                      type="button"
+                      className={`viewer-corner-btn ${studioCameraFocus === 'model' ? 'is-active' : ''}`}
+                      data-testid="sculpture-focus-model-btn"
+                      onClick={() => {
+                        setStudioCameraFocus('model');
+                        setPreviewResetTick((t) => t + 1);
+                      }}
+                      title="Zoom inside the land to fill the view with this model"
+                    >
+                      🎯 Focus Model
+                    </button>
+                    {hasLandVolumeForPreview && (
+                      <button
+                        type="button"
+                        className={`viewer-corner-btn ${
+                          studioCameraFocus === 'land' && showLandBoundsPreview ? 'is-active' : ''
+                        }`}
+                        data-testid="sculpture-fit-land-btn"
+                        onClick={() => {
+                          setShowLandBoundsPreview(true);
+                          setStudioCameraFocus('land');
+                          setPreviewResetTick((t) => t + 1);
+                        }}
+                        title="Pull back to see the full Virtual Land envelope"
+                      >
+                        📦 Fit Land
+                      </button>
+                    )}
+                    {hasLandVolumeForPreview && (
+                      <button
+                        type="button"
+                        className={`viewer-corner-btn ${showLandBoundsPreview ? 'is-active' : ''}`}
+                        data-testid="sculpture-land-preview-toggle"
+                        onClick={() => setShowLandBoundsPreview((v) => !v)}
+                        title="Toggle 3D Land Bounds & neighboring items wireframe"
+                      >
+                        {showLandBoundsPreview ? '🧱 Bounds: ON' : '🧱 Bounds'}
+                      </button>
+                    )}
+                    {canModifySculpture && (
+                      <button
+                        type="button"
+                        className={`viewer-corner-btn ${showGizmoHandles ? 'is-active' : ''}`}
+                        data-testid="sculpture-gizmo-toggle"
+                        onClick={() => setShowGizmoHandles((v) => !v)}
+                        title="Toggle 3D drag bars & corner points on artwork"
+                      >
+                        {showGizmoHandles ? '🎛️ Gizmo: ON' : '🎛️ Gizmo'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="viewer-corner-btn"
+                      data-testid="sculpture-cam-reset-btn"
+                      onClick={() => setPreviewResetTick((t) => t + 1)}
+                      title="Re-center current camera focus (or double-click model)"
+                    >
+                      ↺
+                    </button>
+                  </div>
+                ) : null
+              }
               onModelBoundsMeasured={handleMeasuredBounds}
               onTransformChange={!isPendingPreview && canModifySculpture ? handleGizmoTransformChange : null}
             />
@@ -1341,38 +1497,6 @@ export default function SculptureModal({
               </div>
             )}
           </div>
-
-          {!isPendingPreview && canModifySculpture && (
-            <div className="sculpture-sticky-toolbar">
-              <div className="sculpture-sticky-toggles">
-                <button
-                  type="button"
-                  className={`btn btn-xs ${showLandBoundsPreview ? 'btn-primary' : ''}`}
-                  data-testid="sculpture-land-preview-toggle"
-                  onClick={() => setShowLandBoundsPreview((v) => !v)}
-                  title="Toggle 3D Land Bounds & neighboring items preview"
-                >
-                  {showLandBoundsPreview ? '📦 Land Bounds: ON' : '📦 Land Bounds'}
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-xs ${showGizmoHandles ? 'btn-primary' : ''}`}
-                  data-testid="sculpture-gizmo-toggle"
-                  onClick={() => setShowGizmoHandles((v) => !v)}
-                  title="Toggle 3D drag bars & corner points on artwork"
-                >
-                  {showGizmoHandles ? '🎛️ 3D Bars & Points: ON' : '🎛️ 3D Bars & Points'}
-                </button>
-              </div>
-              <span className="mono sculpture-sticky-readout">
-                {Number(editScale || 1).toFixed(2)}× · ↕ {formatShortLength(activeScaleDims.h, unitSystem)} · Yaw{' '}
-                {Math.round(Number(editOffset.yaw || 0))}°
-                {Math.abs(Number(editOffset.pitch || 0)) > 0.1 || Math.abs(Number(editOffset.roll || 0)) > 0.1
-                  ? ` · Tilt ${Math.round(Number(editOffset.pitch || 0))}°/${Math.round(Number(editOffset.roll || 0))}°`
-                  : ''}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Scrollable Modifiers & Details Body — Slides behind the pinned 3D model window */}
@@ -2039,15 +2163,16 @@ export default function SculptureModal({
           </div>
         ) : null}
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
+        {/* Compact Share, Navigation & Chain Action Bar (model stats live in 3D view corners) */}
+        <div className="sculpture-quick-actions-row">
           {googleMapsUrl && (
             <a
-              className="btn btn-primary"
+              className="btn btn-sm btn-primary"
               href={googleMapsUrl}
               target="_blank"
               rel="noreferrer"
             >
-              <XeroIcon emoji="🧭" size={15} />
+              <XeroIcon emoji="🧭" size={14} />
               <span>
                 Navigate{distanceLabel ? ` · ${distanceLabel}` : ''}
               </span>
@@ -2055,17 +2180,17 @@ export default function SculptureModal({
           )}
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm"
             onClick={async () => {
               const ok = await copyToClipboard(buildSculptureShareUrl(sculpture.id));
               setPropNotice(ok ? 'Copied shareable deep link (?sculpture=...)!' : 'Copy unavailable');
             }}
             title="Copy direct share link to this sculpture"
           >
-            <XeroIcon emoji="📋" size={18} /> Copy Link
+            <XeroIcon emoji="📋" size={15} /> Copy Link
           </button>
           <a
-            className="btn"
+            className="btn btn-sm"
             href={buildShareToXUrl({
               title: sculpture.title,
               landName: scLandDisplayName,
@@ -2076,77 +2201,26 @@ export default function SculptureModal({
             rel="noreferrer"
             title="Share this Virtual Land sculpture to X"
           >
-            𝕏 Share to X
+            𝕏 Share
           </a>
           {explorerTxUrl ? (
-            <a className="btn" href={explorerTxUrl} target="_blank" rel="noreferrer">
-              <XeroIcon emoji="⛓️" size={14} />
+            <a className="btn btn-sm" href={explorerTxUrl} target="_blank" rel="noreferrer">
+              <XeroIcon emoji="⛓️" size={13} />
               <span>Tx {sculpture.chain?.txHash?.slice(0, 10)}...</span>
             </a>
           ) : sculpture.chain?.txHash ? (
             <span className="badge">
-              <XeroIcon emoji="⛓️" size={13} />{' '}
+              <XeroIcon emoji="⛓️" size={12} />{' '}
               {chainLinks.isSimulated ? 'Pre-chain' : 'Tx'} {sculpture.chain.txHash.slice(0, 10)}...
             </span>
           ) : null}
-          <span className="badge teal">
-            <XeroIcon emoji="📍" size={13} /> {scLandDisplayName}
-          </span>
-          <span className="badge gold">
-            <XeroIcon emoji="✅" size={13} /> PoL Score {sculpture.polScore}/100
-          </span>
-          <span className="badge pink">
-            <XeroIcon emoji="🪙" size={13} /> {sculpture.chain?.royaltyPercent || 5}% Resale Fee
-          </span>
-          <span className={`badge ${sculpture.layerRole === 'steward_stage' ? 'gold' : 'teal'}`}>
-            {sculpture.layerRole === 'steward_stage'
-              ? '🤖 Steward Stage Architecture'
-              : sculpture.qualifiesForContributorPool !== false
-              ? '🎨 IRL Artist Work · 2% Pool'
-              : '🌱 Micro Voxel (<3)'}
-          </span>
-          {sculpture.modelType === 'custom-3d' && sculpture.customModel ? (
-            <span className="badge teal">
-              <XeroIcon emoji="🗿" size={13} /> {String(sculpture.customModel.format || 'glb').toUpperCase()} 3D Model
-              {sculpture.meshStats?.triangleCount > 0 && ` · ${sculpture.meshStats.triangleCount.toLocaleString()} tris`}
-              {sculpture.meshStats?.hasDraco && ' · Draco'}
-              {sculpture.meshStats?.hasMeshopt && ' · Meshopt'}
-            </span>
-          ) : (
-            <span className="badge">
-              <XeroIcon emoji="🧱" size={13} /> {sculpture.voxelCount} voxels
-            </span>
-          )}
-          <span className="badge teal">v{sculpture.currentRev || 1}</span>
-          {Math.abs(currentSavedScale - 1) > 0.01 && (
-            <span className="badge gold" data-testid="sculpture-scale-badge">
-              📐 Scale {currentSavedScale.toFixed(2)}×
-            </span>
-          )}
-          {(sculpture.anchorOffset?.dx || sculpture.anchorOffset?.dy || sculpture.anchorOffset?.dz || sculpture.anchorOffset?.yaw) ? (
-            <span className="badge">
-              <XeroIcon emoji="📌" size={12} /> Offset ({sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m)
-            </span>
-          ) : null}
-          {sculpture.hidden && (
-            <span className="badge badge-error">🙈 Hidden from Public Feeds</span>
-          )}
-          {parcelFrozen && (
-            <span className="badge badge-error">❄️ Land Frozen</span>
-          )}
-          {isLandOwner && !isPropertyOwner && (
-            <span className="badge gold">🏠 Land Owner Control</span>
-          )}
-          {isContributor && (
-            <span className="badge gold">
-              <XeroIcon emoji="🤝" size={13} /> Contributor Edit Access
-            </span>
-          )}
         </div>
 
-        <p style={{ fontSize: 14, lineHeight: 1.5, margin: '12px 0' }}>{sculpture.description}</p>
+        {!canModifySculpture && sculpture.description && (
+          <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '4px 0 8px' }}>{sculpture.description}</p>
+        )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
+        <div className="sculpture-detail-cards-grid">
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
               <XeroIcon emoji="🗺️" size={18} /> Location &amp; Virtual Land ({scLandDisplayName})

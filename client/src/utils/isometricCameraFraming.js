@@ -87,17 +87,22 @@ export function computeIsometricModelFraming({
   const target = [cx, cy, cz];
 
   const maxSpan = Math.max(w, h, d, 0.5);
+  const minSpan = Math.max(0.12, Math.min(w, h, d));
   const footprintSpan = Math.max(w, d, 0.8);
+  const minDistance = Math.max(0.12, Math.min(minSpan * 0.35, distance * 0.14));
+  const maxDistance = Math.max(distance * 8, maxSpan * 10, 12);
 
   return {
     fov: safeFov,
     distance,
+    minDistance,
+    maxDistance,
     position,
     target,
     azimuthDeg: Number(azimuthDeg),
     elevationDeg: Number(elevationDeg),
-    near: Math.max(0.02, Math.min(0.5, distance * 0.01)),
-    far: Math.max(400, distance * 22),
+    near: Math.max(0.01, Math.min(0.08, minDistance * 0.25)),
+    far: Math.max(500, maxDistance * 4),
     groundY: baseMinY - 0.012,
     gridScale: Math.max(0.65, (footprintSpan * 2.2) / 6),
     shadowScale: Math.max(0.65, (footprintSpan * 2.6) / 8),
@@ -106,8 +111,74 @@ export function computeIsometricModelFraming({
 }
 
 /**
+ * Computes a close-up camera framing focused directly on the model inside its Virtual Land,
+ * filling the viewport window with the model while allowing free zoom right into its details
+ * or all the way back out to inspect the entire land bounds envelope.
+ */
+export function computeInsideLandModelFraming({
+  modelWidth = 1.4,
+  modelHeight = 1.4,
+  modelDepth = 1.4,
+  modelCenterX = 0,
+  modelCenterY = null,
+  modelCenterZ = 0,
+  modelMinY = 0,
+  volW = 10,
+  volH = 10,
+  volD = 10,
+  fovDeg = 46,
+  aspect = 1.45,
+  fillRatio = 0.84,
+  azimuthDeg = ISOMETRIC_AZIMUTH_DEG,
+  elevationDeg = 22
+} = {}) {
+  const baseFraming = computeIsometricModelFraming({
+    width: modelWidth,
+    height: modelHeight,
+    depth: modelDepth,
+    centerX: modelCenterX,
+    centerY: modelCenterY,
+    centerZ: modelCenterZ,
+    minY: modelMinY,
+    fovDeg,
+    aspect,
+    fillRatio,
+    azimuthDeg,
+    elevationDeg
+  });
+
+  // Step slightly closer inside the land so organic/sculpted 3D models genuinely fill the viewport
+  const tighterDistance = Math.max(0.55, baseFraming.distance * 0.84);
+  const dx = baseFraming.position[0] - baseFraming.target[0];
+  const dy = baseFraming.position[1] - baseFraming.target[1];
+  const dz = baseFraming.position[2] - baseFraming.target[2];
+  const scaleFactor = baseFraming.distance > 1e-6 ? tighterDistance / baseFraming.distance : 1;
+  const position = [
+    baseFraming.target[0] + dx * scaleFactor,
+    baseFraming.target[1] + dy * scaleFactor,
+    baseFraming.target[2] + dz * scaleFactor
+  ];
+
+  const landMaxSpan = Math.max(
+    clampPositive(volW, 10),
+    clampPositive(volH, 10),
+    clampPositive(volD, 10),
+    Math.max(clampPositive(modelWidth, 1.4), clampPositive(modelHeight, 1.4), clampPositive(modelDepth, 1.4))
+  );
+  const maxDistance = Math.max(baseFraming.maxDistance, landMaxSpan * 4.5, 24);
+  return {
+    ...baseFraming,
+    distance: tighterDistance,
+    position,
+    maxDistance,
+    far: Math.max(600, maxDistance * 4)
+  };
+}
+
+/**
  * Computes a clean isometric camera framing for a full land parcel volume,
- * centered gracefully around the parcel (with gentle bias toward the placed sculpture).
+ * centered gracefully around the parcel while keeping close-up zoom unlocked so
+ * users can still zoom right inside the land bounds toward the model.
  */
 export function computeIsometricLandFraming({
   volW = 10,
@@ -123,7 +194,7 @@ export function computeIsometricLandFraming({
   const mh = clampPositive(modelHeight, 1.4);
   const focusY = Math.min(h * 0.34, Math.max(1.0, mh * 0.72));
 
-  return computeIsometricModelFraming({
+  const framing = computeIsometricModelFraming({
     width: w,
     height: Math.max(h * 0.72, mh * 1.4),
     depth: d,
@@ -137,4 +208,15 @@ export function computeIsometricLandFraming({
     azimuthDeg: ISOMETRIC_AZIMUTH_DEG,
     elevationDeg: 32
   });
+
+  // Allow zooming right inside the land box toward the placed model without hitting a high floor
+  const minDistance = Math.max(0.15, Math.min(mh * 0.35, 1.2));
+  const maxDistance = Math.max(framing.distance * 4.5, Math.max(w, h, d) * 4.5, 24);
+  return {
+    ...framing,
+    minDistance,
+    maxDistance,
+    near: Math.max(0.01, Math.min(0.08, minDistance * 0.2)),
+    far: Math.max(600, maxDistance * 4)
+  };
 }
