@@ -19,7 +19,8 @@ import {
   formatLandExpiration,
   formatSculptureAssetMeta,
   formatShortDate,
-  isLandOwnedByUser
+  isLandOwnedByUser,
+  resolveLandColorTheme
 } from '../utils/landMapHelpers.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import {
@@ -1027,19 +1028,26 @@ export default function PlotVisitView({
     if (isMapFull) {
       for (const other of stageParcels) {
         if (!other?.parcelId || other.parcelId === activeParcel?.parcelId) continue;
-        const otherFrozen = Boolean(other.frozen || other.settings?.frozen);
-        const otherColor = otherFrozen ? '#7dd3fc' : '#ff4da6';
+        const otherTheme = resolveLandColorTheme(other);
+        const otherColor = otherTheme.outerColor;
         const otherCorners = Array.isArray(other?.volume?.corners) ? other.volume.corners : [];
         let otherLayer = null;
         if (otherCorners.length >= 4) {
           otherLayer = L.polygon(
             otherCorners.slice(0, 4).map(([lng, lat]) => [Number(lat), Number(lng)]),
-            { color: otherColor, weight: 2, fillColor: otherColor, fillOpacity: 0.16 }
+            {
+              color: otherColor,
+              weight: 2,
+              dashArray: otherTheme.dashed ? '6 4' : undefined,
+              fillColor: otherColor,
+              fillOpacity: 0.16
+            }
           );
         } else if (other?.bounds?.sw && other?.bounds?.ne) {
           otherLayer = L.rectangle([other.bounds.sw, other.bounds.ne], {
             color: otherColor,
             weight: 2,
+            dashArray: otherTheme.dashed ? '6 4' : undefined,
             fillColor: otherColor,
             fillOpacity: 0.16
           });
@@ -1053,7 +1061,8 @@ export default function PlotVisitView({
       }
     }
 
-    const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
+    const activeLandTheme = resolveLandColorTheme({ ...activeParcel, frozen: isFrozen });
+    const stroke = activeLandTheme.outerColor;
     const corners = Array.isArray(activeParcel?.volume?.corners) ? activeParcel.volume.corners : [];
 
     let parcelLayer = null;
@@ -1062,6 +1071,7 @@ export default function PlotVisitView({
       parcelLayer = L.polygon(latLngs, {
         color: stroke,
         weight: 3,
+        dashArray: activeLandTheme.dashed ? '6 4' : undefined,
         fillColor: stroke,
         fillOpacity: 0.22
       })
@@ -1071,6 +1081,7 @@ export default function PlotVisitView({
       parcelLayer = L.rectangle([activeParcel.bounds.sw, activeParcel.bounds.ne], {
         color: stroke,
         weight: 3,
+        dashArray: activeLandTheme.dashed ? '6 4' : undefined,
         fillColor: stroke,
         fillOpacity: 0.22
       })
@@ -1083,7 +1094,7 @@ export default function PlotVisitView({
       radius: 6,
       color: '#ffffff',
       weight: 2,
-      fillColor: isFrozen ? '#38bdf8' : '#ff1f8f',
+      fillColor: isFrozen ? '#38bdf8' : stroke,
       fillOpacity: 1
     })
       .bindTooltip(landDisplayName)
@@ -1426,10 +1437,16 @@ export default function PlotVisitView({
             </div>
           )}
           {landExpiration.state !== 'permanent' && (
-            <div className="plot-info-row mono" data-testid="plot-info-expiration">
-              <span>{landExpiration.state === 'expired' ? '⏱️ Status' : '⏳ Timer'}</span>
-              <strong>{landExpiration.badgeText}</strong>
-            </div>
+            <>
+              <div className="plot-info-row mono" data-testid="plot-info-expiration">
+                <span>{landExpiration.state === 'expired' ? '⏱️ Status' : '⏳ Timer'}</span>
+                <strong>{landExpiration.badgeText}</strong>
+              </div>
+              <div className="plot-info-note" data-testid="plot-info-expiration-meaning">
+                {landExpiration.detailText}. Place 3D art in person on Mobile AR to remove this
+                countdown and make the land permanent (Neon Pink).
+              </div>
+            </>
           )}
           {activeParcel?.parcelId && (
             <div className="plot-info-row mono">
@@ -1666,7 +1683,7 @@ export default function PlotVisitView({
                           y1={map2dOverlay.landTag.fromY}
                           x2={map2dOverlay.landTag.toX}
                           y2={map2dOverlay.landTag.toY}
-                          stroke={isFrozen ? '#7dd3fc' : '#ff1f8f'}
+                          stroke={resolveLandColorTheme({ ...activeParcel, frozen: isFrozen }).outerColor}
                           strokeWidth="1.5"
                         />
                         <circle
@@ -1719,12 +1736,16 @@ export default function PlotVisitView({
                 >
                   {map2dOverlay.landTag && (() => {
                     const isEmptyLand = visibleSculptures.length === 0;
+                    const activeTheme = resolveLandColorTheme({ ...activeParcel, frozen: isFrozen });
                     return (
                       <div
                         className={`plot-iso-land-label-pill ${
                           selectedTarget === 'land' ? 'is-selected' : ''
-                        } ${isEmptyLand ? 'is-empty-land' : ''}`}
+                        } ${
+                          activeTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
+                        } ${isEmptyLand ? 'is-empty-land' : ''}`.trim()}
                         data-empty-land={isEmptyLand ? 'true' : 'false'}
+                        data-land-lifecycle={activeTheme.status}
                         style={{
                           left: `${map2dOverlay.landTag.centerX}px`,
                           top: `${map2dOverlay.landTag.y}px`,
@@ -1934,6 +1955,15 @@ export default function PlotVisitView({
                   >
                     {isMapFull ? '⤡' : '⤢'}
                   </button>
+                  <span className="land-preview-map-info" data-testid="plot-2d-map-info">
+                    <InfoTip title="How to Navigate This Map" mode="popover" align="right">
+                      Drag to pan, scroll or pinch to zoom, tap <strong>🧊 3D</strong> to view
+                      extruded buildings &amp; 3D models, or tap <strong>🎯 Fit</strong> to
+                      re-center. <strong>Neon Pink</strong> lands are permanent;{' '}
+                      <strong>Amber</strong> dashed lands need a human to place IRL AR artwork
+                      before their timer expires.
+                    </InfoTip>
+                  </span>
                 </div>
                 <div className="mobile-parcel-map-pill mono">
                   {hasCenter

@@ -12,7 +12,8 @@ import {
 import {
   buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
-  formatSimpleLandLabel
+  formatSimpleLandLabel,
+  resolveLandColorTheme
 } from '../../utils/landMapHelpers.js';
 import {
   computeIsometricCameraFit,
@@ -52,6 +53,7 @@ import {
   formatDimensionTriple,
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
+import InfoTip from '../InfoTip.jsx';
 import NeighborEdgeArrowsOverlay from '../NeighborEdgeArrowsOverlay.jsx';
 import XLogoIcon from '../XLogoIcon.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -64,16 +66,9 @@ const voxelHydrationInFlight = new Set();
 
 function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
-  const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
-  const isDormant = String(parcel?.stewardStatus || '').toLowerCase() === 'dormant';
-  const color = isSelected
-    ? isFrozen
-      ? '#7dd3fc'
-      : '#ff1f8f'
-    : isDormant
-      ? '#ff4da6'
-      : '#ff1f8f';
-  const innerColor = isFrozen ? '#e0f2fe' : isSelected ? '#ffe0f2' : '#ffd6ec';
+  const theme = resolveLandColorTheme(parcel);
+  const color = theme.outerColor;
+  const innerColor = isSelected && theme.isPermanent ? '#ffe0f2' : theme.innerColor;
   return {
     type: 'Feature',
     properties: {
@@ -82,6 +77,7 @@ function parcelVolumeToFeature(parcel, vol, { isSelected = false } = {}) {
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
       color,
       innerColor,
+      landLifecycle: theme.status,
       isSelected: isSelected ? 1 : 0
     },
     geometry: {
@@ -177,9 +173,9 @@ function MobileIsoSvgFallback({
   ];
 
   const pts = (arr) => arr.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  const isFrozen = Boolean(primaryEntry?.parcel?.frozen || primaryEntry?.parcel?.settings?.frozen);
-  const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
-  const fill = isFrozen ? 'rgba(125, 211, 252, 0.16)' : 'rgba(255, 31, 143, 0.14)';
+  const primaryTheme = resolveLandColorTheme(primaryEntry?.parcel);
+  const stroke = primaryTheme.outerColor;
+  const fill = primaryTheme.fillRgba;
   const landName = primaryEntry
     ? showcaseMode
       ? resolveLandDisplayName(primaryEntry.parcel, { defaultName: 'Virtual Land' })
@@ -433,6 +429,7 @@ function MobileIsoSvgFallback({
               style={{
                 left: c.side === 'left' ? 8 : undefined,
                 right: c.side === 'right' ? 8 : undefined,
+                width: c.width ? `${c.width}px` : undefined,
                 top: `${Math.round((c.y / 220) * 100)}%`
               }}
             >
@@ -786,9 +783,9 @@ export default function MobileIsometricMap({
         if (!other?.volume) continue;
         const otherGeom = computePrismScreenGeometry(map, maplibregl, other.volume);
         if (!otherGeom) continue;
-        const otherFrozen = Boolean(other.parcel?.frozen || other.parcel?.settings?.frozen);
-        const otherOuter = otherFrozen ? '#7dd3fc' : '#ff4da6';
-        const otherInner = otherFrozen ? '#e0f2fe' : '#ffd6ec';
+        const otherTheme = resolveLandColorTheme(other.parcel);
+        const otherOuter = otherTheme.outerColor;
+        const otherInner = otherTheme.innerColor;
         projectedOthers.push({ other, otherGeom, otherOuter, otherInner });
       }
       // Draw farther lands first so closer boundaries stay crisp in front
@@ -823,21 +820,17 @@ export default function MobileIsometricMap({
     if (primary?.volume) {
       const geom = computePrismScreenGeometry(map, maplibregl, primary.volume);
       if (geom) {
-        const isFrozen = Boolean(primary.parcel?.frozen || primary.parcel?.settings?.frozen);
+        const primaryTheme = resolveLandColorTheme(primary.parcel);
         const simpleLabel = formatSimpleLandLabel(
           primary.parcel,
-          showcaseModeRef.current ? null : primary.rankIndex
+          showcaseModeRef.current ? null : primary.rankIndex,
+          { maxLength: 28 }
         );
-        const outerColor = isFrozen
-          ? '#7dd3fc'
-          : landSelectedRef.current && showcaseModeRef.current
-            ? '#ff0099'
-            : '#ff1f8f';
-        const innerColor = isFrozen
-          ? '#e0f2fe'
-          : landSelectedRef.current && showcaseModeRef.current
+        const outerColor = primaryTheme.outerColor;
+        const innerColor =
+          landSelectedRef.current && showcaseModeRef.current && primaryTheme.isPermanent
             ? '#ffe0f2'
-            : '#ffd6ec';
+            : primaryTheme.innerColor;
 
         const isPrimaryElevated = Number(primary.volume?.baseAltitudeM || 0) > 0.25;
         if (mapPitch >= 2 || isPrimaryElevated) {
@@ -2008,13 +2001,16 @@ export default function MobileIsometricMap({
               onTouchStart={stopMapGestureLeak}
               onMouseDown={stopMapGestureLeak}
             >
-              {showcaseMode && primaryEntry && (
+              {showcaseMode && primaryEntry && (() => {
+                const primaryTheme = resolveLandColorTheme(primaryEntry.parcel);
+                return (
                 <div
                   ref={landLabelBtnRef}
                   className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
-                    isEmptyPrimaryLand ? 'is-empty-land' : ''
-                  }`}
+                    primaryTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
+                  } ${isEmptyPrimaryLand ? 'is-empty-land' : ''}`.trim()}
                   data-empty-land={isEmptyPrimaryLand ? 'true' : 'false'}
+                  data-land-lifecycle={primaryTheme.status}
                   style={{ display: 'none', transform: 'translateX(-50%)' }}
                 >
                   <button
@@ -2082,7 +2078,8 @@ export default function MobileIsometricMap({
                     <XLogoIcon size={12} />
                   </a>
                 </div>
-              )}
+                );
+              })()}
               {visibleShowcaseSculptures.map((sc) => {
                 const isSel = Boolean(selectedSculptureId && selectedSculptureId === sc.id);
                 const isPendingPreview = Boolean(sc.isPendingPreview);
@@ -2276,6 +2273,14 @@ export default function MobileIsometricMap({
             {isFullExpanded ? '⤡' : '⤢'}
           </button>
         )}
+        <span className="land-preview-map-info" data-testid="mobile-iso-map-info">
+          <InfoTip title="How to Navigate This Map" mode="popover" align="right">
+            Drag to rotate or pan, scroll/pinch to zoom, tap <strong>↻ 90°</strong> to orbit,{' '}
+            <strong>🎯 Fit</strong> to re-center, or <strong>🗺️ 2D</strong> to switch to top-down
+            view. <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong> lands need
+            a human to place IRL AR artwork before their timer expires.
+          </InfoTip>
+        </span>
       </div>
 
       {/* Bottom-Left Compact 3D HUD (Mode + Compass + Metric Scale Bar) */}

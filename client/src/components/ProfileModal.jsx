@@ -1425,11 +1425,18 @@ export default function ProfileModal({
                             </div>
                           </div>
                           {exp.state !== 'permanent' && (
-                            <span
-                              className={`badge ${exp.urgent ? 'danger' : 'gold'}`}
-                              style={{ fontSize: 10 }}
-                            >
-                              {exp.badgeText}
+                            <span className="land-preview-timer-group">
+                              <span
+                                className={`badge ${exp.urgent ? 'danger' : 'is-needs-human-art'}`}
+                                style={{ fontSize: 10 }}
+                              >
+                                ⏱️ {exp.badgeText}
+                              </span>
+                              <InfoTip title="What This Countdown Means" mode="popover" align="right">
+                                {exp.detailText}. Visit this land in person on{' '}
+                                <strong>Mobile AR</strong> and place 3D artwork to make it permanent
+                                (turns from <strong>Amber</strong> to <strong>Neon Pink</strong>).
+                              </InfoTip>
                             </span>
                           )}
                         </div>

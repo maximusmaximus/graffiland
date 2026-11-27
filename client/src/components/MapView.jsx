@@ -17,7 +17,8 @@ import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   computeClosestLandsPerimeterFit,
   extractParcelPerimeterPoints,
-  formatSimpleLandLabel
+  formatSimpleLandLabel,
+  resolveLandColorTheme
 } from '../utils/landMapHelpers.js';
 import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
 import {
@@ -369,24 +370,26 @@ export default function MapView({
       const isSelectedParcel =
         Boolean(effectiveSelectedParcelId) && p.parcelId === effectiveSelectedParcelId;
       const isDormant = p.stewardStatus === 'dormant';
-      const isFrozen = Boolean(p.frozen || p.settings?.frozen);
+      const landTheme = resolveLandColorTheme(p);
+      const isFrozen = landTheme.isFrozen;
+      const needsHumanArt = landTheme.needsHumanArt;
       const hasQuests = Number(p.openQuestCount || 0) > 0;
       const strokeColor = isSelectedParcel
-        ? '#ff0099'
+        ? '#ffd166'
         : isFrozen
-        ? '#7dd3fc'
-        : isDormant
-        ? '#ff4da6'
+        ? landTheme.outerColor
+        : needsHumanArt
+        ? landTheme.outerColor
         : hasQuests
         ? '#c026d3'
-        : '#ff1f8f';
+        : landTheme.outerColor;
 
       const styleOpts = {
         color: strokeColor,
-        weight: isSelectedParcel ? 3 : isDormant ? 2.5 : 2,
-        dashArray: isDormant ? '6 4' : undefined,
+        weight: isSelectedParcel ? 3 : needsHumanArt ? 2.5 : 2,
+        dashArray: needsHumanArt ? '6 4' : undefined,
         fillColor: strokeColor,
-        fillOpacity: isSelectedParcel ? 0.34 : isDormant ? 0.26 : 0.22
+        fillOpacity: isSelectedParcel ? 0.34 : needsHumanArt ? 0.24 : 0.22
       };
 
       const corners = Array.isArray(p?.volume?.corners) ? p.volume.corners : [];

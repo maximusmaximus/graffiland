@@ -206,6 +206,80 @@ export function formatLandExpiration(parcel, nowMs = Date.now()) {
 }
 
 /**
+ * Canonical color palette distinguishing Permanent lands (human IRL artwork minted)
+ * from temporary lands that still need a human to put IRL AR artwork on them.
+ */
+export const LAND_LIFECYCLE_COLORS = {
+  permanent: {
+    status: 'permanent',
+    label: 'Permanent Land',
+    outerColor: '#ff1f8f',
+    innerColor: '#ffd6ec',
+    borderColor: '#ff1f8f',
+    textColor: '#ffe0f0',
+    fillRgba: 'rgba(255, 31, 143, 0.16)',
+    hex: 0xff1f8f,
+    dashed: false
+  },
+  needsHumanArt: {
+    status: 'needs-human-art',
+    label: 'Needs Human Art',
+    outerColor: '#ff9f1c',
+    innerColor: '#ffedd5',
+    borderColor: '#ffb703',
+    textColor: '#fff1d6',
+    fillRgba: 'rgba(255, 159, 28, 0.18)',
+    hex: 0xff9f1c,
+    dashed: true
+  },
+  frozen: {
+    status: 'frozen',
+    label: 'Frozen Land',
+    outerColor: '#7dd3fc',
+    innerColor: '#e0f2fe',
+    borderColor: '#7dd3fc',
+    textColor: '#e0f2fe',
+    fillRgba: 'rgba(125, 211, 252, 0.18)',
+    hex: 0x7dd3fc,
+    dashed: false
+  }
+};
+
+/**
+ * Resolve the visual color theme for a Virtual Land parcel across 3D map, 2D map,
+ * isometric previews, neighbor pointers, and Mobile AR prisms.
+ * - Permanent lands (no expiry timer, IRL human art minted) -> Neon Pink (#ff1f8f)
+ * - Lands needing human IRL artwork (72h agent or 28d countdown) -> Solar Amber (#ff9f1c)
+ * - Frozen lands -> Ice Blue (#7dd3fc)
+ * @param {any} parcel
+ * @param {{ nowMs?: number, isSelected?: boolean }} [options]
+ */
+export function resolveLandColorTheme(parcel, { nowMs = Date.now(), isSelected = false } = {}) {
+  const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
+  const expiration = formatLandExpiration(parcel, nowMs);
+  const isPermanent = expiration.state === 'permanent';
+  const needsHumanArt = !isPermanent;
+
+  const base = isFrozen
+    ? LAND_LIFECYCLE_COLORS.frozen
+    : needsHumanArt
+    ? LAND_LIFECYCLE_COLORS.needsHumanArt
+    : LAND_LIFECYCLE_COLORS.permanent;
+
+  return {
+    ...base,
+    isFrozen,
+    isPermanent,
+    needsHumanArt,
+    expiration,
+    outerColor: isSelected ? '#ffd166' : base.outerColor,
+    innerColor: isSelected ? '#fff3c4' : base.innerColor,
+    baseOuterColor: base.outerColor,
+    baseInnerColor: base.innerColor
+  };
+}
+
+/**
  * Format 3D parcel volume dimensions into a crisp single-line summary.
  * @param {any} parcel
  * @param {'imperial' | 'metric'} [unitSystem='metric']
@@ -485,12 +559,14 @@ export function extractParcelPerimeterPoints(parcel) {
  * Format a clean, concise label for a land parcel on map views.
  * @param {any} parcel
  * @param {number | null} [rankIndex]
+ * @param {{ maxLength?: number }} [options]
  * @returns {string}
  */
-export function formatSimpleLandLabel(parcel, rankIndex = null) {
+export function formatSimpleLandLabel(parcel, rankIndex = null, { maxLength = 20 } = {}) {
+  const cap = Math.max(8, Number(maxLength) || 20);
   let base = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
-  if (base.length > 20) {
-    base = `${base.slice(0, 19).trimEnd()}…`;
+  if (base.length > cap) {
+    base = `${base.slice(0, cap - 1).trimEnd()}…`;
   }
   if (typeof rankIndex === 'number' && Number.isFinite(rankIndex) && rankIndex >= 0) {
     return `#${rankIndex + 1} ${base}`;

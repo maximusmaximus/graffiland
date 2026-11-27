@@ -515,8 +515,8 @@ export function DesktopLandBuilderPanel({
           <strong>side bars</strong> to stretch an edge, drag <strong>top rim bars</strong> up/down
           for height, hold &amp; move <strong>vertical corner bars</strong> to rotate, or drag the{' '}
           <strong>center</strong> to move. Shortcuts: <strong>Ctrl/Cmd+Z</strong> undo,{' '}
-          <strong>Delete</strong> removes an unminted plot, <strong>Ctrl/Cmd+C</strong> &amp;{' '}
-          <strong>Ctrl/Cmd+V</strong> duplicate.
+          <strong>Esc</strong> or <strong>Delete</strong> removes an unminted plot,{' '}
+          <strong>Ctrl/Cmd+C</strong> &amp; <strong>Ctrl/Cmd+V</strong> duplicate.
         </InfoTip>
       </div>
 
@@ -581,7 +581,7 @@ export function DesktopLandBuilderPanel({
                 className="btn btn-xs btn-ghost land-delete-draft-btn"
                 data-testid="land-delete-draft-btn"
                 onClick={() => onRemoveDraft(activeDraft.id)}
-                title="Delete selected unminted land (Delete / Backspace — Undo brings it back)"
+                title="Delete selected unminted land (Esc / Delete / Backspace — Undo brings it back)"
               >
                 🗑️ Delete
               </button>
