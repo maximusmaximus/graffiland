@@ -22,6 +22,10 @@ import {
 } from '../../../shared/sculpturePlacement.mjs';
 import { api, resolveApiUrl } from '../utils/api.js';
 import { buildLandShareToXUrl, copyToClipboard } from '../utils/clipboard.js';
+import {
+  registerDesktopZoomableMap,
+  zoomMapLibreByDelta
+} from '../utils/desktopMapPinchZoom.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
   buildGoogleMapsLandUrl,
@@ -1634,6 +1638,15 @@ export default function MapView3D({
     );
 
     mapRef.current = map;
+    const unregisterPinchZoom = registerDesktopZoomableMap({
+      id: 'map-view-3d',
+      getContainer: () => stageRef.current || mapHostRef.current,
+      getNativeTarget: () => mapHostRef.current,
+      zoomByDelta: (delta, cx, cy) =>
+        zoomMapLibreByDelta(map, delta, cx, cy, () => {
+          userAdjustedRef.current = true;
+        })
+    });
 
     if (pendingFocusTargetRef.current) {
       const pending = pendingFocusTargetRef.current;
@@ -1784,6 +1797,7 @@ export default function MapView3D({
       }
       searchPinMarkerRef.current?.remove();
       searchPinMarkerRef.current = null;
+      unregisterPinchZoom();
       map.remove();
       mapRef.current = null;
       styleReadyRef.current = false;

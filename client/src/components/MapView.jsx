@@ -7,6 +7,10 @@ import {
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
 import { copyToClipboard } from '../utils/clipboard.js';
+import {
+  registerDesktopZoomableMap,
+  zoomLeafletByDelta
+} from '../utils/desktopMapPinchZoom.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
@@ -53,6 +57,7 @@ export default function MapView({
   isFullExpanded = false,
   onToggleFullMap = null
 }) {
+  const stageRef = useRef(null);
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
@@ -205,6 +210,15 @@ export default function MapView({
     const layer = L.layerGroup().addTo(map);
     mapRef.current = map;
     layerRef.current = layer;
+    const unregisterPinchZoom = registerDesktopZoomableMap({
+      id: 'map-view-2d',
+      getContainer: () => stageRef.current || mapHostRef.current,
+      getNativeTarget: () => mapHostRef.current,
+      zoomByDelta: (delta, cx, cy) =>
+        zoomLeafletByDelta(map, delta, cx, cy, () => {
+          markUserAdjusted();
+        })
+    });
 
     const refitAutoBounds = () => {
       if (userAdjustedViewRef.current || isFullExpandedRef.current || !lastAutoBoundsRef.current) return;
@@ -241,6 +255,7 @@ export default function MapView({
     return () => {
       clearTimeout(resizeTimer);
       observer?.disconnect();
+      unregisterPinchZoom();
       map.off('dragstart', markUserAdjusted);
       map.off('zoomstart', markUserAdjusted);
       map.off('moveend', emitViewport);
@@ -715,7 +730,7 @@ export default function MapView({
         </div>
       )}
 
-      <div className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d" data-map-theme={mapTheme}>
+      <div ref={stageRef} className={`map-container ${compact ? 'compact' : ''}`} data-map-mode="2d" data-map-theme={mapTheme}>
         <div ref={mapHostRef} className={isDarkMap ? '' : 'is-map-light'} style={{ width: '100%', height: '100%' }} />
         <NeighborEdgeArrowsOverlay
           arrows={neighborArrows}

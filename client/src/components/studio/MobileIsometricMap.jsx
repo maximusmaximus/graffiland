@@ -6,6 +6,10 @@ import {
 import { api, resolveApiUrl } from '../../utils/api.js';
 import { buildLandShareToXUrl, buildSculptureShareUrl, copyToClipboard } from '../../utils/clipboard.js';
 import {
+  registerDesktopZoomableMap,
+  zoomMapLibreByDelta
+} from '../../utils/desktopMapPinchZoom.js';
+import {
   buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
@@ -1499,7 +1503,19 @@ export default function MobileIsometricMap({
           return;
         }
 
+        map.scrollZoom?.enable?.();
+        map.scrollZoom?.setWheelZoomRate?.(1 / 180);
+        map.scrollZoom?.setZoomRate?.(1 / 65);
         mapRef.current = map;
+        const unregisterPinchZoom = registerDesktopZoomableMap({
+          id: 'mobile-isometric-map',
+          getContainer: () => rootRef.current || mapHostRef.current,
+          getNativeTarget: () => mapHostRef.current,
+          zoomByDelta: (delta, cx, cy) =>
+            zoomMapLibreByDelta(map, delta, cx, cy, () => {
+              userMovedRef.current = true;
+            })
+        });
         setLiveBearing(Number(startBearing.toFixed(1)));
         setLiveZoom(Number(startZoom.toFixed(2)));
 
@@ -1553,6 +1569,7 @@ export default function MobileIsometricMap({
         glCanvas?.addEventListener?.('webglcontextlost', onContextLost, false);
         glCanvas?.addEventListener?.('webglcontextrestored', onContextRestored, false);
         map.__graffilandCleanup = () => {
+          unregisterPinchZoom();
           clearTimeout(styleTimeout);
           clearTimeout(contextLostTimer);
           glCanvas?.removeEventListener?.('webglcontextlost', onContextLost);
