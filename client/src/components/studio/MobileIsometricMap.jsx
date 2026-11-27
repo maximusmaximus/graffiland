@@ -6,12 +6,14 @@ import {
 import { api, resolveApiUrl } from '../../utils/api.js';
 import { buildLandShareToXUrl, buildSculptureShareUrl, copyToClipboard } from '../../utils/clipboard.js';
 import {
+  buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel
 } from '../../utils/landMapHelpers.js';
 import {
   computeIsometricCameraFit,
   computeScaleBarForZoom,
+  computeSculptureIsometricCameraFit,
   formatBearingCardinal,
   resolveParcelVolume
 } from '../../utils/landPreviewHelpers.js';
@@ -336,6 +338,10 @@ function MobileIsoSvgFallback({
         <div className="plot-iso-callout-layer" data-testid="plot-iso-callout-layer">
           {showcaseMode && primaryEntry && (() => {
             const isEmptyLand = Number(sculptureCount || 0) === 0;
+            const navUrl = buildGoogleMapsLandUrl(
+              primaryEntry.volume?.centerLat ?? primaryEntry.parcel?.centerLat,
+              primaryEntry.volume?.centerLng ?? primaryEntry.parcel?.centerLng
+            );
             return (
               <div
                 className={`plot-iso-land-label-pill ${landSelected ? 'is-selected' : ''} ${
@@ -349,11 +355,25 @@ function MobileIsoSvgFallback({
                   className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
                   data-testid="plot-land-label"
                   onClick={() => onSelectLand?.(primaryEntry.parcel)}
-                  title={`Inspect ${landName}`}
+                  title={`Center ${landName} isometrically`}
                 >
                   <span className="plot-iso-land-dot" aria-hidden="true" />
                   <span>{landName}</span>
                 </button>
+                {navUrl && (
+                  <a
+                    href={navUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="plot-iso-land-nav-btn"
+                    data-testid="plot-land-label-nav-btn"
+                    aria-label={`Navigate to ${landName}`}
+                    title={`Navigate to ${landName}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <XeroIcon emoji="🧭" size={14} />
+                  </a>
+                )}
                 <button
                   type="button"
                   className={`plot-iso-land-copy-btn ${landLabelCopied ? 'is-copied' : ''}`}
@@ -494,6 +514,7 @@ export default function MobileIsometricMap({
   selectedParcelId = '',
   selectedSculptureId = '',
   focusParcelTick = 0,
+  focusSculptureTick = 0,
   isFullExpanded = false,
   isDesktop = false,
   showcaseMode = false,
@@ -520,6 +541,7 @@ export default function MobileIsometricMap({
   const initialViewRef = useRef(initialView);
   const onViewportChangeRef = useRef(onViewportChange);
   const lastHandledFocusTickRef = useRef(focusParcelTick);
+  const lastHandledSculptureFocusTickRef = useRef(focusSculptureTick);
   const lastFittedParcelIdRef = useRef('');
   const userMovedRef = useRef(
     Boolean(
@@ -1194,6 +1216,60 @@ export default function MobileIsometricMap({
     []
   );
 
+  const fitCameraToSculpture = useCallback(
+    (sculpture, { offsetDeg = null, animate = true } = {}) => {
+      if (!sculpture) return;
+      const map = mapRef.current;
+      const effOffset = offsetDeg !== null ? offsetDeg : bearingOffsetRef.current;
+      const hostCanvas = map?.getCanvas?.();
+      const vw = hostCanvas?.clientWidth || rootRef.current?.clientWidth || 360;
+      const vh = hostCanvas?.clientHeight || rootRef.current?.clientHeight || 240;
+      const matchedEntry =
+        (entriesRef.current || []).find(
+          (e) => e?.parcel?.parcelId && e.parcel.parcelId === sculpture.parcelId
+        ) || primaryEntryRef.current;
+      const liveTransform = sculpture.id ? threeLayerRef.current?.getTransform?.(sculpture.id) || null : null;
+      const fit = computeSculptureIsometricCameraFit(sculpture, matchedEntry?.volume || null, {
+        viewportWidth: vw,
+        viewportHeight: vh,
+        bearingOffsetDeg: effOffset,
+        liveTransform
+      });
+      if (!fit) {
+        if (matchedEntry?.volume) {
+          fitCameraToTarget({ targetEntry: matchedEntry, offsetDeg: effOffset, animate });
+        }
+        return;
+      }
+      setLiveBearing(fit.bearing);
+      setLiveZoom(fit.zoom);
+      if (!map) return;
+
+      suppressMoveFlagRef.current = true;
+      const opts = {
+        center: fit.center,
+        zoom: fit.zoom,
+        pitch: fit.pitch,
+        bearing: fit.bearing,
+        padding: {
+          top: Math.max(fit.padding.top, showcaseModeRef.current && vw < 520 ? 78 : 54),
+          bottom: Math.max(fit.padding.bottom, 28),
+          left: 16,
+          right: 16
+        }
+      };
+      if (animate) {
+        map.easeTo({ ...opts, duration: 520, essential: true });
+      } else {
+        map.jumpTo(opts);
+      }
+      setTimeout(() => {
+        suppressMoveFlagRef.current = false;
+      }, animate ? 560 : 80);
+    },
+    [fitCameraToTarget]
+  );
+
   // Mount MapLibre GL 3D isometric map
   useEffect(() => {
     if (!webglAvailable || !mapHostRef.current) return undefined;
@@ -1661,7 +1737,7 @@ export default function MobileIsometricMap({
     syncMapSources();
   }, [resolvedEntries, effectiveSelectedId, hydratedSculptures, selectedSculptureId, landSelected, showcaseMode, isFullExpanded, isDesktop, userLocation, unitSystem, syncMapSources]);
 
-  // Smoothly re-frame ONLY on initial mount or explicit land-focus action — NEVER auto-snap while in Full View
+  // Smoothly re-frame on initial mount, switching to another land tag, or explicit land-focus click
   useEffect(() => {
     if (!primaryEntry?.volume) return;
     const tickAdvanced = focusParcelTick > lastHandledFocusTickRef.current;
@@ -1669,20 +1745,27 @@ export default function MobileIsometricMap({
     const parcelId = primaryEntry.parcel?.parcelId || '';
     const parcelChanged = Boolean(parcelId && parcelId !== lastFittedParcelIdRef.current);
 
-    if (isFullExpandedRef.current) {
-      if (tickAdvanced) {
-        lastFittedParcelIdRef.current = parcelId;
-        fitCameraToTarget({ targetEntry: primaryEntry, animate: true });
-      }
-      return;
-    }
-
-    if (tickAdvanced || !lastFittedParcelIdRef.current || (parcelChanged && !userMovedRef.current)) {
+    if (tickAdvanced || parcelChanged || !lastFittedParcelIdRef.current) {
       userMovedRef.current = false;
       lastFittedParcelIdRef.current = parcelId;
       fitCameraToTarget({ targetEntry: primaryEntry, animate: tickAdvanced || parcelChanged });
     }
   }, [focusParcelTick, primaryEntry, fitCameraToTarget]);
+
+  // Smoothly center a selected 3D artwork/object isometrically whenever an object tag is clicked
+  useEffect(() => {
+    const tickAdvanced = focusSculptureTick > lastHandledSculptureFocusTickRef.current;
+    if (!tickAdvanced) return;
+    lastHandledSculptureFocusTickRef.current = focusSculptureTick;
+    if (!selectedSculptureId) return;
+    const targetSc =
+      (hydratedSculptures || []).find((s) => s?.id === selectedSculptureId) ||
+      (sculptures || []).find((s) => s?.id === selectedSculptureId) ||
+      null;
+    if (!targetSc) return;
+    userMovedRef.current = false;
+    fitCameraToSculpture(targetSc, { animate: true });
+  }, [focusSculptureTick, selectedSculptureId, hydratedSculptures, sculptures, fitCameraToSculpture]);
 
   // Resize MapLibre cleanly whenever container height switches between compact & full-screen
   useEffect(() => {
@@ -1870,6 +1953,13 @@ export default function MobileIsometricMap({
       : formatSimpleLandLabel(primaryEntry.parcel)
     : 'Virtual Land';
 
+  const primaryLandNavUrl = primaryEntry
+    ? buildGoogleMapsLandUrl(
+        primaryEntry.volume?.centerLat ?? primaryEntry.parcel?.centerLat,
+        primaryEntry.volume?.centerLng ?? primaryEntry.parcel?.centerLng
+      )
+    : '';
+
   return (
     <div
       ref={rootRef}
@@ -1881,6 +1971,8 @@ export default function MobileIsometricMap({
       data-free-nav={isFullExpanded ? 'true' : 'false'}
       data-focused-parcel-id={primaryEntry?.parcel?.parcelId || ''}
       data-focus-tick={String(focusParcelTick || 0)}
+      data-focused-sculpture-id={selectedSculptureId || ''}
+      data-focus-sculpture-tick={String(focusSculptureTick || 0)}
       data-three-3d-models={loadedThree3dCount}
     >
       {webglAvailable ? (
@@ -1913,11 +2005,25 @@ export default function MobileIsometricMap({
                     className={`plot-iso-land-label-btn ${landSelected ? 'is-selected' : ''}`}
                     data-testid="plot-land-label"
                     onClick={() => onSelectLand?.(primaryEntry.parcel)}
-                    title={`Inspect ${primaryLandLabel}`}
+                    title={`Center ${primaryLandLabel} isometrically`}
                   >
                     <span className="plot-iso-land-dot" aria-hidden="true" />
                     <span>{primaryLandLabel}</span>
                   </button>
+                  {primaryLandNavUrl && (
+                    <a
+                      href={primaryLandNavUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="plot-iso-land-nav-btn"
+                      data-testid="plot-land-label-nav-btn"
+                      aria-label={`Navigate to ${primaryLandLabel}`}
+                      title={`Navigate to ${primaryLandLabel}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <XeroIcon emoji="🧭" size={14} />
+                    </a>
+                  )}
                   <button
                     type="button"
                     className={`plot-iso-land-copy-btn ${landLabelCopied ? 'is-copied' : ''}`}
@@ -2180,8 +2286,8 @@ export default function MobileIsometricMap({
         arrows={neighborArrows}
         viewportWidth={stageDims.width}
         viewportHeight={stageDims.height}
-        onSelectParcel={onSelectParcel}
-        onSelectSculpture={onSelectSculpture}
+        onSelectParcel={(targetParcel) => onSelectParcel?.(targetParcel, { fromEdgeTag: true })}
+        onSelectSculpture={(sc) => onSelectSculpture?.(sc, { fromEdgeTag: true })}
       />
     </div>
   );

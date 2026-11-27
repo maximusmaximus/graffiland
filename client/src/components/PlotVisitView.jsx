@@ -22,7 +22,10 @@ import {
   isLandOwnedByUser
 } from '../utils/landMapHelpers.js';
 import { buildDefaultHudReservedRects } from '../utils/canvasLabelLayout.js';
-import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
+import {
+  resolveParcelVolume,
+  resolveSculptureWorldTarget
+} from '../utils/landPreviewHelpers.js';
 import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
@@ -140,10 +143,13 @@ export default function PlotVisitView({
     }
   }, [isMapFull]);
 
-  // Interactive selection & expandable details panel below the isometric viewport
+  // Interactive selection & expandable details panel below the isometric viewport (hidden by default)
   const [selectedTarget, setSelectedTarget] = useState('land'); // 'land' | 'artwork'
   const [selectedSculptureId, setSelectedSculptureId] = useState('');
-  const [detailsExpanded, setDetailsExpanded] = useState(true);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [focusParcelTick, setFocusParcelTick] = useState(0);
+  const [focusSculptureTick, setFocusSculptureTick] = useState(0);
+  const lastActiveParcelIdRef = useRef(parcel?.parcelId || '');
 
   // Local optimistic copies so inline management edits update labels & details instantaneously
   const [localParcel, setLocalParcel] = useState(parcel);
@@ -194,6 +200,21 @@ export default function PlotVisitView({
 
   const activeParcel = localParcel || parcel;
 
+  // Switching to a different land parcel resets selection, hides details by default, and centers isometrically
+  useEffect(() => {
+    const nextPid = activeParcel?.parcelId || '';
+    if (!nextPid || nextPid === lastActiveParcelIdRef.current) return;
+    lastActiveParcelIdRef.current = nextPid;
+    setSelectedTarget('land');
+    setSelectedSculptureId('');
+    setEditingLand(false);
+    setEditingArtworkId('');
+    setConfirmRemoveId('');
+    setDetailsExpanded(false);
+    setIsMapFull(false);
+    setFocusParcelTick((t) => t + 1);
+  }, [activeParcel?.parcelId]);
+
   // Ensure neighboring lands are available for clickable directional edge arrows on direct plot visits
   useEffect(() => {
     if (Array.isArray(allParcels) && allParcels.length > 1) return undefined;
@@ -233,8 +254,8 @@ export default function PlotVisitView({
         setSelectedSculptureId('');
         setEditingArtworkId('');
         setConfirmRemoveId('');
-        setDetailsExpanded(true);
         setIsMapFull(false);
+        setFocusParcelTick((t) => t + 1);
         return;
       }
       if (typeof onSelectNeighborParcel === 'function') {
@@ -251,7 +272,9 @@ export default function PlotVisitView({
           setEditingLand(false);
           setEditingArtworkId('');
           setConfirmRemoveId('');
-          setDetailsExpanded(true);
+          setDetailsExpanded(false);
+          setIsMapFull(false);
+          setFocusParcelTick((t) => t + 1);
         }
       } catch {
         // ignore transient error
@@ -565,20 +588,32 @@ export default function PlotVisitView({
     setSelectedSculptureId('');
     setEditingArtworkId('');
     setConfirmRemoveId('');
-    setDetailsExpanded(true);
     setIsMapFull(false);
-  }, []);
+    setFocusParcelTick((t) => t + 1);
+    const map = mapRef.current;
+    if (map && hasCenter) {
+      const parcelLayer = map2dParcelLayerRef.current;
+      if (parcelLayer && typeof parcelLayer.getBounds === 'function') {
+        map.fitBounds(parcelLayer.getBounds(), { padding: [44, 44], maxZoom: 21, animate: true });
+      } else {
+        map.setView([centerLat, centerLng], 19, { animate: true });
+      }
+      map2dUserMovedRef.current = false;
+    }
+  }, [centerLat, centerLng, hasCenter]);
 
   const handleSelectArtworkTarget = useCallback(
-    (sc) => {
+    (sc, opts = {}) => {
       if (!sc?.id) return;
       // Pending approval previews open straight into the zoomed-in isometric 3D approval modal
       if (sc.isPendingPreview && typeof onSelectSculpture === 'function') {
         onSelectSculpture(sc);
         return;
       }
-      // If this artwork label is already selected, clicking it again goes straight to the full 3D art view
+      // If an on-screen artwork label is already selected, clicking it again opens the full 3D art view.
+      // Clicking an off-screen edge tag ALWAYS centers that object isometrically in the stage first.
       if (
+        !opts?.fromEdgeTag &&
         selectedTarget === 'artwork' &&
         selectedSculptureId === sc.id &&
         typeof onSelectSculpture === 'function'
@@ -591,8 +626,19 @@ export default function PlotVisitView({
       setEditingLand(false);
       setEditingArtworkId('');
       setConfirmRemoveId('');
-      setDetailsExpanded(true);
       setIsMapFull(false);
+      setFocusSculptureTick((t) => t + 1);
+      const map = mapRef.current;
+      if (map) {
+        const vol = activeParcelRef.current ? resolveParcelVolume(activeParcelRef.current) : null;
+        const target = resolveSculptureWorldTarget(sc, vol);
+        if (target && Number.isFinite(target.lat) && Number.isFinite(target.lng)) {
+          map.setView([target.lat, target.lng], Math.max(20, map.getZoom?.() || 20), {
+            animate: true
+          });
+          map2dUserMovedRef.current = false;
+        }
+      }
     },
     [onSelectSculpture, selectedSculptureId, selectedTarget]
   );
@@ -783,7 +829,7 @@ export default function PlotVisitView({
   // Reset initial 2D fit flag when navigating to a different parcel
   useEffect(() => {
     map2dInitialFittedRef.current = false;
-    map2dUserMovedRef.current = Boolean(isMapFullRef.current);
+    map2dUserMovedRef.current = false;
   }, [activeParcel?.parcelId]);
 
   // Optional 2D Leaflet view when user explicitly toggles 3D -> 2D
@@ -1498,6 +1544,8 @@ export default function PlotVisitView({
                 userLocation={userLocation}
                 selectedParcelId={activeParcel.parcelId}
                 selectedSculptureId={selectedTarget === 'artwork' ? selectedSculptureId : ''}
+                focusParcelTick={focusParcelTick}
+                focusSculptureTick={focusSculptureTick}
                 isFullExpanded={isMapFull}
                 isDesktop={isDesktop}
                 showcaseMode
@@ -1606,11 +1654,25 @@ export default function PlotVisitView({
                           }`}
                           data-testid="plot-land-label"
                           onClick={handleSelectLandTarget}
-                          title={`Inspect ${landDisplayName}`}
+                          title={`Center ${landDisplayName} isometrically`}
                         >
                           <span className="plot-iso-land-dot" aria-hidden="true" />
                           <span>{landDisplayName}</span>
                         </button>
+                        {directionsUrl && (
+                          <a
+                            href={directionsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="plot-iso-land-nav-btn"
+                            data-testid="plot-land-label-nav-btn"
+                            aria-label={`Navigate to ${landDisplayName}`}
+                            title={`Navigate to ${landDisplayName}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <XeroIcon emoji="🧭" size={14} />
+                          </a>
+                        )}
                         <button
                           type="button"
                           className={`plot-iso-land-copy-btn ${labelLinkCopied ? 'is-copied' : ''}`}
@@ -1749,7 +1811,7 @@ export default function PlotVisitView({
                     viewportWidth={map2dOverlay.width}
                     viewportHeight={map2dOverlay.height}
                     onSelectParcel={handleSelectNeighborOnMap}
-                    onSelectSculpture={handleSelectArtworkTarget}
+                    onSelectSculpture={(sc) => handleSelectArtworkTarget(sc, { fromEdgeTag: true })}
                   />
                 )}
                 <div
@@ -1880,7 +1942,7 @@ export default function PlotVisitView({
                   aria-expanded={detailsExpanded}
                   onClick={() => setDetailsExpanded((v) => !v)}
                 >
-                  {detailsExpanded ? '▾ Hide Details' : '▴ Expand Details'}
+                  {detailsExpanded ? '▾ Hide Details' : '▴ Show Details'}
                 </button>
               </div>
 
@@ -2609,13 +2671,6 @@ export default function PlotVisitView({
                               <XeroIcon emoji="🧭" size={13} /> Navigate
                             </a>
                           )}
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            onClick={handleCopyShareLink}
-                          >
-                            <XeroIcon emoji="📋" size={16} /> Copy Share Link
-                          </button>
                           {!isLandOwner && !isFrozen && user && onOpenAddLandItem && (
                             <button
                               type="button"

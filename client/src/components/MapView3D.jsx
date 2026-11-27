@@ -24,8 +24,10 @@ import { api, resolveApiUrl } from '../utils/api.js';
 import { buildLandShareToXUrl, copyToClipboard } from '../utils/clipboard.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
+  buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
-  formatSimpleLandLabel
+  formatSimpleLandLabel,
+  resolveLandCoords
 } from '../utils/landMapHelpers.js';
 import { computeDraft3DAutoFit } from '../utils/landPreviewHelpers.js';
 import {
@@ -686,22 +688,30 @@ export default function MapView3D({
     const targetLat = Number(focusTarget.lat);
     const targetLng = Number(focusTarget.lng);
     const targetZoom = Number(focusTarget.zoom || 17.8);
+    const targetPitch = Number.isFinite(Number(focusTarget.pitch))
+      ? Number(focusTarget.pitch)
+      : undefined;
+    const targetBearing = Number.isFinite(Number(focusTarget.bearing))
+      ? Number(focusTarget.bearing)
+      : undefined;
     const map = mapRef.current;
     userAdjustedRef.current = true;
+    const camOpts = {
+      center: [targetLng, targetLat],
+      zoom: targetZoom,
+      ...(targetPitch !== undefined ? { pitch: targetPitch } : {}),
+      ...(targetBearing !== undefined ? { bearing: targetBearing } : {})
+    };
     if (!map) {
-      pendingFocusTargetRef.current = { lat: targetLat, lng: targetLng, zoom: targetZoom };
+      pendingFocusTargetRef.current = camOpts;
       return;
     }
     pendingFocusTargetRef.current = null;
     if (focusTarget.instant) {
-      map.jumpTo({
-        center: [targetLng, targetLat],
-        zoom: targetZoom
-      });
+      map.jumpTo(camOpts);
     } else {
       map.flyTo({
-        center: [targetLng, targetLat],
-        zoom: targetZoom,
+        ...camOpts,
         duration: 550
       });
     }
@@ -1629,7 +1639,11 @@ export default function MapView3D({
       const pending = pendingFocusTargetRef.current;
       pendingFocusTargetRef.current = null;
       userAdjustedRef.current = true;
-      map.jumpTo({ center: [pending.lng, pending.lat], zoom: pending.zoom });
+      map.jumpTo(
+        pending.center
+          ? pending
+          : { center: [pending.lng, pending.lat], zoom: pending.zoom }
+      );
     }
 
     const onStyleLoad = () => {
@@ -2355,7 +2369,44 @@ export default function MapView3D({
       xShareLink.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       xShareLink.addEventListener('click', (ev) => ev.stopPropagation());
 
-      labelPill.append(badge, shareBtn, xShareLink);
+      const navCoords = resolveLandCoords(p);
+      const navUrl = navCoords ? buildGoogleMapsLandUrl(navCoords.lat, navCoords.lng) : '';
+      let navLink = null;
+      if (navUrl) {
+        navLink = document.createElement('a');
+        navLink.href = navUrl;
+        navLink.target = '_blank';
+        navLink.rel = 'noopener noreferrer';
+        navLink.className = 'map3d-land-label-nav-btn map3d-ui-stop';
+        navLink.dataset.testid = 'map3d-land-nav-btn';
+        navLink.dataset.parcelId = pid;
+        navLink.setAttribute('aria-label', `Navigate to ${landName}`);
+        navLink.title = `Navigate to ${landName}`;
+        const navIconUrl = xeroemoji.get('🧭')?.svgUrl || '';
+        if (navIconUrl) {
+          const img = document.createElement('img');
+          img.src = navIconUrl;
+          img.alt = '';
+          img.setAttribute('aria-hidden', 'true');
+          img.width = 14;
+          img.height = 14;
+          img.className = 'xero-icon';
+          img.style.width = '14px';
+          img.style.height = '14px';
+          img.style.objectFit = 'contain';
+          navLink.appendChild(img);
+        } else {
+          navLink.appendChild(document.createTextNode('🧭'));
+        }
+        navLink.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        navLink.addEventListener('click', (ev) => ev.stopPropagation());
+      }
+
+      if (navLink) {
+        labelPill.append(badge, navLink, shareBtn, xShareLink);
+      } else {
+        labelPill.append(badge, shareBtn, xShareLink);
+      }
       wrap.appendChild(labelPill);
       wrap.style.display = 'none';
       pinLayer.appendChild(wrap);
