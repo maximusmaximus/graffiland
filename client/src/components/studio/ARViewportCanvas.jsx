@@ -32,6 +32,7 @@ import { estimateCameraVerticalFovDeg } from '../../utils/arSensorFusion.js';
 import { resolveRelativeOrbBucket } from '../../utils/arCalibrationManager.js';
 import { startWebXrArSession } from '../../utils/webxrArSession.js';
 import XeroIcon from '../XeroIcon.jsx';
+import ToolCenterReticle from './ToolCenterReticle.jsx';
 
 /**
  * Manages the transparent Three.js WebGL overlay, camera background video,
@@ -90,9 +91,15 @@ function ARViewportCanvasInner({
   cameraHidden = false,
   mode,
   modeRef,
+  tool = 'brush',
   toolRef,
+  blockSize = 1,
   blockSizeRef = null,
+  color = '#00f5d4',
   colorRef,
+  reachMeters = 1.8,
+  surfaceAnchor = null,
+  painting = false,
   voxelsRef,
   paintingRef,
   strokeDeviceOriginRef = null,
@@ -129,6 +136,10 @@ function ARViewportCanvasInner({
   onCanvasPointerMove,
   onCanvasPointerUp,
   onCanvasPointerCancel,
+  onSetCenterSurface = null,
+  onDrawAtCenter = null,
+  onStartCenterBrushHold = null,
+  onStopCenterBrushHold = null,
   onRequestContextRecover = null
 }) {
   const [contextLost, setContextLost] = useState(false);
@@ -1640,7 +1651,19 @@ function ARViewportCanvasInner({
             />
           )}
           {!isArViewOnly && mode === 'draw' && !isInteractingWithLand && calibrationReady && (
-            <div className="reticle" />
+            <ToolCenterReticle
+              tool={tool}
+              blockSize={blockSize}
+              color={color}
+              reachMeters={reachMeters}
+              surfaceAnchor={surfaceAnchor}
+              painting={painting}
+              vFovDeg={cameraRef?.current?.fov || 65}
+              onSetCenterSurface={onSetCenterSurface}
+              onDrawAtCenter={onDrawAtCenter}
+              onStartCenterBrushHold={onStartCenterBrushHold}
+              onStopCenterBrushHold={onStopCenterBrushHold}
+            />
           )}
           {contextLost && !renderPaused && (
             <div

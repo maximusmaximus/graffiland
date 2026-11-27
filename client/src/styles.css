@@ -474,6 +474,127 @@ select {
   background: #fff;
 }
 
+/* Interactive Center Tool & Block-Diameter Reticle (Brush & Pencil) */
+.reticle.is-tool-circle {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: pointer;
+  z-index: 8;
+  transition: transform 0.14s ease;
+}
+
+.reticle.is-tool-circle::after {
+  display: none;
+}
+
+.reticle.is-tool-circle .tool-reticle-ring {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2.25px solid var(--reticle-color, #00f5d4);
+  background: color-mix(in srgb, var(--reticle-color, #00f5d4) 10%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(4, 8, 18, 0.55),
+    0 0 16px color-mix(in srgb, var(--reticle-color, #00f5d4) 42%, transparent);
+  transition:
+    width 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.16s ease,
+    transform 0.12s ease,
+    box-shadow 0.16s ease;
+}
+
+.reticle.is-tool-circle.is-tool-brush .tool-reticle-ring {
+  border-style: dashed;
+}
+
+.reticle.is-tool-circle.is-tool-brush.is-surface-set .tool-reticle-ring {
+  border-style: solid;
+}
+
+.reticle.is-tool-circle.needs-surface .tool-reticle-ring {
+  border-color: rgba(255, 209, 102, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(4, 8, 18, 0.6),
+    0 0 18px rgba(255, 209, 102, 0.38);
+}
+
+.reticle.is-tool-circle.is-painting .tool-reticle-ring {
+  transform: scale(0.95);
+  background: color-mix(in srgb, var(--reticle-color, #00f5d4) 22%, transparent);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.45),
+    0 0 22px color-mix(in srgb, var(--reticle-color, #00f5d4) 68%, transparent);
+}
+
+.tool-reticle-inner-block {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  border: 1.25px solid color-mix(in srgb, var(--reticle-color, #00f5d4) 72%, #ffffff 28%);
+  opacity: 0.78;
+  transition: width 0.16s ease, height 0.16s ease;
+}
+
+.tool-reticle-inner-block.is-brush-core {
+  border-radius: 50%;
+  border-style: dotted;
+}
+
+.tool-reticle-inner-block.is-pencil-cube {
+  border-radius: 3px;
+}
+
+.tool-reticle-center-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+}
+
+.tool-reticle-caption {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  background: rgba(6, 10, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #f8fafc;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.42);
+}
+
+.tool-reticle-caption.is-prompt {
+  border-color: rgba(255, 209, 102, 0.56);
+  color: #ffe69c;
+}
+
+.tool-reticle-caption.is-locked {
+  border-color: color-mix(in srgb, var(--reticle-color, #00f5d4) 48%, transparent);
+  color: rgba(226, 232, 240, 0.92);
+}
+
 /* Side Volumetric Remaining-Pixels Capacity Bar (shown while holding draw tool) */
 .draw-volume-meter {
   position: absolute;
