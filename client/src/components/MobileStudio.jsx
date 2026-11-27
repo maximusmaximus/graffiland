@@ -6,6 +6,7 @@ import {
 } from '../../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api } from '../utils/api.js';
+import { useInAppBackHistory } from '../utils/inAppHistory.js';
 import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
 import {
   describeApiErrorForMobile,
@@ -158,6 +159,7 @@ export default function MobileStudio({
   const sprayBrushGuideSeenRef = useRef(loadBoolPreference(SPRAY_BRUSH_GUIDE_SEEN_KEY, false));
   const arViewSessionRef = useRef(null);
   arViewSessionRef.current = arViewSession;
+  const drawReturnSessionRef = useRef(null);
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
   const editingSculptureIdRef = useRef('');
@@ -1089,9 +1091,150 @@ export default function MobileStudio({
   const isAwayFromMappingView = Boolean(
     hasFullscreenOverlay || isArViewOnly || isTransformMode
   );
-  mappingPausedRef.current = Boolean(
-    isAwayFromMappingView || pol.mappingRestartPrompt
-  );
+  mappingPausedRef.current = Boolean(isAwayFromMappingView || pol.mappingRestartPrompt);
+
+  const mobileActiveViewKey = loginOpen
+    ? 'login'
+    : ar.mapSelectedSculpture
+    ? `sculpture:${ar.mapSelectedSculpture.id || 'item'}`
+    : chat.chatSelection
+    ? `chat:${chat.chatSelection?.sculpture?.id || 'room'}`
+    : brush.mode === 'publish'
+    ? 'publish'
+    : lands.landManageOpen
+    ? `land-manage:${lands.landManageParcelId || 'all'}`
+    : profileHandle
+    ? `profile:${profileHandle}`
+    : drafts.draftsOpen
+    ? 'drafts'
+    : pairing.pairOpen
+    ? 'pair'
+    : drafts.agentOpen
+    ? 'agent'
+    : infoOpen
+    ? `info:${infoInitialTab}`
+    : archiveOpen
+    ? `archive:${archiveInitialId || 'all'}`
+    : sprayBrushGuideOpen
+    ? 'spray-guide'
+    : tutorialOpen && !isWelcomeOpen && !parcelVisit
+    ? 'tutorial'
+    : dockOpen
+    ? 'dock'
+    : isInteractingWithLand
+    ? `ar-land:${ar.activeArLand?.parcelId || ar.arSelectedLandId || 'active'}`
+    : parcelVisit
+    ? `plot:${parcelVisit.parcel?.parcelId || 'visit'}`
+    : ar.mapOpen
+    ? 'map'
+    : `camera:${brush.mode}`;
+
+  useInAppBackHistory({
+    activeViewKey: mobileActiveViewKey,
+    onBackStep: () => {
+      if (loginOpen) {
+        pendingPublishAfterLoginRef.current = null;
+        setPendingPublishAfterLogin(false);
+        setLoginOpen(false);
+        return true;
+      }
+      if (ar.mapSelectedSculpture) {
+        ar.setMapSelectedSculpture(null);
+        return true;
+      }
+      if (chat.chatSelection) {
+        chat.setChatSelection(null);
+        return true;
+      }
+      if (brush.mode === 'publish') {
+        brush.setMode('draw');
+        return true;
+      }
+      if (lands.landManageOpen) {
+        lands.setLandManageOpen(false);
+        return true;
+      }
+      if (profileHandle) {
+        setProfileHandle('');
+        return true;
+      }
+      if (drafts.draftsOpen) {
+        drafts.setDraftsOpen(false);
+        return true;
+      }
+      if (pairing.pairOpen) {
+        pairing.setPairOpen(false);
+        return true;
+      }
+      if (drafts.agentOpen) {
+        drafts.setAgentOpen(false);
+        return true;
+      }
+      if (infoOpen) {
+        setInfoOpen(false);
+        setInfoInitialTab('guide');
+        return true;
+      }
+      if (archiveOpen) {
+        setArchiveOpen(false);
+        setArchiveInitialId('');
+        return true;
+      }
+      if (sprayBrushGuideOpen) {
+        setSprayBrushGuideOpen(false);
+        return true;
+      }
+      if (tutorialOpen) {
+        setTutorialOpen(false);
+        return true;
+      }
+      if (dockOpen) {
+        setDockOpen(false);
+        return true;
+      }
+      if (isInteractingWithLand) {
+        handleExitArLand();
+        return true;
+      }
+      if (parcelVisit) {
+        setParcelVisit(null);
+        return true;
+      }
+      if (ar.mapOpen) {
+        ar.setMapOpen(false);
+        return true;
+      }
+      if (brush.mode === 'transform') {
+        brush.commitTransformAndExit('draw');
+        return true;
+      }
+      if (brush.mode === 'preview') {
+        brush.setMode('draw');
+        return true;
+      }
+      const prevDrawOrigin = drawReturnSessionRef.current;
+      if (prevDrawOrigin) {
+        drawReturnSessionRef.current = null;
+        if (prevDrawOrigin.type === 'ar-land' && prevDrawOrigin.land) {
+          setArViewSession(prevDrawOrigin.arViewSession || null);
+          setArInspectorExpanded(false);
+          brush.setMode('preview');
+          ar.selectArLand(prevDrawOrigin.land, prevDrawOrigin.land.sculptures || []);
+          return true;
+        }
+        if (prevDrawOrigin.type === 'plot' && prevDrawOrigin.parcel) {
+          setParcelVisit({
+            loading: false,
+            parcel: prevDrawOrigin.parcel,
+            sculptures: prevDrawOrigin.sculptures || [],
+            error: ''
+          });
+          return true;
+        }
+      }
+      return false;
+    }
+  });
 
   const prevFullscreenOverlayRef = useRef(hasFullscreenOverlay);
   useEffect(() => {
@@ -1865,6 +2008,11 @@ export default function MobileStudio({
                 );
                 return;
               }
+              drawReturnSessionRef.current = {
+                type: 'ar-land',
+                land: targetLand,
+                arViewSession: arViewSessionRef.current || null
+              };
               setArViewSession(null);
               ar.setArSelectedLandId('');
               setPreferredDrawLandId(targetLand?.parcelId || '');
@@ -2214,6 +2362,11 @@ export default function MobileStudio({
             }
           }}
           onMakeArt={(visitedParcel) => {
+            drawReturnSessionRef.current = {
+              type: 'plot',
+              parcel: visitedParcel,
+              sculptures: parcelVisit?.sculptures || []
+            };
             setParcelVisit(null);
             setTutorialOpen(false);
             setPreferredDrawLandId(visitedParcel?.parcelId || '');

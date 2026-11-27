@@ -13,6 +13,7 @@ import {
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
 import { api, API_BASE } from '../utils/api.js';
+import { useInAppBackHistory } from '../utils/inAppHistory.js';
 import {
   buildSculptureShareUrl,
   buildShareToXUrl,
@@ -274,6 +275,96 @@ export default function DesktopHub({
     : infoOpen
     ? 'info'
     : 'map';
+
+  const desktopHistoryViewKey = loginOpen
+    ? 'login'
+    : selected
+    ? `sculpture:${selected.id || 'item'}`
+    : addItemParcelId
+    ? `add-item:${addItemParcelId}`
+    : titleModalTarget
+    ? `title-land:${titleModalTarget?.parcel?.parcelId || 'draft'}`
+    : landManageOpen
+    ? `land-manage:${landManageParcelId || 'all'}`
+    : profileHandle
+    ? `profile:${profileHandle}`
+    : pairOpen
+    ? 'pair'
+    : infoOpen
+    ? `info:${infoInitialViewport || 'main'}`
+    : archiveOpen
+    ? `archive:${archiveInitialId || 'all'}`
+    : adminOpen
+    ? 'admin'
+    : visitedParcel
+    ? `plot:${visitedParcel.parcel?.parcelId || visitedParcel.parcelId || 'visit'}`
+    : drawMode
+    ? 'draw-land'
+    : selectedLandParcelId
+    ? `land:${selectedLandParcelId}`
+    : 'desktop-map';
+
+  useInAppBackHistory({
+    activeViewKey: desktopHistoryViewKey,
+    onBackStep: ({ previousKey } = {}) => {
+      if (loginOpen) {
+        setLoginOpen(false);
+        return true;
+      }
+      if (selected) {
+        setSelected(null);
+        return true;
+      }
+      if (addItemParcelId) {
+        setAddItemParcelId('');
+        return true;
+      }
+      if (titleModalTarget) {
+        setTitleModalTarget(null);
+        return true;
+      }
+      if (landManageOpen) {
+        setLandManageOpen(false);
+        return true;
+      }
+      if (profileHandle) {
+        setProfileHandle('');
+        return true;
+      }
+      if (pairOpen) {
+        setPairOpen(false);
+        return true;
+      }
+      if (infoOpen) {
+        setInfoOpen(false);
+        return true;
+      }
+      if (archiveOpen) {
+        setArchiveOpen(false);
+        setArchiveInitialId('');
+        return true;
+      }
+      if (adminOpen) {
+        setAdminOpen(false);
+        return true;
+      }
+      if (visitedParcel) {
+        setVisitedParcel(null);
+        return true;
+      }
+      if (drawMode) {
+        setDrawMode(false);
+        return true;
+      }
+      if (selectedLandParcelId) {
+        const prevLandId =
+          previousKey && previousKey.startsWith('land:') ? previousKey.slice('land:'.length) : '';
+        setSelectedLandParcelId(prevLandId && prevLandId !== selectedLandParcelId ? prevLandId : '');
+        return true;
+      }
+      return false;
+    }
+  });
 
   useEffect(() => {
     saveDesktopSession({

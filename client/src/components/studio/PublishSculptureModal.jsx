@@ -6,6 +6,7 @@ import {
   copyToClipboard
 } from '../../utils/clipboard.js';
 import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
+import { useSafeBackdropClose } from '../../utils/modalBackdropGuard.js';
 import { EmojiInput, EmojiTextarea } from '../EmojiField.jsx';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -61,9 +62,10 @@ export default function PublishSculptureModal({
     ? resolveLandDisplayName(activeTargetLand, { defaultName: 'Virtual Land' })
     : '';
   const targetLandFrozen = Boolean(activeTargetLand?.isFrozen);
+  const backdropCloseProps = useSafeBackdropClose(onClose);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdropCloseProps}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
