@@ -1120,16 +1120,18 @@ function ARViewportCanvasInner({
       const selectedLandId = arSelectedLandIdRef?.current || '';
 
       if (
-        (modeRef.current === 'draw' || modeRef.current === 'preview') &&
+        (modeRef.current === 'draw' ||
+          modeRef.current === 'transform' ||
+          modeRef.current === 'preview') &&
         nearbyGroupRef.current?.children.length
       ) {
         const activeId = arTargetedIdRef.current;
         const activeFadeMul =
-        modeRef.current === 'draw' &&
-        !isInteractingWithLandRef?.current &&
-        Boolean(fadeOtherItemsRef?.current)
-          ? 0.22
-          : 1;
+          (modeRef.current === 'draw' || modeRef.current === 'transform') &&
+          !isInteractingWithLandRef?.current &&
+          Boolean(fadeOtherItemsRef?.current)
+            ? 0.22
+            : 1;
         const hazeTintHex = Number.isFinite(Number(atmosphericTintRef?.current))
           ? Number(atmosphericTintRef.current)
           : DEFAULT_ATMOSPHERIC_HAZE_HEX;

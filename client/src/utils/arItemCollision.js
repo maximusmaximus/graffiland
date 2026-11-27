@@ -364,3 +364,334 @@ export function testTransformedVoxelsAgainstPlacedItems({
   }
   return { blocked: false, blockedBy: null };
 }
+
+/**
+ * Computes positive 3D penetration depth (in meters) between two Box3 volumes,
+ * returning 0 when they do not overlap.
+ *
+ * @param {THREE.Box3 | null | undefined} boxA
+ * @param {THREE.Box3 | null | undefined} boxB
+ * @returns {number}
+ */
+export function computeBoxPenetrationDepth(boxA, boxB) {
+  if (!boxA || !boxB || boxA.isEmpty() || boxB.isEmpty()) return 0;
+  const ox = Math.min(boxA.max.x, boxB.max.x) - Math.max(boxA.min.x, boxB.min.x);
+  if (ox <= 0) return 0;
+  const oy = Math.min(boxA.max.y, boxB.max.y) - Math.max(boxA.min.y, boxB.min.y);
+  if (oy <= 0) return 0;
+  const oz = Math.min(boxA.max.z, boxB.max.z) - Math.max(boxA.min.z, boxB.min.z);
+  if (oz <= 0) return 0;
+  return Math.min(ox, oy, oz);
+}
+
+/**
+ * Tests whether a candidate 3D sculpture world bounding box overlaps any existing
+ * placed sculpture on the land (voxel sculptures or custom 3D models), keeping a small
+ * safety clearance margin so sculptures can never be placed inside other sculptures.
+ *
+ * @param {{
+ *   box: THREE.Box3 | null | undefined,
+ *   colliders?: any[],
+ *   marginMeters?: number
+ * }} params
+ */
+export function testBoundingBoxAgainstPlacedItems({
+  box,
+  colliders = [],
+  marginMeters = 0.04
+}) {
+  if (!box || box.isEmpty() || !Array.isArray(colliders) || colliders.length === 0) {
+    return { blocked: false, blockedBy: null, penetrationDepth: 0 };
+  }
+
+  const margin = Math.max(0, Number(marginMeters) || 0);
+  const testBox = box.clone().expandByScalar(margin);
+  let worstHit = null;
+  let maxDepth = 0;
+
+  for (const col of colliders) {
+    if (!col?.broadBox || !testBox.intersectsBox(col.broadBox)) continue;
+
+    if (col.voxelCells && col.voxelCells.length > 0) {
+      for (let i = 0; i < col.voxelCells.length; i += 1) {
+        const c = col.voxelCells[i];
+        _candMin.set(c.x - c.half, c.y - c.half, c.z - c.half);
+        _candMax.set(c.x + c.half, c.y + c.half, c.z + c.half);
+        _candBox.set(_candMin, _candMax);
+        const depth = computeBoxPenetrationDepth(testBox, _candBox);
+        if (depth > 0 && depth > maxDepth) {
+          maxDepth = depth;
+          worstHit = {
+            reason: 'overlap',
+            sculptureId: col.sculptureId,
+            title: col.title,
+            colliderBox: col.broadBox.clone()
+          };
+        }
+      }
+      continue;
+    }
+
+    const subBoxes = col.subBoxes && col.subBoxes.length > 0 ? col.subBoxes : [col.broadBox];
+    for (let i = 0; i < subBoxes.length; i += 1) {
+      const depth = computeBoxPenetrationDepth(testBox, subBoxes[i]);
+      if (depth > 0 && depth > maxDepth) {
+        maxDepth = depth;
+        worstHit = {
+          reason: 'overlap',
+          sculptureId: col.sculptureId,
+          title: col.title,
+          colliderBox: subBoxes[i].clone()
+        };
+      }
+    }
+  }
+
+  if (worstHit) {
+    return {
+      blocked: true,
+      blockedBy: worstHit,
+      penetrationDepth: maxDepth
+    };
+  }
+  return { blocked: false, blockedBy: null, penetrationDepth: 0 };
+}
+
+function buildWorldBoxFromLocalBoxAndMatrix(localBox, matrix) {
+  if (!localBox || localBox.isEmpty()) return new THREE.Box3();
+  const min = localBox.min;
+  const max = localBox.max;
+  const corners = [
+    new THREE.Vector3(min.x, min.y, min.z),
+    new THREE.Vector3(min.x, min.y, max.z),
+    new THREE.Vector3(min.x, max.y, min.z),
+    new THREE.Vector3(min.x, max.y, max.z),
+    new THREE.Vector3(max.x, min.y, min.z),
+    new THREE.Vector3(max.x, min.y, max.z),
+    new THREE.Vector3(max.x, max.y, min.z),
+    new THREE.Vector3(max.x, max.y, max.z)
+  ];
+  const worldBox = new THREE.Box3();
+  for (const pt of corners) {
+    pt.applyMatrix4(matrix);
+    worldBox.expandByPoint(pt);
+  }
+  return worldBox;
+}
+
+/**
+ * Computes the candidate world-space Box3 for the active draft (staged 3D catalog model
+ * and/or drawn voxels) under a candidate `artTransform` around `pivot`, without mutating
+ * the live Three.js scene graph.
+ *
+ * @param {{
+ *   draftGroup?: THREE.Object3D | null,
+ *   placedCatalogItem?: any | null,
+ *   voxels?: any[],
+ *   pivot?: { x: number, y: number, z: number } | null,
+ *   artTransform?: {
+ *     scale?: number,
+ *     rotXDeg?: number,
+ *     rotYDeg?: number,
+ *     rotZDeg?: number,
+ *     offsetX?: number,
+ *     offsetY?: number,
+ *     offsetZ?: number
+ *   } | null,
+ *   voxelStep?: number
+ * }} params
+ */
+export function computeCandidateDraftWorldBox({
+  draftGroup = null,
+  placedCatalogItem = null,
+  voxels = [],
+  pivot = { x: 0, y: 0, z: 0 },
+  artTransform = null,
+  voxelStep = VOXEL_STEP
+}) {
+  const localBox = new THREE.Box3();
+
+  // 1) Measure actual Three.js local bounds of draftGroup children (in draftGroup local space)
+  if (draftGroup && Array.isArray(draftGroup.children) && draftGroup.children.length > 0) {
+    const savedPos = draftGroup.position.clone();
+    const savedQuat = draftGroup.quaternion.clone();
+    const savedScale = draftGroup.scale.clone();
+    draftGroup.position.set(0, 0, 0);
+    draftGroup.quaternion.identity();
+    draftGroup.scale.set(1, 1, 1);
+    draftGroup.updateMatrixWorld(true);
+    const childBox = new THREE.Box3();
+    for (const child of draftGroup.children) {
+      if (!child || child.visible === false) continue;
+      childBox.setFromObject(child);
+      if (!childBox.isEmpty()) localBox.union(childBox);
+    }
+    draftGroup.position.copy(savedPos);
+    draftGroup.quaternion.copy(savedQuat);
+    draftGroup.scale.copy(savedScale);
+    draftGroup.updateMatrixWorld(true);
+  }
+
+  // 2) Deterministic fallback from placedCatalogItem metadata (headless / before mesh attach)
+  if (localBox.isEmpty() && placedCatalogItem && placedCatalogItem.pos) {
+    const sc = Math.max(0.05, Number(placedCatalogItem.scale || 1));
+    const bw = Math.max(0.1, Number(placedCatalogItem.baseSize?.width || 0.75)) * sc;
+    const bh = Math.max(0.1, Number(placedCatalogItem.baseSize?.height || 0.75)) * sc;
+    const bd = Math.max(0.1, Number(placedCatalogItem.baseSize?.depth || 0.75)) * sc;
+    const itemLocal = new THREE.Box3(
+      new THREE.Vector3(-bw * 0.5, 0, -bd * 0.5),
+      new THREE.Vector3(bw * 0.5, bh, bd * 0.5)
+    );
+    const itemQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(
+        THREE.MathUtils.degToRad(Number(placedCatalogItem.rotXDeg || 0)),
+        THREE.MathUtils.degToRad(Number(placedCatalogItem.rotYDeg || 0)),
+        THREE.MathUtils.degToRad(Number(placedCatalogItem.rotZDeg || 0)),
+        'YXZ'
+      )
+    );
+    const itemMat = new THREE.Matrix4().compose(
+      new THREE.Vector3(
+        Number(placedCatalogItem.pos.x || 0),
+        Number(placedCatalogItem.pos.y || 0),
+        Number(placedCatalogItem.pos.z || 0)
+      ),
+      itemQuat,
+      new THREE.Vector3(1, 1, 1)
+    );
+    localBox.union(buildWorldBoxFromLocalBoxAndMatrix(itemLocal, itemMat));
+  }
+
+  // 3) Deterministic fallback for voxels when draftGroup isn't mounted
+  if (localBox.isEmpty() && Array.isArray(voxels) && voxels.length > 0) {
+    for (const v of voxels) {
+      const half = Math.max(0.01, voxelStep * Math.max(0.25, Number(v.scale ?? 1)) * 0.48);
+      _candMin.set(v.x - half, v.y - half, v.z - half);
+      _candMax.set(v.x + half, v.y + half, v.z + half);
+      localBox.expandByPoint(_candMin);
+      localBox.expandByPoint(_candMax);
+    }
+  }
+
+  if (localBox.isEmpty()) return localBox;
+  if (!artTransform) return localBox;
+
+  const s = Math.max(0.05, Number(artTransform.scale ?? 1));
+  const radX = THREE.MathUtils.degToRad(Number(artTransform.rotXDeg || 0));
+  const radY = THREE.MathUtils.degToRad(Number(artTransform.rotYDeg || 0));
+  const radZ = THREE.MathUtils.degToRad(Number(artTransform.rotZDeg || 0));
+  const pv = new THREE.Vector3(
+    Number(pivot?.x || 0),
+    Number(pivot?.y || 0),
+    Number(pivot?.z || 0)
+  );
+  const offset = new THREE.Vector3(
+    Number(artTransform.offsetX || 0),
+    Number(artTransform.offsetY || 0),
+    Number(artTransform.offsetZ || 0)
+  );
+  const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(radX, radY, radZ, 'YXZ'));
+  const transformedPivot = pv.clone().multiplyScalar(s).applyQuaternion(quat);
+  const groupPos = pv.clone().add(offset).sub(transformedPivot);
+  const mat = new THREE.Matrix4().compose(groupPos, quat, new THREE.Vector3(s, s, s));
+  return buildWorldBoxFromLocalBoxAndMatrix(localBox, mat);
+}
+
+/**
+ * Finds the nearest collision-free 3D world position for spawning a searched 3D model
+ * so a newly placed sculpture never spawns inside another sculpture in the scene.
+ *
+ * @param {{
+ *   initialPos: { x: number, y: number, z: number },
+ *   baseSize?: { width?: number, height?: number, depth?: number },
+ *   scale?: number,
+ *   colliders?: any[],
+ *   cameraPosition?: { x: number, y: number, z: number } | null,
+ *   marginMeters?: number,
+ *   maxSearchRadius?: number
+ * }} params
+ */
+export function findNonCollidingPlacementPosition({
+  initialPos,
+  baseSize = { width: 0.75, height: 0.75, depth: 0.75 },
+  scale = 1,
+  colliders = [],
+  cameraPosition = null,
+  marginMeters = 0.06,
+  maxSearchRadius = 2.8
+}) {
+  const safeInit = {
+    x: Number(initialPos?.x || 0),
+    y: Number(initialPos?.y || 0),
+    z: Number(initialPos?.z || -1.8)
+  };
+  if (!Array.isArray(colliders) || colliders.length === 0) {
+    return { pos: safeInit, shifted: false, avoidedTitle: '', blocked: false };
+  }
+
+  const sc = Math.max(0.05, Number(scale) || 1);
+  const halfW = Math.max(0.08, Number(baseSize?.width || 0.75) * sc * 0.5);
+  const height = Math.max(0.12, Number(baseSize?.height || 0.75) * sc);
+  const halfD = Math.max(0.08, Number(baseSize?.depth || 0.75) * sc * 0.5);
+
+  const testAt = (pt) => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(pt.x - halfW, pt.y, pt.z - halfD),
+      new THREE.Vector3(pt.x + halfW, pt.y + height, pt.z + halfD)
+    );
+    return testBoundingBoxAgainstPlacedItems({ box, colliders, marginMeters });
+  };
+
+  const initialHit = testAt(safeInit);
+  if (!initialHit.blocked) {
+    return { pos: safeInit, shifted: false, avoidedTitle: '', blocked: false };
+  }
+
+  // Build camera-oriented horizontal basis (right, towardCamera) so shifts stay right in view
+  const toCam = new THREE.Vector3(
+    Number(cameraPosition?.x ?? 0) - safeInit.x,
+    0,
+    Number(cameraPosition?.z ?? 0) - safeInit.z
+  );
+  if (toCam.lengthSq() < 1e-4) toCam.set(0, 0, 1);
+  toCam.normalize();
+  const right = new THREE.Vector3(-toCam.z, 0, toCam.x).normalize();
+
+  const step = Math.max(0.28, Math.min(0.55, Math.max(halfW, halfD) * 0.9));
+  const directions = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 1],
+    [0.707, 0, 0.707],
+    [-0.707, 0, 0.707],
+    [0, 0, -1],
+    [0.707, 0, -0.707],
+    [-0.707, 0, -0.707],
+    [0, 1, 0]
+  ];
+
+  for (let r = step; r <= maxSearchRadius + 1e-4; r += step) {
+    for (const [dr, dy, dtc] of directions) {
+      const cand = {
+        x: Number((safeInit.x + right.x * dr * r + toCam.x * dtc * r).toFixed(3)),
+        y: Number((safeInit.y + dy * r).toFixed(3)),
+        z: Number((safeInit.z + right.z * dr * r + toCam.z * dtc * r).toFixed(3))
+      };
+      if (!testAt(cand).blocked) {
+        return {
+          pos: cand,
+          shifted: true,
+          avoidedTitle: initialHit.blockedBy?.title || 'existing art',
+          blocked: false
+        };
+      }
+    }
+  }
+
+  return {
+    pos: safeInit,
+    shifted: false,
+    avoidedTitle: initialHit.blockedBy?.title || 'existing art',
+    blocked: true
+  };
+}

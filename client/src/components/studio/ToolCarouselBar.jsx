@@ -13,6 +13,8 @@ export default function ToolCarouselBar({
   dockOpen,
   voxelsLength,
   placedCatalogItem = null,
+  transformCollision = null,
+  onRemoveCatalogItem = null,
   artTransform,
   onSetArtTransform,
   onToggleTransformLock,
@@ -126,31 +128,94 @@ export default function ToolCarouselBar({
 
       {mode === 'transform' && (
         <div
-          className={`transform-bar hud-interactive ${dockOpen ? 'with-dock' : ''}`}
+          className={`transform-bar hud-interactive ${dockOpen ? 'with-dock' : ''} ${
+            transformCollision?.blocked ? 'is-colliding' : ''
+          }`}
           role="region"
           aria-label="Scale and transform art piece"
         >
           <div className="transform-bar-top">
             <span className="transform-bar-title">
-              <XeroIcon emoji="📐" size={14} />
-              <span>
+              {placedCatalogItem?.previewImageUrl ? (
+                <img
+                  src={placedCatalogItem.previewImageUrl}
+                  alt={placedCatalogItem.title}
+                  className="transform-model-preview-thumb"
+                  data-testid="transform-model-preview-thumb"
+                />
+              ) : (
+                <XeroIcon emoji="📐" size={14} />
+              )}
+              <span className="transform-bar-title-text">
                 {placedCatalogItem
-                  ? `Scale ${placedCatalogItem.title}${voxelsLength > 0 ? ` (+${voxelsLength})` : ''}`
+                  ? `Preview & Place: ${placedCatalogItem.title}${
+                      voxelsLength > 0 ? ` (+${voxelsLength})` : ''
+                    }`
                   : `Lock & Scale (${voxelsLength})`}
               </span>
             </span>
-            <button
-              type="button"
-              className="transform-done-btn"
-              onClick={onToggleTransformLock}
-              title="Confirm transform & return to drawing mode"
-            >
-              <XeroIcon emoji="✅" size={14} />
-              <span>Draw</span>
-            </button>
+            <div className="transform-bar-top-actions">
+              {placedCatalogItem && typeof onRemoveCatalogItem === 'function' && (
+                <button
+                  type="button"
+                  className="transform-chip-btn is-danger"
+                  data-testid="transform-remove-catalog-btn"
+                  onClick={onRemoveCatalogItem}
+                  title="Remove staged 3D model"
+                  aria-label="Remove staged 3D model"
+                >
+                  <XeroIcon emoji="🗑️" size={11} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="transform-done-btn"
+                onClick={onToggleTransformLock}
+                title="Confirm placement & return to drawing mode"
+              >
+                <XeroIcon emoji="✅" size={14} />
+                <span>Draw</span>
+              </button>
+            </div>
           </div>
 
+          {transformCollision?.blocked && (
+            <div
+              className="transform-collision-warning"
+              data-testid="transform-collision-warning"
+              role="alert"
+            >
+              <XeroIcon emoji="⚠️" size={12} />
+              <span>
+                Overlaps &ldquo;{transformCollision.title || 'existing art'}&rdquo; — move to an open
+                spot
+              </span>
+            </div>
+          )}
+
           <div className="transform-nudge-row">
+            <button
+              type="button"
+              className="transform-chip-btn"
+              data-testid="transform-nudge-x-minus"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetX: Number((p.offsetX - 0.15).toFixed(2)) }))
+              }
+              title="Move left (-X)"
+            >
+              -X
+            </button>
+            <button
+              type="button"
+              className="transform-chip-btn"
+              data-testid="transform-nudge-x-plus"
+              onClick={() =>
+                onSetArtTransform((p) => ({ ...p, offsetX: Number((p.offsetX + 0.15).toFixed(2)) }))
+              }
+              title="Move right (+X)"
+            >
+              +X
+            </button>
             <button
               type="button"
               className="transform-chip-btn"
@@ -197,6 +262,7 @@ export default function ToolCarouselBar({
               onClick={() =>
                 onSetArtTransform({
                   scale: 1,
+                  rotXDeg: 0,
                   rotYDeg: 0,
                   rotZDeg: 0,
                   offsetX: 0,
@@ -208,10 +274,13 @@ export default function ToolCarouselBar({
             >
               Reset
             </button>
-            <span className="transform-gesture-note">2-finger twist = Z</span>
           </div>
 
-          <div className="transform-sliders">
+          <div className="transform-gesture-banner" data-testid="transform-gesture-banner">
+            1-finger drag: move · 2-finger twist: rotate · 2-finger pinch &amp; slide: scale &amp; depth
+          </div>
+
+          <div className="transform-sliders is-four-grid">
             <label className="transform-slider-field">
               <span>
                 <XeroIcon emoji="🔍" size={12} /> {artTransform.scale.toFixed(2)}x
@@ -219,7 +288,7 @@ export default function ToolCarouselBar({
               <input
                 type="range"
                 min={0.25}
-                max={2}
+                max={placedCatalogItem ? 2.5 : 2}
                 step={0.05}
                 value={artTransform.scale}
                 onChange={(e) =>
@@ -245,6 +314,24 @@ export default function ToolCarouselBar({
                 }
                 data-testid="transform-roty-slider"
                 aria-label="Rotate sculpture Y axis"
+              />
+            </label>
+
+            <label className="transform-slider-field">
+              <span>
+                <XeroIcon emoji="↕️" size={12} /> X {artTransform.rotXDeg || 0}°
+              </span>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                step={2}
+                value={artTransform.rotXDeg || 0}
+                onChange={(e) =>
+                  onSetArtTransform((p) => ({ ...p, rotXDeg: Number(e.target.value) }))
+                }
+                data-testid="transform-rotx-slider"
+                aria-label="Rotate sculpture X axis"
               />
             </label>
 

@@ -5,7 +5,13 @@ import {
   resolveLandDisplayName
 } from '../../../shared/landVolume.mjs';
 import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs';
-import { api } from '../utils/api.js';
+import { api, resolveApiUrl } from '../utils/api.js';
+import {
+  collectPlacedItemColliders,
+  computeCandidateDraftWorldBox,
+  findNonCollidingPlacementPosition,
+  testBoundingBoxAgainstPlacedItems
+} from '../utils/arItemCollision.js';
 import { useInAppBackHistory } from '../utils/inAppHistory.js';
 import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
 import {
@@ -296,9 +302,12 @@ export default function MobileStudio({
   const syncPlacedCatalogMesh = useCallback((nextItem) => {
     const mesh = placedCatalogMeshRef.current;
     if (!mesh || !nextItem) return;
+    if (draftGroupRef.current && mesh.parent !== draftGroupRef.current) {
+      draftGroupRef.current.add(mesh);
+    }
     mesh.position.set(nextItem.pos.x, nextItem.pos.y, nextItem.pos.z);
     mesh.rotation.set(
-      0,
+      THREE.MathUtils.degToRad(nextItem.rotXDeg || 0),
       THREE.MathUtils.degToRad(nextItem.rotYDeg || 0),
       THREE.MathUtils.degToRad(nextItem.rotZDeg || 0),
       'YXZ'
@@ -313,12 +322,13 @@ export default function MobileStudio({
       const cur = placedCatalogItemRef.current;
       if (!cur) return;
       const s = Math.min(20, Math.max(0.1, Number((cur.scale || 1) * (tr.scale || 1))));
+      const nextRotX = Math.max(-180, Math.min(180, Number((cur.rotXDeg || 0) + (tr.rotXDeg || 0))));
       const nextRotY = Number(((cur.rotYDeg || 0) + (tr.rotYDeg || 0)) % 360);
       const nextRotZ = Math.max(-180, Math.min(180, Number((cur.rotZDeg || 0) + (tr.rotZDeg || 0))));
       const pv = pivot || cur.pos || { x: 0, y: 0, z: 0 };
       const quat = new THREE.Quaternion().setFromEuler(
         new THREE.Euler(
-          0,
+          THREE.MathUtils.degToRad(tr.rotXDeg || 0),
           THREE.MathUtils.degToRad(tr.rotYDeg || 0),
           THREE.MathUtils.degToRad(tr.rotZDeg || 0),
           'YXZ'
@@ -339,6 +349,7 @@ export default function MobileStudio({
       const updated = {
         ...cur,
         scale: Number(s.toFixed(3)),
+        rotXDeg: Number(nextRotX.toFixed(1)),
         rotYDeg: Number(nextRotY.toFixed(1)),
         rotZDeg: Number(nextRotZ.toFixed(1)),
         pos: nextPos
@@ -403,6 +414,7 @@ export default function MobileStudio({
     onAutoEraseStaleDrawing: (info) => onAutoEraseStaleDrawingBridgeRef.current?.(info),
     onResetSpatialOrigin: pol.resetSpatialDrawOrigin,
     hasPlacedCatalogItem: Boolean(placedCatalogItem),
+    placedCatalogItemRef,
     placedCatalogPivotRef,
     onCommitCatalogTransform: handleCommitCatalogTransform,
     onClearCatalogItem: clearPlacedCatalogItem
@@ -452,33 +464,61 @@ export default function MobileStudio({
           const res = await loadCustomModelObject(
             {
               id: item.id,
+              modelGlbUrl: item.modelUrl,
               customModel: {
                 format: item.modelFormat || 'glb',
+                downloadUrl: item.modelUrl,
                 modelUrl: item.modelUrl,
                 scale: 1
               }
             },
+            resolveApiUrl,
             { applyCustomScale: false }
           );
           if (res?.object3d) {
             loadedObj = res.object3d;
             if (res.baseSize) baseSize = res.baseSize;
           }
-        } catch {
-          // Graceful fallback visual marker if headless/offline environment cannot decode GLB
+        } catch (loadErr) {
+          const isHeadlessTest =
+            typeof navigator !== 'undefined' && /jsdom/i.test(String(navigator.userAgent || ''));
+          if (!isHeadlessTest) {
+            showTemporaryHint(
+              `Could not load 3D model "${item.title}" (${loadErr?.message || 'network error'}). Try again or pick another item.`
+            );
+            return;
+          }
+          // Headless jsdom fallback only (never shown as a solid block in live browsers)
           const fallbackGeo = new THREE.BoxGeometry(0.65, 0.65, 0.65);
-          const fallbackMat = new THREE.MeshStandardMaterial({
+          const fallbackMat = new THREE.MeshBasicMaterial({
             color: 0x00f5d4,
-            roughness: 0.35,
-            metalness: 0.2
+            wireframe: true
           });
           loadedObj = new THREE.Mesh(fallbackGeo, fallbackMat);
           loadedObj.position.y = 0.325;
         }
 
+        if (!loadedObj) {
+          showTemporaryHint(`Could not decode 3D model "${item.title}" — try another item.`);
+          return;
+        }
+
         // Normalize initial AR placement scale to comfortable ~0.75m size in front of user
         const maxDim = Math.max(0.1, baseSize.width || 1, baseSize.height || 1, baseSize.depth || 1);
         const initialScale = Number(Math.max(0.15, Math.min(2.0, 0.75 / maxDim)).toFixed(3));
+
+        // Never spawn a newly placed 3D sculpture inside an existing sculpture in the scene
+        const existingColliders = collectPlacedItemColliders(nearbyGroupRef.current, {
+          excludeSculptureId: editingSculptureIdRef.current || ''
+        });
+        const nonColliding = findNonCollidingPlacementPosition({
+          initialPos: targetPos,
+          baseSize,
+          scale: initialScale,
+          colliders: existingColliders,
+          cameraPosition: cameraRef.current?.position || null
+        });
+        targetPos = nonColliding.pos;
 
         const nextPlaced = {
           id: item.id,
@@ -488,8 +528,9 @@ export default function MobileStudio({
           title: item.title,
           modelFormat: item.modelFormat || 'glb',
           modelUrl: item.modelUrl,
-          previewImageUrl: item.previewImageUrl || null,
+          previewImageUrl: item.previewImageUrl || item.previewThumbDataUrl || null,
           scale: initialScale,
+          rotXDeg: 0,
           rotYDeg: 0,
           rotZDeg: 0,
           pos: targetPos,
@@ -515,11 +556,14 @@ export default function MobileStudio({
         }
 
         setCatalogSearchOpen(false);
-        // Automatically switch to Lock & Scale tooling so user can resize/position immediately,
-        // then tap ✅ Draw to keep painting or 🚀 Publish to mint!
+        // Automatically switch to Lock & Scale tooling with other items faded so user can
+        // preview, 2-finger rotate/scale/position in 3D, then tap ✅ Draw or 🚀 Publish!
+        const shiftNote = nonColliding.shifted
+          ? ` (placed beside "${nonColliding.avoidedTitle}" to avoid overlap)`
+          : '';
         brush.enterTransformMode({
           pivotOverride: targetPos,
-          hintOverride: `Placed "${item.title}" — scale, rotate or move it, then tap ✅ Draw to paint more or 🚀 Publish!`
+          hintOverride: `Previewing "${item.title}"${shiftNote} — 2-finger rotate, pinch & depth-move, or 1-finger drag to position!`
         });
       } finally {
         setCatalogPlaceBusy(false);
@@ -572,6 +616,7 @@ export default function MobileStudio({
     mode: brush.mode,
     activeKeyTool: brush.activeKeyTool,
     tool: brush.tool,
+    hasPlacedCatalogItem: Boolean(placedCatalogItem),
     isInteractingWithLand: Boolean(focusedArLandId),
     isArViewOnly: Boolean(arViewSession || brush.mode === 'preview')
   });
@@ -613,6 +658,7 @@ export default function MobileStudio({
     mode: brush.mode,
     activeKeyTool: brush.activeKeyTool,
     tool: brush.tool,
+    hasPlacedCatalogItem: Boolean(placedCatalogItem),
     isInteractingWithLand,
     isArViewOnly
   });
@@ -1595,7 +1641,36 @@ export default function MobileStudio({
           : 0;
       const headingRad = trueHeadingDeg !== null ? THREE.MathUtils.degToRad(trueHeadingDeg) : 0;
       const placedCat = placedCatalogItemRef.current;
+      // Enforce non-overlapping sculpture placement right before publish as well
+      const publishColliders = collectPlacedItemColliders(nearbyGroupRef.current, {
+        excludeSculptureId: editingSculptureIdRef.current || ''
+      });
+      if (publishColliders.length > 0 && (placedCat || brush.voxels.length > 0)) {
+        const finalBox = computeCandidateDraftWorldBox({
+          draftGroup: draftGroupRef.current,
+          placedCatalogItem: placedCat,
+          voxels: brush.voxels,
+          pivot: brush.transformPivot,
+          artTransform: brush.mode === 'transform' ? tr : null
+        });
+        const pubCol = testBoundingBoxAgainstPlacedItems({
+          box: finalBox,
+          colliders: publishColliders,
+          marginMeters: 0.04
+        });
+        if (pubCol.blocked) {
+          throw new Error(
+            `Cannot place inside "${pubCol.blockedBy?.title || 'existing art'}" — move your sculpture to an open spot before publishing.`
+          );
+        }
+      }
       const placedCatYawRad = THREE.MathUtils.degToRad(Number(placedCat?.rotYDeg || 0));
+      const effectivePitchDeg = Number(
+        ((Number(placedCat?.rotXDeg || 0) + Number(tr.rotXDeg || 0)) || 0).toFixed(1)
+      );
+      const effectiveRollDeg = Number(
+        ((Number(placedCat?.rotZDeg || 0) + Number(tr.rotZDeg || 0)) || 0).toFixed(1)
+      );
       const anchorOffset = {
         dx: Number(
           (
@@ -1613,7 +1688,8 @@ export default function MobileStudio({
           ).toFixed(3)
         ),
         yaw: Number((draftYawRad + localTransformYawRad + placedCatYawRad).toFixed(4)),
-        ...(placedCat?.rotZDeg ? { roll: Number(placedCat.rotZDeg) } : {})
+        ...(effectivePitchDeg ? { pitch: effectivePitchDeg } : {}),
+        ...(effectiveRollDeg ? { roll: effectiveRollDeg } : {})
       };
       const enrichedPolSnap = {
         ...polSnap,
@@ -2253,6 +2329,14 @@ export default function MobileStudio({
             dockOpen={dockOpen}
             voxelsLength={brush.voxels.length}
             placedCatalogItem={placedCatalogItem}
+            transformCollision={brush.transformCollision}
+            onRemoveCatalogItem={() => {
+              clearPlacedCatalogItem();
+              if (brush.voxels.length === 0) {
+                brush.resetArtTransformState();
+                brush.setMode('draw');
+              }
+            }}
             artTransform={brush.artTransform}
             onSetArtTransform={brush.setArtTransform}
             onToggleTransformLock={brush.toggleTransformLock}

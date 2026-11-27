@@ -415,7 +415,7 @@ async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
     }
   }
 
-  const primaryRaw = cm.downloadUrl || sculpture?.modelGlbUrl || '';
+  const primaryRaw = cm.downloadUrl || cm.modelUrl || sculpture?.modelGlbUrl || '';
   const primaryUrl = primaryRaw ? resolveUrlFn(primaryRaw) : '';
   const proxyRaw = cm.proxyUrl || '';
   const proxyUrl = proxyRaw ? resolveUrlFn(proxyRaw) : '';
@@ -503,15 +503,21 @@ async function fetchModelArrayBufferWithFallback(sculpture, resolveUrlFn) {
 export async function loadCustomModelObject(
   sculpture,
   resolveUrlFn = (u) => u,
-  { maxAnisotropy = 8, applyCustomScale = true, meshStats = undefined } = {}
+  options = {}
 ) {
   const cm = sculpture?.customModel;
   if (!cm?.format) return null;
 
+  const effectiveResolveUrl =
+    typeof resolveUrlFn === 'function' ? resolveUrlFn : (u) => u;
+  const effectiveOptions =
+    resolveUrlFn && typeof resolveUrlFn === 'object' ? resolveUrlFn : options || {};
+  const { maxAnisotropy = 8, applyCustomScale = true, meshStats = undefined } = effectiveOptions;
+
   const format = String(cm.format || '').toLowerCase();
   const { arrayBuffer, resolvedUrl } = await fetchModelArrayBufferWithFallback(
     sculpture,
-    resolveUrlFn
+    effectiveResolveUrl
   );
   const basePath = resolvedUrl.includes('/')
     ? resolvedUrl.slice(0, resolvedUrl.lastIndexOf('/') + 1)
