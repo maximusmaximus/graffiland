@@ -964,6 +964,22 @@ export default function StudioHudTopBar({
           )}
         </button>
       )}
+
+      {!isInteractingWithLand && !dockOpen && typeof onOpenAgentHandoff === 'function' && (
+        <button
+          type="button"
+          className="floating-agent-prompt-btn hud-interactive"
+          data-testid="floating-agent-prompt-btn"
+          onClick={onOpenAgentHandoff}
+          aria-label="Copy AI Agent Prompt for this location"
+          title="Copy AI Agent Prompt — add to this land, claim new land, or engage like a human"
+        >
+          <XeroIcon emoji="📋" size={20} />
+          <span className="floating-agent-mini-badge" aria-hidden="true">
+            🤖
+          </span>
+        </button>
+      )}
     </>
   );
 }

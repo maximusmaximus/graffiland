@@ -211,18 +211,18 @@ describe('Mobile 3D Search Stability, Camera Hide on Search, and First-Time Came
     );
     assert.match(
       mobileStudioSrc,
-      /cameraHidden=\{Boolean\(catalogSearchOpen\)\}/,
-      'MobileStudio must pass cameraHidden={Boolean(catalogSearchOpen)} to ARViewportCanvas'
+      /cameraHidden=\{Boolean\(catalogSearchOpen \|\| drafts\.agentOpen\)\}/,
+      'MobileStudio must pass cameraHidden={Boolean(catalogSearchOpen || drafts.agentOpen)} to ARViewportCanvas'
     );
     assert.match(
       mobileStudioSrc,
-      /cameraSuspendedRef\.current = Boolean\(catalogSearchOpen\)/,
-      'MobileStudio must mark cameraSuspendedRef true while catalogSearchOpen is active'
+      /cameraSuspendedRef\.current = Boolean\(catalogSearchOpen \|\| drafts\.agentOpen\)/,
+      'MobileStudio must mark cameraSuspendedRef true while catalogSearchOpen or drafts.agentOpen is active'
     );
     assert.match(
       mobileStudioSrc,
-      /className=\{`hud-layer\$\{catalogSearchOpen \? ' is-camera-hidden' : ''\}`\}/,
-      'MobileStudio must hide the camera HUD layer while catalogSearchOpen is active'
+      /className=\{`hud-layer\$\{catalogSearchOpen \|\| drafts\.agentOpen \? ' is-camera-hidden' : ''\}`\}/,
+      'MobileStudio must hide the camera HUD layer while catalogSearchOpen or drafts.agentOpen is active'
     );
 
     const polSrc = fs.readFileSync(

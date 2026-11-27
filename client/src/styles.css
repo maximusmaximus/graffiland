@@ -332,6 +332,48 @@ select {
   z-index: 25;
 }
 
+.floating-agent-prompt-btn {
+  position: absolute;
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 10px)) + 58px);
+  right: max(16px, env(safe-area-inset-right));
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 245, 212, 0.55);
+  background: rgba(8, 14, 28, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 25;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.48), 0 0 12px rgba(0, 245, 212, 0.16);
+  transition: transform 0.14s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.floating-agent-prompt-btn:active {
+  transform: scale(0.94);
+  border-color: var(--accent);
+  background: rgba(0, 245, 212, 0.18);
+}
+
+.floating-agent-mini-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #0d1629;
+  border: 1.5px solid rgba(0, 245, 212, 0.72);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .floating-map-btn {
   position: absolute;
   bottom: max(18px, calc(env(safe-area-inset-bottom) + 10px));
@@ -1127,7 +1169,7 @@ select {
 /* AR Calibration Card (Front-and-Center during calibration/loss -> Bottom-Right Icon when locked) */
 .scene-scan-box {
   position: absolute;
-  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 64px);
+  bottom: calc(max(18px, calc(env(safe-area-inset-bottom) + 10px)) + 116px);
   right: max(14px, env(safe-area-inset-right));
   width: 204px;
   padding: 10px;
@@ -13874,6 +13916,7 @@ html.mobile-portrait-locked .key-carousel,
 html.mobile-portrait-locked .mobile-top-hud-left,
 html.mobile-portrait-locked .mobile-top-hud-right,
 html.mobile-portrait-locked .floating-map-btn,
+html.mobile-portrait-locked .floating-agent-prompt-btn,
 html.mobile-portrait-locked .floating-tools-toggle,
 html.mobile-portrait-locked .modal-backdrop {
   touch-action: none;
@@ -14870,7 +14913,8 @@ html.mobile-portrait-locked .mobile-map-sheet {
   pointer-events: none !important;
 }
 
-.modal-backdrop.mobile-catalog-search-backdrop.is-fullscreen-sheet {
+.modal-backdrop.mobile-catalog-search-backdrop.is-fullscreen-sheet,
+.modal-backdrop.mobile-agent-prompt-backdrop.is-fullscreen-sheet {
   position: fixed;
   inset: 0;
   padding: 0;
@@ -14883,7 +14927,8 @@ html.mobile-portrait-locked .mobile-map-sheet {
   overscroll-behavior: contain;
 }
 
-.mobile-catalog-search-backdrop.is-fullscreen-sheet .mobile-catalog-search-card {
+.mobile-catalog-search-backdrop.is-fullscreen-sheet .mobile-catalog-search-card,
+.mobile-agent-prompt-backdrop.is-fullscreen-sheet .mobile-agent-prompt-card {
   max-width: none;
   width: 100%;
   height: 100%;
@@ -14896,6 +14941,121 @@ html.mobile-portrait-locked .mobile-map-sheet {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.mobile-agent-prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-location-context-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 13px;
+  border-color: rgba(0, 245, 212, 0.34);
+  background: rgba(12, 22, 40, 0.85);
+}
+
+.agent-location-context-card.is-on-land {
+  border-color: rgba(0, 245, 212, 0.62);
+  background: rgba(8, 28, 36, 0.88);
+}
+
+.agent-location-context-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  color: #f8fafc;
+}
+
+.agent-location-context-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(203, 213, 225, 0.9);
+}
+
+.agent-location-context-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.agent-prompt-primary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-copy-prompt-cta {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.agent-copy-prompt-cta.is-copied {
+  background: linear-gradient(135deg, #10b981, #00f5d4);
+  color: #031317;
+  border-color: #6ee7b7;
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.42);
+}
+
+.agent-prompt-secondary-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-copy-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.6);
+  color: #d1fae5;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.agent-prompt-preview-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-prompt-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.agent-prompt-preview {
+  margin: 0;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: rgba(5, 8, 16, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 36dvh;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .mobile-catalog-search-header {

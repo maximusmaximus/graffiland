@@ -179,7 +179,6 @@ export default function MobileStudio({
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
   const cameraSuspendedRef = useRef(false);
-  cameraSuspendedRef.current = Boolean(catalogSearchOpen);
   const editingSculptureIdRef = useRef('');
   const fadeOtherItemsRef = useRef(false);
   const atmosphericTintRef = useRef(0x9dbcd8);
@@ -1025,15 +1024,20 @@ export default function MobileStudio({
     commitTransformAndExit: brush.commitTransformAndExit,
     stopBrushPainting: brush.stopBrushPainting,
     resetArtTransformState: brush.resetArtTransformState,
-    ensureToolUsable: brush.ensureToolUsable,
     captureSculptureSnapshot,
     setSensorBanner: pol.setSensorBanner,
     showTemporaryHint,
     drawActivity: brush.drawActivity,
     markDrawActivity: brush.markDrawActivity
   });
-  openAgentHandoffRef.current = drafts.openAgentHandoff;
+  const openAgentPromptModal = useCallback(() => {
+    markModalOpenedFromPointerUp();
+    setDockOpen(false);
+    drafts.openAgentHandoff();
+  }, [drafts]);
+  openAgentHandoffRef.current = openAgentPromptModal;
   openDraftsSheetRef.current = drafts.openDraftsSheet;
+  cameraSuspendedRef.current = Boolean(catalogSearchOpen || drafts.agentOpen);
 
   const lands = useLandManagement({
     user,
@@ -2047,9 +2051,10 @@ export default function MobileStudio({
             parcelVisit ||
             lands.landManageOpen ||
             ar.mapSelectedSculpture ||
-            catalogSearchOpen
+            catalogSearchOpen ||
+            drafts.agentOpen
         )}
-        cameraHidden={Boolean(catalogSearchOpen)}
+        cameraHidden={Boolean(catalogSearchOpen || drafts.agentOpen)}
         mode={brush.mode}
         modeRef={brush.modeRef}
         tool={brush.tool}
@@ -2110,8 +2115,8 @@ export default function MobileStudio({
       />
 
       <div
-        className={`hud-layer${catalogSearchOpen ? ' is-camera-hidden' : ''}`}
-        aria-hidden={catalogSearchOpen || undefined}
+        className={`hud-layer${catalogSearchOpen || drafts.agentOpen ? ' is-camera-hidden' : ''}`}
+        aria-hidden={catalogSearchOpen || drafts.agentOpen || undefined}
       >
         <StudioHudTopBar
           user={user}
@@ -2134,7 +2139,7 @@ export default function MobileStudio({
           openPairHubSignal={openPairHubSignal}
           onCreateMcpPairing={pairing.handleCreateMcpPairing}
           onDisconnectMcpPairing={pairing.handleDisconnectMcpPairing}
-          onOpenAgentHandoff={drafts.openAgentHandoff}
+          onOpenAgentHandoff={openAgentPromptModal}
           onOpenLogin={() => setLoginOpen(true)}
           voxels={brush.voxels}
           onOpenTutorial={() => setTutorialOpen(true)}
@@ -2554,7 +2559,12 @@ export default function MobileStudio({
           agentSession={drafts.agentSession}
           agentCopied={drafts.agentCopied}
           setAgentCopied={drafts.setAgentCopied}
+          location={pol.location}
+          activeLand={activeInsideLand}
+          pairingCode={pairing.mcpPairingsState?.activePairing?.code || ''}
+          onRetryGenerateSession={openAgentPromptModal}
           onRefreshAgentDraft={drafts.refreshAgentDraft}
+          onNotifyCopied={showTemporaryHint}
           onInspectInAR={() => {
             drafts.applyAgentSessionDraft(drafts.agentSession);
             drafts.setAgentOpen(false);
