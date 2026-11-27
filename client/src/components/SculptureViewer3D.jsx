@@ -11,7 +11,7 @@ import {
   yawToRadians
 } from '../../../shared/sculpturePlacement.mjs';
 import { formatShortLength } from '../utils/measurementUnits.js';
-import { resolveApiUrl } from '../utils/api.js';
+import { api, resolveApiUrl } from '../utils/api.js';
 import {
   enforceCrispTexturesAndShading,
   loadCustomModelObject
@@ -48,6 +48,85 @@ function normalizeYawDeg(deg) {
   return Math.round(d);
 }
 
+function applyGhostMaterialToObject3D(
+  rootObj,
+  { tintHex = 0x60a5fa, opacity = 0.36, emissiveIntensity = 0.32 } = {}
+) {
+  const ghostMaterials = [];
+  if (!rootObj) return ghostMaterials;
+  const tintColor = new THREE.Color(tintHex);
+
+  const convertMat = (orig) => {
+    const baseColor = orig?.color?.clone ? orig.color.clone() : new THREE.Color(0xcbd5e1);
+    baseColor.lerp(tintColor, 0.38);
+    const ghostMat = new THREE.MeshStandardMaterial({
+      color: baseColor,
+      map: orig?.map || null,
+      alphaMap: orig?.alphaMap || null,
+      vertexColors: Boolean(orig?.vertexColors),
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      emissive: tintColor.clone(),
+      emissiveIntensity,
+      roughness: 0.45,
+      metalness: 0.08,
+      side: THREE.DoubleSide
+    });
+    ghostMaterials.push(ghostMat);
+    return ghostMat;
+  };
+
+  rootObj.traverse((node) => {
+    if (!node?.isMesh) return;
+    node.castShadow = false;
+    node.receiveShadow = false;
+    node.renderOrder = 2;
+    const prevMat = node.material;
+    if (Array.isArray(prevMat)) {
+      node.material = prevMat.map((m) => {
+        const next = convertMat(m);
+        if (m && typeof m.dispose === 'function') m.dispose();
+        return next;
+      });
+    } else if (prevMat) {
+      node.material = convertMat(prevMat);
+      if (typeof prevMat.dispose === 'function') prevMat.dispose();
+    } else {
+      node.material = convertMat(null);
+    }
+  });
+  return ghostMaterials;
+}
+
+function updateGhostMaterialsStyle(materials, { tintHex, opacity, emissiveIntensity }) {
+  if (!Array.isArray(materials) || materials.length === 0) return;
+  for (const mat of materials) {
+    if (!mat) continue;
+    if (mat.emissive && tintHex !== undefined) {
+      mat.emissive.setHex(tintHex);
+    }
+    if (opacity !== undefined) {
+      mat.opacity = opacity;
+    }
+    if (emissiveIntensity !== undefined) {
+      mat.emissiveIntensity = emissiveIntensity;
+    }
+  }
+}
+
+function buildSiblingGeometrySignature(sib) {
+  const sc = sib?.sculpture || null;
+  if (!sc) return `${sib?.id || ''}|box`;
+  const fmt = sc.customModel?.format || '';
+  const cid = sc.customModel?.ipfsCid || '';
+  const dl = sc.customModel?.downloadUrl || sc.modelGlbUrl || '';
+  const rotY = Number(sc.customModel?.rotationY || 0);
+  const voxLen = Array.isArray(sc.voxels) ? sc.voxels.length : 0;
+  const voxCnt = Number(sc.voxelCount || 0);
+  return `${sc.id || sib.id}|${fmt}|${cid}|${dl}|${rotY}|${voxLen}|${voxCnt}`;
+}
+
 export default function SculptureViewer3D({
   sculpture = null,
   voxels = [],
@@ -72,7 +151,10 @@ export default function SculptureViewer3D({
   cornerTopRight = null,
   cornerBottomLeft = null,
   onModelBoundsMeasured = null,
-  onTransformChange = null
+  onTransformStart = null,
+  onTransformChange = null,
+  onSelectSibling = null,
+  switchingSiblingId = ''
 }) {
   const hostRef = useRef(null);
   const groupRef = useRef(null);
@@ -80,6 +162,9 @@ export default function SculptureViewer3D({
   const modelContentRef = useRef(null);
   const landOverlayRef = useRef(null);
   const siblingOverlayRef = useRef(null);
+  const siblingGhostGroupRef = useRef(null);
+  const siblingGhostEntriesRef = useRef(new Map());
+  const siblingHitMeshesRef = useRef([]);
   const gizmoOverlayRef = useRef(null);
   const gizmoHitMeshesRef = useRef([]);
   const cursorRef = useRef(null);
@@ -103,14 +188,22 @@ export default function SculptureViewer3D({
   isometricFocusRef.current = isometricFocus;
   const [gizmoStatusText, setGizmoStatusText] = useState('');
   const [modelBoundsVersion, setModelBoundsVersion] = useState(0);
+  const [ghostMeshVersion, setGhostMeshVersion] = useState(0);
+  const [hoveredSibling, setHoveredSibling] = useState(null);
+  const hoveredSiblingRef = useRef(null);
+  hoveredSiblingRef.current = hoveredSibling;
   const [modelStatus, setModelStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'error'
   const [modelErrorMsg, setModelErrorMsg] = useState('');
   const [dblClickFocusTick, setDblClickFocusTick] = useState(0);
 
   const onModelBoundsMeasuredRef = useRef(onModelBoundsMeasured);
   onModelBoundsMeasuredRef.current = onModelBoundsMeasured;
+  const onTransformStartRef = useRef(onTransformStart);
+  onTransformStartRef.current = onTransformStart;
   const onTransformChangeRef = useRef(onTransformChange);
   onTransformChangeRef.current = onTransformChange;
+  const onSelectSiblingRef = useRef(onSelectSibling);
+  onSelectSiblingRef.current = onSelectSibling;
   const liveTransformRef = useRef(liveTransform);
   liveTransformRef.current = liveTransform;
   const showEditGizmoRef = useRef(showEditGizmo);
@@ -228,6 +321,10 @@ export default function SculptureViewer3D({
     const siblingOverlay = new THREE.Group();
     scene.add(siblingOverlay);
 
+    const siblingGhostGroup = new THREE.Group();
+    scene.add(siblingGhostGroup);
+    const siblingGhostEntries = siblingGhostEntriesRef.current;
+
     const gizmoOverlay = new THREE.Group();
     scene.add(gizmoOverlay);
 
@@ -243,6 +340,7 @@ export default function SculptureViewer3D({
     modelContentRef.current = modelContent;
     landOverlayRef.current = landOverlay;
     siblingOverlayRef.current = siblingOverlay;
+    siblingGhostGroupRef.current = siblingGhostGroup;
     gizmoOverlayRef.current = gizmoOverlay;
     cursorRef.current = cursorMesh;
     cameraRef.current = camera;
@@ -251,12 +349,13 @@ export default function SculptureViewer3D({
     shadowGroundRef.current = shadowGround;
     keyLightRef.current = keyLight;
 
-    // Interactive 3D Artwork Gizmo Pointer Dragging (Scale corners, Move side bars, Rotate vertical bars, Height top ball)
+    // Interactive 3D Artwork Gizmo Pointer Dragging + Clickable Scene Ghost Selection
     const raycaster = new THREE.Raycaster();
     const pointerNdc = new THREE.Vector2();
     const dragPlane = new THREE.Plane();
     const hitPoint = new THREE.Vector3();
     let dragState = null;
+    let pendingGhostClick = null;
 
     const toNdc = (evt) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -274,105 +373,167 @@ export default function SculptureViewer3D({
       return '';
     };
 
-    const onPointerDown = (evt) => {
-      if (!showEditGizmoRef.current || !onTransformChangeRef.current) return;
-      const targets = gizmoHitMeshesRef.current;
-      if (!targets || targets.length === 0) return;
-      if (!toNdc(evt)) return;
-
-      raycaster.setFromCamera(pointerNdc, camera);
-      const hits = raycaster.intersectObjects(targets, false);
-      if (!hits || hits.length === 0) return;
-
-      const hit = hits[0];
-      const role = hit.object?.userData?.gizmoRole;
-      if (!role) return;
-
-      evt.stopPropagation();
-      const lt = liveTransformRef.current || {};
-      const startDx = Number(lt.dx || 0);
-      const startDy = Math.max(0, Number(lt.dy || 0));
-      const startDz = Number(lt.dz || 0);
-      const startYaw = Number(lt.yaw || 0);
-      const startScale = Math.max(
-        0.001,
-        Number(lt.scale ?? extractSculptureScale(sculptureRef.current) ?? 1)
-      );
-      const baseX = showLandBoundsRef.current ? Number(lt.baseX || 0) : 0;
-      const baseZ = showLandBoundsRef.current ? Number(lt.baseZ || 0) : 0;
-      const pivotX = showLandBoundsRef.current ? baseX + startDx : 0;
-      const pivotY = showLandBoundsRef.current ? startDy : 0;
-      const pivotZ = showLandBoundsRef.current ? baseZ + startDz : 0;
-
-      if (role === 'height') {
-        const camDir = new THREE.Vector3();
-        camera.getWorldDirection(camDir);
-        camDir.y = 0;
-        if (camDir.lengthSq() < 1e-4) camDir.set(0, 0, 1);
-        camDir.normalize();
-        dragPlane.setFromNormalAndCoplanarPoint(camDir, new THREE.Vector3(pivotX, hit.point.y, pivotZ));
-      } else {
-        dragPlane.setFromNormalAndCoplanarPoint(
-          new THREE.Vector3(0, 1, 0),
-          new THREE.Vector3(pivotX, pivotY, pivotZ)
-        );
-      }
-
-      const startPt = new THREE.Vector3();
-      if (!raycaster.ray.intersectPlane(dragPlane, startPt)) {
-        startPt.copy(hit.point);
-      }
-
-      const startDist = Math.hypot(startPt.x - pivotX, startPt.z - pivotZ);
-      const startAngle = Math.atan2(startPt.x - pivotX, startPt.z - pivotZ);
-
-      dragState = {
-        pointerId: evt.pointerId,
-        role,
-        startDx,
-        startDy,
-        startDz,
-        startYaw,
-        startScale,
-        pivotX,
-        pivotY,
-        pivotZ,
-        startPt: startPt.clone(),
-        startDist: Math.max(0.15, startDist),
-        startAngle
+    const pickSiblingGhostHit = () => {
+      if (!showLandBoundsRef.current) return null;
+      const ghostTargets = siblingHitMeshesRef.current;
+      if (!ghostTargets || ghostTargets.length === 0) return null;
+      const ghostHits = raycaster.intersectObjects(ghostTargets, false);
+      const ud = ghostHits?.[0]?.object?.userData;
+      if (!ud?.siblingId) return null;
+      return {
+        id: ud.siblingId,
+        title: ud.siblingTitle || 'Artwork',
+        canEdit: Boolean(ud.canEdit)
       };
+    };
 
-      controls.enabled = false;
-      controls.autoRotate = false;
-      try {
-        renderer.domElement.setPointerCapture(evt.pointerId);
-      } catch {
-        // ignore if unsupported in headless env
+    const updateHoveredSibling = (nextHover) => {
+      const prev = hoveredSiblingRef.current;
+      if (
+        (prev?.id || '') === (nextHover?.id || '') &&
+        Boolean(prev?.canEdit) === Boolean(nextHover?.canEdit)
+      ) {
+        return;
       }
-      renderer.domElement.style.cursor = role === 'rotate' ? 'grabbing' : getGizmoCursor(role);
-      setGizmoStatusText(
-        role === 'scale'
-          ? `Scaling: ${startScale.toFixed(2)}×`
-          : role === 'move'
-          ? `Moving: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
-          : role === 'rotate'
-          ? `Rotating: ${Math.round(startYaw)}°`
-          : `Height: ${startDy.toFixed(2)}m`
-      );
+      hoveredSiblingRef.current = nextHover;
+      setHoveredSibling(nextHover);
+    };
+
+    const onPointerDown = (evt) => {
+      pendingGhostClick = null;
+      if (!toNdc(evt)) return;
+      raycaster.setFromCamera(pointerNdc, camera);
+
+      // 1) Gizmo handles always take priority over ghost clicking
+      if (showEditGizmoRef.current && onTransformChangeRef.current) {
+        const targets = gizmoHitMeshesRef.current;
+        if (targets && targets.length > 0) {
+          const hits = raycaster.intersectObjects(targets, false);
+          const hit = hits?.[0];
+          const role = hit?.object?.userData?.gizmoRole;
+          if (role) {
+            evt.stopPropagation();
+            onTransformStartRef.current?.(role);
+            const lt = liveTransformRef.current || {};
+            const startDx = Number(lt.dx || 0);
+            const startDy = Math.max(0, Number(lt.dy || 0));
+            const startDz = Number(lt.dz || 0);
+            const startYaw = Number(lt.yaw || 0);
+            const startScale = Math.max(
+              0.001,
+              Number(lt.scale ?? extractSculptureScale(sculptureRef.current) ?? 1)
+            );
+            const baseX = showLandBoundsRef.current ? Number(lt.baseX || 0) : 0;
+            const baseZ = showLandBoundsRef.current ? Number(lt.baseZ || 0) : 0;
+            const pivotX = showLandBoundsRef.current ? baseX + startDx : 0;
+            const pivotY = showLandBoundsRef.current ? startDy : 0;
+            const pivotZ = showLandBoundsRef.current ? baseZ + startDz : 0;
+
+            if (role === 'height') {
+              const camDir = new THREE.Vector3();
+              camera.getWorldDirection(camDir);
+              camDir.y = 0;
+              if (camDir.lengthSq() < 1e-4) camDir.set(0, 0, 1);
+              camDir.normalize();
+              dragPlane.setFromNormalAndCoplanarPoint(
+                camDir,
+                new THREE.Vector3(pivotX, hit.point.y, pivotZ)
+              );
+            } else {
+              dragPlane.setFromNormalAndCoplanarPoint(
+                new THREE.Vector3(0, 1, 0),
+                new THREE.Vector3(pivotX, pivotY, pivotZ)
+              );
+            }
+
+            const startPt = new THREE.Vector3();
+            if (!raycaster.ray.intersectPlane(dragPlane, startPt)) {
+              startPt.copy(hit.point);
+            }
+
+            const startDist = Math.hypot(startPt.x - pivotX, startPt.z - pivotZ);
+            const startAngle = Math.atan2(startPt.x - pivotX, startPt.z - pivotZ);
+
+            dragState = {
+              pointerId: evt.pointerId,
+              role,
+              startDx,
+              startDy,
+              startDz,
+              startYaw,
+              startScale,
+              pivotX,
+              pivotY,
+              pivotZ,
+              startPt: startPt.clone(),
+              startDist: Math.max(0.15, startDist),
+              startAngle
+            };
+
+            controls.enabled = false;
+            controls.autoRotate = false;
+            try {
+              renderer.domElement.setPointerCapture(evt.pointerId);
+            } catch {
+              // ignore if unsupported in headless env
+            }
+            renderer.domElement.style.cursor = role === 'rotate' ? 'grabbing' : getGizmoCursor(role);
+            setGizmoStatusText(
+              role === 'scale'
+                ? `Scaling: ${startScale.toFixed(2)}×`
+                : role === 'move'
+                ? `Moving: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
+                : role === 'rotate'
+                ? `Rotating: ${Math.round(startYaw)}°`
+                : `Height: ${startDy.toFixed(2)}m`
+            );
+            return;
+          }
+        }
+      }
+
+      // 2) Candidate click on an editable scene ghost (still allows camera orbit if dragged >= 6px)
+      if (evt.button === 0 && onSelectSiblingRef.current) {
+        const ghostHit = pickSiblingGhostHit();
+        if (ghostHit?.canEdit) {
+          pendingGhostClick = {
+            pointerId: evt.pointerId,
+            siblingId: ghostHit.id,
+            clientX: evt.clientX,
+            clientY: evt.clientY
+          };
+        }
+      }
     };
 
     const onPointerMove = (evt) => {
-      if (!showEditGizmoRef.current) return;
       if (!toNdc(evt)) return;
       raycaster.setFromCamera(pointerNdc, camera);
 
       if (!dragState) {
-        const targets = gizmoHitMeshesRef.current;
-        if (targets && targets.length > 0) {
-          const hits = raycaster.intersectObjects(targets, false);
-          const role = hits?.[0]?.object?.userData?.gizmoRole || '';
-          renderer.domElement.style.cursor = role ? getGizmoCursor(role) : '';
+        if (pendingGhostClick) {
+          const moved = Math.hypot(
+            evt.clientX - pendingGhostClick.clientX,
+            evt.clientY - pendingGhostClick.clientY
+          );
+          if (moved >= 6) pendingGhostClick = null;
         }
+        if (showEditGizmoRef.current) {
+          const targets = gizmoHitMeshesRef.current;
+          if (targets && targets.length > 0) {
+            const hits = raycaster.intersectObjects(targets, false);
+            const role = hits?.[0]?.object?.userData?.gizmoRole || '';
+            if (role) {
+              updateHoveredSibling(null);
+              renderer.domElement.style.cursor = getGizmoCursor(role);
+              return;
+            }
+          }
+        }
+        const ghostHit = pickSiblingGhostHit();
+        updateHoveredSibling(ghostHit);
+        renderer.domElement.style.cursor =
+          ghostHit?.canEdit && onSelectSiblingRef.current ? 'pointer' : '';
         return;
       }
 
@@ -419,7 +580,20 @@ export default function SculptureViewer3D({
       }
     };
 
-    const endDrag = () => {
+    const endDrag = (evt) => {
+      if (pendingGhostClick && evt?.type === 'pointerup') {
+        const moved = Math.hypot(
+          (evt.clientX ?? pendingGhostClick.clientX) - pendingGhostClick.clientX,
+          (evt.clientY ?? pendingGhostClick.clientY) - pendingGhostClick.clientY
+        );
+        const clickedSiblingId = pendingGhostClick.siblingId;
+        pendingGhostClick = null;
+        if (moved < 6 && clickedSiblingId) {
+          onSelectSiblingRef.current?.(clickedSiblingId);
+        }
+      } else {
+        pendingGhostClick = null;
+      }
       if (!dragState) return;
       try {
         renderer.domElement.releasePointerCapture(dragState.pointerId);
@@ -430,6 +604,12 @@ export default function SculptureViewer3D({
       controls.enabled = true;
       renderer.domElement.style.cursor = '';
       setGizmoStatusText('');
+    };
+
+    const onPointerLeave = () => {
+      pendingGhostClick = null;
+      updateHoveredSibling(null);
+      if (!dragState) renderer.domElement.style.cursor = '';
     };
 
     const onDoubleClick = (evt) => {
@@ -448,6 +628,7 @@ export default function SculptureViewer3D({
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', endDrag);
     renderer.domElement.addEventListener('pointercancel', endDrag);
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave);
     renderer.domElement.addEventListener('dblclick', onDoubleClick);
 
     const handleResize = () => {
@@ -485,10 +666,14 @@ export default function SculptureViewer3D({
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', endDrag);
       renderer.domElement.removeEventListener('pointercancel', endDrag);
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
       renderer.domElement.removeEventListener('dblclick', onDoubleClick);
       clearGroup(modelContent);
       clearGroup(landOverlay);
       clearGroup(siblingOverlay);
+      clearGroup(siblingGhostGroup);
+      siblingGhostEntries.clear();
+      siblingHitMeshesRef.current = [];
       clearGroup(gizmoOverlay);
       gizmoHitMeshesRef.current = [];
       controls.dispose();
@@ -505,6 +690,7 @@ export default function SculptureViewer3D({
       modelContentRef.current = null;
       landOverlayRef.current = null;
       siblingOverlayRef.current = null;
+      siblingGhostGroupRef.current = null;
       gizmoOverlayRef.current = null;
     };
   }, []);
@@ -586,7 +772,156 @@ export default function SculptureViewer3D({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scId, scFormat, scCid, scDownloadUrl, scRotY, voxels, liveCursor]);
 
-  // Fast 60fps transform, land-bounds wireframe, sibling collision boxes & 3D artwork gizmo bars/points
+  // Load real 3D translucent ghost meshes ONCE per sibling set (never reloads during slider/gizmo drags)
+  const siblingSignaturesKey = (siblingBoxes || [])
+    .map((sib) => buildSiblingGeometrySignature(sib))
+    .join('||');
+  const siblingBoxesForLoadRef = useRef(siblingBoxes);
+  siblingBoxesForLoadRef.current = siblingBoxes;
+
+  useEffect(() => {
+    const ghostGroup = siblingGhostGroupRef.current;
+    if (!ghostGroup) return undefined;
+    const entries = siblingGhostEntriesRef.current;
+
+    if (!showLandBounds) {
+      ghostGroup.visible = false;
+      return undefined;
+    }
+    ghostGroup.visible = true;
+
+    const currentSibs = Array.isArray(siblingBoxesForLoadRef.current)
+      ? siblingBoxesForLoadRef.current
+      : [];
+    const wantedById = new Map();
+    for (const sib of currentSibs) {
+      if (!sib?.id) continue;
+      wantedById.set(sib.id, { sib, sig: buildSiblingGeometrySignature(sib) });
+    }
+
+    // Dispose removed or changed siblings
+    for (const [id, entry] of entries.entries()) {
+      const wanted = wantedById.get(id);
+      if (!wanted || wanted.sig !== entry.signature) {
+        entry.disposed = true;
+        ghostGroup.remove(entry.pivot);
+        disposeObject3D(entry.pivot);
+        entries.delete(id);
+      }
+    }
+
+    let cancelled = false;
+    const attachVoxelGhost = (entry, rawVoxels) => {
+      if (cancelled || entry.disposed) return;
+      if (!Array.isArray(rawVoxels) || rawVoxels.length === 0) return;
+      const voxGroup = buildVoxelGroup(rawVoxels);
+      const rawBox = new THREE.Box3().setFromObject(voxGroup);
+      if (rawBox.isEmpty()) {
+        disposeObject3D(voxGroup);
+        return;
+      }
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      rawBox.getSize(size);
+      rawBox.getCenter(center);
+      voxGroup.position.set(-center.x, -rawBox.min.y, -center.z);
+      const ghostMaterials = applyGhostMaterialToObject3D(voxGroup, {
+        tintHex: 0x60a5fa,
+        opacity: 0.36,
+        emissiveIntensity: 0.32
+      });
+      clearGroup(entry.content);
+      entry.content.add(voxGroup);
+      entry.ghostMaterials = ghostMaterials;
+      entry.baseSize = {
+        width: Math.max(0.08, Math.round(size.x * 10000) / 10000),
+        height: Math.max(0.08, Math.round(size.y * 10000) / 10000),
+        depth: Math.max(0.08, Math.round(size.z * 10000) / 10000)
+      };
+      entry.hasRealMesh = true;
+      setGhostMeshVersion((v) => v + 1);
+    };
+
+    for (const [id, { sib, sig }] of wantedById.entries()) {
+      if (entries.has(id)) continue;
+      const sibSc = sib.sculpture || null;
+      const pivot = new THREE.Group();
+      const rotator = new THREE.Group();
+      rotator.rotation.order = 'YXZ';
+      const content = new THREE.Group();
+      rotator.add(content);
+      pivot.add(rotator);
+      pivot.visible = false;
+      ghostGroup.add(pivot);
+
+      const entry = {
+        id,
+        signature: sig,
+        pivot,
+        rotator,
+        content,
+        ghostMaterials: [],
+        baseSize: extractSculptureBaseDimensions(sibSc),
+        hasRealMesh: false,
+        disposed: false
+      };
+      entries.set(id, entry);
+
+      const sibFormat = sibSc?.customModel?.format || '';
+      if (sibFormat && sibSc) {
+        loadCustomModelObject(sibSc, resolveApiUrl, {
+          maxAnisotropy: Math.min(4, maxAnisotropyRef.current),
+          applyCustomScale: false
+        })
+          .then((loaded) => {
+            if (cancelled || entry.disposed || !loaded?.object3d) {
+              if (loaded?.object3d) disposeObject3D(loaded.object3d);
+              return;
+            }
+            const ghostMaterials = applyGhostMaterialToObject3D(loaded.object3d, {
+              tintHex: 0x60a5fa,
+              opacity: 0.36,
+              emissiveIntensity: 0.32
+            });
+            clearGroup(entry.content);
+            entry.content.add(loaded.object3d);
+            entry.ghostMaterials = ghostMaterials;
+            entry.baseSize = loaded.baseSize || entry.baseSize;
+            entry.hasRealMesh = true;
+            setGhostMeshVersion((v) => v + 1);
+          })
+          .catch(() => {
+            // Keep translucent ghost bounding volume fallback
+          });
+      } else if (Array.isArray(sibSc?.voxels) && sibSc.voxels.length > 0) {
+        attachVoxelGhost(entry, sibSc.voxels);
+      } else if (sibSc?.id && Number(sibSc.voxelCount || 0) > 0) {
+        api
+          .getSculpture(sibSc.id)
+          .then((res) => {
+            if (cancelled || entry.disposed) return;
+            if (Array.isArray(res?.sculpture?.voxels) && res.sculpture.voxels.length > 0) {
+              attachVoxelGhost(entry, res.sculpture.voxels);
+            }
+          })
+          .catch(() => {});
+      }
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [siblingSignaturesKey, showLandBounds]);
+
+  // Clear hover badge if hovered sibling disappears or becomes the active edited sculpture
+  useEffect(() => {
+    if (!hoveredSibling?.id) return;
+    if (!showLandBounds || !(siblingBoxes || []).some((s) => s.id === hoveredSibling.id)) {
+      setHoveredSibling(null);
+    }
+  }, [hoveredSibling?.id, showLandBounds, siblingBoxes]);
+
+  // Fast 60fps transform, land-bounds wireframe, sibling ghost transforms & 3D artwork gizmo bars/points
   useEffect(() => {
     const pivot = groupRef.current;
     const rotator = modelRotatorRef.current;
@@ -633,6 +968,7 @@ export default function SculptureViewer3D({
     clearGroup(siblingOverlay);
     clearGroup(gizmoOverlay);
     gizmoHitMeshesRef.current = [];
+    siblingHitMeshesRef.current = [];
 
     const hasLand =
       showLandBounds &&
@@ -640,6 +976,9 @@ export default function SculptureViewer3D({
       Number(parcelVolume.widthMeters) > 0 &&
       Number(parcelVolume.depthMeters) > 0 &&
       Number(parcelVolume.heightMeters) > 0;
+    if (siblingGhostGroupRef.current) {
+      siblingGhostGroupRef.current.visible = Boolean(hasLand);
+    }
 
     if (controlsRef.current) {
       controlsRef.current.autoRotate = hasLand || showEditGizmo ? false : autoRotate;
@@ -963,37 +1302,159 @@ export default function SculptureViewer3D({
       landOverlay.add(targetFootLine);
     }
 
-    // 2) Sibling Artworks on the Same Land (highlighted gold when gently pushed, red if blocking)
+    // 2) Sibling Artworks on the Same Land — Real 3D Ghost Meshes + Click-to-Edit Hit Volumes
+    const ghostHitList = [];
+    const ghostHitMat = new THREE.MeshBasicMaterial({ visible: false });
+    const hoveredSibId = hoveredSibling?.id || '';
+    const ghostEntries = siblingGhostEntriesRef.current;
+    const activeSiblingIds = new Set();
+
     for (const sib of siblingBoxes || []) {
       const b = sib?.box;
       if (!b) continue;
-      const sw = Math.max(0.12, Number(b.effW || 0.5));
-      const sh = Math.max(0.12, Number(b.effH || 0.5));
-      const sd = Math.max(0.12, Number(b.effD || 0.5));
-      const sibColor = sib.isColliding ? 0xff4d6d : sib.wasPushed ? 0xffd166 : 0x60a5fa;
+      activeSiblingIds.add(sib.id);
+      const sw = Math.max(0.18, Number(b.effW || 0.5));
+      const sh = Math.max(0.18, Number(b.effH || 0.5));
+      const sd = Math.max(0.18, Number(b.effD || 0.5));
+      const isHovered = hoveredSibId === sib.id;
+      const canEditSib = Boolean(sib.canEdit);
+      const sibColor = sib.isColliding
+        ? 0xff4d6d
+        : sib.wasPushed
+        ? 0xffd166
+        : isHovered && canEditSib
+        ? 0x00f5d4
+        : canEditSib
+        ? 0x60a5fa
+        : 0x94a3b8;
+      const ghostOpacity = sib.isColliding
+        ? 0.56
+        : isHovered
+        ? canEditSib
+          ? 0.62
+          : 0.44
+        : sib.wasPushed
+        ? 0.48
+        : canEditSib
+        ? 0.36
+        : 0.24;
 
-      const sGeo = new THREE.BoxGeometry(sw, sh, sd);
-      const sMesh = new THREE.Mesh(
-        sGeo,
-        new THREE.MeshStandardMaterial({
-          color: sibColor,
-          transparent: true,
-          opacity: sib.wasPushed || sib.isColliding ? 0.36 : 0.22,
-          roughness: 0.4,
-          metalness: 0.1
-        })
-      );
-      sMesh.position.set(b.cx, b.cy, b.cz);
-      siblingOverlay.add(sMesh);
+      const entry = ghostEntries.get(sib.id);
+      if (entry && entry.hasRealMesh) {
+        const sibSc = sib.sculpture || null;
+        const sibRot = extractSculptureRotation(sibSc);
+        const sibScale = Math.max(
+          0.001,
+          Number(sib.scale ?? extractSculptureScale(sibSc) ?? 1)
+        );
+        const sibYawDeg = sib.yaw !== undefined ? Number(sib.yaw) : sibRot.yaw;
+        const sibPitchDeg = sib.pitch !== undefined ? Number(sib.pitch) : sibRot.pitch;
+        const sibRollDeg = sib.roll !== undefined ? Number(sib.roll) : sibRot.roll;
+        const sibBase = entry.baseSize || { width: 1, height: 1, depth: 1 };
+        const sibUnscaledRot = computeRotatedBoxDimensions({
+          width: sibBase.width,
+          height: sibBase.height,
+          depth: sibBase.depth,
+          yaw: 0,
+          pitch: sibPitchDeg,
+          roll: sibRollDeg,
+          scale: 1
+        });
+        entry.content.position.set(0, -sibBase.height / 2, 0);
+        entry.rotator.rotation.order = 'YXZ';
+        entry.rotator.rotation.set(
+          tiltToRadians(sibPitchDeg),
+          yawToRadians(sibYawDeg),
+          tiltToRadians(sibRollDeg)
+        );
+        entry.rotator.position.set(0, sibUnscaledRot.effH / 2, 0);
+        entry.pivot.scale.setScalar(sibScale);
+        entry.pivot.position.set(b.cx, Math.max(0, Number(b.minY ?? 0)), b.cz);
+        entry.pivot.visible = true;
 
-      const sEdges = new THREE.EdgesGeometry(sGeo);
-      const sWire = new THREE.LineSegments(
-        sEdges,
-        new THREE.LineBasicMaterial({ color: sibColor, transparent: true, opacity: 0.95 })
+        updateGhostMaterialsStyle(entry.ghostMaterials, {
+          tintHex: sibColor,
+          opacity: ghostOpacity,
+          emissiveIntensity: isHovered ? 0.58 : sib.wasPushed || sib.isColliding ? 0.45 : 0.28
+        });
+
+        // Subtle footprint outline (or full wireframe highlight on hover / push / collision)
+        if (isHovered || sib.wasPushed || sib.isColliding) {
+          const highlightGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(sw, sh, sd));
+          const highlightWire = new THREE.LineSegments(
+            highlightGeo,
+            new THREE.LineBasicMaterial({
+              color: sibColor,
+              transparent: true,
+              opacity: isHovered ? 0.96 : 0.85
+            })
+          );
+          highlightWire.position.set(b.cx, b.cy, b.cz);
+          siblingOverlay.add(highlightWire);
+        } else {
+          const footGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(sw, 0.03, sd));
+          const footWire = new THREE.LineSegments(
+            footGeo,
+            new THREE.LineBasicMaterial({
+              color: sibColor,
+              transparent: true,
+              opacity: canEditSib ? 0.55 : 0.3
+            })
+          );
+          footWire.position.set(b.cx, Math.max(0.015, Number(b.minY ?? 0) + 0.015), b.cz);
+          siblingOverlay.add(footWire);
+        }
+      } else {
+        if (entry) entry.pivot.visible = false;
+        const sGeo = new THREE.BoxGeometry(sw, sh, sd);
+        const sMesh = new THREE.Mesh(
+          sGeo,
+          new THREE.MeshStandardMaterial({
+            color: sibColor,
+            transparent: true,
+            opacity: isHovered ? 0.42 : sib.wasPushed || sib.isColliding ? 0.34 : 0.2,
+            depthWrite: false,
+            roughness: 0.4,
+            metalness: 0.1
+          })
+        );
+        sMesh.position.set(b.cx, b.cy, b.cz);
+        siblingOverlay.add(sMesh);
+
+        const sEdges = new THREE.EdgesGeometry(sGeo);
+        const sWire = new THREE.LineSegments(
+          sEdges,
+          new THREE.LineBasicMaterial({
+            color: sibColor,
+            transparent: true,
+            opacity: isHovered ? 1 : 0.78
+          })
+        );
+        sWire.position.set(b.cx, b.cy, b.cz);
+        siblingOverlay.add(sWire);
+      }
+
+      // Raycast hit volume for click-to-edit on ghost objects
+      const hitMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(sw * 1.06, sh * 1.06, sd * 1.06),
+        ghostHitMat
       );
-      sWire.position.set(b.cx, b.cy, b.cz);
-      siblingOverlay.add(sWire);
+      hitMesh.position.set(b.cx, b.cy, b.cz);
+      hitMesh.userData = {
+        siblingId: sib.id,
+        siblingTitle: sib.title || 'Artwork',
+        canEdit: canEditSib
+      };
+      siblingOverlay.add(hitMesh);
+      ghostHitList.push(hitMesh);
     }
+
+    for (const [id, entry] of ghostEntries.entries()) {
+      if (!activeSiblingIds.has(id)) {
+        entry.pivot.visible = false;
+      }
+    }
+    siblingHitMeshesRef.current = ghostHitList;
 
     // Scale grid & shadow plane to land volume
     const maxHoriz = Math.max(volW, volD, 6);
@@ -1121,7 +1582,9 @@ export default function SculptureViewer3D({
     liveCursor,
     height,
     fillHeight,
-    modelBoundsVersion
+    modelBoundsVersion,
+    ghostMeshVersion,
+    hoveredSibling?.id
   ]);
 
   useEffect(() => {
@@ -1180,6 +1643,7 @@ export default function SculptureViewer3D({
       data-model-status={modelStatus}
       data-model-format={scFormat || 'voxel'}
       data-measured-height-m={hudDims.effH.toFixed(3)}
+      data-ghost-count={showLandBounds ? (siblingBoxes || []).length : 0}
       style={{
         position: 'relative',
         width: '100%',
@@ -1249,22 +1713,83 @@ export default function SculptureViewer3D({
         </div>
       )}
 
-      {/* Bottom-Left Corner: Camera Focus (Model / Land), Bounds & Gizmo quick controls */}
-      {cornerBottomLeft && (
+      {/* Bottom-Left Corner: Scene Ghost Siblings + Camera Focus / Bounds / Gizmo controls */}
+      {(cornerBottomLeft || (showLandBounds && (siblingBoxes || []).length > 0)) && (
         <div className="viewer-corner-stack is-bottom-left" data-testid="sculpture-viewer-corner-bl">
+          {showLandBounds && (siblingBoxes || []).length > 0 && (
+            <div
+              className="viewer-ghost-siblings-bar"
+              data-testid="viewer-ghost-siblings-bar"
+              role="group"
+              aria-label="Scene ghost artworks on this land"
+            >
+              <span className="viewer-ghost-bar-label">
+                👻 {siblingBoxes.some((s) => s.canEdit) && onSelectSibling
+                  ? 'Click ghost to save & edit:'
+                  : 'Scene ghosts:'}
+              </span>
+              {siblingBoxes.map((sib) => {
+                const canEditSib = Boolean(sib.canEdit && onSelectSibling);
+                const isSwitching = switchingSiblingId === sib.id;
+                const isHover = hoveredSibling?.id === sib.id;
+                return (
+                  <button
+                    key={sib.id}
+                    type="button"
+                    className={`viewer-ghost-chip ${canEditSib ? 'is-editable' : 'is-readonly'} ${
+                      isHover ? 'is-hovered' : ''
+                    } ${sib.wasPushed ? 'is-pushed' : ''} ${sib.isColliding ? 'is-colliding' : ''}`.trim()}
+                    data-testid={`viewer-ghost-chip-${sib.id}`}
+                    data-sibling-id={sib.id}
+                    data-can-edit={canEditSib ? 'true' : 'false'}
+                    disabled={!canEditSib || Boolean(switchingSiblingId)}
+                    onMouseEnter={() =>
+                      setHoveredSibling({
+                        id: sib.id,
+                        title: sib.title || 'Artwork',
+                        canEdit: Boolean(sib.canEdit)
+                      })
+                    }
+                    onMouseLeave={() =>
+                      setHoveredSibling((prev) => (prev?.id === sib.id ? null : prev))
+                    }
+                    onClick={() => {
+                      if (canEditSib) onSelectSibling?.(sib.id);
+                    }}
+                    title={
+                      canEditSib
+                        ? `Save current edits and switch live to edit "${sib.title || 'Artwork'}"`
+                        : `"${sib.title || 'Artwork'}" — view-only ghost`
+                    }
+                  >
+                    <span>{canEditSib ? '👻' : '🔒'}</span>
+                    <span className="viewer-ghost-chip-title">
+                      {isSwitching ? 'Saving & switching…' : sib.title || 'Artwork'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {cornerBottomLeft}
         </div>
       )}
 
-      {/* Bottom-Right Corner: Live 3D gizmo status / drag legend */}
-      {showEditGizmo && (
+      {/* Bottom-Right Corner: Live 3D gizmo status / ghost hover prompt / drag legend */}
+      {(showEditGizmo || hoveredSibling) && (
         <div
-          className={`sculpture-gizmo-hud-chip ${gizmoStatusText ? 'is-dragging' : ''} ${
-            cornerBottomLeft ? 'is-corner-br' : ''
-          }`.trim()}
+          className={`sculpture-gizmo-hud-chip ${
+            gizmoStatusText || hoveredSibling ? 'is-dragging' : ''
+          } ${cornerBottomLeft || (showLandBounds && (siblingBoxes || []).length > 0) ? 'is-corner-br' : ''}`.trim()}
           data-testid="sculpture-gizmo-hud"
         >
-          {gizmoStatusText || '● Corners: Scale · ▬ Sides: Move · ┃ Bars: Rotate · ▲ Top: Height'}
+          {gizmoStatusText
+            ? gizmoStatusText
+            : hoveredSibling
+            ? hoveredSibling.canEdit && onSelectSibling
+              ? `👻 Click to save & edit "${hoveredSibling.title}"`
+              : `👻 "${hoveredSibling.title}" (view-only ghost)`
+            : '● Corners: Scale · ▬ Sides: Move · ┃ Bars: Rotate · ▲ Top: Height'}
         </div>
       )}
     </div>

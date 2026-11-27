@@ -14120,6 +14120,94 @@ html.mobile-portrait-locked .mobile-map-sheet {
   box-shadow: 0 0 12px rgba(0, 245, 212, 0.22);
 }
 
+.viewer-ghost-siblings-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  max-width: min(100%, 560px);
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: rgba(7, 13, 27, 0.84);
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.viewer-ghost-bar-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #9dc4ff;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.viewer-ghost-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #dbeafe;
+  background: rgba(30, 58, 138, 0.44);
+  border: 1px dashed rgba(96, 165, 250, 0.62);
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.12s ease;
+}
+
+.viewer-ghost-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-ghost-chip.is-editable:hover,
+.viewer-ghost-chip.is-editable.is-hovered {
+  background: rgba(0, 245, 212, 0.24);
+  border-style: solid;
+  border-color: rgba(0, 245, 212, 0.88);
+  color: #ebfffc;
+  box-shadow: 0 0 12px rgba(0, 245, 212, 0.28);
+  transform: translateY(-1px);
+}
+
+.viewer-ghost-chip.is-pushed {
+  border-color: rgba(255, 209, 102, 0.85);
+  color: #ffe8a3;
+  background: rgba(120, 82, 14, 0.42);
+}
+
+.viewer-ghost-chip.is-colliding {
+  border-color: rgba(255, 77, 109, 0.9);
+  color: #ffc5d0;
+  background: rgba(120, 18, 38, 0.5);
+}
+
+.viewer-ghost-chip.is-readonly {
+  opacity: 0.62;
+  cursor: not-allowed;
+  border-color: rgba(148, 163, 184, 0.42);
+  background: rgba(30, 41, 59, 0.56);
+  color: #94a3b8;
+}
+
+.sculpture-unsaved-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #ffe399;
+  background: rgba(255, 190, 11, 0.18);
+  border: 1px solid rgba(255, 209, 102, 0.55);
+}
+
 .sculpture-gizmo-hud-chip.is-corner-br {
   left: auto;
   right: 10px;

@@ -49,6 +49,15 @@ import {
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import {
+  applySculptureRedo,
+  applySculptureUndo,
+  canUserModifySiblingSculpture,
+  createSculptureEditSnapshot,
+  createSnapshotFromSculpture,
+  hasUnsavedSculptureEdits,
+  pushSculptureUndoSnapshot
+} from '../utils/sculptureEditHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
@@ -85,6 +94,7 @@ async function switchOrAddRobinhoodNetwork(eth, chainInfo) {
 }
 
 const EMPTY_PARCELS = [];
+const EMPTY_SCULPTURES = [];
 
 function formatPendingExpiry(expiresAt) {
   if (!expiresAt) return '';
@@ -104,9 +114,11 @@ export default function SculptureModal({
   config,
   userLocation = null,
   allParcels = EMPTY_PARCELS,
+  allSculptures = EMPTY_SCULPTURES,
   onSculptureUpdated,
   onSculptureDeleted = null,
   onSelectParcel = null,
+  onSelectSculpture = null,
   onModifyInCanvas = null,
   onOpenLandManagement = null,
   onOpenAddLandItem = null,
@@ -152,6 +164,39 @@ export default function SculptureModal({
     };
   });
   const [editScale, setEditScale] = useState(() => extractSculptureScale(initialSculpture));
+  const [savedBaseline, setSavedBaseline] = useState(() =>
+    createSnapshotFromSculpture(initialSculpture)
+  );
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const [switchingSiblingId, setSwitchingSiblingId] = useState('');
+  const historyBySculptureRef = useRef(new Map());
+  const activeSculptureIdRef = useRef(initialSculpture?.id || '');
+  const activeGestureRef = useRef('');
+  const coalesceGroupRef = useRef({ key: '', ts: 0 });
+  const undoStackRef = useRef(undoStack);
+  undoStackRef.current = undoStack;
+  const redoStackRef = useRef(redoStack);
+  redoStackRef.current = redoStack;
+  const currentEditSnapshot = useMemo(
+    () =>
+      createSculptureEditSnapshot({
+        title: editTitle,
+        description: editDesc,
+        scale: editScale,
+        offset: editOffset
+      }),
+    [editDesc, editOffset, editScale, editTitle]
+  );
+  const currentEditSnapshotRef = useRef(currentEditSnapshot);
+  currentEditSnapshotRef.current = currentEditSnapshot;
+  const hasUnsavedChanges = useMemo(
+    () => !isPendingPreview && hasUnsavedSculptureEdits(currentEditSnapshot, savedBaseline),
+    [currentEditSnapshot, isPendingPreview, savedBaseline]
+  );
+  const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+  hasUnsavedChangesRef.current = hasUnsavedChanges;
+
   const [measuredBaseDims, setMeasuredBaseDims] = useState(null);
   const [parcelDetail, setParcelDetail] = useState(null);
   const [parcelSculptures, setParcelSculptures] = useState([]);
@@ -176,69 +221,98 @@ export default function SculptureModal({
   const [editModalPinText, setEditModalPinText] = useState('');
   const [pinBatchInfo, setPinBatchInfo] = useState(initialSculpture?.pinSummary || null);
 
-  useEffect(() => {
-    setSculpture(initialSculpture);
-    setEditTitle(initialSculpture?.title || '');
-    setEditDesc(initialSculpture?.description || '');
-    const initRot = extractSculptureRotation(initialSculpture);
-    setEditOffset({
-      dx: Number(initialSculpture?.anchorOffset?.dx || 0),
-      dy: Number(initialSculpture?.anchorOffset?.dy || 0),
-      dz: Number(initialSculpture?.anchorOffset?.dz || 0),
-      yaw: initRot.yaw,
-      pitch: initRot.pitch,
-      roll: initRot.roll
-    });
-    setEditScale(extractSculptureScale(initialSculpture));
+  const loadSculptureIntoEditor = useCallback((nextSc, { preserveHistory = false } = {}) => {
+    if (!nextSc) return;
+    activeSculptureIdRef.current = nextSc.id || '';
+    activeGestureRef.current = '';
+    coalesceGroupRef.current = { key: '', ts: 0 };
+    const snap = createSnapshotFromSculpture(nextSc);
+    currentEditSnapshotRef.current = snap;
+    setSculpture(nextSc);
+    setEditTitle(snap.title);
+    setEditDesc(snap.description);
+    setEditOffset(snap.offset);
+    setEditScale(snap.scale);
+    setSavedBaseline(snap);
+    if (preserveHistory && nextSc.id && historyBySculptureRef.current.has(nextSc.id)) {
+      const savedHist = historyBySculptureRef.current.get(nextSc.id);
+      setUndoStack(savedHist.undoStack || []);
+      setRedoStack(savedHist.redoStack || []);
+    } else {
+      setUndoStack([]);
+      setRedoStack([]);
+    }
     setMeasuredBaseDims(null);
     setConfirmRemove(false);
-    setParcelFrozen(Boolean(initialSculpture?.parcelFrozen));
-    setLandCustomName(initialSculpture?.parcelName || '');
+    setParcelFrozen(Boolean(nextSc.parcelFrozen));
+    setLandCustomName((prev) => nextSc.parcelName || prev || '');
     setMetadataCopied(false);
     setNftNotice('');
     setNftError('');
-    setPropNotice('');
-    setPropError('');
     setPromptCopied(false);
     setModalPins([]);
     setPinDraftText('');
     setEditModalPinId('');
-    setPinBatchInfo(initialSculpture?.pinSummary || null);
+    setPinBatchInfo(nextSc.pinSummary || null);
     setLocalPendingBusy(false);
     setLocalPendingError(null);
-    if (!initialSculpture?.id || initialSculpture?.isPendingPreview) return;
+  }, []);
+
+  const initialScId = initialSculpture?.id || '';
+  const initialScPending = Boolean(initialSculpture?.isPendingPreview);
+  const lastSyncedInitialRef = useRef({ id: '', pending: false });
+
+  useEffect(() => {
+    if (!initialSculpture) return undefined;
+    const isSameActiveLiveSwitch =
+      Boolean(initialScId) &&
+      activeSculptureIdRef.current === initialScId &&
+      lastSyncedInitialRef.current.id === initialScId &&
+      lastSyncedInitialRef.current.pending === initialScPending;
+    if (isSameActiveLiveSwitch) {
+      return undefined;
+    }
+    const isAlreadyLoadedLive =
+      Boolean(initialScId) &&
+      activeSculptureIdRef.current === initialScId &&
+      !initialScPending;
+    lastSyncedInitialRef.current = { id: initialScId, pending: initialScPending };
+
+    if (!isAlreadyLoadedLive) {
+      loadSculptureIntoEditor(initialSculpture, { preserveHistory: false });
+      setPropNotice('');
+      setPropError('');
+    }
+    if (!initialScId || initialScPending) return undefined;
     let cancelled = false;
     api
-      .getSculpture(initialSculpture.id)
+      .getSculpture(initialScId)
       .then((res) => {
-        if (!cancelled && res?.sculpture) {
-          setSculpture(res.sculpture);
-          setEditTitle(res.sculpture.title || '');
-          setEditDesc(res.sculpture.description || '');
-          const fetchedRot = extractSculptureRotation(res.sculpture);
-          setEditOffset({
-            dx: Number(res.sculpture.anchorOffset?.dx || 0),
-            dy: Number(res.sculpture.anchorOffset?.dy || 0),
-            dz: Number(res.sculpture.anchorOffset?.dz || 0),
-            yaw: fetchedRot.yaw,
-            pitch: fetchedRot.pitch,
-            roll: fetchedRot.roll
-          });
-          setEditScale(extractSculptureScale(res.sculpture));
-          setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
-          if (res.sculpture.parcelName !== undefined) {
-            setLandCustomName(res.sculpture.parcelName || '');
-          }
-          if (res.sculpture.pinSummary) {
-            setPinBatchInfo(res.sculpture.pinSummary);
-          }
+        if (cancelled || !res?.sculpture) return;
+        if (activeSculptureIdRef.current !== initialScId) return;
+        setSculpture((prev) => (prev?.id === initialScId ? { ...prev, ...res.sculpture } : res.sculpture));
+        const fetchedSnap = createSnapshotFromSculpture(res.sculpture);
+        setSavedBaseline(fetchedSnap);
+        if (!hasUnsavedChangesRef.current) {
+          currentEditSnapshotRef.current = fetchedSnap;
+          setEditTitle(fetchedSnap.title);
+          setEditDesc(fetchedSnap.description);
+          setEditOffset(fetchedSnap.offset);
+          setEditScale(fetchedSnap.scale);
+        }
+        setParcelFrozen(Boolean(res.sculpture.parcelFrozen));
+        if (res.sculpture.parcelName !== undefined) {
+          setLandCustomName(res.sculpture.parcelName || '');
+        }
+        if (res.sculpture.pinSummary) {
+          setPinBatchInfo(res.sculpture.pinSummary);
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [initialSculpture, user?.id]);
+  }, [initialScId, initialScPending, initialSculpture, loadSculptureIntoEditor, user?.id]);
 
   // Load parent Virtual Land 3D volume + sibling artworks for live bounds & non-intersecting push preview
   const scParcelId = sculpture?.parcelId || '';
@@ -312,10 +386,36 @@ export default function SculptureModal({
     [sculpture, measuredBaseDims]
   );
 
+  const mergedParcelSculptures = useMemo(() => {
+    const pid = String(scParcelId || '').toUpperCase();
+    const byId = new Map();
+    if (pid && Array.isArray(allSculptures)) {
+      for (const sc of allSculptures) {
+        if (!sc?.id || sc.hidden) continue;
+        if (String(sc.parcelId || '').toUpperCase() !== pid) continue;
+        byId.set(sc.id, sc);
+      }
+    }
+    for (const sc of parcelSculptures || []) {
+      if (!sc?.id) continue;
+      if (sc.hidden) {
+        byId.delete(sc.id);
+        continue;
+      }
+      const prev = byId.get(sc.id);
+      byId.set(sc.id, prev ? { ...prev, ...sc } : sc);
+    }
+    if (sculpture?.id && !sculpture.hidden) {
+      const prev = byId.get(sculpture.id);
+      byId.set(sculpture.id, prev ? { ...prev, ...sculpture } : sculpture);
+    }
+    return Array.from(byId.values());
+  }, [allSculptures, parcelSculptures, scParcelId, sculpture]);
+
   const placementItems = useMemo(() => {
     if (!sculpture?.id) return [];
     const byId = new Map();
-    for (const sc of parcelSculptures || []) {
+    for (const sc of mergedParcelSculptures) {
       if (!sc?.id || sc.hidden) continue;
       byId.set(sc.id, sc);
     }
@@ -327,7 +427,7 @@ export default function SculptureModal({
         sc.id === sculpture.id ? effectiveBaseDims : null
       )
     );
-  }, [effectiveBaseDims, parcelSculptures, placementVolume, sculpture]);
+  }, [effectiveBaseDims, mergedParcelSculptures, placementVolume, sculpture]);
 
   const targetBaseItem = useMemo(
     () => placementItems.find((it) => it.id === sculpture?.id) || null,
@@ -601,28 +701,67 @@ export default function SculptureModal({
 
   const viewerSiblingBoxes = useMemo(() => {
     if (!sculpture?.id) return [];
+    const byId = new Map();
+    for (const sc of mergedParcelSculptures) {
+      if (sc?.id) byId.set(sc.id, sc);
+    }
+    const buildEntry = (it, { box, wasPushed, isColliding }) => {
+      const fullSc = byId.get(it.id) || null;
+      const canEdit =
+        !isPendingPreview &&
+        canUserModifySiblingSculpture(fullSc || { id: it.id, parcelId: scParcelId }, {
+          user,
+          parcelDetail,
+          allParcels,
+          fallbackContributor: Boolean(isContributor)
+        });
+      return {
+        id: it.id,
+        title: it.title || fullSc?.title || 'Artwork',
+        sculpture: fullSc,
+        box,
+        scale: Number(it.scale ?? extractSculptureScale(fullSc) ?? 1),
+        yaw: Number(it.yaw ?? 0),
+        pitch: Number(it.pitch ?? 0),
+        roll: Number(it.roll ?? 0),
+        wasPushed,
+        isColliding,
+        canEdit
+      };
+    };
     if (livePlacement?.ok && Array.isArray(livePlacement.allItems)) {
       return livePlacement.allItems
         .filter((it) => it.id !== sculpture.id)
-        .map((it) => ({
-          id: it.id,
-          title: it.title,
-          box: it.box,
-          wasPushed: Boolean(it.wasPushed),
-          isColliding: false
-        }));
+        .map((it) =>
+          buildEntry(it, {
+            box: it.box,
+            wasPushed: Boolean(it.wasPushed),
+            isColliding: false
+          })
+        );
     }
     const collidingSet = new Set(livePlacement?.collidingIds || []);
     return placementItems
       .filter((it) => it.id !== sculpture.id)
-      .map((it) => ({
-        id: it.id,
-        title: it.title,
-        box: computeItemLocalBox(it),
-        wasPushed: false,
-        isColliding: collidingSet.has(it.id)
-      }));
-  }, [livePlacement, placementItems, sculpture?.id]);
+      .map((it) =>
+        buildEntry(it, {
+          box: computeItemLocalBox(it),
+          wasPushed: false,
+          isColliding: collidingSet.has(it.id)
+        })
+      );
+  }, [
+    allParcels,
+    isContributor,
+    isPendingPreview,
+    livePlacement,
+    mergedParcelSculptures,
+    parcelDetail,
+    placementItems,
+    scParcelId,
+    sculpture?.id,
+    user
+  ]);
 
   const activeScaleDims = useMemo(() => {
     const s = Math.max(MIN_ARTWORK_SCALE, Number(editScale || 1));
@@ -664,6 +803,168 @@ export default function SculptureModal({
     };
   }, [activeScaleDims, placementVolume, targetBaseItem?.baseX, targetBaseItem?.baseZ]);
 
+  const recordUndoCheckpoint = useCallback((label = 'Edit', { coalesceKey = '' } = {}) => {
+    const now = Date.now();
+    if (coalesceKey) {
+      if (activeGestureRef.current === coalesceKey) {
+        coalesceGroupRef.current = { key: coalesceKey, ts: now };
+        return;
+      }
+      if (
+        coalesceGroupRef.current.key === coalesceKey &&
+        now - coalesceGroupRef.current.ts < 650
+      ) {
+        coalesceGroupRef.current = { key: coalesceKey, ts: now };
+        return;
+      }
+      coalesceGroupRef.current = { key: coalesceKey, ts: now };
+    } else {
+      activeGestureRef.current = '';
+      coalesceGroupRef.current = { key: '', ts: 0 };
+    }
+    const snap = createSculptureEditSnapshot(currentEditSnapshotRef.current);
+    setUndoStack((prev) => {
+      const next = pushSculptureUndoSnapshot(prev, snap, { label });
+      undoStackRef.current = next;
+      return next;
+    });
+    redoStackRef.current = [];
+    setRedoStack([]);
+  }, []);
+
+  const beginEditGesture = useCallback((gestureKey, label = 'Edit') => {
+    const snap = createSculptureEditSnapshot(currentEditSnapshotRef.current);
+    activeGestureRef.current = gestureKey;
+    coalesceGroupRef.current = { key: gestureKey, ts: Date.now() };
+    setUndoStack((prev) => {
+      const next = pushSculptureUndoSnapshot(prev, snap, { label });
+      undoStackRef.current = next;
+      return next;
+    });
+    redoStackRef.current = [];
+    setRedoStack([]);
+  }, []);
+
+  const endEditGesture = useCallback(() => {
+    activeGestureRef.current = '';
+  }, []);
+
+  const handleUndoEdit = useCallback(() => {
+    const res = applySculptureUndo(
+      undoStackRef.current,
+      redoStackRef.current,
+      currentEditSnapshotRef.current
+    );
+    if (!res) return false;
+    activeGestureRef.current = '';
+    coalesceGroupRef.current = { key: '', ts: 0 };
+    currentEditSnapshotRef.current = res.restored;
+    undoStackRef.current = res.undoStack;
+    redoStackRef.current = res.redoStack;
+    setUndoStack(res.undoStack);
+    setRedoStack(res.redoStack);
+    setEditTitle(res.restored.title);
+    setEditDesc(res.restored.description);
+    setEditScale(res.restored.scale);
+    setEditOffset(res.restored.offset);
+    setPropError('');
+    setPropNotice(`Undid: ${res.label}`);
+    return true;
+  }, []);
+
+  const handleRedoEdit = useCallback(() => {
+    const res = applySculptureRedo(
+      undoStackRef.current,
+      redoStackRef.current,
+      currentEditSnapshotRef.current
+    );
+    if (!res) return false;
+    activeGestureRef.current = '';
+    coalesceGroupRef.current = { key: '', ts: 0 };
+    currentEditSnapshotRef.current = res.restored;
+    undoStackRef.current = res.undoStack;
+    redoStackRef.current = res.redoStack;
+    setUndoStack(res.undoStack);
+    setRedoStack(res.redoStack);
+    setEditTitle(res.restored.title);
+    setEditDesc(res.restored.description);
+    setEditScale(res.restored.scale);
+    setEditOffset(res.restored.offset);
+    setPropError('');
+    setPropNotice(`Redid: ${res.label}`);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener('pointerup', endEditGesture);
+    window.addEventListener('blur', endEditGesture);
+    return () => {
+      window.removeEventListener('pointerup', endEditGesture);
+      window.removeEventListener('blur', endEditGesture);
+    };
+  }, [endEditGesture]);
+
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const canModifyRef = useRef(canModifySculpture);
+  canModifyRef.current = canModifySculpture;
+  const isPendingPreviewRef = useRef(isPendingPreview);
+  isPendingPreviewRef.current = isPendingPreview;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onKeyDown = (e) => {
+      if (e.defaultPrevented) return;
+      const key = String(e.key || '').toLowerCase();
+      const mod = Boolean(e.metaKey || e.ctrlKey);
+
+      // Escape -> Exit modal immediately WITHOUT saving unsaved edits on the active view
+      if (!mod && !e.altKey && e.key === 'Escape') {
+        if (typeof document !== 'undefined' && document.querySelector('[data-info-tip-mode]')) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        onCloseRef.current?.();
+        return;
+      }
+
+      if (isPendingPreviewRef.current || !canModifyRef.current) return;
+
+      const targetTag = String(e.target?.tagName || '').toLowerCase();
+      const targetType = String(e.target?.type || '').toLowerCase();
+      const isTextEntry =
+        targetTag === 'textarea' ||
+        e.target?.isContentEditable ||
+        (targetTag === 'input' &&
+          ['text', 'search', 'url', 'email', 'password'].includes(targetType));
+
+      // Ctrl+Z / Cmd+Z -> Undo sculpture transform/edit
+      if (mod && !e.altKey && !e.shiftKey && key === 'z') {
+        if (isTextEntry) return;
+        if (undoStackRef.current.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleUndoEdit();
+        }
+        return;
+      }
+
+      // Ctrl+Shift+Z / Cmd+Shift+Z / Ctrl+Y / Cmd+Y -> Redo sculpture transform/edit
+      if (mod && !e.altKey && ((e.shiftKey && key === 'z') || (!e.shiftKey && key === 'y'))) {
+        if (isTextEntry) return;
+        if (redoStackRef.current.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleRedoEdit();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleRedoEdit, handleUndoEdit]);
+
   if (!sculpture) return null;
 
   async function saveOwnerPinnedIpfsBatch(nextPins) {
@@ -704,11 +1005,13 @@ export default function SculptureModal({
     }
   }
 
-  async function handleSaveSculptureEdit(e) {
-    e?.preventDefault?.();
+  async function persistSculptureChanges({
+    silentToast = false,
+    keepActiveSelection = false
+  } = {}) {
     if (livePlacement && !livePlacement.ok) {
       setPropError(livePlacement.message || 'Artwork position or scale violates land bounds.');
-      return;
+      return { ok: false, error: livePlacement.message || 'Bounds violation' };
     }
     setPropBusy('save');
     setPropNotice('');
@@ -743,24 +1046,28 @@ export default function SculptureModal({
       });
       if (res?.sculpture) {
         const merged = { ...sculpture, ...res.sculpture };
-        setSculpture(merged);
-        const savedRot = extractSculptureRotation(res.sculpture);
-        setEditOffset({
-          dx: Number(res.sculpture.anchorOffset?.dx || 0),
-          dy: Number(res.sculpture.anchorOffset?.dy || 0),
-          dz: Number(res.sculpture.anchorOffset?.dz || 0),
-          yaw: savedRot.yaw,
-          pitch: savedRot.pitch,
-          roll: savedRot.roll
-        });
-        setEditScale(extractSculptureScale(res.sculpture));
+        const savedSnap = createSnapshotFromSculpture(merged);
+        if (!keepActiveSelection) {
+          setSculpture(merged);
+          currentEditSnapshotRef.current = savedSnap;
+          setSavedBaseline(savedSnap);
+          setEditTitle(savedSnap.title);
+          setEditDesc(savedSnap.description);
+          setEditOffset(savedSnap.offset);
+          setEditScale(savedSnap.scale);
+        }
 
         // Keep local sibling positions in sync with any gently pushed neighbors
         const pushedList = Array.isArray(res.pushedSiblings) ? res.pushedSiblings : [];
         const pushedMap = new Map(pushedList.map((p) => [p.id, p]));
-        setParcelSculptures((prev) =>
-          (prev || []).map((item) => {
-            if (item.id === res.sculpture.id) return { ...item, ...res.sculpture };
+        setParcelSculptures((prev) => {
+          const baseList = Array.isArray(prev) && prev.length > 0 ? prev : mergedParcelSculptures;
+          let seenUpdated = false;
+          const mapped = baseList.map((item) => {
+            if (item.id === res.sculpture.id) {
+              seenUpdated = true;
+              return { ...item, ...res.sculpture };
+            }
             const pushed = pushedMap.get(item.id);
             if (!pushed) return item;
             return {
@@ -772,23 +1079,126 @@ export default function SculptureModal({
                 dz: pushed.dz
               }
             };
-          })
-        );
+          });
+          return seenUpdated ? mapped : [...mapped, merged];
+        });
 
-        onSculptureUpdated?.(merged, { pushedSiblings: pushedList });
+        onSculptureUpdated?.(merged, {
+          pushedSiblings: pushedList,
+          keepActiveSelection
+        });
+
         const savedMsg =
           pushedList.length > 0
             ? `Saved transform & updated IPFS bundle! Safely shifted ${pushedList.length} neighboring artwork${
                 pushedList.length === 1 ? '' : 's'
               } (${pushedList.map((p) => `"${p.title}"`).join(', ')}) inside "${scLandDisplayName}".`
             : 'Artwork settings, rotation, scale & position saved.';
-        setPropNotice(savedMsg);
-        notifySettingsSaved(savedMsg);
+        if (!silentToast) {
+          setPropNotice(savedMsg);
+          notifySettingsSaved(savedMsg);
+        }
+        return { ok: true, sculpture: merged, pushedSiblings: pushedList };
       }
+      return { ok: false, error: 'Update failed' };
     } catch (err) {
-      setPropError(err.message || 'Update failed');
+      const msg = err.message || 'Update failed';
+      setPropError(msg);
+      return { ok: false, error: msg };
     } finally {
       setPropBusy('');
+    }
+  }
+
+  async function handleSaveSculptureEdit(e) {
+    e?.preventDefault?.();
+    await persistSculptureChanges({ silentToast: false, keepActiveSelection: false });
+  }
+
+  async function handleSwitchToSiblingSculpture(siblingId) {
+    if (!siblingId || siblingId === sculpture?.id || switchingSiblingId || propBusy !== '') {
+      return;
+    }
+    const targetRaw = mergedParcelSculptures.find((s) => s?.id === siblingId);
+    if (!targetRaw) return;
+    const canEditTarget = canUserModifySiblingSculpture(targetRaw, {
+      user,
+      parcelDetail,
+      allParcels,
+      fallbackContributor: Boolean(isContributor)
+    });
+    if (!canEditTarget) return;
+
+    const prevId = sculpture.id;
+    const prevTitle = editTitle || sculpture.title || 'Artwork';
+    const needsSave = Boolean(canModifySculpture && hasUnsavedChangesRef.current);
+
+    setSwitchingSiblingId(siblingId);
+    setPropError('');
+    try {
+      let pushedSiblings = [];
+      if (needsSave) {
+        const saved = await persistSculptureChanges({
+          silentToast: true,
+          keepActiveSelection: true
+        });
+        if (!saved?.ok) return;
+        pushedSiblings = Array.isArray(saved.pushedSiblings) ? saved.pushedSiblings : [];
+      }
+
+      // Preserve undo/redo history for the sculpture we're leaving
+      historyBySculptureRef.current.set(prevId, {
+        undoStack: undoStackRef.current,
+        redoStack: redoStackRef.current
+      });
+
+      const pushedMatch = pushedSiblings.find((p) => p?.id === targetRaw.id);
+      const nextSibling = pushedMatch
+        ? {
+            ...targetRaw,
+            anchorOffset: {
+              ...(targetRaw.anchorOffset || {}),
+              dx: pushedMatch.dx,
+              dy: pushedMatch.dy,
+              dz: pushedMatch.dz
+            }
+          }
+        : targetRaw;
+
+      loadSculptureIntoEditor(nextSibling, { preserveHistory: true });
+      setStudioOpen(true);
+      setShowLandBoundsPreview(true);
+
+      const switchMsg = needsSave
+        ? `Saved "${prevTitle}" and switched live to edit "${nextSibling.title || 'Artwork'}".`
+        : `Switched live to edit "${nextSibling.title || 'Artwork'}".`;
+      setPropNotice(switchMsg);
+      if (needsSave) notifySettingsSaved(switchMsg);
+
+      if (typeof onSelectSculpture === 'function') {
+        onSelectSculpture(nextSibling);
+      } else if (nextSibling.id && !nextSibling.isPendingPreview) {
+        api
+          .getSculpture(nextSibling.id)
+          .then((res) => {
+            if (!res?.sculpture || activeSculptureIdRef.current !== nextSibling.id) return;
+            setSculpture((prev) =>
+              prev?.id === nextSibling.id ? { ...prev, ...res.sculpture } : res.sculpture
+            );
+            const fetchedSnap = createSnapshotFromSculpture(res.sculpture);
+            setSavedBaseline(fetchedSnap);
+            if (!hasUnsavedChangesRef.current) {
+              currentEditSnapshotRef.current = fetchedSnap;
+              setEditTitle(fetchedSnap.title);
+              setEditDesc(fetchedSnap.description);
+              setEditOffset(fetchedSnap.offset);
+              setEditScale(fetchedSnap.scale);
+            }
+          })
+          .catch(() => {});
+      }
+    } finally {
+      setSwitchingSiblingId('');
     }
   }
 
@@ -1105,11 +1515,77 @@ export default function SculptureModal({
   const currentSavedScale = extractSculptureScale(sculpture);
   const isCompactViewport = typeof window !== 'undefined' && window.innerWidth <= 640;
 
+  const updateEditScale = (nextScale, { label = 'Scale', coalesceKey = '' } = {}) => {
+    const val = Number(nextScale);
+    if (!Number.isFinite(val)) return;
+    recordUndoCheckpoint(label, { coalesceKey });
+    setShowLandBoundsPreview(true);
+    currentEditSnapshotRef.current = {
+      ...currentEditSnapshotRef.current,
+      scale: val
+    };
+    setEditScale(val);
+  };
+
+  const updateEditOffset = (patch, { label = 'Move / Rotate', coalesceKey = '' } = {}) => {
+    recordUndoCheckpoint(label, { coalesceKey });
+    setShowLandBoundsPreview(true);
+    const curOff = currentEditSnapshotRef.current.offset;
+    const nextOff = {
+      dx: patch.dx !== undefined ? Number(patch.dx) : curOff.dx,
+      dy: patch.dy !== undefined ? Math.max(0, Number(patch.dy)) : curOff.dy,
+      dz: patch.dz !== undefined ? Number(patch.dz) : curOff.dz,
+      yaw: patch.yaw !== undefined ? Number(patch.yaw) : curOff.yaw,
+      pitch: patch.pitch !== undefined ? tiltToDegrees(patch.pitch) : curOff.pitch,
+      roll: patch.roll !== undefined ? tiltToDegrees(patch.roll) : curOff.roll
+    };
+    currentEditSnapshotRef.current = {
+      ...currentEditSnapshotRef.current,
+      offset: nextOff
+    };
+    setEditOffset(nextOff);
+  };
+
+  const updateEditTitle = (nextTitle) => {
+    recordUndoCheckpoint('Title', { coalesceKey: 'title' });
+    currentEditSnapshotRef.current = {
+      ...currentEditSnapshotRef.current,
+      title: String(nextTitle ?? '')
+    };
+    setEditTitle(nextTitle);
+  };
+
+  const updateEditDesc = (nextDesc) => {
+    recordUndoCheckpoint('Description', { coalesceKey: 'desc' });
+    currentEditSnapshotRef.current = {
+      ...currentEditSnapshotRef.current,
+      description: String(nextDesc ?? '')
+    };
+    setEditDesc(nextDesc);
+  };
+
+  const handleGizmoTransformStart = (role) => {
+    const label =
+      role === 'scale'
+        ? 'Scale (3D handle)'
+        : role === 'move'
+        ? 'Move (3D handle)'
+        : role === 'rotate'
+        ? 'Rotate (3D handle)'
+        : 'Height (3D handle)';
+    beginEditGesture(`gizmo:${role || 'drag'}`, label);
+  };
+
   const handleGizmoTransformChange = (patch) => {
     if (!patch || typeof patch !== 'object') return;
     setShowLandBoundsPreview(true);
     if (patch.scale !== undefined && Number.isFinite(Number(patch.scale))) {
-      setEditScale(Number(patch.scale));
+      const nextVal = Number(patch.scale);
+      currentEditSnapshotRef.current = {
+        ...currentEditSnapshotRef.current,
+        scale: nextVal
+      };
+      setEditScale(nextVal);
     }
     if (
       patch.dx !== undefined ||
@@ -1119,14 +1595,21 @@ export default function SculptureModal({
       patch.pitch !== undefined ||
       patch.roll !== undefined
     ) {
-      setEditOffset((prev) => ({
-        dx: patch.dx !== undefined ? Number(patch.dx) : prev.dx,
-        dy: patch.dy !== undefined ? Number(patch.dy) : prev.dy,
-        dz: patch.dz !== undefined ? Number(patch.dz) : prev.dz,
-        yaw: patch.yaw !== undefined ? Number(patch.yaw) : prev.yaw,
-        pitch: patch.pitch !== undefined ? tiltToDegrees(patch.pitch) : prev.pitch,
-        roll: patch.roll !== undefined ? tiltToDegrees(patch.roll) : prev.roll
-      }));
+      setEditOffset((prev) => {
+        const nextOff = {
+          dx: patch.dx !== undefined ? Number(patch.dx) : prev.dx,
+          dy: patch.dy !== undefined ? Number(patch.dy) : prev.dy,
+          dz: patch.dz !== undefined ? Number(patch.dz) : prev.dz,
+          yaw: patch.yaw !== undefined ? Number(patch.yaw) : prev.yaw,
+          pitch: patch.pitch !== undefined ? tiltToDegrees(patch.pitch) : prev.pitch,
+          roll: patch.roll !== undefined ? tiltToDegrees(patch.roll) : prev.roll
+        };
+        currentEditSnapshotRef.current = {
+          ...currentEditSnapshotRef.current,
+          offset: nextOff
+        };
+        return nextOff;
+      });
     }
   };
 
@@ -1211,6 +1694,8 @@ export default function SculptureModal({
           isPendingPreview ? 'is-pending-preview' : 'is-studio-split'
         }`.trim()}
         data-testid="sculpture-modal"
+        data-active-sculpture-id={sculpture.id || ''}
+        data-has-unsaved={hasUnsavedChanges ? 'true' : 'false'}
         data-pending-preview={isPendingPreview ? 'true' : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1269,7 +1754,17 @@ export default function SculptureModal({
                   {shareLinkCopied ? '✓' : <XeroIcon emoji="📋" size={16} />}
                 </button>
               )}
-              <button type="button" className="btn" onClick={onClose} aria-label="Close sculpture details">
+              <button
+                type="button"
+                className="btn"
+                onClick={onClose}
+                aria-label="Close sculpture details"
+                title={
+                  hasUnsavedChanges
+                    ? 'Exit without saving current edits (Esc)'
+                    : 'Close sculpture view (Esc)'
+                }
+              >
                 <XeroIcon emoji="❌" size={16} />
               </button>
             </div>
@@ -1464,7 +1959,10 @@ export default function SculptureModal({
                 ) : null
               }
               onModelBoundsMeasured={handleMeasuredBounds}
+              onTransformStart={!isPendingPreview && canModifySculpture ? handleGizmoTransformStart : null}
               onTransformChange={!isPendingPreview && canModifySculpture ? handleGizmoTransformChange : null}
+              onSelectSibling={!isPendingPreview && user?.id ? handleSwitchToSiblingSculpture : null}
+              switchingSiblingId={switchingSiblingId}
             />
 
             {isPendingPreview && (
@@ -1633,8 +2131,45 @@ export default function SculptureModal({
                 <span className="badge gold" style={{ fontSize: 10 }}>
                   {isPropertyOwner ? 'Owner' : isLandOwner ? 'Land Owner' : 'Contributor'}
                 </span>
+                {hasUnsavedChanges && (
+                  <span
+                    className="sculpture-unsaved-badge"
+                    data-testid="sculpture-unsaved-badge"
+                    title="Press Save or click an editable scene ghost to save · Press Esc to exit without saving"
+                  >
+                    Unsaved
+                  </span>
+                )}
               </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  data-testid="sculpture-undo-btn"
+                  disabled={undoStack.length === 0 || propBusy !== '' || Boolean(switchingSiblingId)}
+                  onClick={handleUndoEdit}
+                  title={
+                    undoStack.length > 0
+                      ? `Undo ${undoStack[undoStack.length - 1]?.label || 'edit'} (Ctrl+Z)`
+                      : 'Nothing to undo (Ctrl+Z)'
+                  }
+                >
+                  ↩ Undo
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  data-testid="sculpture-redo-btn"
+                  disabled={redoStack.length === 0 || propBusy !== '' || Boolean(switchingSiblingId)}
+                  onClick={handleRedoEdit}
+                  title={
+                    redoStack.length > 0
+                      ? `Redo ${redoStack[redoStack.length - 1]?.label || 'edit'} (Ctrl+Shift+Z / Ctrl+Y)`
+                      : 'Nothing to redo (Ctrl+Shift+Z / Ctrl+Y)'
+                  }
+                >
+                  ↪ Redo
+                </button>
                 <button
                   type="button"
                   className="btn btn-xs"
@@ -1673,10 +2208,13 @@ export default function SculptureModal({
                       max={Math.max(MIN_ARTWORK_SCALE + 0.1, maxSafeScale)}
                       step="0.05"
                       value={Math.min(Math.max(MIN_ARTWORK_SCALE, Number(editScale || 1)), Math.max(MIN_ARTWORK_SCALE + 0.1, maxSafeScale))}
-                      onChange={(e) => {
-                        setShowLandBoundsPreview(true);
-                        setEditScale(Number(e.target.value));
-                      }}
+                      onPointerDown={() => beginEditGesture('scale', 'Scale')}
+                      onChange={(e) =>
+                        updateEditScale(Number(e.target.value), {
+                          label: 'Scale',
+                          coalesceKey: 'scale'
+                        })
+                      }
                     />
                     <input
                       type="number"
@@ -1687,10 +2225,12 @@ export default function SculptureModal({
                       max={Math.max(60, maxScaleForLand)}
                       step="any"
                       value={editScale}
-                      onChange={(e) => {
-                        setShowLandBoundsPreview(true);
-                        setEditScale(Number(e.target.value || MIN_ARTWORK_SCALE));
-                      }}
+                      onChange={(e) =>
+                        updateEditScale(Number(e.target.value || MIN_ARTWORK_SCALE), {
+                          label: 'Scale',
+                          coalesceKey: 'scale-input'
+                        })
+                      }
                     />
                   </div>
                   <div className="sculpture-scale-presets">
@@ -1702,10 +2242,7 @@ export default function SculptureModal({
                           Math.abs(Number(editScale) - preset) < 0.03 ? 'btn-primary' : ''
                         }`}
                         disabled={preset > maxSafeScale + 0.001}
-                        onClick={() => {
-                          setShowLandBoundsPreview(true);
-                          setEditScale(preset);
-                        }}
+                        onClick={() => updateEditScale(preset, { label: `Scale ${preset}×` })}
                       >
                         {preset}×
                       </button>
@@ -1714,10 +2251,7 @@ export default function SculptureModal({
                       type="button"
                       className="btn btn-xs btn-outline"
                       data-testid="sculpture-fit-max-scale-btn"
-                      onClick={() => {
-                        setShowLandBoundsPreview(true);
-                        setEditScale(maxSafeScale);
-                      }}
+                      onClick={() => updateEditScale(maxSafeScale, { label: 'Max Safe Scale' })}
                     >
                       ✨ Max Safe ({maxSafeScale.toFixed(2)}×)
                     </button>
@@ -1740,10 +2274,13 @@ export default function SculptureModal({
                         max={moveRanges.maxDx}
                         step="0.1"
                         value={Math.min(moveRanges.maxDx, Math.max(moveRanges.minDx, Number(editOffset.dx || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dx: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('dx', 'Move X')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dx: Number(e.target.value) },
+                            { label: 'Move X', coalesceKey: 'dx' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1751,10 +2288,12 @@ export default function SculptureModal({
                         aria-label="dx (m)"
                         step="any"
                         value={editOffset.dx}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dx: Number(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dx: Number(e.target.value || 0) },
+                            { label: 'Move X', coalesceKey: 'dx-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1773,10 +2312,13 @@ export default function SculptureModal({
                         max={moveRanges.maxDz}
                         step="0.1"
                         value={Math.min(moveRanges.maxDz, Math.max(moveRanges.minDz, Number(editOffset.dz || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dz: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('dz', 'Move Z')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dz: Number(e.target.value) },
+                            { label: 'Move Z', coalesceKey: 'dz' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1784,10 +2326,12 @@ export default function SculptureModal({
                         aria-label="dz (m)"
                         step="any"
                         value={editOffset.dz}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dz: Number(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dz: Number(e.target.value || 0) },
+                            { label: 'Move Z', coalesceKey: 'dz-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1806,10 +2350,13 @@ export default function SculptureModal({
                         max={Math.max(0.5, moveRanges.maxDy)}
                         step="0.1"
                         value={Math.min(Math.max(0.5, moveRanges.maxDy), Math.max(0, Number(editOffset.dy || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dy: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('dy', 'Height Y')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dy: Number(e.target.value) },
+                            { label: 'Height Y', coalesceKey: 'dy' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1817,10 +2364,12 @@ export default function SculptureModal({
                         aria-label="dy (m)"
                         step="any"
                         value={editOffset.dy}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, dy: Number(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { dy: Number(e.target.value || 0) },
+                            { label: 'Height Y', coalesceKey: 'dy-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1839,10 +2388,13 @@ export default function SculptureModal({
                         max={180}
                         step="5"
                         value={Math.min(180, Math.max(-180, Number(editOffset.yaw || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, yaw: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('yaw', 'Rotate Yaw')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { yaw: Number(e.target.value) },
+                            { label: 'Rotate Yaw', coalesceKey: 'yaw' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1850,10 +2402,12 @@ export default function SculptureModal({
                         aria-label="yaw (°)"
                         step="15"
                         value={editOffset.yaw}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, yaw: Number(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { yaw: Number(e.target.value || 0) },
+                            { label: 'Rotate Yaw', coalesceKey: 'yaw-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1872,10 +2426,13 @@ export default function SculptureModal({
                         max={180}
                         step="5"
                         value={Math.min(180, Math.max(-180, Number(editOffset.pitch || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, pitch: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('pitch', 'Tilt Pitch')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { pitch: Number(e.target.value) },
+                            { label: 'Tilt Pitch', coalesceKey: 'pitch' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1886,10 +2443,12 @@ export default function SculptureModal({
                         max={180}
                         step="5"
                         value={editOffset.pitch}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, pitch: tiltToDegrees(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { pitch: tiltToDegrees(e.target.value || 0) },
+                            { label: 'Tilt Pitch', coalesceKey: 'pitch-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1908,10 +2467,13 @@ export default function SculptureModal({
                         max={180}
                         step="5"
                         value={Math.min(180, Math.max(-180, Number(editOffset.roll || 0)))}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, roll: Number(e.target.value) }));
-                        }}
+                        onPointerDown={() => beginEditGesture('roll', 'Tilt Roll')}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { roll: Number(e.target.value) },
+                            { label: 'Tilt Roll', coalesceKey: 'roll' }
+                          )
+                        }
                       />
                       <input
                         type="number"
@@ -1922,10 +2484,12 @@ export default function SculptureModal({
                         max={180}
                         step="5"
                         value={editOffset.roll}
-                        onChange={(e) => {
-                          setShowLandBoundsPreview(true);
-                          setEditOffset((p) => ({ ...p, roll: tiltToDegrees(e.target.value || 0) }));
-                        }}
+                        onChange={(e) =>
+                          updateEditOffset(
+                            { roll: tiltToDegrees(e.target.value || 0) },
+                            { label: 'Tilt Roll', coalesceKey: 'roll-input' }
+                          )
+                        }
                       />
                     </div>
                   </label>
@@ -1958,10 +2522,9 @@ export default function SculptureModal({
                           : ''
                       }`}
                       data-testid="sculpture-stand-vertical-x-btn"
-                      onClick={() => {
-                        setShowLandBoundsPreview(true);
-                        setEditOffset((p) => ({ ...p, pitch: 90, roll: 0 }));
-                      }}
+                      onClick={() =>
+                        updateEditOffset({ pitch: 90, roll: 0 }, { label: 'Stand Vertical (+90° X)' })
+                      }
                       title="Stand sculpture upright 90° around X axis to measure vertical height"
                     >
                       ↕ Stand Vertical (+90° X)
@@ -1975,10 +2538,9 @@ export default function SculptureModal({
                           : ''
                       }`}
                       data-testid="sculpture-stand-vertical-z-btn"
-                      onClick={() => {
-                        setShowLandBoundsPreview(true);
-                        setEditOffset((p) => ({ ...p, pitch: 0, roll: 90 }));
-                      }}
+                      onClick={() =>
+                        updateEditOffset({ pitch: 0, roll: 90 }, { label: 'Stand Side (+90° Z)' })
+                      }
                       title="Stand sculpture upright 90° around Z axis to measure side length vertically"
                     >
                       ↕ Stand Side (+90° Z)
@@ -1992,10 +2554,9 @@ export default function SculptureModal({
                           : ''
                       }`}
                       data-testid="sculpture-level-flat-btn"
-                      onClick={() => {
-                        setShowLandBoundsPreview(true);
-                        setEditOffset((p) => ({ ...p, pitch: 0, roll: 0 }));
-                      }}
+                      onClick={() =>
+                        updateEditOffset({ pitch: 0, roll: 0 }, { label: 'Level Flat (0°)' })
+                      }
                       title="Reset vertical tilt (Pitch & Roll) back to 0°"
                     >
                       📐 Level Flat (0°)
@@ -2026,7 +2587,7 @@ export default function SculptureModal({
                         <button
                           type="button"
                           className="btn btn-xs btn-primary"
-                          onClick={() => setEditScale(maxSafeScale)}
+                          onClick={() => updateEditScale(maxSafeScale, { label: 'Fit Max Safe' })}
                         >
                           Fit Max Safe ({maxSafeScale.toFixed(2)}×)
                         </button>
@@ -2042,7 +2603,7 @@ export default function SculptureModal({
                       <span>
                         ✅ Fits cleanly inside &ldquo;{scLandDisplayName}&rdquo;
                         {siblingCount > 0
-                          ? ` — ${siblingCount} other placed item${siblingCount === 1 ? '' : 's'} untouched`
+                          ? ` — ${siblingCount} other placed item${siblingCount === 1 ? '' : 's'} untouched (ghosts in view)`
                           : ''}
                         .
                       </span>
@@ -2057,7 +2618,7 @@ export default function SculptureModal({
                     aria-label="Artwork title"
                     maxLength={48}
                     value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
+                    onChange={(e) => updateEditTitle(e.target.value)}
                     placeholder="Sculpture title (type : for emojis)"
                   />
                   <EmojiTextarea
@@ -2066,7 +2627,7 @@ export default function SculptureModal({
                     rows={2}
                     maxLength={240}
                     value={editDesc}
-                    onChange={(e) => setEditDesc(e.target.value)}
+                    onChange={(e) => updateEditDesc(e.target.value)}
                     placeholder="Description (type : for emojis)"
                   />
                 </div>
@@ -2088,7 +2649,14 @@ export default function SculptureModal({
                     data-testid="sculpture-reset-transform-btn"
                     disabled={propBusy !== ''}
                     onClick={() => {
-                      setEditOffset({ dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, roll: 0 });
+                      recordUndoCheckpoint('Center & 1×');
+                      const resetOff = { dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, roll: 0 };
+                      currentEditSnapshotRef.current = {
+                        ...currentEditSnapshotRef.current,
+                        scale: 1,
+                        offset: resetOff
+                      };
+                      setEditOffset(resetOff);
                       setEditScale(1);
                     }}
                   >
