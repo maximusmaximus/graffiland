@@ -1,7 +1,7 @@
 import * as maplibregl from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import xeroemoji from 'xeroemoji';
 import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import {
@@ -31,6 +31,7 @@ import {
   buildGoogleMapsLandUrl,
   computeClosestLandsPerimeterFit,
   formatSimpleLandLabel,
+  resolveLandColorTheme,
   resolveLandCoords
 } from '../utils/landMapHelpers.js';
 import { computeDraft3DAutoFit } from '../utils/landPreviewHelpers.js';
@@ -110,17 +111,17 @@ function parcelToFeature(p, fallbackHeight = LAND_VOLUME_LIMITS.defaultHeightMet
     p?.volume ||
     (p?.bounds ? buildDefaultVolumeFromBounds(p.bounds, p.parcelId, p.geohash) : null);
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
-  const isDormant = p?.stewardStatus === 'dormant';
-  const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
+  const theme = resolveLandColorTheme(p);
   return {
     type: 'Feature',
     properties: {
       parcelId: p.parcelId,
       heightMeters: Number(vol.heightMeters || fallbackHeight),
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
-      color: isFrozen ? '#7dd3fc' : isDormant ? '#ff4da6' : '#ff1f8f',
-      innerColor: isFrozen ? '#e0f2fe' : isDormant ? '#ffc2dc' : '#ffd6ec',
-      borderColor: isFrozen ? '#7dd3fc' : isDormant ? '#ff85c0' : '#ff1f8f'
+      color: theme.outerColor,
+      innerColor: theme.innerColor,
+      borderColor: theme.borderColor,
+      landLifecycle: theme.status
     },
     geometry: {
       type: 'Polygon',
@@ -763,26 +764,13 @@ export default function MapView3D({
       if (!vol) continue;
       const geom = computePrismScreenGeometry(map, maplibregl, vol);
       if (!geom) continue;
-      const isDormant = p?.stewardStatus === 'dormant';
-      const isFrozen = Boolean(p?.frozen || p?.settings?.frozen);
       const pidUpper = String(p?.parcelId || '').toUpperCase();
       const isSelectedParcel =
         Boolean(selectedParcelIdRef.current) &&
         pidUpper === String(selectedParcelIdRef.current).toUpperCase();
-      const outerColor = isSelectedParcel
-        ? '#ffd166'
-        : isFrozen
-        ? '#7dd3fc'
-        : isDormant
-        ? '#ff4da6'
-        : '#ff1f8f';
-      const innerColor = isSelectedParcel
-        ? '#fff3c4'
-        : isFrozen
-        ? '#e0f2fe'
-        : isDormant
-        ? '#ffc2dc'
-        : '#ffd6ec';
+      const theme = resolveLandColorTheme(p, { isSelected: isSelectedParcel });
+      const outerColor = theme.outerColor;
+      const innerColor = theme.innerColor;
       projectedParcels.push({
         pid: pidUpper,
         vol,
@@ -2172,7 +2160,7 @@ export default function MapView3D({
           labelSpan.className = 'map3d-sculpture-label';
           const rawTitle = String(sc.title).trim();
           labelSpan.textContent =
-            rawTitle.length > 20 ? `${rawTitle.slice(0, 19).trimEnd()}…` : rawTitle;
+            rawTitle.length > 30 ? `${rawTitle.slice(0, 29).trimEnd()}…` : rawTitle;
           el.appendChild(labelSpan);
         }
 
@@ -2291,20 +2279,24 @@ export default function MapView3D({
         wrap.appendChild(btnRow);
       }
 
+      const landTheme = resolveLandColorTheme(p);
       const labelPill = document.createElement('div');
       labelPill.className = `map3d-land-label-pill map3d-ui-stop ${
-        isEmptyLand ? 'is-empty-land' : ''
-      }`;
+        landTheme.needsHumanArt ? 'is-needs-human-art' : 'is-permanent-land'
+      } ${isEmptyLand ? 'is-empty-land' : ''}`.trim();
       labelPill.dataset.emptyLand = isEmptyLand ? 'true' : 'false';
+      labelPill.dataset.landLifecycle = landTheme.status;
+      labelPill.style.setProperty('--land-tag-accent', landTheme.outerColor);
+      labelPill.style.setProperty('--land-tag-text', landTheme.textColor);
 
       const badge = document.createElement('button');
       badge.type = 'button';
       badge.className = 'map3d-owned-plus-tag map3d-ui-stop';
       badge.dataset.testid = 'map3d-land-label';
       badge.dataset.parcelId = pid;
-      badge.textContent = formatSimpleLandLabel(p);
+      badge.textContent = formatSimpleLandLabel(p, null, { maxLength: 30 });
       badge.setAttribute('aria-label', `Open detailed view for ${landName}`);
-      badge.title = `${landName} — click to open detailed view`;
+      badge.title = `${landName} (${landTheme.label}) — click to open detailed view`;
       badge.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       badge.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -3548,6 +3540,47 @@ export default function MapView3D({
     });
   }
 
+  // Cancel an active in-progress draw drag immediately on Escape
+  useEffect(() => {
+    const onEscCancelDraw = (e) => {
+      if (e.key !== 'Escape') return;
+      const hadActiveDrag = Boolean(
+        dragStartRef.current || dragPreviewRef.current || holdDrawRef.current
+      );
+      if (!hadActiveDrag) return;
+      if (holdDrawRef.current) {
+        clearTimeout(holdDrawRef.current.timerId);
+        if (holdDrawRef.current.rafId) cancelAnimationFrame(holdDrawRef.current.rafId);
+        holdDrawRef.current = null;
+      }
+      dragStartRef.current = null;
+      dragPreviewRef.current = null;
+      setHoldDrawActive(false);
+      setGizmoHint('');
+      if (mapRef.current && !drawModeRef.current) {
+        try {
+          mapRef.current.dragPan.enable();
+        } catch {
+          // ignore
+        }
+      }
+      drawWireframes();
+    };
+    window.addEventListener('keydown', onEscCancelDraw);
+    return () => window.removeEventListener('keydown', onEscCancelDraw);
+  }, [drawWireframes]);
+
+  const landLifecycleCounts = useMemo(() => {
+    let permanent = 0;
+    let needsHumanArt = 0;
+    for (const p of parcels || []) {
+      const theme = resolveLandColorTheme(p);
+      if (theme.needsHumanArt) needsHumanArt += 1;
+      else permanent += 1;
+    }
+    return { permanent, needsHumanArt };
+  }, [parcels]);
+
   function handleCenterOnUser() {
     const map = mapRef.current;
     if (!map || !userLocation) return;
@@ -3759,11 +3792,14 @@ export default function MapView3D({
             )}
             <InfoTip title="3D Map & Land Handles" mode="popover">
               <strong>Hold down</strong> in one spot on the map (or open <strong>Mint Land</strong>)
-              and drag to draw a 3D cube. Once drawn, <strong>click &amp; drag anywhere around the land</strong>{' '}
-              to rotate &amp; tilt the 3D map around it (hold <strong>Shift+drag</strong> to pan). Drag{' '}
+              and drag to draw a 3D cube — press <strong>Esc</strong> anytime to remove a drawn
+              draft. Once drawn, <strong>click &amp; drag anywhere around the land</strong> to
+              rotate &amp; tilt the 3D map around it (hold <strong>Shift+drag</strong> to pan). Drag{' '}
               <strong>corner balls</strong> to scale, <strong>side bars</strong> to stretch an edge,{' '}
-              <strong>vertical gold bars</strong> to rotate, the <strong>center ↕ orb</strong> to pull
-              height up/down, or click any <strong>3D sculpture</strong> to view all metadata.
+              <strong>vertical gold bars</strong> to rotate, or the <strong>center ↕ orb</strong> to
+              pull height up/down. <strong>Neon Pink</strong> lands are permanent;{' '}
+              <strong>Amber</strong> lands need a human to place IRL AR artwork before their timer
+              expires.
             </InfoTip>
           </div>
         </div>
@@ -3814,12 +3850,24 @@ export default function MapView3D({
         )}
 
         {/* Glowing Wireframe Color Legend */}
-        <div className="map3d-legend map3d-ui-stop">
+        <div className="map3d-legend map3d-ui-stop" data-testid="map3d-legend">
           <span className="map3d-legend-item">
             <span className="map3d-swatch is-considering" /> Draft ({draftParcels.length})
           </span>
-          <span className="map3d-legend-item">
-            <span className="map3d-swatch is-owned" /> Owned ({parcels.length})
+          <span
+            className="map3d-legend-item"
+            data-testid="map3d-legend-permanent"
+            title="Permanent lands minted with in-person human AR artwork (no expiry)"
+          >
+            <span className="map3d-swatch is-permanent" /> Permanent ({landLifecycleCounts.permanent})
+          </span>
+          <span
+            className="map3d-legend-item"
+            data-testid="map3d-legend-needs-human-art"
+            title="Temporary lands waiting for a human to visit in person on Mobile AR and place artwork"
+          >
+            <span className="map3d-swatch is-needs-human-art" /> Needs Human Art (
+            {landLifecycleCounts.needsHumanArt})
           </span>
           <span className="map3d-legend-item">
             <span className="map3d-swatch is-sculptures" /> Art ({sculptures.length})

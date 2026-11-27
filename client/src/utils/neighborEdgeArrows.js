@@ -1,6 +1,7 @@
 import { haversineMeters } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { rectsOverlap } from './canvasLabelLayout.js';
+import { formatLandExpiration, LAND_LIFECYCLE_COLORS } from './landMapHelpers.js';
 import { FEET_PER_METER, METERS_PER_MILE, normalizeUnitSystem } from './measurementUnits.js';
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -63,7 +64,8 @@ export function resolveNeighborTagTheme({
   isSelected = false,
   isPendingPreview = false,
   frozen = false,
-  dormant = false
+  dormant = false,
+  needsHumanArt = false
 } = {}) {
   if (kind === 'sculpture') {
     if (isSelected || isPendingPreview) {
@@ -94,17 +96,41 @@ export function resolveNeighborTagTheme({
       textColor: '#e0f2fe'
     };
   }
+  if (dormant || needsHumanArt) {
+    return {
+      accentColor: LAND_LIFECYCLE_COLORS.needsHumanArt.outerColor,
+      dotColor: LAND_LIFECYCLE_COLORS.needsHumanArt.innerColor,
+      textColor: LAND_LIFECYCLE_COLORS.needsHumanArt.textColor
+    };
+  }
   const baseColor = String(defaultLandColor || '').trim();
   if (baseColor) {
-    const resolved = dormant ? '#ff4da6' : baseColor;
+    const resolved = baseColor;
     const lower = resolved.toLowerCase();
     const isPink = lower === '#ff1f8f' || lower === '#ff4da6' || lower === '#ff0099';
     const isTeal = lower === '#00f5d4';
     const isBlue = lower === '#7dd3fc';
+    const isAmber = lower === '#ff9f1c' || lower === '#ffb703';
     return {
       accentColor: resolved,
-      dotColor: isPink ? '#ffd6ec' : isTeal ? '#eafffc' : isBlue ? '#e0f2fe' : '#fff3c4',
-      textColor: isPink ? '#ffe8f4' : isTeal ? '#d9fff9' : isBlue ? '#e0f2fe' : '#fff3c4'
+      dotColor: isPink
+        ? '#ffd6ec'
+        : isTeal
+        ? '#eafffc'
+        : isBlue
+        ? '#e0f2fe'
+        : isAmber
+        ? '#ffedd5'
+        : '#fff3c4',
+      textColor: isPink
+        ? '#ffe8f4'
+        : isTeal
+        ? '#d9fff9'
+        : isBlue
+        ? '#e0f2fe'
+        : isAmber
+        ? '#fff1d6'
+        : '#fff3c4'
     };
   }
   return {
@@ -459,13 +485,15 @@ export function computeNeighborEdgeArrows({
       const distanceMeters = haversineMeters(fLat, fLng, lat, lng);
       const frozen = Boolean(entry?.parcel?.frozen || entry?.parcel?.settings?.frozen);
       const dormant = String(entry?.parcel?.stewardStatus || '').toLowerCase() === 'dormant';
+      const needsHumanArt = formatLandExpiration(entry?.parcel).state !== 'permanent';
       const isSelected = Boolean(entry?.isSelected);
       const theme = resolveNeighborTagTheme({
         kind: 'land',
         defaultLandColor: entry?.accentColor || defaultLandColor,
         isSelected,
         frozen,
-        dormant
+        dormant,
+        needsHumanArt
       });
       rawCandidates.push({
         id: `land:${pid}`,

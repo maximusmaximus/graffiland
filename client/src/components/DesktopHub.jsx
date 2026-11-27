@@ -58,6 +58,7 @@ import BrandLogo from './BrandLogo.jsx';
 import DesktopLandBuilderPanel from './DesktopLandBuilderPanel.jsx';
 import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
+import InfoTip from './InfoTip.jsx';
 import LandArchiveModal from './LandArchiveModal.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
@@ -1822,6 +1823,34 @@ export default function DesktopHub({
         return;
       }
 
+      // Escape -> Remove drawn/selected unminted draft land (or exit Draw Land mode)
+      if (!mod && !e.altKey && e.key === 'Escape') {
+        if (typeof document !== 'undefined' && document.querySelector('[data-info-tip-mode]')) {
+          return;
+        }
+        const draftsNow = draftParcelsRawRef.current || [];
+        if (draftsNow.length > 0) {
+          const selId = selectedDraftIdRef.current;
+          const targetId = draftsNow.some((d) => d.id === selId)
+            ? selId
+            : draftsNow[draftsNow.length - 1]?.id;
+          if (targetId) {
+            e.preventDefault();
+            handleRemoveDraft(targetId);
+            setDrawMode(false);
+            setLandStatus({
+              text: '🗑️ Removed drawn land (Esc) — press Ctrl+Z / Cmd+Z to undo.'
+            });
+            return;
+          }
+        }
+        if (drawMode) {
+          e.preventDefault();
+          setDrawMode(false);
+        }
+        return;
+      }
+
       // Delete / Backspace -> Delete selected unminted land (never deletes minted land)
       if (!mod && !e.altKey && (e.key === 'Delete' || e.key === 'Backspace')) {
         const selId = selectedDraftIdRef.current;
@@ -1856,6 +1885,7 @@ export default function DesktopHub({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     hasBlockingDesktopModal,
+    drawMode,
     handleUndoDraftAction,
     handleRedoDraftAction,
     handleRemoveDraft,
@@ -2890,12 +2920,24 @@ export default function DesktopHub({
                           )}
                           {exp.state !== 'permanent' && (
                             <span
-                              className={expBadgeClass}
-                              style={{ fontSize: 9.5 }}
-                              title={exp.detailText}
+                              className="land-preview-timer-group"
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => e.stopPropagation()}
                             >
-                              <XeroIcon emoji={exp.state === 'expired' ? '⏱️' : '⏳'} size={10} />{' '}
-                              {exp.badgeText}
+                              <span
+                                className={expBadgeClass}
+                                style={{ fontSize: 9.5 }}
+                                title={exp.detailText}
+                              >
+                                <XeroIcon emoji={exp.state === 'expired' ? '⏱️' : '⏳'} size={10} />{' '}
+                                {exp.badgeText}
+                              </span>
+                              <InfoTip title="What This Countdown Means" mode="popover">
+                                {exp.detailText}. Visit this land in person on{' '}
+                                <strong>Mobile AR</strong> and place 3D artwork to make ownership
+                                permanent (turns from <strong>Amber</strong> to{' '}
+                                <strong>Neon Pink</strong>).
+                              </InfoTip>
                             </span>
                           )}
                           {land.isFrozen && (

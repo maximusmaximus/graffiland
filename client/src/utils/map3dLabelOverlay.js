@@ -265,10 +265,19 @@ export function computeSideArtworkCallouts({
   if (visible.length === 0 || viewportWidth <= 0 || viewportHeight <= 0) return [];
 
   const isNarrow = viewportWidth < 520;
-  const labelWidth = isNarrow
-    ? Math.min(136, Math.max(104, Math.round(viewportWidth * 0.31)))
-    : Math.min(184, Math.max(136, Math.round(viewportWidth * 0.22)));
+  const minLabelWidth = isNarrow ? 112 : 132;
   const elbowStub = isNarrow ? 10 : 18;
+  const estimateCalloutWidth = (item, maxAllowed) => {
+    const titleStr = String(item?.title || '');
+    const subStr = String(item?.subtitle || '');
+    const previewPad = item?.isPendingPreview ? 52 : 0;
+    // Bold 11.5px title (~7.1px avg char width) + 9.5px mono meta (~5.9px avg char) + padding & 26px ↗ button
+    const chromePx = isNarrow ? 42 : 48;
+    const neededTitle = Math.ceil(titleStr.length * (isNarrow ? 6.6 : 7.2)) + previewPad;
+    const neededSub = Math.ceil(subStr.length * 6.0);
+    const desired = Math.max(neededTitle, neededSub) + chromePx;
+    return Math.max(minLabelWidth, Math.min(maxAllowed, desired));
+  };
 
   const baseAlt = Number(volume?.baseAltitudeM || 0);
   const volH = Number(volume?.heightMeters || 0);
@@ -398,6 +407,11 @@ export function computeSideArtworkCallouts({
     }
   }
 
+  const hasBothSides = leftItems.length > 0 && rightItems.length > 0;
+  const maxLabelWidth = isNarrow
+    ? Math.min(hasBothSides ? 168 : 210, Math.max(120, Math.round(viewportWidth * (hasBothSides ? 0.39 : 0.48))))
+    : Math.min(hasBothSides ? 256 : 292, Math.max(168, Math.round(viewportWidth * (hasBothSides ? 0.31 : 0.38))));
+
   const placeColumn = (items, side) => {
     const sorted = [...items].sort((a, b) => a.targetY - b.targetY);
     const minTop = topInsetPx;
@@ -433,8 +447,9 @@ export function computeSideArtworkCallouts({
     }
 
     return placed.map((item) => {
-      const x = side === 'left' ? marginPx : Math.max(marginPx, viewportWidth - marginPx - labelWidth);
-      const fromX = side === 'left' ? x + labelWidth : x;
+      const itemWidth = estimateCalloutWidth(item, maxLabelWidth);
+      const x = side === 'left' ? marginPx : Math.max(marginPx, viewportWidth - marginPx - itemWidth);
+      const fromX = side === 'left' ? x + itemWidth : x;
       const fromY = item.y + labelHeight / 2;
       const elbowX = side === 'left' ? fromX + elbowStub : fromX - elbowStub;
       const elbowY = fromY;
@@ -442,7 +457,7 @@ export function computeSideArtworkCallouts({
         ...item,
         x: Math.round(x),
         y: Math.round(item.y),
-        width: labelWidth,
+        width: itemWidth,
         height: labelHeight,
         fromX: Math.round(fromX),
         fromY: Math.round(fromY),

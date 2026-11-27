@@ -28,7 +28,8 @@ import { loadCustomModelObject } from '../utils/customModelLoader.js';
 import { createDepthFadedThreePrismWireframe } from '../utils/prismDepthFade.js';
 import {
   groupNearestLandsWithSculptures,
-  isLandOwnedByUser
+  isLandOwnedByUser,
+  resolveLandColorTheme
 } from '../utils/landMapHelpers.js';
 import { resolveParcelVolume } from '../utils/landPreviewHelpers.js';
 import {
@@ -896,14 +897,12 @@ export function useARPreview({
       if (!prism) continue;
 
       const isSelected = Boolean(arSelectedLandId && arSelectedLandId === land.parcelId);
-      const isDormant = String(land.stewardStatus || '').toLowerCase() === 'dormant';
+      const landTheme = resolveLandColorTheme({ ...land, frozen: land.isFrozen ?? land.frozen });
       const baseHex = isSelected || land.isInside
-        ? 0xff00aa
-        : land.isFrozen
-        ? 0x7dd3fc
-        : isDormant
-        ? 0xff4da6
-        : 0xff1f8f;
+        ? landTheme.needsHumanArt
+          ? 0xffb703
+          : 0xff00aa
+        : landTheme.hex;
 
       const landSharpness = computeProximitySharpness(landDistMeters, { hazeTintHex });
       const atmosphericHex = blendHexWithAtmosphericHaze(

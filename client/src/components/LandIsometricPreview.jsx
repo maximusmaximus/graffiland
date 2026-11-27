@@ -13,6 +13,7 @@ import {
   formatBearingCardinal,
   resolveParcelVolume
 } from '../utils/landPreviewHelpers.js';
+import { resolveLandColorTheme } from '../utils/landMapHelpers.js';
 import { hasWebGLSupport, loadMapLibre } from '../utils/loadMapLibre.js';
 import {
   computePrismScreenGeometry,
@@ -52,16 +53,9 @@ const previewSculptureInFlight = new Set();
 
 function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
   if (!vol || !Array.isArray(vol.ring) || vol.ring.length < 4) return null;
-  const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
-  const isDormant = String(parcel?.stewardStatus || '').toLowerCase() === 'dormant';
-  const color = isSelected
-    ? isFrozen
-      ? '#7dd3fc'
-      : '#ff1f8f'
-    : isDormant
-      ? '#ff4da6'
-      : '#ff1f8f';
-  const innerColor = isFrozen ? '#e0f2fe' : isSelected ? '#ffe0f2' : '#ffd6ec';
+  const theme = resolveLandColorTheme(parcel);
+  const color = theme.outerColor;
+  const innerColor = isSelected && theme.isPermanent ? '#ffe0f2' : theme.innerColor;
   return {
     type: 'Feature',
     properties: {
@@ -70,6 +64,7 @@ function volumeToFeature(parcel, vol, { isSelected = false } = {}) {
       baseAltitudeM: Number(vol.baseAltitudeM || 0),
       color,
       innerColor,
+      landLifecycle: theme.status,
       isSelected: isSelected ? 1 : 0
     },
     geometry: {
@@ -143,9 +138,9 @@ function IsometricFallbackBlueprint({
   const topCenterX = (t0[0] + t1[0] + t2[0] + t3[0]) / 4;
   const topCenterY = (t0[1] + t1[1] + t2[1] + t3[1]) / 4;
   const labelY = Math.max(20, Math.min(t0[1], t1[1], t2[1], t3[1]) - 14);
-  const isFrozen = Boolean(parcel?.frozen || parcel?.settings?.frozen);
-  const stroke = isFrozen ? '#7dd3fc' : '#ff1f8f';
-  const fill = isFrozen ? 'rgba(125, 211, 252, 0.18)' : 'rgba(255, 31, 143, 0.16)';
+  const landTheme = resolveLandColorTheme(parcel);
+  const stroke = landTheme.outerColor;
+  const fill = landTheme.fillRgba;
   const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
 
   const fallbackCallouts = computeSideArtworkCallouts({
@@ -251,6 +246,7 @@ function IsometricFallbackBlueprint({
               style={{
                 left: c.side === 'left' ? 8 : undefined,
                 right: c.side === 'right' ? 8 : undefined,
+                width: c.width ? `${c.width}px` : undefined,
                 top: `${Math.round((c.y / 220) * 100)}%`
               }}
             >
@@ -598,10 +594,11 @@ export default function LandIsometricPreview({
       const geom = computePrismScreenGeometry(map, maplibregl, curVol);
       if (geom) {
         const isFrozenNow = isFrozenRef.current;
+        const theme = resolveLandColorTheme({ ...parcelRef.current, frozen: isFrozenNow });
         const shortName = displayNameRef.current || 'Virtual Land';
-        const trimmed = shortName.length > 22 ? `${shortName.slice(0, 21).trimEnd()}…` : shortName;
-        const outerColor = isFrozenNow ? '#7dd3fc' : '#ff1f8f';
-        const innerColor = isFrozenNow ? '#e0f2fe' : '#ffd6ec';
+        const trimmed = shortName.length > 30 ? `${shortName.slice(0, 29).trimEnd()}…` : shortName;
+        const outerColor = theme.outerColor;
+        const innerColor = theme.innerColor;
         const mapPitch = Number(map.getPitch?.() || 0);
         const isElevated = Number(curVol.baseAltitudeM || 0) > 0.25;
         if (mapPitch >= 2 || isElevated) {
@@ -610,6 +607,7 @@ export default function LandIsometricPreview({
             innerColor,
             lineWidth: 2.3,
             glowBlur: 14,
+            dashed: theme.dashed,
             includeBottomEdges: isElevated
           });
         }
@@ -631,7 +629,7 @@ export default function LandIsometricPreview({
     if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
       const stageRect = stageEl.getBoundingClientRect();
       const hudNodes = stageEl.querySelectorAll(
-        '.land-preview-mode-group, .land-preview-compass-group, .land-preview-scale, .land-preview-refit, .land-preview-artwork-dock'
+        '.land-preview-mode-group, .land-preview-compass-group, .land-preview-map-info, .land-preview-scale, .land-preview-refit, .land-preview-artwork-dock'
       );
       hudNodes.forEach((node) => {
         const r = node.getBoundingClientRect();
@@ -737,6 +735,7 @@ export default function LandIsometricPreview({
           avoidRects: prismAvoidRects,
           maxArrows: desktopPointers ? (w >= 520 ? 6 : 4) : null,
           onScreenPointers: desktopPointers,
+          defaultLandColor: '#ff1f8f',
           unitSystem: unitSystemRef.current
         })
       : [];
@@ -1349,22 +1348,28 @@ export default function LandIsometricPreview({
               </span>
             )}
             {geoSummary.expiration.state !== 'permanent' && (
-              <span
-                className={`badge ${geoSummary.expiration.urgent ? 'badge-error' : ''}`}
-                style={{ fontSize: 10 }}
-              >
-                ⏱️ {geoSummary.expiration.badgeText}
+              <span className="land-preview-timer-group" data-testid="land-preview-timer-group">
+                <span
+                  className={`badge ${
+                    geoSummary.expiration.urgent ? 'badge-error' : 'is-needs-human-art'
+                  }`}
+                  style={{ fontSize: 10 }}
+                >
+                  ⏱️ {geoSummary.expiration.badgeText}
+                </span>
+                <span data-testid="land-preview-timer-info">
+                  <InfoTip title="What This Countdown Means">
+                    <p style={{ margin: '0 0 6px' }}>{geoSummary.expiration.detailText}.</p>
+                    <p style={{ margin: 0 }}>
+                      <strong>How to make it permanent:</strong> Visit this spot in person on{' '}
+                      <strong>Mobile AR</strong> and place 3D artwork — the countdown disappears
+                      forever and the land boundary turns from <strong>Amber</strong> (needs human
+                      art) to <strong>Neon Pink</strong> (permanent).
+                    </p>
+                  </InfoTip>
+                </span>
               </span>
             )}
-            <InfoTip title="Isometric Geographic Preview">
-              Shows your selected land fitted in 3D isometric view with surrounding streets, 3D
-              buildings, and placed sculptures. Switch between <strong>Iso</strong> (fitted 3D plot),{' '}
-              <strong>Area</strong> (neighborhood context), and <strong>2D</strong> (North-up site
-              plan), or click <strong>↻ 90°</strong> to inspect all sides.
-              {otherParcelEntries.length > 0
-                ? ' Edge arrows point toward your neighboring lands — click any arrow label to jump to it.'
-                : ''}
-            </InfoTip>
           </div>
           <div className="land-preview-place" data-testid="land-preview-place">
             <XeroIcon emoji="📍" size={12} />
@@ -1538,6 +1543,19 @@ export default function LandIsometricPreview({
             >
               ↻ 90°
             </button>
+            <span className="land-preview-map-info" data-testid="land-preview-map-info">
+              <InfoTip title="How to Navigate This Map" mode="popover" align="right">
+                Switch between <strong>Iso</strong> (fitted 3D plot), <strong>Area</strong>{' '}
+                (neighborhood context), and <strong>2D</strong> (North-up site plan), click{' '}
+                <strong>↻ 90°</strong> to orbit all sides, drag to pan/rotate, scroll or pinch to
+                zoom, or tap <strong>🎯 Fit</strong> to re-center.{' '}
+                <strong>Neon Pink</strong> lands are permanent; <strong>Amber</strong> lands need a
+                human to place IRL AR artwork before their timer expires.
+                {otherParcelEntries.length > 0
+                  ? ' Click any edge arrow label to jump to a neighboring land.'
+                  : ''}
+              </InfoTip>
+            </span>
           </div>
         </div>
 
