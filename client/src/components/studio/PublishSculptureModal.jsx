@@ -7,6 +7,7 @@ import {
 } from '../../utils/clipboard.js';
 import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
 import { useSafeBackdropClose } from '../../utils/modalBackdropGuard.js';
+import { projectVoxelsToIsoCubes } from '../../utils/sculptureThumbnailRenderer.js';
 import { EmojiInput, EmojiTextarea } from '../EmojiField.jsx';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
@@ -16,6 +17,7 @@ export default function PublishSculptureModal({
   user,
   voxels,
   placedCatalogItem = null,
+  artPreviewUrl = '',
   polStats,
   location,
   orbStatus,
@@ -55,6 +57,8 @@ export default function PublishSculptureModal({
   onClose
 }) {
   const policy = config?.policy;
+  const safeVoxels = useMemo(() => (Array.isArray(voxels) ? voxels : []), [voxels]);
+  const hasPublishableArt = safeVoxels.length > 0 || Boolean(placedCatalogItem);
   const wordCount = useMemo(
     () => (description.trim() ? description.trim().split(/\s+/).filter(Boolean).length : 0),
     [description]
@@ -66,8 +70,99 @@ export default function PublishSculptureModal({
   const backdropCloseProps = useSafeBackdropClose(onClose);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
 
+  const isolatedPreviewUrl = mintReceipt
+    ? mintReceipt.sculpture?.previewDataUrl || artPreviewUrl || ''
+    : artPreviewUrl || placedCatalogItem?.previewImageUrl || '';
+  const isoCubes = useMemo(() => {
+    if (isolatedPreviewUrl) return [];
+    const sourceVoxels =
+      Array.isArray(mintReceipt?.sculpture?.voxels) && mintReceipt.sculpture.voxels.length > 0
+        ? mintReceipt.sculpture.voxels
+        : safeVoxels;
+    if (sourceVoxels.length === 0) return [];
+    return projectVoxelsToIsoCubes(sourceVoxels, { width: 280, height: 170, maxCubes: 220 });
+  }, [isolatedPreviewUrl, mintReceipt, safeVoxels]);
+  const showIsolatedPreview = Boolean(
+    isolatedPreviewUrl || isoCubes.length > 0 || placedCatalogItem
+  );
+  const isolatedPreviewKind = isolatedPreviewUrl
+    ? 'snapshot'
+    : isoCubes.length > 0
+    ? 'voxel-iso'
+    : 'model-card';
+  const isolatedPreviewTitle =
+    placedCatalogItem && safeVoxels.length > 0
+      ? 'Your Art & Placed 3D Model'
+      : placedCatalogItem
+      ? placedCatalogItem.title || 'Your Placed 3D Model'
+      : mintReceipt?.sculpture?.title || title.trim() || 'Your New Art';
+
+  const isolatedArtPreviewBlock = showIsolatedPreview ? (
+    <div
+      className="publish-art-preview-card"
+      data-testid="publish-isolated-art-preview"
+      data-isolated-only="true"
+      data-preview-kind={isolatedPreviewKind}
+    >
+      <div className="publish-art-preview-stage">
+        {isolatedPreviewUrl ? (
+          <img
+            src={isolatedPreviewUrl}
+            alt={`Isolated preview of ${isolatedPreviewTitle}`}
+            className="publish-art-preview-img"
+            data-testid="publish-art-preview-img"
+          />
+        ) : isoCubes.length > 0 ? (
+          <svg
+            className="publish-art-preview-svg"
+            data-testid="publish-art-preview-voxel-svg"
+            viewBox="0 0 280 170"
+            role="img"
+            aria-label={`Isolated preview of ${isolatedPreviewTitle}`}
+          >
+            {isoCubes.map((cube, idx) => (
+              <g key={idx}>
+                <polygon points={cube.left} fill={cube.leftFill} />
+                <polygon points={cube.right} fill={cube.rightFill} />
+                <polygon points={cube.top} fill={cube.topFill} />
+              </g>
+            ))}
+          </svg>
+        ) : (
+          <div
+            className="publish-art-preview-model-fallback"
+            data-testid="publish-art-preview-model-fallback"
+          >
+            <XeroIcon emoji="🧊" size={34} />
+            <strong>{placedCatalogItem?.title || 'Placed 3D Model'}</strong>
+            <span className="mono">
+              {String(placedCatalogItem?.modelFormat || 'GLB').toUpperCase()}
+              {placedCatalogItem?.sourceName ? ` · ${placedCatalogItem.sourceName}` : ''}
+            </span>
+          </div>
+        )}
+        <span className="publish-art-preview-pill">
+          <XeroIcon emoji={placedCatalogItem && safeVoxels.length === 0 ? '🧊' : '🎨'} size={12} />
+          <span>
+            {placedCatalogItem && safeVoxels.length > 0
+              ? 'Your Art + 3D Model'
+              : placedCatalogItem
+              ? 'Your Placed 3D Model'
+              : 'Your New Art'}
+          </span>
+        </span>
+        <span className="publish-art-preview-tag mono">Only your piece</span>
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div className="modal-backdrop" {...backdropCloseProps}>
+    <div
+      className="modal-backdrop publish-modal-backdrop"
+      data-testid="publish-sculpture-modal"
+      data-publish-isolated="true"
+      {...backdropCloseProps}
+    >
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
@@ -111,6 +206,7 @@ export default function PublishSculptureModal({
 
         {mintReceipt ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {isolatedArtPreviewBlock}
             <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
               <XeroIcon emoji="✅" size={15} />{' '}
               {mintReceipt.addedToExistingLand
@@ -201,15 +297,18 @@ export default function PublishSculptureModal({
           </div>
         ) : (
           <form onSubmit={onSubmitPublish} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {isolatedArtPreviewBlock}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {placedCatalogItem && (
                 <span className="badge gold" data-testid="publish-catalog-item-badge">
                   <XeroIcon emoji="🧊" size={13} /> {placedCatalogItem.title} ({placedCatalogItem.sourceName || '.GLB'})
                 </span>
               )}
-              <span className="badge teal">
-                <XeroIcon emoji="🧱" size={13} /> {voxels.length} voxels
-              </span>
+              {(safeVoxels.length > 0 || !placedCatalogItem) && (
+                <span className="badge teal">
+                  <XeroIcon emoji="🧱" size={13} /> {safeVoxels.length} voxels
+                </span>
+              )}
               <span className="badge gold">
                 <XeroIcon emoji="📷" size={13} /> {polStats.frames} frames / {polStats.flow}% flow
               </span>
@@ -438,7 +537,7 @@ export default function PublishSculptureModal({
                   type="submit"
                   className="btn btn-pink"
                   style={{ flex: '1 1 180px' }}
-                  disabled={publishing || voxels.length === 0 || targetLandFrozen}
+                  disabled={publishing || !hasPublishableArt || targetLandFrozen}
                 >
                   <XeroIcon emoji={activeTargetLand ? '🎨' : '🚀'} size={16} />
                   {publishing
@@ -455,7 +554,7 @@ export default function PublishSculptureModal({
                   type="button"
                   className="btn btn-primary"
                   style={{ flex: '1 1 180px' }}
-                  disabled={publishing || voxels.length === 0 || targetLandFrozen}
+                  disabled={publishing || !hasPublishableArt || targetLandFrozen}
                   onClick={onCopyAgentPublishPrompt}
                 >
                   <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt
@@ -464,7 +563,7 @@ export default function PublishSculptureModal({
               <button
                 type="button"
                 className="btn"
-                disabled={publishing || draftsBusy || (voxels.length === 0 && !title.trim() && !description.trim())}
+                disabled={publishing || draftsBusy || (!hasPublishableArt && !title.trim() && !description.trim())}
                 onClick={() => onManualSaveDraft({ closePublish: true })}
               >
                 <XeroIcon emoji="💾" size={15} />

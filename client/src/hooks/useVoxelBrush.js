@@ -2051,7 +2051,7 @@ export function useVoxelBrush({
         if (
           toolId === 'publish' &&
           !silent &&
-          voxelsRef.current.length > 0 &&
+          (voxelsRef.current.length > 0 || hasPlacedCatalogRef.current) &&
           !userRef.current
         ) {
           markModalOpenedFromPointerUp();
@@ -2706,7 +2706,14 @@ export function useVoxelBrush({
           const host = canvasHostRef.current;
           const cam = cameraRef.current;
           const nearbyGroup = nearbyGroupRef.current;
-          if (host && cam && nearbyGroup && nearbyGroup.children.length > 0 && onTapArLand) {
+          if (
+            host &&
+            cam &&
+            nearbyGroup &&
+            nearbyGroup.visible !== false &&
+            nearbyGroup.children.length > 0 &&
+            onTapArLand
+          ) {
             const rect = host.getBoundingClientRect();
             const ndc = new THREE.Vector2(
               ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
@@ -2763,7 +2770,7 @@ export function useVoxelBrush({
       const host = canvasHostRef.current;
       const cam = cameraRef.current;
       const nearbyGroup = nearbyGroupRef.current;
-      if (!host || !cam || !nearbyGroup) return;
+      if (!host || !cam || !nearbyGroup || nearbyGroup.visible === false) return;
 
       const rect = host.getBoundingClientRect();
       const ndc = new THREE.Vector2(

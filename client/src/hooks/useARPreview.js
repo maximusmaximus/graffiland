@@ -70,6 +70,7 @@ export function useARPreview({
   isArViewOnly = false,
   editingSculptureId = '',
   fadeOtherItems = false,
+  isolatePublishArt = false,
   atmosphericTintRef = null,
   orientationFusionRef = null
 }) {
@@ -430,9 +431,10 @@ export function useARPreview({
       entries.clear();
     };
 
-    if ((mode !== 'draw' && mode !== 'preview') || !location) {
+    if (!location) {
       clearAllPrisms();
       clearAllEntries();
+      group.visible = false;
       setVisibleOtherItemsCount((prev) => (prev === 0 ? prev : 0));
       while (group.children.length > 0) {
         const stray = group.children[0];
@@ -441,6 +443,35 @@ export function useARPreview({
       }
       return undefined;
     }
+
+    // When entering or inside Publish, strictly hide all other art, models, and land items
+    // so the user ONLY sees the art they just made or the 3D model they just placed.
+    // Keep cached children mounted (invisible) so publish-time overlap checks stay accurate
+    // and returning to Draw does not re-download GLB models.
+    if (mode === 'publish' || isolatePublishArt) {
+      group.visible = false;
+      setVisibleOtherItemsCount((prev) => (prev === 0 ? prev : 0));
+      if (arTargetedIdRef.current) {
+        arTargetedIdRef.current = '';
+        setArTargetedSculpture(null);
+      }
+      return undefined;
+    }
+
+    if (mode !== 'draw' && mode !== 'transform' && mode !== 'preview') {
+      clearAllPrisms();
+      clearAllEntries();
+      group.visible = false;
+      setVisibleOtherItemsCount((prev) => (prev === 0 ? prev : 0));
+      while (group.children.length > 0) {
+        const stray = group.children[0];
+        group.remove(stray);
+        disposeObject3D(stray);
+      }
+      return undefined;
+    }
+
+    group.visible = true;
 
     // Always refresh lightweight land prism wireframes cheaply for the latest GPS position
     clearAllPrisms();
@@ -1017,6 +1048,7 @@ export function useARPreview({
     arModelLoadedTick,
     editingSculptureId,
     fadeOtherItems,
+    isolatePublishArt,
     atmosphericTintRef
   ]);
 

@@ -221,7 +221,7 @@ describe('Mobile 3D Search Stability, Camera Hide on Search, and First-Time Came
     );
     assert.match(
       mobileStudioSrc,
-      /className=\{`hud-layer\$\{catalogSearchOpen \|\| drafts\.agentOpen \? ' is-camera-hidden' : ''\}`\}/,
+      /className=\{`hud-layer\$\{[\s\S]*?catalogSearchOpen \|\| drafts\.agentOpen[\s\S]*?\? ' is-camera-hidden'\s*:\s*''[\s\S]*?\}`\}/,
       'MobileStudio must hide the camera HUD layer while catalogSearchOpen or drafts.agentOpen is active'
     );
 
