@@ -147,8 +147,21 @@ export default function ARLandInspectorPanel({
   webxrSupported = false,
   webxrActive = false,
   onToggleWebxr = null,
+  expanded = undefined,
+  defaultExpanded = true,
+  onToggleExpanded = null,
   onClose
 }) {
+  const [internalExpanded, setInternalExpanded] = useState(Boolean(defaultExpanded));
+  const isExpanded = typeof expanded === 'boolean' ? expanded : internalExpanded;
+  const handleToggleExpanded = () => {
+    const next = !isExpanded;
+    if (typeof onToggleExpanded === 'function') {
+      onToggleExpanded(next);
+    } else {
+      setInternalExpanded(next);
+    }
+  };
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
@@ -359,12 +372,122 @@ export default function ARLandInspectorPanel({
       ? `Visit ${displayName} in person (${formatDistanceMeters(edgeDistM, unitSystem)} away) to unlock locked on-site actions.`
       : `Enable GPS and visit ${displayName} in person to unlock locked on-site actions.`;
 
+  if (!isExpanded) {
+    const artCountLabel =
+      sculptures.length > 0
+        ? ` · ${sculptures.length} ${sculptures.length === 1 ? 'artwork' : 'artworks'}`
+        : '';
+    return (
+      <section
+        className="ar-land-inspector is-collapsed hud-interactive"
+        role="dialog"
+        aria-label={`Land details for ${displayName}`}
+        data-testid="ar-land-inspector"
+        data-expanded="false"
+        data-parcel-id={land.parcelId}
+        data-owned={land.isOwned ? 'true' : 'false'}
+        onPointerDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+      >
+        <div className="ar-land-compact-bar">
+          <button
+            type="button"
+            className="ar-land-compact-summary"
+            data-testid="ar-land-compact-summary"
+            onClick={handleToggleExpanded}
+            aria-label={`Show details for ${displayName}`}
+          >
+            <div className="ar-land-compact-eyebrow">
+              <span
+                className={`ar-land-status-text ${land.isInside ? 'is-gold' : 'is-teal'}`}
+                data-testid="ar-land-proximity-badge"
+              >
+                <span className="ar-land-status-dot" aria-hidden="true" />
+                {proximityText}
+              </span>
+              {artCountLabel && <span className="ar-land-compact-count">{artCountLabel}</span>}
+            </div>
+            <div className="ar-land-compact-title">{displayName}</div>
+          </button>
+
+          <div className="ar-land-compact-actions">
+            {hasMultipleNearby && (
+              <div className="ar-land-pager" role="group" aria-label="Switch nearby land">
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => stepNearbyLand(-1)}
+                  aria-label="Previous nearby land"
+                >
+                  ◂
+                </button>
+                <span className="mono ar-land-pager-count">
+                  {currentIdx + 1}/{nearbyLands.length}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => stepNearbyLand(1)}
+                  aria-label="Next nearby land"
+                >
+                  ▸
+                </button>
+              </div>
+            )}
+            {hasPrimaryDraw && canDrawAtLand ? (
+              <button
+                type="button"
+                className="btn btn-xs btn-primary ar-land-compact-cta"
+                data-testid="ar-land-compact-draw-btn"
+                onClick={() => onDrawHere(land)}
+              >
+                <XeroIcon emoji="🎨" size={13} />
+                <span>Draw</span>
+              </button>
+            ) : land.googleMapsUrl ? (
+              <a
+                className="btn btn-xs ar-land-compact-cta"
+                href={land.googleMapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="ar-land-compact-nav-link"
+                aria-label={`Navigate to ${displayName}`}
+              >
+                <XeroIcon emoji="🧭" size={13} />
+                <span>Go</span>
+              </a>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-xs ar-land-expand-toggle"
+              data-testid="ar-land-details-toggle"
+              aria-expanded="false"
+              onClick={handleToggleExpanded}
+            >
+              ▲ Details
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs ar-land-close-btn"
+              data-testid="ar-land-close-btn"
+              aria-label="Close land details and return to camera drawing"
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
-      className="ar-land-inspector hud-interactive"
+      className="ar-land-inspector is-expanded hud-interactive"
       role="dialog"
       aria-label={`Land details for ${displayName}`}
       data-testid="ar-land-inspector"
+      data-expanded="true"
       data-parcel-id={land.parcelId}
       data-owned={land.isOwned ? 'true' : 'false'}
       onPointerDown={(e) => e.stopPropagation()}
@@ -423,6 +546,15 @@ export default function ARLandInspectorPanel({
                 </button>
               </div>
             )}
+            <button
+              type="button"
+              className="btn btn-xs ar-land-expand-toggle"
+              data-testid="ar-land-details-toggle"
+              aria-expanded="true"
+              onClick={handleToggleExpanded}
+            >
+              ▾ Hide
+            </button>
             <button
               type="button"
               className="btn btn-xs ar-land-close-btn"

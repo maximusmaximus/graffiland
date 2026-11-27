@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -9115,6 +9116,107 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.ok(frozenBanner.textContent.includes('Stibblez Land is frozen'));
     const frozenSubmit = pubFrozenView.getByRole('button', { name: /Land Frozen/i });
     assert.equal(frozenSubmit.disabled, true);
+    cleanup();
+  });
+
+  test('AR item guidance view prevents telemetry/guidance overlap and collapses bottom inspector into a clean compact bar by default', async () => {
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+    const { default: ARLandGuidanceOverlay } = await loadJsxModule(
+      'client/src/components/studio/ARLandGuidanceOverlay.jsx'
+    );
+
+    // 1) Verify CSS strictly separates top telemetry strip (+52px) from AR guidance stage (+96px)
+    const cssText = fs.readFileSync(
+      path.resolve(ROOT, 'client/src/styles.css'),
+      'utf8'
+    );
+    const inspectMatch = cssText.match(/\.mobile-hud-stack\.is-land-inspect\s*\{[^}]*top:\s*calc\([^;]*\+\s*(\d+)px\)/);
+    const stageMatch = cssText.match(/\.ar-guidance-stage\s*\{[^}]*top:\s*calc\([^;]*\+\s*(\d+)px\)/);
+    assert.ok(inspectMatch, 'Expected .mobile-hud-stack.is-land-inspect top offset in styles.css');
+    assert.ok(stageMatch, 'Expected .ar-guidance-stage top offset in styles.css');
+    const telemetryTopPx = Number(inspectMatch[1]);
+    const guidanceTopPx = Number(stageMatch[1]);
+    assert.ok(
+      guidanceTopPx - telemetryTopPx >= 36,
+      `Expected >=36px separation between telemetry strip (+${telemetryTopPx}px) and AR guidance stage (+${guidanceTopPx}px)`
+    );
+
+    const land = {
+      parcelId: 'GLAND-ARCLEAN1',
+      displayName: 'Stibblez Land',
+      customName: 'Stibblez Land',
+      isInside: true,
+      isFrozen: false,
+      isOwned: false,
+      edgeDistanceMeters: 0,
+      distanceMeters: 0,
+      googleMapsUrl: 'https://maps.google.com/?q=39.7302,-121.8406',
+      sculptures: [
+        { id: 'sc-1', title: 'Turkey Day 2026 Coffee', voxelCount: 0, modelType: 'custom-3d' },
+        { id: 'sc-2', title: 'Stibblez', voxelCount: 2478 }
+      ]
+    };
+
+    // 2) ARLandGuidanceOverlay renders clean legible off-screen guidance & omits .has-inspector when collapsed
+    const guideView = RTL.render(
+      React.createElement(ARLandGuidanceOverlay, {
+        land,
+        guidance: {
+          inView: false,
+          edge: 'right',
+          instruction: 'Move camera right',
+          turnDegrees: 108,
+          angleDeg: 108,
+          distanceMeters: 0,
+          sharpnessPct: 100,
+          tier: 'ultra',
+          tierLabel: 'Ultra-Sharp'
+        },
+        hasBottomInspector: false
+      })
+    );
+    const stageEl = guideView.getByTestId('ar-land-guidance-overlay');
+    assert.equal(stageEl.className.includes('has-inspector'), false);
+    const guidePill = guideView.getByTestId('ar-land-guide-pill');
+    assert.ok(guidePill.textContent.includes('Stibblez Land'));
+    assert.ok(guidePill.textContent.includes('Inside'));
+    assert.ok(guidePill.textContent.includes('Move camera right'));
+    assert.ok(guidePill.textContent.includes('108°'));
+    cleanup();
+
+    // 3) ARLandInspectorPanel with defaultExpanded={false} renders sleek compact bar & expands/hides cleanly
+    const drawClicked = [];
+    const panelView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land,
+        defaultExpanded: false,
+        onDrawHere: (l) => drawClicked.push(l.parcelId),
+        onClose: () => {}
+      })
+    );
+    const inspector = panelView.getByTestId('ar-land-inspector');
+    assert.equal(inspector.getAttribute('data-expanded'), 'false');
+    assert.ok(panelView.getByTestId('ar-land-compact-summary').textContent.includes('Stibblez Land'));
+    assert.ok(panelView.getByTestId('ar-land-compact-summary').textContent.includes('2 artworks'));
+    assert.equal(panelView.queryByTestId('ar-land-info-section'), null);
+    assert.equal(panelView.queryByTestId('ar-land-actions-section'), null);
+
+    // Quick Draw works right from compact bar
+    RTL.fireEvent.click(panelView.getByTestId('ar-land-compact-draw-btn'));
+    assert.deepEqual(drawClicked, ['GLAND-ARCLEAN1']);
+
+    // Expand via Details toggle -> full info & actions appear
+    RTL.fireEvent.click(panelView.getByTestId('ar-land-details-toggle'));
+    assert.equal(panelView.getByTestId('ar-land-inspector').getAttribute('data-expanded'), 'true');
+    assert.ok(panelView.getByTestId('ar-land-info-section'));
+    assert.ok(panelView.getByTestId('ar-land-actions-section'));
+
+    // Collapse back via Hide toggle
+    RTL.fireEvent.click(panelView.getByTestId('ar-land-details-toggle'));
+    assert.equal(panelView.getByTestId('ar-land-inspector').getAttribute('data-expanded'), 'false');
+    assert.equal(panelView.queryByTestId('ar-land-info-section'), null);
     cleanup();
   });
 });
