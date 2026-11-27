@@ -1,6 +1,11 @@
 // Main-thread interface to the non-reversible binary ORB Web Worker.
 // Samples only small transient luminance frames inside an offscreen canvas (never retained or uploaded).
 
+import {
+  ORB_DEFAULT_MAX_REPROJ_ERR_PX,
+  classifyLightingFromLuminance
+} from './orbMatcher.js';
+
 const SAMPLE_W = 160;
 const SAMPLE_H = 120;
 
@@ -50,10 +55,14 @@ export class OrbLandmarkTracker {
     this.ctx.drawImage(videoEl, 0, 0, SAMPLE_W, SAMPLE_H);
     const { data } = this.ctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H);
     const gray = new Uint8Array(SAMPLE_W * SAMPLE_H);
+    let lumSum = 0;
     for (let i = 0, p = 0; i < gray.length; i += 1, p += 4) {
-      gray[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;
+      const y = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;
+      gray[i] = y;
+      lumSum += y;
     }
-    return { gray, width: SAMPLE_W, height: SAMPLE_H };
+    const meanLuminance = Math.round((lumSum / gray.length) * 10) / 10;
+    return { gray, width: SAMPLE_W, height: SAMPLE_H, meanLuminance };
   }
 
   postTask(message, transfer = []) {
@@ -68,7 +77,10 @@ export class OrbLandmarkTracker {
     });
   }
 
-  async extractKeyframeFeatures(videoEl, { yawDeg = 0, pitchDeg = 0 } = {}) {
+  async extractKeyframeFeatures(
+    videoEl,
+    { yawDeg = 0, pitchDeg = 0, lightingTag = '', solarRegime = '' } = {}
+  ) {
     const frame = this.captureLuminance(videoEl);
     if (!frame) return null;
     const res = await this.postTask(
@@ -77,22 +89,33 @@ export class OrbLandmarkTracker {
         gray: frame.gray,
         width: frame.width,
         height: frame.height,
-        yawDeg
+        yawDeg,
+        solarRegime
       },
       [frame.gray.buffer]
     );
     if (!res?.ok || !Array.isArray(res.features)) return null;
+    const explicitTag = String(lightingTag || '').trim().toLowerCase();
+    const resolvedLightingTag =
+      explicitTag === 'daylight' || explicitTag === 'lowlight'
+        ? explicitTag
+        : res.lightingTag || classifyLightingFromLuminance(frame.meanLuminance, solarRegime);
     return {
       yawOffsetDeg: Math.round(yawDeg * 10) / 10,
       pitchDeg: Math.round(pitchDeg * 10) / 10,
       frameWidth: frame.width,
       frameHeight: frame.height,
-      lightingTag: 'live-scan',
+      lightingTag: resolvedLightingTag,
+      meanLuminance: res.meanLuminance ?? frame.meanLuminance,
       features: res.features
     };
   }
 
-  async matchLiveFrame(videoEl, anchorPack, { maxReprojErr = 6.5 } = {}) {
+  async matchLiveFrame(
+    videoEl,
+    anchorPack,
+    { maxReprojErr = ORB_DEFAULT_MAX_REPROJ_ERR_PX } = {}
+  ) {
     const frame = this.captureLuminance(videoEl);
     if (!frame || !anchorPack?.keyframes?.length) return null;
     const res = await this.postTask(
@@ -102,7 +125,7 @@ export class OrbLandmarkTracker {
         width: frame.width,
         height: frame.height,
         keyframes: anchorPack.keyframes,
-        maxReprojErr
+        maxReprojErr: Number(maxReprojErr || ORB_DEFAULT_MAX_REPROJ_ERR_PX)
       },
       [frame.gray.buffer]
     );
@@ -112,8 +135,11 @@ export class OrbLandmarkTracker {
       inlierCount: res.inlierCount || 0,
       reprojectionErrorPx: res.reprojectionErrorPx || 999,
       poseCorrectionYawRad: res.poseCorrectionYawRad || 0,
+      estimatedScale: res.estimatedScale ?? 1,
+      estimatedRotationRad: res.estimatedRotationRad ?? 0,
       matchedKeyframeIndex: res.matchedKeyframeIndex ?? -1,
-      matchedDescriptors: res.matchedDescriptors || []
+      matchedLightingSlot: res.matchedLightingSlot || '',
+      matchedDescriptors: Array.isArray(res.matchedDescriptors) ? res.matchedDescriptors : []
     };
   }
 

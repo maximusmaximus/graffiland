@@ -970,7 +970,6 @@ function ARViewportCanvasInner({
         }
 
         if (
-          !cov.optimal &&
           now - lastOrbExtractPush > 920 &&
           !orbExtractBusy &&
           hasLiveCameraFrame &&
@@ -992,7 +991,8 @@ function ARViewportCanvasInner({
                   setOrbStatus((prevSt) => ({
                     ...prevSt,
                     keyframes: orbKeyframesRef.current.size,
-                    features: totalPts
+                    features: totalPts,
+                    lightingSlot: kf.lightingTag || prevSt.lightingSlot || 'daylight'
                   }));
                 }
               })

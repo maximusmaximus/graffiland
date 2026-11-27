@@ -1184,8 +1184,11 @@ export default function MobileStudio({
           api
             .saveParcelLandmarkPack(res.sculpture.parcelId, {
               geohash: res.sculpture.geohash,
+              lat: refinedAnchor.lat,
+              lng: refinedAnchor.lng,
               keyframes: kfs,
-              allowInitialClaim: true
+              allowInitialClaim: true,
+              deviceProfile: { isMobile: true }
             })
             .catch(() => {});
           pol.resetOrbKeyframes();
