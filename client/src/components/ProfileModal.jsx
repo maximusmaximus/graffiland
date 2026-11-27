@@ -1499,23 +1499,43 @@ export default function ProfileModal({
                     const scUrl = resolveSculptureUrl(sc.id);
                     const chainLinks = getSculptureChainLinks(sc, config);
                     return (
-                      <div key={sc.id} className="profile-item-card" data-testid="profile-sculpture-item">
+                      <div
+                        key={sc.id}
+                        className={`profile-item-card${onSelectSculpture ? ' is-clickable' : ''}`}
+                        data-testid="profile-sculpture-item"
+                        role={onSelectSculpture ? 'button' : undefined}
+                        tabIndex={onSelectSculpture ? 0 : undefined}
+                        title={onSelectSculpture ? `View "${sc.title || 'Artwork'}" in 3D` : undefined}
+                        onClick={
+                          onSelectSculpture
+                            ? () => {
+                                onClose?.();
+                                onSelectSculpture(sc);
+                              }
+                            : undefined
+                        }
+                        onKeyDown={
+                          onSelectSculpture
+                            ? (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  onClose?.();
+                                  onSelectSculpture(sc);
+                                }
+                              }
+                            : undefined
+                        }
+                      >
                         <div className="profile-item-head">
                           <div style={{ minWidth: 0 }}>
                             {onSelectSculpture ? (
-                              <button
-                                type="button"
+                              <div
                                 className="profile-item-title artwork-title-link-btn"
                                 data-testid="profile-artwork-label"
-                                title={`View "${sc.title || 'Artwork'}" in 3D`}
-                                onClick={() => {
-                                  onClose?.();
-                                  onSelectSculpture(sc);
-                                }}
                               >
                                 <span>{sc.title}</span>
                                 <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
-                              </button>
+                              </div>
                             ) : (
                               <a
                                 className="profile-item-title artwork-title-link-btn"
@@ -1553,6 +1573,7 @@ export default function ProfileModal({
                               href={chainLinks.txUrl}
                               target="_blank"
                               rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
                             >
                               ⛓️ Tx {sc.chain.txHash.slice(0, 8)}...
                             </a>
@@ -1569,28 +1590,20 @@ export default function ProfileModal({
                             target="_blank"
                             rel="noreferrer"
                             data-testid="profile-sculpture-public-link"
+                            onClick={(e) => e.stopPropagation()}
                           >
                             <XeroIcon emoji="🔗" size={11} /> Public Link
                           </a>
                           <button
                             type="button"
                             className="btn btn-xs"
-                            onClick={() => handleCopyUrl(`sc-${sc.id}`, scUrl, 'sculpture link')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyUrl(`sc-${sc.id}`, scUrl, 'sculpture link');
+                            }}
                           >
                             {copiedKey === `sc-${sc.id}` ? '✅ Copied' : '📋 Copy'}
                           </button>
-                          {onSelectSculpture && (
-                            <button
-                              type="button"
-                              className="btn btn-xs btn-primary"
-                              onClick={() => {
-                                onClose?.();
-                                onSelectSculpture(sc);
-                              }}
-                            >
-                              <XeroIcon emoji="🧊" size={11} /> Review 3D
-                            </button>
-                          )}
                         </div>
                       </div>
                     );

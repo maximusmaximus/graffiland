@@ -2168,16 +2168,6 @@ export default function PlotVisitView({
                       )}
 
                       <div className="plot-detail-actions">
-                        {onSelectSculpture && (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            data-testid="plot-open-artwork-viewer-btn"
-                            onClick={() => onSelectSculpture(selectedArtwork)}
-                          >
-                            <XeroIcon emoji="🧊" size={13} /> Inspect Full 3D
-                          </button>
-                        )}
                         <button
                           type="button"
                           className="btn btn-sm"

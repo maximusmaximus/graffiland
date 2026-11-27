@@ -969,17 +969,6 @@ export default function MobileMapSheet({
                                     >
                                       <XeroIcon emoji="📋" size={16} />
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-primary btn-xs"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        markLandSeenById(land.parcelId);
-                                        onSelectSculpture?.(sc);
-                                      }}
-                                    >
-                                      <XeroIcon emoji="🧊" size={12} /> 3D
-                                    </button>
                                   </div>
                                 </div>
                               );

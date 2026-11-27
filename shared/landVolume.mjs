@@ -1,4 +1,4 @@
-import { encodeGeohash } from '../server/services/pol.mjs';
+import { decodeGeohashBounds, encodeGeohash } from '../server/services/pol.mjs';
 import { LAND_VOLUME_LIMITS, POLICY, VOXEL_STEP } from './constants.mjs';
 
 const METERS_PER_DEG_LAT = 111320;
@@ -920,6 +920,312 @@ export function footprintsOverlap(volA, volB, edgeToleranceMeters = 0.15) {
     }
   }
   return true;
+}
+
+function distPointToSegment2D(px, py, ax, ay, bx, by) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq <= 1e-9) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lenSq));
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+}
+
+/**
+ * Exact 2D distance in meters from `(lat, lng)` to the nearest boundary edge of an oriented
+ * land footprint (`volume`). Returns `0` when `(lat, lng)` lies inside the footprint polygon.
+ */
+export function distanceToLandFootprintMeters(lat, lng, volume) {
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (!Number.isFinite(nLat) || !Number.isFinite(nLng) || !volume) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const pts = toLocalMetersCorners(volume, nLat, nLng);
+  if (!Array.isArray(pts) || pts.length < 3) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    const intersects = yi > 0 !== yj > 0 && 0 < ((xj - xi) * (0 - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  if (inside) return 0;
+
+  let minD = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[(i + 1) % pts.length];
+    const d = distPointToSegment2D(0, 0, ax, ay, bx, by);
+    if (d < minD) minD = d;
+  }
+  return Number(minD.toFixed(3));
+}
+
+/**
+ * Returns `true` when `(lat, lng)` is inside (or within `edgeToleranceMeters` of) `volume`.
+ */
+export function isPointInLandFootprint(lat, lng, volume, edgeToleranceMeters = 0.25) {
+  const distM = distanceToLandFootprintMeters(lat, lng, volume);
+  return Number.isFinite(distM) && distM <= Math.max(0, Number(edgeToleranceMeters) || 0);
+}
+
+function reconstructParcelVolumeFromDbRow(row) {
+  if (!row || !row.parcel_id) return null;
+  const volW = Number(row.width_meters);
+  const volD = Number(row.depth_meters);
+  const volLat = Number(row.vol_center_lat ?? row.center_lat);
+  const volLng = Number(row.vol_center_lng ?? row.center_lng);
+  if (
+    Number.isFinite(volW) &&
+    volW > 0 &&
+    Number.isFinite(volD) &&
+    volD > 0 &&
+    Number.isFinite(volLat) &&
+    Number.isFinite(volLng)
+  ) {
+    let corners = [];
+    try {
+      const parsed = JSON.parse(row.corners_json || '[]');
+      if (Array.isArray(parsed) && parsed.length >= 4) corners = parsed;
+    } catch {
+      corners = [];
+    }
+    const rotDeg = normalizeRotationDeg(row.rotation_deg || 0);
+    if (corners.length < 4) {
+      corners = computeOrientedFootprintLngLat({
+        lat: volLat,
+        lng: volLng,
+        widthMeters: volW,
+        depthMeters: volD,
+        rotationDeg: rotDeg
+      }).corners;
+    }
+    return {
+      parcelId: row.parcel_id,
+      geohash: row.geohash || '',
+      centerLat: volLat,
+      centerLng: volLng,
+      widthMeters: volW,
+      depthMeters: volD,
+      heightMeters: Number(row.height_meters) > 0 ? Number(row.height_meters) : LAND_VOLUME_LIMITS.defaultHeightMeters,
+      rotationDeg: rotDeg,
+      footprintAreaSqM: Number((volW * volD).toFixed(2)),
+      corners
+    };
+  }
+  if (row.geohash) {
+    return buildDefaultVolumeFromBounds(
+      decodeGeohashBounds(row.geohash),
+      row.parcel_id,
+      row.geohash
+    );
+  }
+  return null;
+}
+
+/**
+ * Resolves the authoritative Virtual Land parcel for a mobile AR sculpture publish.
+ * Guarantees that publishing inside (or overlapping) an existing active land ALWAYS
+ * attaches the sculpture to that existing land (or blocks with `blockedOverlap: true`)
+ * rather than minting a nested or overlapping new land parcel.
+ *
+ * @param {{ all: (sql: string, params?: any[]) => Promise<any[]> }} db
+ * @param {{
+ *   lat?: number,
+ *   lng?: number,
+ *   userLat?: number | null,
+ *   userLng?: number | null,
+ *   defaultParcelId?: string,
+ *   defaultGeohash?: string,
+ *   requestedParcelId?: string,
+ *   fittedVolume?: any
+ * }} [params]
+ */
+export async function resolveMobilePublishParcel(
+  db,
+  {
+    lat = NaN,
+    lng = NaN,
+    userLat = null,
+    userLng = null,
+    defaultParcelId = '',
+    defaultGeohash = '',
+    requestedParcelId = '',
+    fittedVolume = null
+  } = {}
+) {
+  const artLat = Number(lat);
+  const artLng = Number(lng);
+  const uLat = Number.isFinite(Number(userLat)) ? Number(userLat) : artLat;
+  const uLng = Number.isFinite(Number(userLng)) ? Number(userLng) : artLng;
+  const cleanDefaultGeohash = String(defaultGeohash || '').trim().toLowerCase()
+    || (Number.isFinite(artLat) && Number.isFinite(artLng) ? encodeGeohash(artLat, artLng, 8) : '');
+  const cleanDefaultId = String(defaultParcelId || '').trim().toUpperCase()
+    || (cleanDefaultGeohash ? `GLAND-${cleanDefaultGeohash.toUpperCase()}` : '');
+  const cleanRequestedId = String(requestedParcelId || '').trim().toUpperCase();
+
+  const defaultResult = {
+    matchedExisting: false,
+    blockedOverlap: false,
+    reason: 'new_land',
+    parcelId: cleanDefaultId,
+    geohash: cleanDefaultGeohash,
+    parcelBounds: cleanDefaultGeohash ? decodeGeohashBounds(cleanDefaultGeohash) : null,
+    parcelRow: null,
+    volume: null,
+    displayName: '',
+    conflictingParcelId: '',
+    conflictingLandName: ''
+  };
+
+  if (!db || typeof db.all !== 'function' || !Number.isFinite(artLat) || !Number.isFinite(artLng)) {
+    return defaultResult;
+  }
+
+  const refLat = Number.isFinite(uLat) ? (artLat + uLat) / 2 : artLat;
+  const refLng = Number.isFinite(uLng) ? (artLng + uLng) / 2 : artLng;
+  const latSpan = 0.006; // ~660m N/S
+  const lngSpan = 0.012; // ~1000m E/W at mid-latitudes
+
+  const rows = await db
+    .all(
+      `SELECT lp.parcel_id, lp.geohash,
+              lp.center_lat AS parcel_center_lat, lp.center_lng AS parcel_center_lng,
+              lp.first_claimant_sub, lp.first_claimant_address,
+              lp.latest_claimant_address, lp.sculpture_count,
+              lv.center_lat AS vol_center_lat, lv.center_lng AS vol_center_lng,
+              lv.width_meters, lv.depth_meters, lv.height_meters,
+              lv.rotation_deg, lv.corners_json,
+              COALESCE(st.status, 'awakened') AS steward_status,
+              pc.custom_name AS custom_name,
+              (SELECT s.title FROM sculptures s
+               WHERE s.parcel_id = lp.parcel_id AND s.hidden = 0
+               ORDER BY s.created_at ASC LIMIT 1) AS first_sculpture_title
+       FROM land_parcels lp
+       LEFT JOIN land_volumes lv ON lv.parcel_id = lp.parcel_id
+       LEFT JOIN land_steward_state st ON st.parcel_id = lp.parcel_id
+       LEFT JOIN parcel_curations pc ON pc.parcel_id = lp.parcel_id
+       WHERE COALESCE(st.status, 'awakened') != 'expired'
+         AND (
+           (COALESCE(lv.center_lat, lp.center_lat) BETWEEN ? AND ?
+            AND COALESCE(lv.center_lng, lp.center_lng) BETWEEN ? AND ?)
+           OR lp.parcel_id = ?
+           OR lp.parcel_id = ?
+         )`,
+      [
+        refLat - latSpan,
+        refLat + latSpan,
+        refLng - lngSpan,
+        refLng + lngSpan,
+        cleanDefaultId,
+        cleanRequestedId || cleanDefaultId
+      ]
+    )
+    .catch(() => []);
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return defaultResult;
+  }
+
+  const candidates = rows.map((row) => {
+    const vol = reconstructParcelVolumeFromDbRow(row);
+    const artDistM = vol ? distanceToLandFootprintMeters(artLat, artLng, vol) : Number.POSITIVE_INFINITY;
+    const userDistM = vol ? distanceToLandFootprintMeters(uLat, uLng, vol) : Number.POSITIVE_INFINITY;
+    const minDistM = Math.min(artDistM, userDistM);
+    const areaSqM = Number(vol?.footprintAreaSqM || 0) || Number.POSITIVE_INFINITY;
+    const displayName = resolveLandDisplayName(
+      {
+        customName: row.custom_name || '',
+        firstSculptureTitle: row.first_sculpture_title || ''
+      },
+      { defaultName: 'Virtual Land' }
+    );
+    const isRequested = Boolean(cleanRequestedId && row.parcel_id === cleanRequestedId);
+    const overlapsFitted = Boolean(fittedVolume && vol && footprintsOverlap(fittedVolume, vol, 0.15));
+    return {
+      parcelId: row.parcel_id,
+      geohash: String(row.geohash || '').trim().toLowerCase() || cleanDefaultGeohash,
+      row,
+      vol,
+      artDistM,
+      userDistM,
+      minDistM,
+      areaSqM,
+      displayName,
+      isRequested,
+      overlapsFitted
+    };
+  });
+
+  const buildMatched = (chosen, reason) => ({
+    matchedExisting: true,
+    blockedOverlap: false,
+    reason,
+    parcelId: chosen.parcelId,
+    geohash: chosen.geohash,
+    parcelBounds: chosen.geohash ? decodeGeohashBounds(chosen.geohash) : defaultResult.parcelBounds,
+    parcelRow: chosen.row,
+    volume: chosen.vol,
+    displayName: chosen.displayName,
+    conflictingParcelId: '',
+    conflictingLandName: ''
+  });
+
+  // 1. Direct physical containment: either the sculpture center or the user is inside an existing land.
+  const containing = candidates.filter((c) => c.minDistM <= 0.35);
+  if (containing.length > 0) {
+    containing.sort((a, b) => {
+      if (a.isRequested !== b.isRequested) return a.isRequested ? -1 : 1;
+      const aStrict = a.minDistM === 0;
+      const bStrict = b.minDistM === 0;
+      if (aStrict !== bStrict) return aStrict ? -1 : 1;
+      if (a.minDistM !== b.minDistM) return a.minDistM - b.minDistM;
+      return a.areaSqM - b.areaSqM;
+    });
+    return buildMatched(containing[0], 'inside_existing_land');
+  }
+
+  // 2. Client explicitly indicated the active land they are drawing inside (within ±3.5m GPS jitter or overlapping).
+  if (cleanRequestedId) {
+    const reqMatch = candidates.find(
+      (c) => c.isRequested && (c.minDistM <= 3.5 || c.overlapsFitted)
+    );
+    if (reqMatch) {
+      return buildMatched(reqMatch, 'requested_existing_land');
+    }
+  }
+
+  // 3. Object-fitted new land footprint would overlap an existing land.
+  const overlapping = candidates.filter((c) => c.overlapsFitted);
+  if (overlapping.length > 0) {
+    overlapping.sort((a, b) => {
+      if (a.isRequested !== b.isRequested) return a.isRequested ? -1 : 1;
+      return a.minDistM - b.minDistM;
+    });
+    const top = overlapping[0];
+    if (top.minDistM <= 4.5) {
+      return buildMatched(top, 'overlapping_existing_land');
+    }
+    return {
+      ...defaultResult,
+      blockedOverlap: true,
+      reason: 'footprint_overlap',
+      conflictingParcelId: top.parcelId,
+      conflictingLandName: top.displayName
+    };
+  }
+
+  // 4. Exact geohash parcel already exists in land_parcels (non-expired).
+  const sameId = candidates.find((c) => c.parcelId === cleanDefaultId);
+  if (sameId) {
+    return buildMatched(sameId, 'same_parcel_id');
+  }
+
+  return defaultResult;
 }
 
 /**

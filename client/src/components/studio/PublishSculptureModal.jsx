@@ -19,6 +19,7 @@ export default function PublishSculptureModal({
   orbStatus,
   activeQuest = null,
   selectedPlinthSlot = null,
+  activeTargetLand = null,
   passkeyCount,
   passkeyBusy,
   onEnrollPasskey,
@@ -56,13 +57,26 @@ export default function PublishSculptureModal({
     () => (description.trim() ? description.trim().split(/\s+/).filter(Boolean).length : 0),
     [description]
   );
+  const targetLandName = activeTargetLand
+    ? resolveLandDisplayName(activeTargetLand, { defaultName: 'Virtual Land' })
+    : '';
+  const targetLandFrozen = Boolean(activeTargetLand?.isFrozen);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">
-            <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
+            {activeTargetLand && !mintReceipt ? (
+              <>
+                <XeroIcon emoji={targetLandFrozen ? '❄️' : '🎨'} size={22} />{' '}
+                {targetLandFrozen ? `Frozen Land: ${targetLandName}` : `Add Art to ${targetLandName}`}
+              </>
+            ) : (
+              <>
+                <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
+              </>
+            )}
           </h3>
           <div className="modal-header-actions">
             <GlobalNotificationBell compact testId="publish-modal-notif-bell-btn" />
@@ -75,7 +89,18 @@ export default function PublishSculptureModal({
         {mintReceipt ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div className="badge teal" style={{ alignSelf: 'flex-start' }}>
-              <XeroIcon emoji="✅" size={15} /> Minted directly to your wallet!
+              <XeroIcon emoji="✅" size={15} />{' '}
+              {mintReceipt.addedToExistingLand
+                ? `Added art to "${resolveLandDisplayName(
+                    {
+                      customName: mintReceipt.sculpture.parcelName || '',
+                      displayName:
+                        mintReceipt.landDisplayName || mintReceipt.sculpture.landDisplayName || '',
+                      firstSculptureTitle: mintReceipt.sculpture.title || ''
+                    },
+                    { defaultName: 'Virtual Land' }
+                  )}" & minted NFT!`
+                : 'Minted directly to your wallet!'}
             </div>
             <div className="card" style={{ fontSize: 12 }}>
               <div><strong>Title:</strong> {mintReceipt.sculpture.title}</div>
@@ -203,6 +228,46 @@ export default function PublishSculptureModal({
                 </button>
               )}
             </div>
+
+            {activeTargetLand && (
+              <div
+                className="card"
+                data-testid="publish-target-land-banner"
+                data-parcel-id={activeTargetLand.parcelId || ''}
+                style={{
+                  padding: '10px 12px',
+                  fontSize: 12,
+                  borderColor: targetLandFrozen
+                    ? 'rgba(255, 92, 138, 0.72)'
+                    : 'rgba(255, 209, 102, 0.72)',
+                  background: targetLandFrozen
+                    ? 'rgba(42, 10, 22, 0.88)'
+                    : 'rgba(26, 20, 8, 0.88)'
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 700,
+                    color: targetLandFrozen ? '#ffb3c1' : '#ffd166',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
+                  }}
+                >
+                  <XeroIcon emoji={targetLandFrozen ? '❄️' : '🎨'} size={14} />
+                  <span>
+                    {targetLandFrozen
+                      ? `${targetLandName} is frozen`
+                      : `Adding Art to: ${targetLandName}`}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--muted)', marginTop: 4 }}>
+                  {targetLandFrozen
+                    ? 'This land is frozen by its owner — new art cannot be added here.'
+                    : 'You are inside this existing land. Publishing attaches your art here and will not mint a new land.'}
+                </div>
+              </div>
+            )}
 
             {activeQuest && (
               <div
@@ -355,10 +420,16 @@ export default function PublishSculptureModal({
                   type="submit"
                   className="btn btn-pink"
                   style={{ flex: '1 1 180px' }}
-                  disabled={publishing || voxels.length === 0}
+                  disabled={publishing || voxels.length === 0 || targetLandFrozen}
                 >
-                  <XeroIcon emoji="🚀" size={16} />
-                  {publishing ? 'Verifying PoL, Pinning IPFS & Minting...' : 'Sign & Publish on Mobile'}
+                  <XeroIcon emoji={activeTargetLand ? '🎨' : '🚀'} size={16} />
+                  {publishing
+                    ? 'Verifying PoL, Pinning IPFS & Minting...'
+                    : targetLandFrozen
+                    ? 'Land Frozen'
+                    : activeTargetLand
+                    ? `Add Art to ${targetLandName}`
+                    : 'Sign & Publish on Mobile'}
                 </button>
               )}
               {mcpPairingsState.mcpActive && (
@@ -366,7 +437,7 @@ export default function PublishSculptureModal({
                   type="button"
                   className="btn btn-primary"
                   style={{ flex: '1 1 180px' }}
-                  disabled={publishing || voxels.length === 0}
+                  disabled={publishing || voxels.length === 0 || targetLandFrozen}
                   onClick={onCopyAgentPublishPrompt}
                 >
                   <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt

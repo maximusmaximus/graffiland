@@ -143,6 +143,7 @@ export default function MobileStudio({
     }
   }
   const [arSelectHint, setArSelectHint] = useState('');
+  const [preferredDrawLandId, setPreferredDrawLandId] = useState('');
   const [parcelVisit, setParcelVisit] = useState(null); // { loading, parcel, sculptures, error }
   const [arViewSession, setArViewSession] = useState(null); // { source: 'plot' | 'map', parcel, sculptures }
   const [sprayBrushGuideOpen, setSprayBrushGuideOpen] = useState(false);
@@ -826,10 +827,27 @@ export default function MobileStudio({
     [ar, lands]
   );
 
+  const activeInsideLand = useMemo(() => {
+    const insideLands = (ar.immediateCameraLands || []).filter((l) => l?.isInside);
+    if (preferredDrawLandId) {
+      const preferred = insideLands.find((l) => l.parcelId === preferredDrawLandId);
+      if (preferred) return preferred;
+    }
+    if (ar.primaryCameraLand?.isInside) return ar.primaryCameraLand;
+    return insideLands[0] || null;
+  }, [ar.immediateCameraLands, ar.primaryCameraLand, preferredDrawLandId]);
+
   const openPublishSheet = useCallback(
     ({ skipVoxelCheck = false, userOverride = null } = {}) => {
       if (!skipVoxelCheck && (!brush.voxelsRef.current || brush.voxelsRef.current.length === 0)) {
         brush.notifyToolUnavailable('publish', 'Draw at least 1 block first.');
+        return;
+      }
+      if (activeInsideLand?.isFrozen) {
+        brush.notifyToolUnavailable(
+          'publish',
+          `"${activeInsideLand.displayName || 'This land'}" is frozen by its owner — new art cannot be added here.`
+        );
         return;
       }
       const activeUser = userOverride || user;
@@ -863,7 +881,7 @@ export default function MobileStudio({
         brush.setMode('publish');
       }
     },
-    [brush, pol, user]
+    [activeInsideLand, brush, pol, user]
   );
   openPublishSheetRef.current = openPublishSheet;
 
@@ -1129,6 +1147,11 @@ export default function MobileStudio({
       if (!location) {
         throw new Error(describeLocationNeededAction());
       }
+      if (activeInsideLand?.isFrozen) {
+        throw new Error(
+          `"${activeInsideLand.displayName || 'This land'}" is frozen by its owner — new art cannot be added here.`
+        );
+      }
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = pol.polRef.current.getSnapshot();
       const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
@@ -1164,6 +1187,7 @@ export default function MobileStudio({
         voxels: brush.voxels,
         anchorOffset,
         previewDataUrl,
+        targetParcelId: activeInsideLand?.parcelId || '',
         questId: activeQuest?.id || '',
         plinthSlotId: selectedPlinthSlot?.id || '',
         draftId: drafts.activeDraftId || undefined,
@@ -1187,7 +1211,7 @@ export default function MobileStudio({
               lat: refinedAnchor.lat,
               lng: refinedAnchor.lng,
               keyframes: kfs,
-              allowInitialClaim: true,
+              allowInitialClaim: !res?.addedToExistingLand,
               deviceProfile: { isMobile: true }
             })
             .catch(() => {});
@@ -1270,6 +1294,11 @@ export default function MobileStudio({
       if (!activePairingCode) {
         throw new Error('Connect a Pair code first.');
       }
+      if (activeInsideLand?.isFrozen) {
+        throw new Error(
+          `"${activeInsideLand.displayName || 'This land'}" is frozen by its owner — new art cannot be added here.`
+        );
+      }
       const previewDataUrl = captureSculptureSnapshot();
       const polSnap = pol.polRef.current.getSnapshot();
       const refinedAnchor = pol.polRef.current.getRefinedLocation(location) || location;
@@ -1280,6 +1309,7 @@ export default function MobileStudio({
         termsAccepted,
         voxels: brush.voxels,
         previewDataUrl,
+        targetParcelId: activeInsideLand?.parcelId || '',
         draftId: drafts.activeDraftId || undefined,
         location: refinedAnchor,
         proofOfLocation: polSnap,
@@ -1689,7 +1719,7 @@ export default function MobileStudio({
           selectedPlinthSlot={selectedPlinthSlot}
           onSnapToPlinthSlot={handleSnapToPlinthSlot}
           isInteractingWithLand={isInteractingWithLand}
-          nearbyCameraLand={ar.primaryCameraLand}
+          nearbyCameraLand={activeInsideLand || ar.primaryCameraLand}
           nearbyCameraLandCount={ar.immediateCameraLands.length}
           nearbyOtherItemsCount={ar.visibleOtherItemsCount}
           fadeOtherItems={fadeOtherItems}
@@ -1831,10 +1861,11 @@ export default function MobileStudio({
               }
               setArViewSession(null);
               ar.setArSelectedLandId('');
+              setPreferredDrawLandId(targetLand?.parcelId || '');
               brush.setMode('draw');
               maybeShowSprayBrushGuide();
               showTemporaryHint(
-                `Drawing on ${targetLand.displayName} — hold Brush to spray in 3D AR!`
+                `Adding art to ${targetLand.displayName} — hold Brush to spray in 3D AR!`
               );
             }}
             onCheckInLand={async (targetLand) => {
@@ -2020,6 +2051,7 @@ export default function MobileStudio({
           orbStatus={pol.orbStatus}
           activeQuest={activeQuest}
           selectedPlinthSlot={selectedPlinthSlot}
+          activeTargetLand={activeInsideLand}
           passkeyCount={pol.passkeyCount}
           passkeyBusy={pol.passkeyBusy}
           onEnrollPasskey={pol.handleEnrollPasskey}
@@ -2177,10 +2209,11 @@ export default function MobileStudio({
           onMakeArt={(visitedParcel) => {
             setParcelVisit(null);
             setTutorialOpen(false);
+            setPreferredDrawLandId(visitedParcel?.parcelId || '');
             brush.setMode('draw');
             maybeShowSprayBrushGuide();
             showTemporaryHint(
-              `Ready to sculpt on ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
+              `Adding art to ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
             );
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}

@@ -906,24 +906,37 @@ export default function ARLandInspectorPanel({
             {sculptures.map((sc) => (
               <div
                 key={sc.id}
-                className="ar-land-sc-row"
+                className={`ar-land-sc-row${onInspectSculpture ? ' is-clickable' : ''}`}
                 data-testid="ar-land-sculpture-row"
+                role={onInspectSculpture ? 'button' : undefined}
+                tabIndex={onInspectSculpture ? 0 : undefined}
+                title={
+                  onInspectSculpture
+                    ? `View "${sc.title || 'Untitled Artwork'}" in 3D`
+                    : undefined
+                }
+                onClick={onInspectSculpture ? () => onInspectSculpture(sc) : undefined}
+                onKeyDown={
+                  onInspectSculpture
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onInspectSculpture(sc);
+                        }
+                      }
+                    : undefined
+                }
               >
                 <div className="ar-land-sc-info">
-                  {onInspectSculpture ? (
-                    <button
-                      type="button"
-                      className="ar-land-sc-title artwork-title-link-btn"
-                      data-testid="ar-land-artwork-label"
-                      title={`View "${sc.title || 'Untitled Artwork'}" in 3D`}
-                      onClick={() => onInspectSculpture(sc)}
-                    >
-                      <span>{sc.title || 'Untitled Artwork'}</span>
+                  <div
+                    className={`ar-land-sc-title${onInspectSculpture ? ' artwork-title-link-btn' : ''}`}
+                    data-testid="ar-land-artwork-label"
+                  >
+                    <span>{sc.title || 'Untitled Artwork'}</span>
+                    {onInspectSculpture && (
                       <span className="artwork-title-link-arrow" aria-hidden="true">↗</span>
-                    </button>
-                  ) : (
-                    <div className="ar-land-sc-title">{sc.title || 'Untitled Artwork'}</div>
-                  )}
+                    )}
+                  </div>
                   <div className="ar-land-sc-meta mono" style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                     <span>{formatSculptureAssetMeta(sc)}</span>
                     {(sc.creatorUsername || sc.creatorName) && (
@@ -943,17 +956,6 @@ export default function ARLandInspectorPanel({
                     )}
                     {formatShortDate(sc.createdAt) ? ` · ${formatShortDate(sc.createdAt)}` : ''}
                   </div>
-                </div>
-                <div className="ar-land-sc-actions">
-                  {onInspectSculpture && (
-                    <button
-                      type="button"
-                      className="btn btn-xs ar-land-sc-view-btn"
-                      onClick={() => onInspectSculpture(sc)}
-                    >
-                      <XeroIcon emoji="🧊" size={11} /> View 3D
-                    </button>
-                  )}
                 </div>
               </div>
             ))}
