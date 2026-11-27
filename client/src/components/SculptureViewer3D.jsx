@@ -17,6 +17,7 @@ import {
   loadCustomModelObject
 } from '../utils/customModelLoader.js';
 import {
+  computeInsideLandModelFraming,
   computeIsometricLandFraming,
   computeIsometricModelFraming,
   ISOMETRIC_PREVIEW_FOV_DEG
@@ -51,8 +52,10 @@ export default function SculptureViewer3D({
   sculpture = null,
   voxels = [],
   height = 300,
+  fillHeight = false,
   autoRotate = true,
   isometricFocus = false,
+  cameraFocus = 'model', // 'model' | 'land'
   resetViewTick = 0,
   liveCursor = null,
   liveQuaternion = null,
@@ -65,6 +68,9 @@ export default function SculptureViewer3D({
   moveRanges = null,
   placementBlocked = false,
   unitSystem = 'imperial',
+  cornerTopLeftExtra = null,
+  cornerTopRight = null,
+  cornerBottomLeft = null,
   onModelBoundsMeasured = null,
   onTransformChange = null
 }) {
@@ -85,6 +91,12 @@ export default function SculptureViewer3D({
   const maxAnisotropyRef = useRef(8);
   const modelBaseSizeRef = useRef({ width: 1.4, height: 1.4, depth: 1.4 });
   const framedModeKeyRef = useRef('');
+  const prevModelCenterRef = useRef(null);
+  const resizeCanvasRef = useRef(null);
+  const heightRef = useRef(height);
+  heightRef.current = height;
+  const fillHeightRef = useRef(fillHeight);
+  fillHeightRef.current = fillHeight;
   const autoRotateRef = useRef(autoRotate);
   autoRotateRef.current = autoRotate;
   const isometricFocusRef = useRef(isometricFocus);
@@ -93,6 +105,7 @@ export default function SculptureViewer3D({
   const [modelBoundsVersion, setModelBoundsVersion] = useState(0);
   const [modelStatus, setModelStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'error'
   const [modelErrorMsg, setModelErrorMsg] = useState('');
+  const [dblClickFocusTick, setDblClickFocusTick] = useState(0);
 
   const onModelBoundsMeasuredRef = useRef(onModelBoundsMeasured);
   onModelBoundsMeasuredRef.current = onModelBoundsMeasured;
@@ -125,17 +138,26 @@ export default function SculptureViewer3D({
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#090d18');
 
-    const initWidth = Math.max(220, host.clientWidth || Math.min(640, (window.innerWidth || 640) - 48));
-    const initFov = isometricFocusRef.current ? ISOMETRIC_PREVIEW_FOV_DEG : 50;
-    const camera = new THREE.PerspectiveCamera(initFov, initWidth / height, 0.05, 600);
+    const measureViewport = () => {
+      const w = Math.max(220, host.clientWidth || Math.min(640, (window.innerWidth || 640) - 48));
+      const fallbackH = typeof heightRef.current === 'number' ? heightRef.current : 320;
+      const h = fillHeightRef.current
+        ? Math.max(220, host.clientHeight || fallbackH)
+        : Math.max(160, fallbackH);
+      return { w, h };
+    };
+
+    const { w: initWidth, h: initHeight } = measureViewport();
+    const initFov = isometricFocusRef.current ? ISOMETRIC_PREVIEW_FOV_DEG : 42;
+    const camera = new THREE.PerspectiveCamera(initFov, initWidth / initHeight, 0.02, 800);
     camera.position.set(2.4, 1.8, 2.4);
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 4));
-    renderer.setSize(initWidth, height, false);
+    renderer.setSize(initWidth, initHeight, false);
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.maxWidth = '100%';
-    renderer.domElement.style.height = `${height}px`;
+    renderer.domElement.style.height = fillHeightRef.current ? '100%' : `${initHeight}px`;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -153,6 +175,11 @@ export default function SculptureViewer3D({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
+    controls.zoomSpeed = 1.2;
+    controls.minDistance = 0.12;
+    controls.maxDistance = 360;
     controls.autoRotate = Boolean(autoRotateRef.current);
     controls.autoRotateSpeed = 1.4;
 
@@ -405,18 +432,33 @@ export default function SculptureViewer3D({
       setGizmoStatusText('');
     };
 
+    const onDoubleClick = (evt) => {
+      if (dragState) return;
+      if (showEditGizmoRef.current && toNdc(evt)) {
+        const targets = gizmoHitMeshesRef.current;
+        if (targets && targets.length > 0) {
+          raycaster.setFromCamera(pointerNdc, camera);
+          if (raycaster.intersectObjects(targets, false).length > 0) return;
+        }
+      }
+      setDblClickFocusTick((t) => t + 1);
+    };
+
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', endDrag);
     renderer.domElement.addEventListener('pointercancel', endDrag);
+    renderer.domElement.addEventListener('dblclick', onDoubleClick);
 
     const handleResize = () => {
       if (!host) return;
-      const w = Math.max(220, host.clientWidth || Math.min(640, (window.innerWidth || 640) - 48));
-      camera.aspect = w / height;
+      const { w, h } = measureViewport();
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, height, false);
+      renderer.setSize(w, h, false);
+      renderer.domElement.style.height = fillHeightRef.current ? '100%' : `${h}px`;
     };
+    resizeCanvasRef.current = handleResize;
     window.addEventListener('resize', handleResize);
     let resizeObs = null;
     if (typeof ResizeObserver !== 'undefined') {
@@ -436,12 +478,14 @@ export default function SculptureViewer3D({
 
     return () => {
       cancelAnimationFrame(rafId);
+      resizeCanvasRef.current = null;
       window.removeEventListener('resize', handleResize);
       resizeObs?.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', endDrag);
       renderer.domElement.removeEventListener('pointercancel', endDrag);
+      renderer.domElement.removeEventListener('dblclick', onDoubleClick);
       clearGroup(modelContent);
       clearGroup(landOverlay);
       clearGroup(siblingOverlay);
@@ -463,7 +507,11 @@ export default function SculptureViewer3D({
       siblingOverlayRef.current = null;
       gizmoOverlayRef.current = null;
     };
-  }, [height]);
+  }, []);
+
+  useEffect(() => {
+    resizeCanvasRef.current?.();
+  }, [height, fillHeight]);
 
   // Load 3D geometry ONCE per model / voxel update at base scale = 1 (zero reload while sliding scale/move)
   const scId = sculpture?.id || '';
@@ -800,10 +848,13 @@ export default function SculptureViewer3D({
         boxMinY = worldBox.min.y;
       }
 
-      const targetFov = isometricFocus ? ISOMETRIC_PREVIEW_FOV_DEG : 50;
+      const targetFov = isometricFocus ? ISOMETRIC_PREVIEW_FOV_DEG : 42;
+      const measuredH = fillHeight
+        ? Math.max(220, hostRef.current?.clientHeight || (typeof height === 'number' ? height : 320))
+        : Math.max(160, typeof height === 'number' ? height : 300);
       const camAspect =
         cameraRef.current?.aspect ||
-        Math.max(0.8, (hostRef.current?.clientWidth || 560) / Math.max(160, height));
+        Math.max(0.8, (hostRef.current?.clientWidth || 560) / measuredH);
       const framing = computeIsometricModelFraming({
         width: boxW,
         height: boxH,
@@ -814,7 +865,7 @@ export default function SculptureViewer3D({
         minY: boxMinY,
         fovDeg: targetFov,
         aspect: camAspect,
-        fillRatio: isometricFocus ? 0.74 : 0.64
+        fillRatio: isometricFocus ? 0.76 : 0.74
       });
 
       if (gridRef.current) {
@@ -840,16 +891,19 @@ export default function SculptureViewer3D({
         keyLightRef.current.shadow.camera.updateProjectionMatrix();
       }
 
-      const soloKey = `${isometricFocus ? 'iso' : 'solo'}:${scId}:${modelBoundsVersion}:${resetViewTick}`;
+      const soloKey = `${isometricFocus ? 'iso' : 'solo'}:${scId}:${modelBoundsVersion}:${resetViewTick}:${dblClickFocusTick}`;
       if (!liveCursor && framedModeKeyRef.current !== soloKey && controlsRef.current && cameraRef.current) {
         framedModeKeyRef.current = soloKey;
+        prevModelCenterRef.current = { x: framing.target[0], y: framing.target[1], z: framing.target[2] };
         const cam = cameraRef.current;
-        if (Math.abs(cam.fov - framing.fov) > 0.05 || Math.abs(cam.near - framing.near) > 0.01) {
+        if (Math.abs(cam.fov - framing.fov) > 0.05 || Math.abs(cam.near - framing.near) > 0.005) {
           cam.fov = framing.fov;
           cam.near = framing.near;
           cam.far = framing.far;
           cam.updateProjectionMatrix();
         }
+        controlsRef.current.minDistance = framing.minDistance;
+        controlsRef.current.maxDistance = framing.maxDistance;
         controlsRef.current.target.set(framing.target[0], framing.target[1], framing.target[2]);
         cam.position.set(framing.position[0], framing.position[1], framing.position[2]);
         controlsRef.current.update();
@@ -962,34 +1016,93 @@ export default function SculptureViewer3D({
       keyLightRef.current.shadow.camera.updateProjectionMatrix();
     }
 
-    // Frame the isometric land view once when entering Land Bounds mode (never fights user orbit)
-    const landKey = `land:${scId}:${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}:${resetViewTick}`;
+    // Compute live model world center inside the land for inside-land focus & smooth follow
+    pivot.updateMatrixWorld(true);
+    const liveWorldBox = new THREE.Box3().setFromObject(pivot);
+    let modelW = footW;
+    let modelH = footH;
+    let modelD = footD;
+    let modelCx = baseX + dx;
+    let modelCy = dy + footH * 0.48;
+    let modelCz = baseZ + dz;
+    let modelMinY = dy;
+    if (!liveWorldBox.isEmpty()) {
+      const mSize = new THREE.Vector3();
+      const mCenter = new THREE.Vector3();
+      liveWorldBox.getSize(mSize);
+      liveWorldBox.getCenter(mCenter);
+      modelW = Math.max(0.18, mSize.x);
+      modelH = Math.max(0.18, mSize.y);
+      modelD = Math.max(0.18, mSize.z);
+      modelCx = mCenter.x;
+      modelCy = liveWorldBox.min.y + modelH * 0.48;
+      modelCz = mCenter.z;
+      modelMinY = liveWorldBox.min.y;
+    }
+
+    const effectiveFocus = cameraFocus === 'land' ? 'land' : 'model';
+    const landKey = `${effectiveFocus}:${scId}:${modelBoundsVersion}:${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}:${resetViewTick}:${dblClickFocusTick}`;
     if (framedModeKeyRef.current !== landKey && controlsRef.current && cameraRef.current) {
       framedModeKeyRef.current = landKey;
       const cam = cameraRef.current;
-      const landFraming = computeIsometricLandFraming({
-        volW,
-        volH,
-        volD,
-        modelHeight: baseDims.height * effScale,
-        fovDeg: 46,
-        aspect: cam.aspect || 1.6
-      });
-      cam.fov = landFraming.fov;
-      cam.near = landFraming.near;
-      cam.far = landFraming.far;
+      const framing =
+        effectiveFocus === 'land'
+          ? computeIsometricLandFraming({
+              volW,
+              volH,
+              volD,
+              modelHeight: modelH,
+              fovDeg: 46,
+              aspect: cam.aspect || 1.5
+            })
+          : computeInsideLandModelFraming({
+              modelWidth: modelW,
+              modelHeight: modelH,
+              modelDepth: modelD,
+              modelCenterX: modelCx,
+              modelCenterY: modelCy,
+              modelCenterZ: modelCz,
+              modelMinY,
+              volW,
+              volH,
+              volD,
+              fovDeg: 46,
+              aspect: cam.aspect || 1.5,
+              fillRatio: 0.84
+            });
+      cam.fov = framing.fov;
+      cam.near = framing.near;
+      cam.far = framing.far;
       cam.updateProjectionMatrix();
-      controlsRef.current.target.set(
-        landFraming.target[0],
-        landFraming.target[1],
-        landFraming.target[2]
-      );
-      cam.position.set(
-        landFraming.position[0],
-        landFraming.position[1],
-        landFraming.position[2]
-      );
+      controlsRef.current.minDistance = framing.minDistance;
+      controlsRef.current.maxDistance = framing.maxDistance;
+      controlsRef.current.target.set(framing.target[0], framing.target[1], framing.target[2]);
+      cam.position.set(framing.position[0], framing.position[1], framing.position[2]);
       controlsRef.current.update();
+      prevModelCenterRef.current = { x: modelCx, y: modelCy, z: modelCz };
+    } else if (
+      effectiveFocus === 'model' &&
+      prevModelCenterRef.current &&
+      controlsRef.current &&
+      cameraRef.current
+    ) {
+      // Smoothly pan camera & target along with the model when moving X/Y/Z inside the land
+      const deltaX = modelCx - prevModelCenterRef.current.x;
+      const deltaY = modelCy - prevModelCenterRef.current.y;
+      const deltaZ = modelCz - prevModelCenterRef.current.z;
+      if (Math.abs(deltaX) > 1e-4 || Math.abs(deltaY) > 1e-4 || Math.abs(deltaZ) > 1e-4) {
+        controlsRef.current.target.x += deltaX;
+        controlsRef.current.target.y += deltaY;
+        controlsRef.current.target.z += deltaZ;
+        cameraRef.current.position.x += deltaX;
+        cameraRef.current.position.y += deltaY;
+        cameraRef.current.position.z += deltaZ;
+        controlsRef.current.update();
+      }
+      // Keep close-up zoom bounds responsive as the model is scaled larger or smaller
+      const minSpan = Math.max(0.12, Math.min(modelW, modelH, modelD));
+      controlsRef.current.minDistance = Math.max(0.12, minSpan * 0.3);
+      prevModelCenterRef.current = { x: modelCx, y: modelCy, z: modelCz };
     }
   }, [
     scId,
@@ -1002,9 +1115,12 @@ export default function SculptureViewer3D({
     placementBlocked,
     autoRotate,
     isometricFocus,
+    cameraFocus,
     resetViewTick,
+    dblClickFocusTick,
     liveCursor,
     height,
+    fillHeight,
     modelBoundsVersion
   ]);
 
@@ -1045,12 +1161,20 @@ export default function SculptureViewer3D({
     scale: hudScale
   });
   const isTilted = Math.abs(hudPitch) > 0.05 || Math.abs(hudRoll) > 0.05;
+  const resolvedCameraMode = showLandBounds
+    ? cameraFocus === 'land'
+      ? 'land'
+      : 'model-in-land'
+    : isometricFocus
+    ? 'isometric'
+    : 'solo';
 
   return (
     <div
-      className="sculpture-viewer-wrap"
+      className={`sculpture-viewer-wrap ${fillHeight ? 'is-fill-height' : ''}`.trim()}
       data-testid="sculpture-viewer-3d"
-      data-camera-mode={showLandBounds ? 'land' : isometricFocus ? 'isometric' : 'solo'}
+      data-camera-mode={resolvedCameraMode}
+      data-camera-focus={cameraFocus}
       data-land-bounds-preview={showLandBounds ? 'on' : 'off'}
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
       data-model-status={modelStatus}
@@ -1059,7 +1183,7 @@ export default function SculptureViewer3D({
       style={{
         position: 'relative',
         width: '100%',
-        height,
+        height: fillHeight ? '100%' : height,
         borderRadius: 12,
         overflow: 'hidden',
         border: `1px solid ${
@@ -1072,25 +1196,40 @@ export default function SculptureViewer3D({
       }}
     >
       <div ref={hostRef} style={{ width: '100%', height: '100%' }} />
-      {(showEditGizmo || isTilted) && (
-        <div
-          className="sculpture-vertical-ruler-badge mono"
-          data-testid="sculpture-vertical-height-badge"
-          title="Live measured vertical height at current rotation & scale"
-        >
-          <span>↕ Height: {formatShortLength(hudDims.effH, unitSystem)}</span>
-          {hudDy > 0.01 && (
-            <span className="sculpture-ruler-sep">
-              · Top: {formatShortLength(hudDy + hudDims.effH, unitSystem)}
-            </span>
+
+      {/* Top-Left Corner: Live vertical height, scale/dimensions & fit telemetry */}
+      {(showEditGizmo || isTilted || cornerTopLeftExtra) && (
+        <div className="viewer-corner-stack is-top-left" data-testid="sculpture-viewer-corner-tl">
+          {(showEditGizmo || isTilted) && (
+            <div
+              className="sculpture-vertical-ruler-badge mono"
+              data-testid="sculpture-vertical-height-badge"
+              title="Live measured vertical height at current rotation & scale"
+            >
+              <span>↕ Height: {formatShortLength(hudDims.effH, unitSystem)}</span>
+              {hudDy > 0.01 && (
+                <span className="sculpture-ruler-sep">
+                  · Top: {formatShortLength(hudDy + hudDims.effH, unitSystem)}
+                </span>
+              )}
+              {isTilted && (
+                <span className="sculpture-ruler-tilt">
+                  · Tilt X {Math.round(hudPitch)}° / Z {Math.round(hudRoll)}°
+                </span>
+              )}
+            </div>
           )}
-          {isTilted && (
-            <span className="sculpture-ruler-tilt">
-              · Tilt X {Math.round(hudPitch)}° / Z {Math.round(hudRoll)}°
-            </span>
-          )}
+          {cornerTopLeftExtra}
         </div>
       )}
+
+      {/* Top-Right Corner: Valuable model & NFT stats tucked neatly into corner */}
+      {cornerTopRight && (
+        <div className="viewer-corner-stack is-top-right" data-testid="sculpture-viewer-corner-tr">
+          {cornerTopRight}
+        </div>
+      )}
+
       {scFormat && modelStatus === 'loading' && (
         <div
           className="sculpture-viewer-status-pill"
@@ -1109,9 +1248,20 @@ export default function SculptureViewer3D({
           {modelErrorMsg || `Could not load ${scFormat.toUpperCase()} 3D model`}
         </div>
       )}
+
+      {/* Bottom-Left Corner: Camera Focus (Model / Land), Bounds & Gizmo quick controls */}
+      {cornerBottomLeft && (
+        <div className="viewer-corner-stack is-bottom-left" data-testid="sculpture-viewer-corner-bl">
+          {cornerBottomLeft}
+        </div>
+      )}
+
+      {/* Bottom-Right Corner: Live 3D gizmo status / drag legend */}
       {showEditGizmo && (
         <div
-          className={`sculpture-gizmo-hud-chip ${gizmoStatusText ? 'is-dragging' : ''}`}
+          className={`sculpture-gizmo-hud-chip ${gizmoStatusText ? 'is-dragging' : ''} ${
+            cornerBottomLeft ? 'is-corner-br' : ''
+          }`.trim()}
           data-testid="sculpture-gizmo-hud"
         >
           {gizmoStatusText || '● Corners: Scale · ▬ Sides: Move · ┃ Bars: Rotate · ▲ Top: Height'}

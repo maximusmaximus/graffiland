@@ -13824,6 +13824,284 @@ html.mobile-portrait-locked .mobile-map-sheet {
   color: var(--muted);
 }
 
+/* Desktop Split-Pane 3D Studio Layout & 4-Corner Viewer HUD */
+.modal-card.sculpture-modal-card.is-pending-preview {
+  width: min(680px, calc(100vw - 24px));
+}
+
+.modal-card.sculpture-modal-card.is-studio-split {
+  position: relative;
+  width: min(860px, calc(100vw - 24px));
+}
+
+.modal-card.sculpture-modal-card.is-studio-split .preview-stage-shell {
+  width: 100%;
+  height: 280px;
+}
+
+.sculpture-viewer-wrap.is-fill-height {
+  height: 100% !important;
+  min-height: 220px;
+}
+
+.sculpture-quick-actions-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sculpture-detail-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+/* 4-Corner Translucent Overlays Inside 3D Model Viewport */
+.viewer-corner-stack {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  pointer-events: none;
+}
+
+.viewer-corner-stack.is-top-left {
+  top: 10px;
+  left: 10px;
+  max-width: min(54%, 380px);
+  align-items: flex-start;
+}
+
+.viewer-corner-stack.is-top-right {
+  top: 10px;
+  right: 10px;
+  max-width: min(44%, 340px);
+  align-items: flex-end;
+}
+
+.viewer-corner-stack.is-bottom-left {
+  bottom: 10px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  align-items: flex-start;
+}
+
+.viewer-corner-stack .sculpture-vertical-ruler-badge {
+  position: static;
+  top: auto;
+  left: auto;
+  max-width: 100%;
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+.viewer-corner-subrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.viewer-corner-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.viewer-corner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #dce7ff;
+  background: rgba(8, 13, 26, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+}
+
+.viewer-corner-pill.is-teal {
+  color: #b7fff5;
+  border-color: rgba(0, 245, 212, 0.36);
+  background: rgba(5, 22, 28, 0.78);
+}
+
+.viewer-corner-pill.is-gold {
+  color: #ffe399;
+  border-color: rgba(255, 209, 102, 0.42);
+  background: rgba(26, 20, 7, 0.78);
+}
+
+.viewer-corner-pill.is-pink {
+  color: #ffadd2;
+  border-color: rgba(255, 62, 127, 0.4);
+  background: rgba(30, 10, 22, 0.78);
+}
+
+.viewer-corner-pill.is-danger {
+  color: #ffc2cf;
+  border-color: rgba(255, 77, 109, 0.55);
+  background: rgba(42, 8, 18, 0.85);
+}
+
+.viewer-corner-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  pointer-events: auto;
+}
+
+.viewer-corner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #d7e5ff;
+  background: rgba(8, 14, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.12s ease;
+}
+
+.viewer-corner-btn:hover {
+  border-color: rgba(0, 245, 212, 0.52);
+  color: #ffffff;
+}
+
+.viewer-corner-btn.is-active {
+  background: linear-gradient(135deg, rgba(0, 245, 212, 0.24), rgba(0, 187, 255, 0.22));
+  border-color: rgba(0, 245, 212, 0.72);
+  color: #e6fffb;
+  box-shadow: 0 0 12px rgba(0, 245, 212, 0.22);
+}
+
+.sculpture-gizmo-hud-chip.is-corner-br {
+  left: auto;
+  right: 10px;
+  bottom: 10px;
+  max-width: min(48%, 380px);
+  text-align: right;
+}
+
+/* Desktop Wide Split Studio: Expansive 3D Model View on Left + Editing Tooling on Right */
+@media (min-width: 960px) {
+  .modal-card.sculpture-modal-card.is-studio-split {
+    width: min(1420px, calc(100vw - 32px));
+    height: min(90dvh, 880px);
+    max-height: 92dvh;
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(380px, 445px);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-modal-sticky-stage {
+    position: static;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 14px 14px;
+    border-bottom: none;
+    border-right: 1px solid rgba(0, 245, 212, 0.22);
+    box-shadow: none;
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-modal-header {
+    flex: 0 0 auto;
+    margin-bottom: 8px;
+  }
+
+  /* Float notification bell + close cleanly at top-right of the entire desktop studio modal */
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-modal-top-actions {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    z-index: 35;
+    padding: 3px 5px;
+    border-radius: 12px;
+    background: rgba(11, 17, 31, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    backdrop-filter: blur(8px);
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .preview-stage-shell {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-modal-scroll-body {
+    height: 100%;
+    min-height: 0;
+    padding: 54px 14px 20px;
+    gap: 10px;
+    background: linear-gradient(180deg, rgba(13, 20, 36, 0.96), rgba(9, 14, 26, 0.98));
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-num-input {
+    width: 58px !important;
+    flex: 0 0 58px;
+    padding: 3px 5px !important;
+    font-size: 11px !important;
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-axis-control {
+    padding: 6px 8px;
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .modal-card.sculpture-modal-card.is-studio-split .sculpture-detail-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 959px) {
+  .modal-card.sculpture-modal-card.is-studio-split .preview-stage-shell {
+    height: 264px;
+  }
+
+  .viewer-corner-stack.is-top-right {
+    max-width: 52%;
+  }
+
+  .sculpture-gizmo-hud-chip.is-corner-br {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .modal-card.sculpture-modal-card.is-studio-split .preview-stage-shell {
+    height: 244px;
+  }
+
+  .viewer-corner-pill {
+    font-size: 9px;
+    padding: 2px 6px;
+  }
+
+  .viewer-corner-btn {
+    font-size: 9.5px;
+    padding: 3px 7px;
+  }
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,
