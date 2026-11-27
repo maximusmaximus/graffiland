@@ -24,6 +24,8 @@ import {
   search3dAssetCatalog
 } from './catalogSearchService.mjs';
 import { buildParcelShareUrl, slugifyLandTitle } from './landVolume.mjs';
+import { buildPublicProfileUrl } from './profileRules.mjs';
+import { getPublicProfile, updateUserProfile } from './profileService.mjs';
 import {
   McpServiceError,
   checkParcelOwnership,
@@ -251,6 +253,78 @@ export async function handleMcpJsonRpc(
 
     if (toolName === 'get_spec') {
       toolResult = buildAgentSpec(apiOrigin);
+    } else if (toolName === 'get_my_profile') {
+      const publicOrigin = 'https://spray.land';
+      const detail = await getPublicProfile(db, {
+        identifier: ownerUser.username || ownerUser.id,
+        origin: publicOrigin,
+        pathname: '/'
+      });
+      const shareUrl =
+        detail?.profile?.profileUrl ||
+        (detail?.profile?.username
+          ? buildPublicProfileUrl({
+              origin: publicOrigin,
+              pathname: '/',
+              username: detail.profile.username
+            })
+          : '');
+      toolResult = {
+        ok: true,
+        shareUrl,
+        pairingCode: pairing.code,
+        ...detail
+      };
+    } else if (toolName === 'update_profile') {
+      const hasAnyField =
+        args.username !== undefined ||
+        args.bio !== undefined ||
+        args.avatarImage !== undefined ||
+        args.headerImage !== undefined;
+      if (!hasAnyField) {
+        throw new McpServiceError(
+          'Provide at least one profile field to update (username, bio, avatarImage, or headerImage).',
+          400
+        );
+      }
+      let updatedRow;
+      try {
+        updatedRow = await updateUserProfile(db, {
+          user: ownerUser,
+          ...(args.username !== undefined ? { username: args.username } : {}),
+          ...(args.bio !== undefined ? { bio: args.bio } : {}),
+          ...(args.avatarImage !== undefined ? { avatarImage: args.avatarImage } : {}),
+          ...(args.headerImage !== undefined ? { headerImage: args.headerImage } : {})
+        });
+      } catch (err) {
+        throw new McpServiceError(
+          err?.message || 'Failed to update profile.',
+          Number(err?.statusCode) || 400
+        );
+      }
+      const publicOrigin = 'https://spray.land';
+      const detail = await getPublicProfile(db, {
+        identifier: updatedRow?.username || ownerUser.id,
+        origin: publicOrigin,
+        pathname: '/'
+      });
+      const shareUrl =
+        detail?.profile?.profileUrl ||
+        (detail?.profile?.username
+          ? buildPublicProfileUrl({
+              origin: publicOrigin,
+              pathname: '/',
+              username: detail.profile.username
+            })
+          : '');
+      toolResult = {
+        ok: true,
+        updatedBy: pairing.agentName || 'paired-agent',
+        pairingCode: pairing.code,
+        shareUrl,
+        profile: detail.profile,
+        stats: detail.stats
+      };
     } else if (toolName === 'list_my_lands') {
       toolResult = await listOwnerLandsAndSculptures(db, ownerUser);
     } else if (toolName === 'get_land') {

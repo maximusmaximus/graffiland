@@ -632,7 +632,7 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
 
     assert.ok(infoZone.textContent.includes('Owner') && infoZone.textContent.includes('Size'));
     assert.ok(actionsZone.textContent.includes('Actions'));
-    assert.ok(primaryActions.querySelector('[data-testid="ar-land-draw-btn"]'));
+    assert.equal(primaryActions.querySelector('[data-testid="ar-land-draw-btn"]'), null);
     assert.ok(primaryActions.querySelector('[data-testid="ar-land-chat-btn"]'));
     assert.ok(secondaryActions.querySelector('[data-testid="ar-land-3d-map-btn"]'));
     assert.ok(secondaryActions.querySelector('[data-testid="ar-land-manage-btn"]'));

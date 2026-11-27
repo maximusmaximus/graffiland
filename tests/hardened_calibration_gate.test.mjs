@@ -526,7 +526,7 @@ describe('Hardened Cross-Browser Calibration Engine, Drawing Gate & Center->Bott
       })
     );
     const widget2 = view2.getByTestId('scene-coverage-widget');
-    assert.equal(widget2.getAttribute('data-placement'), 'bottom-right');
+    assert.equal(widget2.getAttribute('data-placement'), 'above-carousel');
     assert.equal(widget2.getAttribute('data-calibration-state'), 'calibrated');
     assert.ok(view2.getByText('Calibrated!'));
     RTL.fireEvent.click(view2.getByTestId('calibration-minimized-fab'));

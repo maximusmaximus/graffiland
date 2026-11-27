@@ -227,9 +227,9 @@ describe('Remove HUD Question Mark Icon & Clean Up Unified Help Guide', () => {
     assert.ok(view.container.textContent.includes('Proof of Location'));
     assert.ok(view.container.textContent.includes('+ Seed'));
 
-    // Open Step 2 InfoTip to verify spray can, Stack hold-to-build, auto-fade & Copy Agent Prompt
+    // Open Step 2 InfoTip to verify spray can, 3D bars, Stack hold-to-build, auto-fade & Copy Agent Prompt
     RTL.fireEvent.click(
-      view.getByRole('button', { name: /Info: Spray Brush, Center Reticle & Mobile Tool Carousel/i })
+      view.getByRole('button', { name: /Info: Spray Brush, 3D Manipulator Bars & Mobile Gestures/i })
     );
     assert.ok(view.container.textContent.includes('hold to build off faces'));
     assert.ok(view.container.textContent.includes('automatically fade existing land art'));

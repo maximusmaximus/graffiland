@@ -53,7 +53,7 @@ export default function SceneCoverageWidget({
     onStartFresh?.();
   };
 
-  // Minimized bottom-right icon when calibration is complete (or silently relocalizing)
+  // Minimized icon docked right above the side-scroll tool selector caption when calibrated
   if (!isCenteredOverlay && scanBoxCollapsed) {
     return (
       <div
@@ -63,7 +63,7 @@ export default function SceneCoverageWidget({
           dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''
         }`}
         data-testid="scene-coverage-widget"
-        data-placement="bottom-right"
+        data-placement="above-carousel"
         data-calibration-state={resolvedState}
         data-needs-restart="false"
         role="region"
@@ -146,7 +146,7 @@ export default function SceneCoverageWidget({
               : 'scanning'
       } ${dockOpen || mode === 'transform' ? 'hide-on-dock-mobile' : ''}`}
       data-testid="scene-coverage-widget"
-      data-placement={isCenteredOverlay ? 'center' : 'bottom-right'}
+      data-placement={isCenteredOverlay ? 'center' : 'above-carousel'}
       data-calibration-state={resolvedState}
       data-needs-restart={needsRestart ? 'true' : 'false'}
       role={isCenteredOverlay ? 'dialog' : 'region'}
@@ -190,7 +190,7 @@ export default function SceneCoverageWidget({
               className="scene-scan-collapse"
               onClick={onToggleCollapse}
               aria-label="Collapse scene coverage window"
-              title="Minimize to bottom-right icon"
+              title="Minimize above tool selector"
             >
               <XeroIcon emoji="➖" size={11} />
             </button>

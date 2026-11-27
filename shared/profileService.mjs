@@ -52,9 +52,9 @@ function buildGoogleMapsUrl(lat, lng) {
 /**
  * Check whether a username is valid and available to claim.
  * @param {any} db
- * @param {{ username: string, excludeUserId?: string }} params
+ * @param {{ username?: string, excludeUserId?: string }} [params]
  */
-export async function checkUsernameAvailability(db, { username, excludeUserId = '' } = {}) {
+export async function checkUsernameAvailability(db, { username = '', excludeUserId = '' } = {}) {
   const check = validateUsername(username);
   if (!check.ok) {
     return {
@@ -100,11 +100,11 @@ export async function checkUsernameAvailability(db, { username, excludeUserId = 
  * Update an authenticated user's unique username, bio, custom bio image (avatar), and/or profile header.
  * Enforces format rules + case-insensitive uniqueness across all accounts + strict raster image validation.
  * @param {any} db
- * @param {{ user: any, username?: string, bio?: string, avatarImage?: string, headerImage?: string }} params
+ * @param {{ user?: any, username?: string, bio?: string, avatarImage?: string, headerImage?: string }} [params]
  */
 export async function updateUserProfile(
   db,
-  { user, username, bio, avatarImage, headerImage } = {}
+  { user = null, username, bio, avatarImage, headerImage } = {}
 ) {
   if (!user?.id) {
     throw makeError('Authentication required.', 401);
@@ -202,9 +202,9 @@ export async function updateUserProfile(
  * including public links to all lands, sculptures, active listings, quests, and recent actions.
  * Never returns private fields (email, encrypted keys, auth tokens).
  * @param {any} db
- * @param {{ identifier: string, origin?: string, pathname?: string }} params
+ * @param {{ identifier?: string, origin?: string, pathname?: string }} [params]
  */
-export async function getPublicProfile(db, { identifier, origin = '', pathname = '/' } = {}) {
+export async function getPublicProfile(db, { identifier = '', origin = '', pathname = '/' } = {}) {
   const raw = String(identifier || '').trim();
   if (!raw) {
     throw makeError('Profile handle is required.', 400);

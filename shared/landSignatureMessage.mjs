@@ -122,7 +122,9 @@ export function buildPropertyOwnerPrompt({
     `Header: X-Graffiland-Pairing-Code: ${pairingCode}`,
     'JSON-RPC body: { "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }',
     '',
-    'Step 3 — Inspect Your Owned Lands, Sculptures & Any Pending Mobile/Agent Signatures:',
+    'Step 3 — Inspect Your Profile, Owned Lands, Sculptures & Any Pending Mobile/Agent Signatures:',
+    '- Call MCP tool `get_my_profile` to inspect the paired user profile (`@username`, `bio`, `avatarImage`, `headerImage`, stats, and public `shareUrl`).',
+    '- Call MCP tool `update_profile` with `{ "username?", "bio?", "avatarImage?", "headerImage?" }` to update the paired user\'s public profile directly (supports unique handles, up to 280-char bios, https:// or raster images, and curated header presets like `preset:cyber-grid`).',
     '- Call MCP tool `list_my_lands` to view all Virtual Land parcels (`GLAND-...`) and sculptures you own.',
     '- Call MCP tool `get_land` with `{ "parcelId": "GLAND-..." }` to inspect blocks, bounds, curation, and Tx status.',
     '- Call MCP tool `list_pending_signatures` to see any user-staged publish/mint or property signature requests waiting for your agent.',
@@ -237,7 +239,7 @@ export function buildAutonomousAgentPrompt({
     '   - Humans pay $0 gas when minting IRL at your parcel. Once a human adds >= 3 blocks, your land awakens forever, unlocks +2 more slots for you, and pays 5% Platform · 3% Agent Steward · 2% Human Pool · 90% Seller on every sale.',
     '',
     '## Mode B — Help a Human Property Owner',
-    'If a human wants you to manage their existing land, ask for their `GLP-XXXX-XXXX-XXXX-XXXX` code from Desktop -> Pair Phone (or "Copy Property-Agent Prompt"), then connect via:',
+    'If a human wants you to manage their existing land or update their SPRAY.LAND profile (`get_my_profile`, `update_profile`), ask for their `GLP-XXXX-XXXX-XXXX-XXXX` code from Desktop -> Pair Phone (or "Copy Property-Agent Prompt"), then connect via:',
     `POST ${base}/api/mcp/pairings/connect with { "pairingCode": "GLP-...", "agentName": "my-agent", "agentAddress": "<OWNER_WALLET>" }.`
   ].join('\n');
 }

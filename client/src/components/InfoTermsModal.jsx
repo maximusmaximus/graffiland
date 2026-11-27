@@ -547,12 +547,15 @@ export default function InfoTermsModal({
                         Open <strong>Pairing</strong> to copy your persistent pairing code for Phone
                         AR mirroring or AI Agent MCP (<code>GLP-...</code>). Once paired,{' '}
                         <strong>Land Management</strong> unlocks so you can rename parcels, invite
-                        contributors, and allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads.
-                        Autonomous agents connect with a wallet via <code>npx graffiland-mcp</code>{' '}
-                        or <code>/llms.txt</code> ({STEWARD_DEFAULTS.starterDormantSlots} starter
-                        slots, {STEWARD_DEFAULTS.dormantLeaseTtlHours}h visit timer, +2 slots per
-                        awakened land). Sales split 90% Seller · 5% Platform · 3% AI Agent · 2%
-                        Human Artists.
+                        contributors, allow <code>.glb/.gltf/.obj/.stl/.ply</code> uploads, and let
+                        your paired agent read or update your profile (<code>@username</code>,{' '}
+                        <code>bio</code>, avatar, banner) via MCP <code>get_my_profile</code> &amp;{' '}
+                        <code>update_profile</code>. Autonomous agents connect with a wallet via{' '}
+                        <code>npx graffiland-mcp</code> or <code>/llms.txt</code> (
+                        {STEWARD_DEFAULTS.starterDormantSlots} starter slots,{' '}
+                        {STEWARD_DEFAULTS.dormantLeaseTtlHours}h visit timer, +2 slots per awakened
+                        land). Sales split 90% Seller · 5% Platform · 3% AI Agent · 2% Human
+                        Artists.
                       </InfoTip>
                     </div>
                     <p>
@@ -567,12 +570,15 @@ export default function InfoTermsModal({
                     <div className="info-simple-title">
                       <XeroIcon emoji="🧑" size={15} />
                       <strong>Pair a Personal Helper Agent to Your Lands</strong>
-                      <InfoTip title="Property-Agent Pairing & 3D Asset Search">
+                      <InfoTip title="Property-Agent Pairing, Profile Sync & 3D Asset Search">
                         Copy a <code>GLP-...</code> pairing prompt so your personal AI helper can
                         search 9,000+ ready-made 3D models &amp; emojis via MCP{' '}
-                        <code>search_3d_catalog</code> (SimReady Pile, Pixels Atlas, XeroEmoji Pile)
-                        or generate &amp; place custom 3D art on lands you own, with two-way
-                        approval on your phone or desktop notifications.
+                        <code>search_3d_catalog</code> (SimReady Pile, Pixels Atlas, XeroEmoji
+                        Pile), generate &amp; place custom 3D art on lands you own, and inspect or
+                        update your public profile (<code>@username</code>, <code>bio</code>,
+                        avatar, banner) via MCP <code>get_my_profile</code> &amp;{' '}
+                        <code>update_profile</code>, with two-way approval on your phone or desktop
+                        notifications.
                       </InfoTip>
                     </div>
                     <p>
@@ -723,46 +729,47 @@ export default function InfoTermsModal({
                       <strong>1. Aim, Scan &amp; Lock Surface</strong>
                       <InfoTip title="Surface Scan, Calibration & Multi-Sensor AR">
                         Allow Camera, GPS, Compass, and Gyroscope. Sweep your phone until the
-                        bottom-right scan box reaches <strong>100%</strong> so Proof of Location
-                        locks your real-world spot, then choose Draw, Paint, or Add 3D Model. Tap
-                        any floor, wall, ledge, mid-air anchor, or the center reticle circle (and{' '}
-                        <strong>+ Seed</strong>) to place your first block. SPRAY.LAND fuses
+                        calibration scan reaches <strong>100%</strong> so Proof of Location locks
+                        your spot and shrinks into the compact dock right above the bottom tool
+                        selector, then choose Draw, Paint, or Add 3D Model. Your start surface
+                        reconciles automatically as you paint (or tap the center reticle +{' '}
+                        <strong>+ Seed</strong> to lock a specific spot). SPRAY.LAND fuses
                         True-North compass (WMM declination), 60Hz gyroscope, Kalman GPS, off-thread
                         ORB landmarks, and optional 6-DoF WebXR; use the compass Align nudge or a
                         figure-8 wave near steel structures.
                       </InfoTip>
                     </div>
                     <p>
-                      Allow Camera, GPS &amp; Gyroscope, scan to 100%, and tap a surface (or center
-                      reticle + Seed) to lock your starting point.
+                      Allow Camera, GPS &amp; Gyroscope — once calibrated to 100%, the dock shrinks
+                      above your tools and surfaces reconcile automatically (or use center reticle +
+                      Seed).
                     </p>
                   </div>
 
                   <div className="card info-simple-card">
                     <div className="info-simple-title">
                       <XeroIcon emoji="🖌️" size={15} />
-                      <strong>2. Tap Surface &amp; Paint 3D Voxels</strong>
-                      <InfoTip title="Spray Brush, Center Reticle & Mobile Tool Carousel">
-                        Hold and sweep your phone like a real spray can (let go to stop), or tap
-                        inside the center tool/block-diameter reticle circle on Brush/Pencil — first
-                        click locks that surface, and further taps/holds draw right at center. Open
-                        the <strong>🎨</strong> dock for colors, S/M/L/XL sizes, and Matte/Neon/Glass
-                        finishes. Swipe the bottom carousel:{' '}
-                        <strong>
-                          Brush → Pencil → Erase → Lock &amp; Scale (2-finger Z-rotate &amp;
-                          sliders) → Stack (hold to build off faces) → Search 3D → Preview → Publish
-                        </strong>
-                        . Drawing tools automatically fade existing land art so strokes stay clear
-                        (3D collision stays active). Tap bottom-right{' '}
+                      <strong>2. Paint Freely &amp; Lock/Scale With 3D Bars</strong>
+                      <InfoTip title="Spray Brush, 3D Manipulator Bars & Mobile Gestures">
+                        Hold and sweep your phone freely like a real spray can (no 10 ft origin
+                        lockout!), or tap inside the center tool/block-diameter reticle circle on
+                        Brush/Pencil. Open the <strong>🎨</strong> dock for colors, S/M/L/XL sizes,
+                        and Matte/Neon/Glass finishes, or swipe to <strong>Stack</strong> (hold to
+                        build off faces). In <strong>Lock &amp; Scale</strong>, drag the Land-style{' '}
+                        <strong>3D wireframe bars &amp; corner orbs</strong> directly (cyan bottom
+                        bars move, gold vertical bars rotate, top bars/elevator lift, corner orbs
+                        scale) — or use <strong>2 fingers up/down to Z-pivot</strong>,{' '}
+                        <strong>2 fingers left/right to rotate</strong>, and pinch to scale. Drawing
+                        tools automatically fade existing land art so strokes stay clear (3D
+                        collision stays active). Tap bottom-right{' '}
                         <strong>Copy Agent Prompt (🤖)</strong> (camera hides cleanly) to let your
-                        AI agent add to the current land or claim a new one. Supports 4x{' '}
-                        <code>0.05m</code> grid, 300 ft AR visibility, up to 4,096 blocks, and
-                        auto-saved drafts.
+                        AI agent add art, claim land, or update your profile. Access your lands and
+                        ⚙️ Settings anytime from your account name.
                       </InfoTip>
                     </div>
                     <p>
-                      Sweep like a spray can or tap the center reticle, swipe tools below, or tap
-                      bottom-right Copy Agent Prompt.
+                      Paint freely with no 10 ft limit, drag Land-style 3D bars or 2-finger Z-pivot
+                      &amp; rotate in Lock &amp; Scale, or open Copy Agent Prompt.
                     </p>
                   </div>
 
@@ -770,18 +777,19 @@ export default function InfoTermsModal({
                     <div className="info-simple-title">
                       <XeroIcon emoji="🔍" size={15} />
                       <strong>3. Search &amp; Place 3D Items in AR</strong>
-                      <InfoTip title="Mobile Search to Place & Auto-Scale">
-                        Tap <strong>🔍 Search</strong> in the top right or bottom carousel (the
-                        camera pauses cleanly while you browse) to query SimReady Pile, Pixels
-                        Atlas, and XeroEmoji Pile. Placing an item automatically switches into{' '}
-                        <strong>Lock &amp; Scale</strong> so you can pinch-scale, rotate, and
-                        position it — then tap <strong>✅ Draw</strong> to keep painting or{' '}
-                        <strong>🚀 Publish</strong> to mint.
+                      <InfoTip title="Mobile Search to Place & 3D Wireframe Scale">
+                        Tap the floating <strong>🔍 (3-blocks)</strong> search button directly above
+                        the bottom-left Map icon (or in the bottom carousel — the camera pauses
+                        cleanly while you browse) to search SimReady Pile, Pixels Atlas, and
+                        XeroEmoji Pile. Placing an item opens a live 3D preview in{' '}
+                        <strong>Lock &amp; Scale</strong> with Land-style 3D bars and 2-finger
+                        Z-pivot/rotate/pinch gestures — then tap <strong>✅ Draw</strong> to paint
+                        or <strong>🚀 Publish</strong> to mint.
                       </InfoTip>
                     </div>
                     <p>
-                      Tap 🔍 to place ready-made 3D props &amp; emojis, pinch-scale in AR, and
-                      resume drawing or minting.
+                      Tap 🔍 (blocks badge) above Map to place 3D props &amp; emojis, shape with 3D
+                      bars or 2-finger gestures, and resume drawing or minting.
                     </p>
                   </div>
 

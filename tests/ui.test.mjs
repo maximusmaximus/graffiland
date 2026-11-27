@@ -182,7 +182,7 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     // Switch to Mobile AR Studio guide tab
     RTL.fireEvent.click(view.getByRole('tab', { name: /Mobile AR Studio/i }));
     assert.ok(view.getByTestId('info-guide-mobile'));
-    assert.ok(view.getByText(/Tap Surface & Paint 3D Voxels/i));
+    assert.ok(view.getByText(/Paint Freely & Lock\/Scale With 3D Bars/i));
 
     // Click the "i" tooltip button next to Threat Model to pull up full security summary
     RTL.fireEvent.click(view.getByRole('button', { name: /Info: Transparency & Security Details/i }));
@@ -2629,12 +2629,13 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     });
     assert.deepEqual(calls.rename, [{ parcelId: 'GLAND-9R16561P', name: 'Secret Garden ✨' }]);
 
-    RTL.fireEvent.click(panel.getByTestId('ar-land-draw-btn'));
+    // Inside land removes redundant Draw button cleanly while keeping 3D Map, Manage & navigation
+    assert.equal(panel.queryByTestId('ar-land-draw-btn'), null);
     RTL.fireEvent.click(panel.getByTestId('ar-land-3d-map-btn'));
     RTL.fireEvent.click(panel.getByTestId('ar-land-manage-btn'));
     RTL.fireEvent.click(panel.getByLabelText('Next nearby land'));
     RTL.fireEvent.click(panel.getByTestId('ar-land-close-btn'));
-    assert.deepEqual(calls.draw, ['GLAND-9R16561P']);
+    assert.deepEqual(calls.draw, []);
     assert.deepEqual(calls.map3d, ['GLAND-9R16561P']);
     assert.deepEqual(calls.manage, ['GLAND-9R16561P']);
     assert.deepEqual(calls.switched, ['GLAND-SECOND02']);
@@ -6917,23 +6918,25 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
 
     const mobileUnpaired = RTL.render(React.createElement(StudioHudTopBar, mobileBase));
     assert.equal(mobileUnpaired.queryByLabelText('Land Management'), null);
+    assert.ok(mobileUnpaired.getByTestId('mobile-profile-btn'));
     cleanup();
 
-    // Paired via phone live-mirror code -> Land Management pill appears
+    // Mobile drawing screen removes dedicated Land pill even when paired (users reach lands via account profile)
     const mobilePhonePaired = RTL.render(
       React.createElement(StudioHudTopBar, { ...mobileBase, pairedCode: 'PAIR42' })
     );
-    assert.ok(mobilePhonePaired.getByLabelText('Land Management'));
+    assert.equal(mobilePhonePaired.queryByLabelText('Land Management'), null);
+    assert.ok(mobilePhonePaired.getByTestId('mobile-profile-btn'));
     cleanup();
 
-    // Paired via MCP active -> Land Management pill appears
     const mobileMcpPaired = RTL.render(
       React.createElement(StudioHudTopBar, {
         ...mobileBase,
         mcpPairingsState: { mcpActive: true, activePairing: { code: 'GLP-1234-5678-9012-3456' }, pairings: [] }
       })
     );
-    assert.ok(mobileMcpPaired.getByLabelText('Land Management'));
+    assert.equal(mobileMcpPaired.queryByLabelText('Land Management'), null);
+    assert.ok(mobileMcpPaired.getByTestId('mobile-profile-btn'));
     cleanup();
 
     // 2) DesktopHub hides Land Management nav button until paired, and shows it once paired
@@ -7842,16 +7845,13 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       );
 
       assert.equal(Boolean(localView.queryByTestId('ar-land-visit-lock-note')), false);
-      const localDraw = localView.getByTestId('ar-land-draw-btn');
-      assert.equal(localDraw.getAttribute('data-locked'), 'false');
-      assert.ok(localDraw.className.includes('btn-primary'));
-      RTL.fireEvent.click(localDraw);
+      assert.equal(localView.queryByTestId('ar-land-draw-btn'), null);
       RTL.fireEvent.click(localView.getByTestId('ar-land-chat-btn'));
       await RTL.act(async () => {
         RTL.fireEvent.click(localView.getByTestId('ar-land-checkin-btn'));
       });
       RTL.fireEvent.click(localView.getByTestId('ar-compass-align-toggle-btn'));
-      assert.equal(fired.draw, 1);
+      assert.equal(fired.draw, 0);
       assert.equal(fired.chat, 1);
       assert.equal(fired.checkIn, 1);
       assert.ok(localView.getByTestId('ar-compass-nudge-controls'));
@@ -9206,9 +9206,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(panelView.queryByTestId('ar-land-info-section'), null);
     assert.equal(panelView.queryByTestId('ar-land-actions-section'), null);
 
-    // Quick Draw works right from compact bar
-    RTL.fireEvent.click(panelView.getByTestId('ar-land-compact-draw-btn'));
-    assert.deepEqual(drawClicked, ['GLAND-ARCLEAN1']);
+    // Inside land hides redundant compact Draw button cleanly
+    assert.equal(panelView.queryByTestId('ar-land-compact-draw-btn'), null);
+    assert.deepEqual(drawClicked, []);
 
     // Expand via Details toggle -> full info & actions appear
     RTL.fireEvent.click(panelView.getByTestId('ar-land-details-toggle'));

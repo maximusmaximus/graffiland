@@ -277,7 +277,7 @@ export default function ToolCarouselBar({
           </div>
 
           <div className="transform-gesture-banner" data-testid="transform-gesture-banner">
-            1-finger drag: move · 2-finger twist: rotate · 2-finger pinch &amp; slide: scale &amp; depth
+            Drag 3D bars · 2-finger ↕ Z-pivot · 2-finger ↔ rotate · pinch scale
           </div>
 
           <div className="transform-sliders is-four-grid">

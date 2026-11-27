@@ -40,9 +40,6 @@ export default function StudioHudTopBar({
   onOpenCatalogSearch = null,
   hasPlacedCatalogItem = false,
   onOpenProfile = null,
-  hasOwnedLand,
-  ownedLandCount,
-  onOpenLandManage,
   editingSculpture,
   savingCanvasEdit,
   onSaveCanvasModification,
@@ -53,7 +50,6 @@ export default function StudioHudTopBar({
   brushUnavailableReason,
   onSeedVoxelAtAnchor,
   onClearSurfaceAnchor,
-  onSelectSurfaceCenter,
   needsGyroTap,
   calibrationOverlayVisible = false,
   gyroFallbackActive,
@@ -278,19 +274,6 @@ export default function StudioHudTopBar({
             )}
           </button>
 
-          {typeof onOpenCatalogSearch === 'function' && (
-            <button
-              type="button"
-              className={`info-fab-inline mobile-search-fab ${hasPlacedCatalogItem ? 'is-active' : ''}`}
-              data-testid="mobile-catalog-search-btn"
-              onClick={onOpenCatalogSearch}
-              aria-label="Search 3D items to place"
-              title="Search & place 3D models & emojis (SimReady, Pixels, XeroEmoji)"
-            >
-              <XeroIcon emoji="🔍" size={18} label="Search 3D" />
-            </button>
-          )}
-
           <button
             type="button"
             className="info-fab-inline"
@@ -302,9 +285,7 @@ export default function StudioHudTopBar({
           </button>
         </div>
 
-        {((pendingCount > 0 && !pairHubOpen) ||
-          (needsRepairAlert && !pairHubOpen) ||
-          (isPaired && hasOwnedLand)) && (
+        {((pendingCount > 0 && !pairHubOpen) || (needsRepairAlert && !pairHubOpen)) && (
           <div className="mobile-top-hud-subrow">
             {pendingCount > 0 && !pairHubOpen && (
               <button
@@ -335,20 +316,6 @@ export default function StudioHudTopBar({
                 <XeroIcon emoji="🔗" size={12} />
                 <span>Re-pair needed</span>
                 <span aria-hidden="true">▾</span>
-              </button>
-            )}
-
-            {isPaired && hasOwnedLand && (
-              <button
-                type="button"
-                className="land-manage-pill"
-                data-testid="mobile-land-management-btn"
-                onClick={onOpenLandManage}
-                aria-label="Land Management"
-                title="Land Management (Contributors, 3D Models & Agent Controls)"
-              >
-                <XeroIcon emoji="🗺️" size={14} label="Land" />
-                <span>Land ({ownedLandCount})</span>
               </button>
             )}
           </div>
@@ -575,56 +542,43 @@ export default function StudioHudTopBar({
           </div>
         )}
 
-        {!isInteractingWithLand && mode === 'draw' && (
+        {!isInteractingWithLand && mode === 'draw' && surfaceAnchor && (
           <div className="surface-pill hud-interactive">
-            {surfaceAnchor ? (
-              <>
-                <XeroIcon emoji="📌" size={13} />
-                <span className="surface-pill-label">
-                  {surfaceAnchor.label} · {formatShortLength(surfaceAnchor.depthM, unitSystem, { decimals: 1, compact: true })}
-                </span>
-                <button
-                  type="button"
-                  className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
-                  onClick={onToggleSurfaceLock}
-                  title="Toggle start surface plane lock vs Free 3D air drawing"
-                >
-                  <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
-                  <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`surface-pill-btn ${!brushUsable ? 'is-unavailable' : ''}`}
-                  aria-disabled={!brushUsable || undefined}
-                  onClick={onSeedVoxelAtAnchor}
-                  title={
-                    brushUsable
-                      ? 'Place first block flush on the selected surface'
-                      : brushUnavailableReason
-                  }
-                >
-                  + Seed
-                </button>
-                <button
-                  type="button"
-                  className="surface-pill-btn clear"
-                  onClick={onClearSurfaceAnchor}
-                  aria-label="Clear start surface"
-                  title="Clear start surface"
-                >
-                  <XeroIcon emoji="✖️" size={11} />
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="surface-pill-prompt"
-                onClick={onSelectSurfaceCenter}
-              >
-                <XeroIcon emoji="👆" size={13} />
-                <span>Tap scene to set start surface</span>
-              </button>
-            )}
+            <XeroIcon emoji="📌" size={13} />
+            <span className="surface-pill-label">
+              {surfaceAnchor.label} · {formatShortLength(surfaceAnchor.depthM, unitSystem, { decimals: 1, compact: true })}
+            </span>
+            <button
+              type="button"
+              className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
+              onClick={onToggleSurfaceLock}
+              title="Toggle start surface plane lock vs Free 3D air drawing"
+            >
+              <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
+              <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
+            </button>
+            <button
+              type="button"
+              className={`surface-pill-btn ${!brushUsable ? 'is-unavailable' : ''}`}
+              aria-disabled={!brushUsable || undefined}
+              onClick={onSeedVoxelAtAnchor}
+              title={
+                brushUsable
+                  ? 'Place first block flush on the selected surface'
+                  : brushUnavailableReason
+              }
+            >
+              + Seed
+            </button>
+            <button
+              type="button"
+              className="surface-pill-btn clear"
+              onClick={onClearSurfaceAnchor}
+              aria-label="Clear start surface"
+              title="Clear start surface"
+            >
+              <XeroIcon emoji="✖️" size={11} />
+            </button>
           </div>
         )}
 
@@ -940,6 +894,41 @@ export default function StudioHudTopBar({
           </div>
         );
       })()}
+
+      {!isInteractingWithLand && typeof onOpenCatalogSearch === 'function' && (
+        <button
+          type="button"
+          className={`floating-catalog-search-btn hud-interactive ${
+            hasPlacedCatalogItem ? 'is-active' : ''
+          }`}
+          data-testid="mobile-catalog-search-btn"
+          onClick={onOpenCatalogSearch}
+          aria-label="Search premade 3D items to place"
+          title="Search & place premade 3D models & emojis (SimReady, Pixels, XeroEmoji)"
+        >
+          <XeroIcon emoji="🔍" size={20} label="Search 3D" />
+          <span
+            className="floating-search-mini-badge"
+            data-testid="floating-search-blocks-badge"
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 18 18" width="13" height="13" fill="none">
+              {/* Top centered 3D block */}
+              <polygon points="9,1.2 12.6,3.1 9,5 5.4,3.1" fill="#00f5d4" />
+              <polygon points="5.4,3.1 9,5 9,8.4 5.4,6.5" fill="#00b89e" />
+              <polygon points="12.6,3.1 9,5 9,8.4 12.6,6.5" fill="#008f7a" />
+              {/* Bottom-left 3D block */}
+              <polygon points="5.2,8 8.8,9.9 5.2,11.8 1.6,9.9" fill="#ffd166" />
+              <polygon points="1.6,9.9 5.2,11.8 5.2,15.2 1.6,13.3" fill="#e0a82e" />
+              <polygon points="8.8,9.9 5.2,11.8 5.2,15.2 8.8,13.3" fill="#b88418" />
+              {/* Bottom-right 3D block */}
+              <polygon points="12.8,8 16.4,9.9 12.8,11.8 9.2,9.9" fill="#ff3e7f" />
+              <polygon points="9.2,9.9 12.8,11.8 12.8,15.2 9.2,13.3" fill="#d92662" />
+              <polygon points="16.4,9.9 12.8,11.8 12.8,15.2 16.4,13.3" fill="#a81a4a" />
+            </svg>
+          </span>
+        </button>
+      )}
 
       {!isInteractingWithLand && (
         <button
