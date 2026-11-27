@@ -16,6 +16,7 @@ import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyCl
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import LandDeedPanel from './LandDeedPanel.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
@@ -1452,6 +1453,17 @@ export default function LandManagementModal({
                     })
                   )}
                 </div>
+
+                {/* 3.5) Transferable Virtual Land Deed NFT & Marketplace Panel */}
+                <LandDeedPanel
+                  parcel={activeParcel}
+                  onDeedChanged={async () => {
+                    await loadWorkspace();
+                    onWorkspaceChanged?.();
+                  }}
+                  onNotice={setNotice}
+                  onError={setErrorMsg}
+                />
 
                 {/* 4) Compact Erase Land Zone */}
                 <div

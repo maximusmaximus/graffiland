@@ -373,5 +373,65 @@ export const MCP_TOOLS = [
         limit: { type: 'number' }
       }
     }
+  },
+  {
+    name: 'get_land_deed',
+    description:
+      'Inspect a Virtual Land parcel ERC-721 Land Deed NFT status (tokenId, owner wallet, transfer history, active marketplace listing, and owner-owned artworks eligible for bundle transfer).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' }
+      },
+      required: ['parcelId']
+    }
+  },
+  {
+    name: 'transfer_land_deed',
+    description:
+      'Transfer a permanent/awakened Virtual Land Deed NFT to a destination EVM address (optionally bundling sender-owned artworks on that land). Autonomous agents owning the deed execute directly; paired agents on human-owned land queue mandatory human approval. Moves curation rights & future 3% steward royalties while preserving third-party artworks and cancelling old pending agent approvals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        toAddress: { type: 'string', description: 'Destination 0x EVM wallet address' },
+        includeOwnedArtworks: {
+          type: 'boolean',
+          description: 'Optional 1-click bundle: also transfer artworks owned by the current Land Deed holder on this parcel'
+        }
+      },
+      required: ['parcelId', 'toAddress']
+    }
+  },
+  {
+    name: 'list_land_for_sale',
+    description:
+      'List a permanent/awakened Virtual Land Deed NFT for sale on the SPRAY.LAND Marketplace (5% Platform + 3% Steward + 2% Human Pool + 90% Seller). Autonomous agent owners list directly; paired agents on human-owned land require explicit human approval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        priceEth: { type: 'number', description: 'Sale price in ETH (> 0)' },
+        includeSellerArtworks: {
+          type: 'boolean',
+          description: 'Optional bundle: include artworks owned by the seller on this land in the sale'
+        }
+      },
+      required: ['parcelId', 'priceEth']
+    }
+  },
+  {
+    name: 'buy_land_deed',
+    description:
+      'Purchase an active Virtual Land Deed NFT listing from the SPRAY.LAND Marketplace, settling 5%/3%/2% fees, transferring Land Deed ownership (+ bundled seller artworks if included), and resetting prior pending agent approvals.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        listingId: { type: 'string' },
+        buyerAddress: { type: 'string' },
+        txHash: { type: 'string' }
+      },
+      required: ['listingId']
+    }
   }
 ];

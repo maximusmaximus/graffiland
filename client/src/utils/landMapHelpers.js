@@ -649,6 +649,27 @@ export function computeClosestLandsPerimeterFit({
 export function isLandOwnedByUser(land, { user = null, ownedParcelIds = [] } = {}) {
   if (!user?.id || !land?.parcelId) return false;
 
+  const uid = String(user.id).trim();
+  const userWallets = new Set(
+    [user.walletAddress, user.customPayoutAddress, user.activeMintRecipient]
+      .filter(Boolean)
+      .map((a) => String(a).trim().toLowerCase())
+  );
+
+  // When a permanent Land Deed NFT exists, the deed holder is the canonical owner.
+  const deed = land.landDeed;
+  if (deed && (deed.ownerSub || deed.ownerAddress)) {
+    const deedSub = String(deed.ownerSub || '').trim();
+    if (deedSub && deedSub === uid) {
+      return true;
+    }
+    const deedAddr = String(deed.ownerAddress || '').trim().toLowerCase();
+    if (deedAddr && userWallets.has(deedAddr)) {
+      return true;
+    }
+    return false;
+  }
+
   const pid = String(land.parcelId).trim().toUpperCase();
   if (
     Array.isArray(ownedParcelIds) &&
@@ -657,7 +678,6 @@ export function isLandOwnedByUser(land, { user = null, ownedParcelIds = [] } = {
     return true;
   }
 
-  const uid = String(user.id).trim();
   const ownerSubs = [land.ownerSub, land.stewardSub, land.claimedBy]
     .filter(Boolean)
     .map((v) => String(v).trim());
@@ -665,11 +685,6 @@ export function isLandOwnedByUser(land, { user = null, ownedParcelIds = [] } = {
     return true;
   }
 
-  const userWallets = new Set(
-    [user.walletAddress, user.customPayoutAddress, user.activeMintRecipient]
-      .filter(Boolean)
-      .map((a) => String(a).trim().toLowerCase())
-  );
   if (userWallets.size > 0) {
     const landWallets = [land.firstClaimantAddress, land.ownerAddress, land.stewardAddress]
       .filter(Boolean)

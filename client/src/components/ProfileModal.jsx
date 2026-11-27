@@ -1436,6 +1436,23 @@ export default function ProfileModal({
                           <div className="profile-item-desc">{land.description}</div>
                         )}
                         <div className="profile-item-chips">
+                          {land.landDeed?.tokenId ? (
+                            <span
+                              className="mobile-sc-chip"
+                              data-testid="profile-land-deed-badge"
+                            >
+                              🏷️ Deed #{land.landDeed.tokenId}
+                            </span>
+                          ) : null}
+                          {land.activeLandListing ? (
+                            <span
+                              className="badge gold"
+                              style={{ fontSize: 10 }}
+                              data-testid="profile-land-forsale-badge"
+                            >
+                              💎 For Sale · {land.activeLandListing.priceEth} ETH
+                            </span>
+                          ) : null}
                           {dims && <span className="mobile-sc-chip">📐 {dims}</span>}
                           <span className="mobile-sc-chip">
                             🎨 {land.sculptureCount} sculpture{land.sculptureCount === 1 ? '' : 's'}

@@ -251,6 +251,12 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
   );
   const ownedLands = allParcels
     .filter((p) => {
+      // Canonical Land Deed NFT ownership takes precedence once minted
+      if (p.landDeed) {
+        if (p.landDeed.ownerSub && p.landDeed.ownerSub === userId) return true;
+        const deedAddr = String(p.landDeed.ownerAddress || '').toLowerCase();
+        return Boolean(deedAddr && walletSet.has(deedAddr));
+      }
       if (p.ownerSub === userId || p.stewardSub === userId) return true;
       const addr = String(p.firstClaimantAddress || '').toLowerCase();
       return Boolean(addr && walletSet.has(addr));
@@ -279,6 +285,9 @@ export async function getPublicProfile(db, { identifier, origin = '', pathname =
         frozen: Boolean(p.frozen),
         openQuestCount: Number(p.openQuestCount || 0),
         humanContributorCount: Number(p.humanContributorCount || 0),
+        landDeed: p.landDeed || null,
+        landDeedEligible: Boolean(p.landDeedEligible),
+        activeLandListing: p.activeLandListing || null,
         volume: p.volume || null,
         slug: p.slug || p.parcelId.toLowerCase(),
         latestAt: p.latestAt || '',

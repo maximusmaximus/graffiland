@@ -110,6 +110,18 @@ import {
   transferSculptureNft
 } from '../shared/transferService.mjs';
 import {
+  buildLandDeedMetadata,
+  buyLandDeed,
+  cancelLandDeedListing,
+  ensureLandDeedMinted,
+  getLandDeedSummary,
+  listActiveLandMarketplaceListings,
+  listLandDeedForSale,
+  serializeLandDeedRow,
+  syncLandDeedOwnership,
+  transferLandDeed
+} from '../shared/landDeedService.mjs';
+import {
   claimClueUnlockedGrant,
   enterChatBoard,
   initChatBoard,
@@ -1425,6 +1437,185 @@ export function createAppServer(serverOptions = {}) {
     }
   });
 
+  // Dedicated Transferable Land Deed NFTs & Land Marketplace Endpoints
+  app.get('/api/contract/land-deeds.json', (req, res) => {
+    const publicOrigin = `${req.protocol}://${req.get('host')}`;
+    const chain = getChainStatus();
+    res.json({
+      name: 'SPRAY.LAND Virtual Land Deeds',
+      symbol: 'SLAND',
+      description:
+        'Permanent, awakened SPRAY.LAND Virtual Land Deed ERC-721 NFTs on Robinhood Chain. Holding a Land Deed grants parcel curation rights and all future 3% Land Steward royalties.',
+      image: `${publicOrigin}/og-image.png`,
+      external_link: publicOrigin,
+      seller_fee_basis_points: 1000,
+      fee_recipient: chain.royaltyReceiver
+    });
+  });
+
+  app.get('/api/land-tokens/:tokenId.json', async (req, res) => {
+    try {
+      const tokenId = String(req.params.tokenId || '').trim();
+      const row = await chatDb.get('SELECT * FROM land_deed_nfts WHERE token_id = ? LIMIT 1', [tokenId]);
+      if (!row) return res.status(404).json({ error: 'Land Deed token not found' });
+      const summary = await getLandDeedSummary(chatDb, {
+        parcelId: row.parcel_id,
+        autoBackfill: false
+      });
+      const publicOrigin = `${req.protocol}://${req.get('host')}`;
+      return res.json(
+        buildLandDeedMetadata({
+          parcelId: row.parcel_id,
+          displayName: summary.displayName,
+          deed: serializeLandDeedRow(row),
+          volume: summary.volume,
+          artworkCount: summary.totalArtworkCount,
+          publicUrl: publicOrigin
+        })
+      );
+    } catch (err) {
+      return res.status(err?.statusCode || 400).json({ error: err.message || 'Metadata lookup failed' });
+    }
+  });
+
+  app.get('/api/lands/:parcelId/deed.json', async (req, res) => {
+    try {
+      const publicOrigin = `${req.protocol}://${req.get('host')}`;
+      const summary = await getLandDeedSummary(chatDb, {
+        parcelId: req.params.parcelId,
+        chainCfg: getChainStatus(),
+        publicUrl: publicOrigin
+      });
+      if (!summary.deed) {
+        return res.status(404).json({
+          error: summary.eligibilityReason || 'Land Deed NFT not minted yet for this parcel.'
+        });
+      }
+      return res.json(
+        buildLandDeedMetadata({
+          parcelId: summary.parcelId,
+          displayName: summary.displayName,
+          deed: summary.deed,
+          volume: summary.volume,
+          artworkCount: summary.totalArtworkCount,
+          publicUrl: publicOrigin
+        })
+      );
+    } catch (err) {
+      return res.status(err?.statusCode || 400).json({ error: err.message || 'Metadata lookup failed' });
+    }
+  });
+
+  app.get('/api/lands/:parcelId/deed', async (req, res) => {
+    try {
+      const caller = getAuthUserFromRequest(req);
+      const publicOrigin = `${req.protocol}://${req.get('host')}`;
+      const out = await getLandDeedSummary(chatDb, {
+        parcelId: req.params.parcelId,
+        callerUser: caller,
+        chainCfg: getChainStatus(),
+        publicUrl: publicOrigin
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Land Deed lookup failed' });
+    }
+  });
+
+  app.post('/api/lands/:parcelId/transfer', requireAuth, async (req, res) => {
+    try {
+      const publicOrigin = `${req.protocol}://${req.get('host')}`;
+      const chainCfg = getChainStatus();
+      const out = await transferLandDeed(chatDb, {
+        parcelId: req.params.parcelId,
+        callerUser: req.user,
+        toAddress: req.body?.toAddress || '',
+        includeOwnedArtworks: Boolean(req.body?.includeOwnedArtworks),
+        externalTxHash: req.body?.externalTxHash || '',
+        walletSignature: req.body?.walletSignature || '',
+        chainCfg,
+        publicUrl: publicOrigin
+      });
+      res.json(out);
+    } catch (err) {
+      res
+        .status(err?.statusCode || 400)
+        .json({ error: err.message || 'Land Deed transfer failed', ...(err?.extra || {}) });
+    }
+  });
+
+  app.post('/api/lands/:parcelId/deed/sync', requireAuth, async (req, res) => {
+    try {
+      const out = await syncLandDeedOwnership(chatDb, {
+        parcelId: req.params.parcelId,
+        chainCfg: getChainStatus(),
+        callerUser: req.user
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Land Deed sync failed' });
+    }
+  });
+
+  app.get(
+    '/api/marketplace/lands',
+    handleChatRoute(async (req) => ({
+      listings: await listActiveLandMarketplaceListings(chatDb, {
+        parcelId: String(req.query?.parcel || ''),
+        limit: req.query?.limit ? Number(req.query.limit) : 60
+      })
+    }))
+  );
+
+  app.post('/api/marketplace/lands/list', requireAuth, async (req, res) => {
+    try {
+      const publicOrigin = `${req.protocol}://${req.get('host')}`;
+      const chainCfg = getChainStatus();
+      const out = await listLandDeedForSale(chatDb, {
+        parcelId: req.body?.parcelId,
+        sellerUser: req.user,
+        priceEth: req.body?.priceEth,
+        includeSellerArtworks: Boolean(
+          req.body?.includeSellerArtworks || req.body?.includeOwnedArtworks
+        ),
+        platformAddress: chainCfg.royaltyReceiver,
+        chainCfg,
+        publicUrl: publicOrigin
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Land listing failed' });
+    }
+  });
+
+  app.post('/api/marketplace/lands/listings/:id/cancel', requireAuth, async (req, res) => {
+    try {
+      const out = await cancelLandDeedListing(chatDb, {
+        listingId: req.params.id,
+        callerUser: req.user
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Cancel listing failed' });
+    }
+  });
+
+  app.post('/api/marketplace/lands/listings/:id/buy', requireAuth, async (req, res) => {
+    try {
+      const chainCfg = getChainStatus();
+      const out = await buyLandDeed(chatDb, {
+        listingId: req.params.id,
+        buyerUser: req.user,
+        buyerAddress: req.body?.buyerAddress || '',
+        txHash: req.body?.txHash || '',
+        platformAddress: chainCfg.royaltyReceiver
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(err?.statusCode || 400).json({ error: err.message || 'Land purchase failed' });
+    }
+  });
+
   app.get(
     '/api/economy/splits',
     handleChatRoute((req) =>
@@ -2383,12 +2574,29 @@ export function createAppServer(serverOptions = {}) {
         await consumeDraftOnPublish(chatDb, { draftId: req.body.draftId, user: req.user });
       }
 
+      let landDeed = awakening?.landDeed || null;
+      if (!landDeed) {
+        try {
+          const deedRes = await ensureLandDeedMinted(chatDb, {
+            parcelId: effectiveParcelId,
+            ownerSub: attachingToExistingLand ? '' : req.user.id,
+            ownerAddress: attachingToExistingLand ? '' : recipientAddress,
+            trigger: attachingToExistingLand ? 'awakened' : 'mobile_ar_mint',
+            chainCfg: getChainStatus()
+          });
+          landDeed = deedRes?.deed || null;
+        } catch {
+          // non-fatal
+        }
+      }
+
       const saved = db.prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ?`).get(sculptureId);
       res.status(201).json({
         sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
         mint: mintResult,
         ipfs: ipfsResult,
         awakening,
+        landDeed,
         addedToExistingLand: attachingToExistingLand,
         mintedNewLand: !attachingToExistingLand,
         landDisplayName: resolvedTarget.displayName || ''

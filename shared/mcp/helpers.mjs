@@ -83,6 +83,18 @@ export async function isUserLandOwner(db, { parcelId, user = null, signerAddress
   const userId = user?.id ? String(user.id) : '';
   if (!userId && allowed.size === 0) return false;
 
+  // Canonical ERC-721 Land Deed NFT holder takes precedence over legacy claimant records
+  const deedRow = await db
+    .get('SELECT owner_sub, owner_address FROM land_deed_nfts WHERE parcel_id = ?', [cleanParcelId])
+    .catch(() => null);
+  if (deedRow && (deedRow.owner_sub || deedRow.owner_address)) {
+    if (userId && deedRow.owner_sub && deedRow.owner_sub === userId) return true;
+    if (deedRow.owner_address && allowed.has(String(deedRow.owner_address).toLowerCase())) {
+      return true;
+    }
+    return false;
+  }
+
   const stewardRow = await db
     .get('SELECT steward_sub, steward_address FROM land_steward_state WHERE parcel_id = ?', [
       cleanParcelId

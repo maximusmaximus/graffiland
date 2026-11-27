@@ -98,6 +98,18 @@ import {
   transferSculptureNft
 } from '../../shared/transferService.mjs';
 import {
+  buildLandDeedMetadata,
+  buyLandDeed,
+  cancelLandDeedListing,
+  ensureLandDeedMinted,
+  getLandDeedSummary,
+  listActiveLandMarketplaceListings,
+  listLandDeedForSale,
+  serializeLandDeedRow,
+  syncLandDeedOwnership,
+  transferLandDeed
+} from '../../shared/landDeedService.mjs';
+import {
   claimClueUnlockedGrant,
   enterChatBoard,
   initChatBoard,
@@ -2325,6 +2337,218 @@ export default {
       }
     }
 
+    // Dedicated Transferable Land Deed NFTs & Land Marketplace Endpoints
+    const landDeedChainCfg = {
+      chainId: cfg.network.chainId,
+      chainName: cfg.network.name,
+      rpcUrl: cfg.network.rpcUrl,
+      landDeedContractAddress: env.ROBINHOOD_LAND_DEED_CONTRACT_ADDRESS || ''
+    };
+
+    if (pathname === '/api/contract/land-deeds.json' && request.method === 'GET') {
+      return jsonResponse(
+        {
+          name: 'SPRAY.LAND Virtual Land Deeds',
+          symbol: 'SLAND',
+          description:
+            'Permanent, awakened SPRAY.LAND Virtual Land Deed ERC-721 NFTs on Robinhood Chain. Holding a Land Deed grants parcel curation rights and all future 3% Land Steward royalties.',
+          image: `${cfg.publicUrl}/og-image.png`,
+          external_link: cfg.publicUrl,
+          seller_fee_basis_points: 1000,
+          fee_recipient: cfg.royaltyReceiver
+        },
+        200,
+        request
+      );
+    }
+
+    const landTokenMetaMatch = pathname.match(/^\/api\/land-tokens\/([^/]+)\.json$/);
+    if (landTokenMetaMatch && request.method === 'GET') {
+      try {
+        const tokenId = decodeURIComponent(landTokenMetaMatch[1]);
+        const row = await d1Adapter.get('SELECT * FROM land_deed_nfts WHERE token_id = ? LIMIT 1', [
+          tokenId
+        ]);
+        if (!row) return jsonResponse({ error: 'Land Deed token not found' }, 404, request);
+        const summary = await getLandDeedSummary(d1Adapter, {
+          parcelId: row.parcel_id,
+          autoBackfill: false
+        });
+        return jsonResponse(
+          buildLandDeedMetadata({
+            parcelId: row.parcel_id,
+            displayName: summary.displayName,
+            deed: serializeLandDeedRow(row),
+            volume: summary.volume,
+            artworkCount: summary.totalArtworkCount,
+            publicUrl: cfg.publicUrl
+          }),
+          200,
+          request
+        );
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Metadata lookup failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landDeedMetaMatch = pathname.match(/^\/api\/lands\/([^/]+)\/deed\.json$/);
+    if (landDeedMetaMatch && request.method === 'GET') {
+      try {
+        const summary = await getLandDeedSummary(d1Adapter, {
+          parcelId: decodeURIComponent(landDeedMetaMatch[1]),
+          chainCfg: landDeedChainCfg,
+          publicUrl: cfg.publicUrl
+        });
+        if (!summary.deed) {
+          return jsonResponse(
+            { error: summary.eligibilityReason || 'Land Deed NFT not minted yet for this parcel.' },
+            404,
+            request
+          );
+        }
+        return jsonResponse(
+          buildLandDeedMetadata({
+            parcelId: summary.parcelId,
+            displayName: summary.displayName,
+            deed: summary.deed,
+            volume: summary.volume,
+            artworkCount: summary.totalArtworkCount,
+            publicUrl: cfg.publicUrl
+          }),
+          200,
+          request
+        );
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Metadata lookup failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landDeedInfoMatch = pathname.match(/^\/api\/lands\/([^/]+)\/deed$/);
+    if (landDeedInfoMatch && request.method === 'GET') {
+      try {
+        const caller = await getAuthUser(request, env, cfg);
+        const out = await getLandDeedSummary(d1Adapter, {
+          parcelId: decodeURIComponent(landDeedInfoMatch[1]),
+          callerUser: caller,
+          chainCfg: landDeedChainCfg,
+          publicUrl: cfg.publicUrl
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land Deed lookup failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landTransferMatch = pathname.match(/^\/api\/lands\/([^/]+)\/transfer$/);
+    if (landTransferMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await transferLandDeed(d1Adapter, {
+          parcelId: decodeURIComponent(landTransferMatch[1]),
+          callerUser: user,
+          toAddress: body?.toAddress || '',
+          includeOwnedArtworks: Boolean(body?.includeOwnedArtworks),
+          externalTxHash: body?.externalTxHash || '',
+          walletSignature: body?.walletSignature || '',
+          chainCfg: landDeedChainCfg,
+          publicUrl: cfg.publicUrl
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Land Deed transfer failed', ...(err?.extra || {}) },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const landDeedSyncMatch = pathname.match(/^\/api\/lands\/([^/]+)\/deed\/sync$/);
+    if (landDeedSyncMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const out = await syncLandDeedOwnership(d1Adapter, {
+          parcelId: decodeURIComponent(landDeedSyncMatch[1]),
+          chainCfg: landDeedChainCfg,
+          callerUser: user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land Deed sync failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/marketplace/lands' && request.method === 'GET') {
+      try {
+        const listings = await listActiveLandMarketplaceListings(d1Adapter, {
+          parcelId: url.searchParams.get('parcel') || '',
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 60
+        });
+        return jsonResponse({ listings }, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land marketplace error' }, err?.statusCode || 400, request);
+      }
+    }
+
+    if (pathname === '/api/marketplace/lands/list' && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await listLandDeedForSale(d1Adapter, {
+          parcelId: body?.parcelId,
+          sellerUser: user,
+          priceEth: body?.priceEth,
+          includeSellerArtworks: Boolean(
+            body?.includeSellerArtworks || body?.includeOwnedArtworks
+          ),
+          platformAddress: cfg.royaltyReceiver,
+          chainCfg: landDeedChainCfg,
+          publicUrl: cfg.publicUrl
+        });
+        return jsonResponse(out, 201, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land listing failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landCancelMatch = pathname.match(/^\/api\/marketplace\/lands\/listings\/([^/]+)\/cancel$/);
+    if (landCancelMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const out = await cancelLandDeedListing(d1Adapter, {
+          listingId: decodeURIComponent(landCancelMatch[1]),
+          callerUser: user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Cancel listing failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landBuyMatch = pathname.match(/^\/api\/marketplace\/lands\/listings\/([^/]+)\/buy$/);
+    if (landBuyMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Authentication required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await buyLandDeed(d1Adapter, {
+          listingId: decodeURIComponent(landBuyMatch[1]),
+          buyerUser: user,
+          buyerAddress: body?.buyerAddress || '',
+          txHash: body?.txHash || '',
+          platformAddress: cfg.royaltyReceiver
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Land purchase failed' }, err?.statusCode || 400, request);
+      }
+    }
+
     if (pathname === '/api/economy/splits' && request.method === 'GET') {
       try {
         const out = await getEconomySplitsSummary(d1Adapter, {
@@ -3503,6 +3727,23 @@ export default {
           await consumeDraftOnPublish(d1Adapter, { draftId: body.draftId, user });
         }
 
+        let landDeed = awakening?.landDeed || null;
+        if (!landDeed) {
+          try {
+            const deedRes = await ensureLandDeedMinted(d1Adapter, {
+              parcelId: effectiveParcelId,
+              ownerSub: attachingToExistingLand ? '' : user.id,
+              ownerAddress: attachingToExistingLand ? '' : recipientAddress,
+              trigger: attachingToExistingLand ? 'awakened' : 'mobile_ar_mint',
+              chainCfg: landDeedChainCfg,
+              publicUrl: cfg.publicUrl
+            });
+            landDeed = deedRes?.deed || null;
+          } catch {
+            // non-fatal
+          }
+        }
+
         const saved = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ?`)
           .bind(sculptureId)
           .first();
@@ -3512,6 +3753,7 @@ export default {
             mint: mintResult,
             ipfs: ipfsResult,
             awakening,
+            landDeed,
             addedToExistingLand: attachingToExistingLand,
             mintedNewLand: !attachingToExistingLand,
             landDisplayName: resolvedTarget.displayName || ''

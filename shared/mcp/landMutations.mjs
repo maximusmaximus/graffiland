@@ -24,6 +24,11 @@ import {
 import { notifyAfterSculpturePublished } from '../notificationService.mjs';
 import { reapAndArchiveExpiredLands } from '../landArchiveService.mjs';
 import { getLandViewCountsMap } from '../landViewService.mjs';
+import {
+  evaluateLandDeedEligibility,
+  serializeLandDeedRow,
+  serializeLandListingRow
+} from '../landDeedService.mjs';
 import { consumeDraftOnPublish } from '../draftService.mjs';
 import { sanitizeVoxels, validatePublishPayload } from '../../server/services/moderation.mjs';
 import { decodeGeohashBounds, encodeGeohash } from '../../server/services/pol.mjs';
@@ -90,6 +95,26 @@ export async function listLandsWithCurations(db) {
   const userRows = await db
     .all('SELECT id, username, avatar_image, user_number FROM users')
     .catch(() => []);
+  // Single combined query for permanent Land Deed NFTs + active marketplace listings (keeps D1 O(1) <= 15)
+  const landDeedJoinRows = await db
+    .all(
+      `SELECT d.*,
+              l.id AS listing_id,
+              l.seller_sub AS listing_seller_sub,
+              l.seller_name AS listing_seller_name,
+              l.seller_address AS listing_seller_address,
+              l.price_eth AS listing_price_eth,
+              l.price_wei AS listing_price_wei,
+              l.include_seller_artworks AS listing_include_seller_artworks,
+              l.bundled_sculpture_ids_json AS listing_bundled_sculpture_ids_json,
+              l.status AS listing_status,
+              l.created_at AS listing_created_at,
+              l.updated_at AS listing_updated_at
+       FROM land_deed_nfts d
+       LEFT JOIN land_marketplace_listings l
+         ON l.parcel_id = d.parcel_id AND l.status = 'active'`
+    )
+    .catch(() => []);
   const viewCountsMap = await getLandViewCountsMap(db);
   // Single bulk query for all visible sculptures (eliminates 2*N per-parcel queries inside the loop)
   const allVisibleScRows = await db
@@ -123,6 +148,31 @@ export async function listLandsWithCurations(db) {
   const curationMap = new Map((curations || []).map((c) => [c.parcel_id, c]));
   const volumeMap = new Map((volumeRows || []).map((v) => [v.parcel_id, v]));
   const settingsMap = new Map((settingRows || []).map((s) => [s.parcel_id, s]));
+  const deedMap = new Map();
+  const activeLandListingMap = new Map();
+  for (const row of landDeedJoinRows || []) {
+    if (!row?.parcel_id) continue;
+    if (!deedMap.has(row.parcel_id)) {
+      deedMap.set(row.parcel_id, row);
+    }
+    if (row.listing_id && !activeLandListingMap.has(row.parcel_id)) {
+      activeLandListingMap.set(row.parcel_id, {
+        id: row.listing_id,
+        parcel_id: row.parcel_id,
+        token_id: row.token_id,
+        seller_sub: row.listing_seller_sub,
+        seller_name: row.listing_seller_name,
+        seller_address: row.listing_seller_address,
+        price_eth: row.listing_price_eth,
+        price_wei: row.listing_price_wei,
+        include_seller_artworks: row.listing_include_seller_artworks,
+        bundled_sculpture_ids_json: row.listing_bundled_sculpture_ids_json,
+        status: row.listing_status || 'active',
+        created_at: row.listing_created_at,
+        updated_at: row.listing_updated_at
+      });
+    }
+  }
   const userInfoMap = new Map(
     (userRows || []).map((u) => [
       u.id,
@@ -208,7 +258,18 @@ export async function listLandsWithCurations(db) {
         : rawVolume;
 
     const stewardStatus = st?.status || 'awakened';
-    const ownerSub = st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
+    const deedRow = deedMap.get(parcelId) || null;
+    const activeLandListingRow = activeLandListingMap.get(parcelId) || null;
+    const humanArtCount = parcelScRows.filter(
+      (r) => !String(r.creator_sub || '').startsWith('agent:')
+    ).length;
+    const deedEligibility = evaluateLandDeedEligibility({
+      stewardRow: st || null,
+      parcelRow: lp || null,
+      humanSculptureCount: humanArtCount
+    });
+    const ownerSub =
+      deedRow?.owner_sub || st?.steward_sub || first?.creator_sub || lp?.first_claimant_sub || '';
     const stewardType =
       st?.steward_type || (String(ownerSub).startsWith('agent:') ? 'agent' : 'human');
     const ownerInfo = userInfoMap.get(ownerSub) || null;
@@ -290,6 +351,10 @@ export async function listLandsWithCurations(db) {
       },
       pageViews: viewCountsMap.get(parcelId)?.pageViews || 0,
       inPersonViews: viewCountsMap.get(parcelId)?.inPersonViews || 0,
+      landDeed: serializeLandDeedRow(deedRow),
+      landDeedEligible: Boolean(deedRow || deedEligibility.eligible),
+      landDeedStatus: deedRow ? 'minted' : deedEligibility.status,
+      activeLandListing: serializeLandListingRow(activeLandListingRow),
       createdAt: sc?.first_at || st?.created_at || lp?.updated_at || '',
       latestAt: sc?.latest_at || lp?.updated_at || st?.updated_at || ''
     });
@@ -678,9 +743,63 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const lpMap = new Map((lpRows || []).map((r) => [r.parcel_id, r]));
   const stewardRows = await db.all('SELECT * FROM land_steward_state').catch(() => []);
   const stewardMap = new Map((stewardRows || []).map((st) => [st.parcel_id, st]));
+  // Single combined query for permanent Land Deed NFTs + active marketplace listings (keeps D1 O(1) <= 18)
+  const deedJoinRows = await db
+    .all(
+      `SELECT d.*,
+              l.id AS listing_id,
+              l.seller_sub AS listing_seller_sub,
+              l.seller_name AS listing_seller_name,
+              l.seller_address AS listing_seller_address,
+              l.price_eth AS listing_price_eth,
+              l.price_wei AS listing_price_wei,
+              l.include_seller_artworks AS listing_include_seller_artworks,
+              l.bundled_sculpture_ids_json AS listing_bundled_sculpture_ids_json,
+              l.status AS listing_status,
+              l.created_at AS listing_created_at,
+              l.updated_at AS listing_updated_at
+       FROM land_deed_nfts d
+       LEFT JOIN land_marketplace_listings l
+         ON l.parcel_id = d.parcel_id AND l.status = 'active'`
+    )
+    .catch(() => []);
+  const deedMap = new Map();
+  const activeLandListingMap = new Map();
+  for (const row of deedJoinRows || []) {
+    if (!row?.parcel_id) continue;
+    if (!deedMap.has(row.parcel_id)) {
+      deedMap.set(row.parcel_id, row);
+    }
+    if (row.listing_id && !activeLandListingMap.has(row.parcel_id)) {
+      activeLandListingMap.set(row.parcel_id, {
+        id: row.listing_id,
+        parcel_id: row.parcel_id,
+        token_id: row.token_id,
+        seller_sub: row.listing_seller_sub,
+        seller_name: row.listing_seller_name,
+        seller_address: row.listing_seller_address,
+        price_eth: row.listing_price_eth,
+        price_wei: row.listing_price_wei,
+        include_seller_artworks: row.listing_include_seller_artworks,
+        bundled_sculpture_ids_json: row.listing_bundled_sculpture_ids_json,
+        status: row.listing_status || 'active',
+        created_at: row.listing_created_at,
+        updated_at: row.listing_updated_at
+      });
+    }
+  }
 
   const ownedParcelSet = new Set();
+  for (const deed of deedMap.values()) {
+    if (
+      (ownerId && deed.owner_sub === ownerId) ||
+      wallets.has(String(deed.owner_address || '').toLowerCase())
+    ) {
+      ownedParcelSet.add(deed.parcel_id);
+    }
+  }
   for (const lp of lpRows || []) {
+    if (deedMap.has(lp.parcel_id)) continue;
     if (
       (ownerId && lp.first_claimant_sub === ownerId) ||
       wallets.has(String(lp.first_claimant_address || '').toLowerCase())
@@ -689,6 +808,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     }
   }
   for (const st of stewardRows || []) {
+    if (deedMap.has(st.parcel_id)) continue;
     if (st.status === 'archived' || st.status === 'expired') continue;
     if (
       (ownerId && st.steward_sub === ownerId) ||
@@ -697,7 +817,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       ownedParcelSet.add(st.parcel_id);
     }
   }
-  // Legacy fallback: if a parcel has no land_parcels/steward record, credit ownership to its first visible sculpture
+  // Legacy fallback: if a parcel has no land_parcels/steward/deed record, credit ownership to its first visible sculpture
   const firstVisibleByParcel = new Map();
   for (let i = (allRows || []).length - 1; i >= 0; i--) {
     const r = allRows[i];
@@ -706,7 +826,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     }
   }
   for (const [pid, firstSc] of firstVisibleByParcel.entries()) {
-    if (lpMap.has(pid) || stewardMap.has(pid)) continue;
+    if (deedMap.has(pid) || lpMap.has(pid) || stewardMap.has(pid)) continue;
     if (wallets.has(String(firstSc.recipient_address || '').toLowerCase())) {
       ownedParcelSet.add(pid);
     }
@@ -872,6 +992,19 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
         : rawOwnerVolume;
 
     const visibleCount = visibleOnLand.length;
+    const deedRow = deedMap.get(pid) || null;
+    const activeLandListingRow = activeLandListingMap.get(pid) || null;
+    const humanArtCount = visibleOnLand.filter(
+      (r) => !String(r.creator_sub || '').startsWith('agent:')
+    ).length;
+    const deedEligibility = evaluateLandDeedEligibility({
+      stewardRow: st || null,
+      parcelRow: lp || null,
+      humanSculptureCount: humanArtCount
+    });
+    const ownerOwnedArtworksCount = visibleOnLand.filter((r) =>
+      wallets.has(String(r.recipient_address || '').toLowerCase())
+    ).length;
     parcels.push({
       parcelId: pid,
       geohash,
@@ -880,6 +1013,12 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       centerLat: volume?.centerLat ?? bounds?.center?.[0] ?? null,
       centerLng: volume?.centerLng ?? bounds?.center?.[1] ?? null,
       stewardStatus: st?.status || 'awakened',
+      landDeed: serializeLandDeedRow(deedRow),
+      landDeedEligible: Boolean(deedRow || deedEligibility.eligible),
+      landDeedStatus: deedRow ? 'minted' : deedEligibility.status,
+      landDeedEligibilityReason: deedRow ? '' : deedEligibility.reason,
+      activeLandListing: serializeLandListingRow(activeLandListingRow),
+      ownerOwnedArtworkCount: ownerOwnedArtworksCount,
       leaseExpiresAt: st?.lease_expires_at || '',
       inactivityExpiresAt: st?.inactivity_expires_at || '',
       lastHumanInteractionAt: st?.last_human_interaction_at || '',
@@ -2231,6 +2370,13 @@ export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '',
     await db.run('DELETE FROM sculpture_pin_batches WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM land_volumes WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
     await db.run('DELETE FROM land_steward_state WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
+    await db
+      .run(
+        "UPDATE land_marketplace_listings SET status = 'cancelled', updated_at = ? WHERE parcel_id = ? AND status = 'active'",
+        [new Date().toISOString(), parcelCtx.parcelId]
+      )
+      .catch(() => {});
+    await db.run('DELETE FROM land_deed_nfts WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
     await db.run('DELETE FROM land_parcels WHERE parcel_id = ?', [parcelCtx.parcelId]);
   } else {
     await db.run(
