@@ -381,7 +381,7 @@ describe('AR 300-Foot Visibility Cutoff, True Perspective, Atmospheric Haze & Pl
   });
 });
 
-describe('AR Fade Other Art Toggle & Out-of-Range 300 ft Guidance UI (React + jsdom)', () => {
+describe('AR Auto-Fade Art on Drawing/Painting Tools & Out-of-Range 300 ft Guidance UI (React + jsdom)', () => {
   let dom;
   let React;
   let RTL;
@@ -447,7 +447,10 @@ describe('AR Fade Other Art Toggle & Out-of-Range 300 ft Guidance UI (React + js
     }
   });
 
-  test('StudioHudTopBar and StudioDockDrawer expose Fade Other Art toggle while drawing near placed items', async () => {
+  test('Drawing & painting tools auto-fade other art and canvas/dock manual Fade Other Art switches are removed', async () => {
+    const { shouldAutoFadeOtherArt } = await loadJsxModule(
+      'client/src/utils/arLandGuidance.js'
+    );
     const { default: StudioHudTopBar } = await loadJsxModule(
       'client/src/components/studio/StudioHudTopBar.jsx'
     );
@@ -455,7 +458,65 @@ describe('AR Fade Other Art Toggle & Out-of-Range 300 ft Guidance UI (React + js
       'client/src/components/studio/StudioDockDrawer.jsx'
     );
 
-    let toggled = 0;
+    // 1) Auto-fade activates automatically when a drawing/painting tool is selected
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'brush', tool: 'brush' }),
+      true,
+      'Brush (paint) tool must auto-fade other art'
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'pencil', tool: 'pencil' }),
+      true,
+      'Pencil (draw) tool must auto-fade other art'
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'stack', tool: 'stack' }),
+      true,
+      'Stack drawing tool must auto-fade other art'
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'erase', tool: 'erase' }),
+      true,
+      'Erase drawing tool must auto-fade other art'
+    );
+
+    // 2) Auto-fade automatically turns OFF on non-drawing tools, preview, transform, or land inspection
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'preview', activeKeyTool: 'preview', tool: 'brush' }),
+      false
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'transform', activeKeyTool: 'transform', tool: 'brush' }),
+      false
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'search', tool: 'brush' }),
+      false
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({ mode: 'draw', activeKeyTool: 'recenter', tool: 'brush' }),
+      false
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({
+        mode: 'draw',
+        activeKeyTool: 'brush',
+        tool: 'brush',
+        isInteractingWithLand: true
+      }),
+      false
+    );
+    assert.equal(
+      shouldAutoFadeOtherArt({
+        mode: 'draw',
+        activeKeyTool: 'pencil',
+        tool: 'pencil',
+        isArViewOnly: true
+      }),
+      false
+    );
+
+    // 3) Manual Fade Other Art switch is removed from the camera canvas HUD (StudioHudTopBar)
     const hudView = RTL.render(
       React.createElement(StudioHudTopBar, {
         user: null,
@@ -467,47 +528,17 @@ describe('AR Fade Other Art Toggle & Out-of-Range 300 ft Guidance UI (React + js
         cameraReady: true,
         originStatus: { originBlocked: false, reason: '' },
         sceneScan: { optimal: true, coveragePct: 100, scannedCount: 9, targetCount: 9 },
-        isInteractingWithLand: false,
-        nearbyOtherItemsCount: 3,
-        fadeOtherItems: false,
-        onToggleFadeOtherItems: () => {
-          toggled += 1;
-        }
+        isInteractingWithLand: false
       })
     );
-
-    const fadeBtn = hudView.getByTestId('ar-fade-other-items-btn');
-    assert.equal(fadeBtn.getAttribute('aria-pressed'), 'false');
-    assert.ok(fadeBtn.textContent.includes('Fade Other Art (3)'));
-    RTL.fireEvent.click(fadeBtn);
-    assert.equal(toggled, 1);
-
-    // Re-render in faded state
-    hudView.rerender(
-      React.createElement(StudioHudTopBar, {
-        user: null,
-        mode: 'draw',
-        dockOpen: false,
-        location: { lat: 37.7749, lng: -122.4194 },
-        voxels: [],
-        quickSculpt: false,
-        cameraReady: true,
-        originStatus: { originBlocked: false, reason: '' },
-        sceneScan: { optimal: true, coveragePct: 100, scannedCount: 9, targetCount: 9 },
-        isInteractingWithLand: false,
-        nearbyOtherItemsCount: 3,
-        fadeOtherItems: true,
-        onToggleFadeOtherItems: () => {
-          toggled += 1;
-        }
-      })
+    assert.equal(
+      hudView.queryByTestId('ar-fade-other-items-btn'),
+      null,
+      'Canvas Fade Other Art switch must be removed from StudioHudTopBar'
     );
-    const fadedBtn = hudView.getByTestId('ar-fade-other-items-btn');
-    assert.equal(fadedBtn.getAttribute('aria-pressed'), 'true');
-    assert.ok(fadedBtn.textContent.includes('Other Art Faded (3)'));
     hudView.unmount();
 
-    // Paint & Brush Kit also exposes the Fade Other Art toggle when items exist
+    // 4) Manual Fade Other Art switch is also removed from Paint & Brush Kit (StudioDockDrawer)
     const dockView = RTL.render(
       React.createElement(StudioDockDrawer, {
         dockOpen: true,
@@ -515,19 +546,27 @@ describe('AR Fade Other Art Toggle & Out-of-Range 300 ft Guidance UI (React + js
         tool: 'brush',
         color: '#00f5d4',
         material: 'matte',
-        reachMeters: 1.8,
-        nearbyOtherItemsCount: 2,
-        fadeOtherItems: false,
-        onToggleFadeOtherItems: () => {
-          toggled += 1;
-        }
+        reachMeters: 1.8
       })
     );
-    const dockFadeBtn = dockView.getByTestId('palette-fade-other-items-btn');
-    assert.ok(dockFadeBtn.textContent.includes('Fade Other Art on Land (2)'));
-    RTL.fireEvent.click(dockFadeBtn);
-    assert.equal(toggled, 2);
+    assert.equal(
+      dockView.queryByTestId('palette-fade-other-items-btn'),
+      null,
+      'Fade Other Art switch must be removed from StudioDockDrawer'
+    );
     dockView.unmount();
+
+    // 5) MobileStudio wires shouldAutoFadeOtherArt cleanly without manual toggle callbacks
+    const mobileStudioSrc = fs.readFileSync(
+      path.join(ROOT, 'client/src/components/MobileStudio.jsx'),
+      'utf8'
+    );
+    assert.match(mobileStudioSrc, /shouldAutoFadeOtherArt\(/);
+    assert.equal(
+      /handleToggleFadeOtherItems|onToggleFadeOtherItems/.test(mobileStudioSrc),
+      false,
+      'MobileStudio must not expose manual fade-other-art toggle handlers'
+    );
   });
 
   test('ARLandGuidanceOverlay shows clean 300 ft out-of-range prompt when selected land is >= 300 ft away', async () => {

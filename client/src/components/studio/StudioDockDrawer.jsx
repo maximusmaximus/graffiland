@@ -28,10 +28,7 @@ export default function StudioDockDrawer({
   material,
   setMaterial,
   reachMeters,
-  setReachMeters,
-  nearbyOtherItemsCount = 0,
-  fadeOtherItems = false,
-  onToggleFadeOtherItems = null
+  setReachMeters
 }) {
   const toggleBtnRef = useRef(null);
   const popoverRef = useRef(null);
@@ -263,24 +260,6 @@ export default function StudioDockDrawer({
               </div>
             </div>
           </div>
-
-          {nearbyOtherItemsCount > 0 && typeof onToggleFadeOtherItems === 'function' && (
-            <div className="brush-opt-section" style={{ marginTop: 8, marginBottom: 0 }}>
-              <button
-                type="button"
-                className={`brush-mini-pill ${fadeOtherItems ? 'active' : ''}`}
-                style={{ width: '100%', justifyContent: 'center', padding: '6px 10px' }}
-                data-testid="palette-fade-other-items-btn"
-                aria-pressed={fadeOtherItems}
-                onClick={onToggleFadeOtherItems}
-              >
-                <XeroIcon emoji={fadeOtherItems ? '👻' : '👁️'} size={12} />{' '}
-                {fadeOtherItems
-                  ? `Other Land Art Faded (${nearbyOtherItemsCount}) · Tap to Restore`
-                  : `Fade Other Art on Land (${nearbyOtherItemsCount})`}
-              </button>
-            </div>
-          )}
         </div>
       )}
     </>
