@@ -280,7 +280,9 @@ async function assertNoFootprintOverlap(db, targetVol) {
               lv.rotation_deg, lv.corners_json
        FROM land_parcels lp
        LEFT JOIN land_volumes lv ON lv.parcel_id = lp.parcel_id
-       WHERE lp.parcel_id != ?`,
+       LEFT JOIN land_steward_state st ON st.parcel_id = lp.parcel_id
+       WHERE lp.parcel_id != ?
+         AND COALESCE(st.status, 'awakened') != 'expired'`,
       [targetVol.parcelId]
     )
     .catch(() => []);
@@ -435,7 +437,6 @@ export async function claimDormantLand(
       });
     }
     resolvedVolume = volCheck.volume;
-    await assertNoFootprintOverlap(db, resolvedVolume);
   }
 
   const existingSteward = await db.get('SELECT * FROM land_steward_state WHERE parcel_id = ?', [
@@ -449,6 +450,7 @@ export async function claimDormantLand(
     if (existingSteward.steward_sub === agentUser.id) {
       const nowExisting = new Date().toISOString();
       if (volume && typeof volume === 'object') {
+        await assertNoFootprintOverlap(db, resolvedVolume);
         await saveLandVolumeRow(db, resolvedVolume, nowExisting);
       }
       return {
@@ -483,6 +485,8 @@ export async function claimDormantLand(
       throw new McpServiceError(`Virtual Land "${existingLabel}" is already held by another claimant.`, 409);
     }
   }
+
+  await assertNoFootprintOverlap(db, resolvedVolume);
 
   const isAgent = String(agentUser.id || '').startsWith('agent:') || agentUser.actorType === 'agent';
   const agentRow = isAgent

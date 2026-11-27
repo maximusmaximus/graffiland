@@ -474,38 +474,66 @@ export default function StudioHudTopBar({
         {!isInteractingWithLand &&
           nearbyCameraLand &&
           (mode === 'draw' || mode === 'preview') &&
-          onInspectArLand && (
-            <button
-              type="button"
-              className={`ar-nearby-land-pill hud-interactive ${
-                nearbyCameraLand.isInside ? 'is-inside' : ''
-              }`}
-              data-testid="ar-nearby-land-pill"
-              data-parcel-id={nearbyCameraLand.parcelId}
-              onClick={() => onInspectArLand(nearbyCameraLand)}
-              aria-label={`Inspect nearby land ${nearbyCameraLand.displayName}`}
-            >
-              <span className="ar-nearby-land-pill-main">
-                <XeroIcon emoji={nearbyCameraLand.isInside ? '✨' : '📍'} size={13} />
-                <span className="ar-nearby-land-pill-label">
-                  {nearbyCameraLand.isInside ? 'On Land: ' : 'Near: '}
-                  <strong>{nearbyCameraLand.displayName}</strong>
+          (onInspectArLand || (mode === 'draw' && nearbyCameraLand.isInside)) && (() => {
+            const isAddingArt = mode === 'draw' && Boolean(nearbyCameraLand.isInside);
+            const isFrozenAdding = isAddingArt && Boolean(nearbyCameraLand.isFrozen);
+            const pillClass = `ar-nearby-land-pill hud-interactive ${
+              nearbyCameraLand.isInside ? 'is-inside' : ''
+            } ${isFrozenAdding ? 'is-frozen-land' : isAddingArt ? 'is-adding-art' : ''}`;
+            const pillEmoji = isFrozenAdding
+              ? '❄️'
+              : isAddingArt
+              ? '🎨'
+              : nearbyCameraLand.isInside
+              ? '✨'
+              : '📍';
+            const pillPrefix = isFrozenAdding
+              ? 'Frozen Land: '
+              : isAddingArt
+              ? 'Adding Art to: '
+              : nearbyCameraLand.isInside
+              ? 'On Land: '
+              : 'Near: ';
+            const pillAria = isAddingArt
+              ? `Adding art to ${nearbyCameraLand.displayName}`
+              : `Inspect nearby land ${nearbyCameraLand.displayName}`;
+            return (
+              <button
+                type="button"
+                className={pillClass}
+                data-testid="ar-nearby-land-pill"
+                data-parcel-id={nearbyCameraLand.parcelId}
+                data-adding-to-land={isAddingArt && !isFrozenAdding ? 'true' : 'false'}
+                data-frozen-land={isFrozenAdding ? 'true' : 'false'}
+                data-land-name={nearbyCameraLand.displayName}
+                onClick={() => onInspectArLand?.(nearbyCameraLand)}
+                aria-label={pillAria}
+              >
+                <span className="ar-nearby-land-pill-main">
+                  <XeroIcon emoji={pillEmoji} size={13} />
+                  <span className="ar-nearby-land-pill-label">
+                    {pillPrefix}
+                    <strong>{nearbyCameraLand.displayName}</strong>
+                    {isFrozenAdding ? ' · View only' : ''}
+                  </span>
+                  {!nearbyCameraLand.isInside && nearbyCameraLand.edgeDistanceMeters !== undefined && (
+                    <span className="ar-nearby-land-pill-dist mono">
+                      {formatDistance(nearbyCameraLand.edgeDistanceMeters, unitSystem, { compact: true })}
+                    </span>
+                  )}
+                  {nearbyCameraLand.isOwned && (
+                    <span className="ar-nearby-land-pill-own">👑</span>
+                  )}
                 </span>
-                {!nearbyCameraLand.isInside && nearbyCameraLand.edgeDistanceMeters !== undefined && (
-                  <span className="ar-nearby-land-pill-dist mono">
-                    {formatDistance(nearbyCameraLand.edgeDistanceMeters, unitSystem, { compact: true })}
+                {onInspectArLand && (
+                  <span className="ar-nearby-land-pill-cta">
+                    {nearbyCameraLandCount > 1 ? `+${nearbyCameraLandCount - 1} · ` : ''}
+                    Details ▸
                   </span>
                 )}
-                {nearbyCameraLand.isOwned && (
-                  <span className="ar-nearby-land-pill-own">👑</span>
-                )}
-              </span>
-              <span className="ar-nearby-land-pill-cta">
-                {nearbyCameraLandCount > 1 ? `+${nearbyCameraLandCount - 1} · ` : ''}
-                Details ▸
-              </span>
-            </button>
-          )}
+              </button>
+            );
+          })()}
 
         {!isInteractingWithLand &&
           mode === 'draw' &&

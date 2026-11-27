@@ -58,7 +58,8 @@ import {
 import {
   buildObjectFittedLandVolume,
   centerVoxelsHorizontally,
-  offsetLatLngByLocalXZ
+  offsetLatLngByLocalXZ,
+  resolveMobilePublishParcel
 } from '../../shared/landVolume.mjs';
 import { resolveAuthorHandleForStorage } from '../../shared/userDisplay.mjs';
 import { reverseGeocodeLocation, searchLocations } from '../../shared/geocodeService.mjs';
@@ -3176,24 +3177,6 @@ export default {
           );
         }
 
-        const targetLandSettings = await getLandSettingsInternal(d1Adapter, locationBundle.parcelId);
-        if (targetLandSettings.frozen) {
-          return jsonResponse(
-            {
-              error: `Virtual Land ${locationBundle.parcelId} is frozen by its owner — no new sculptures can be placed here.`
-            },
-            403,
-            request
-          );
-        }
-
-        const qRes = await checkAndConsumeRelayerQuota(d1Adapter, {
-          userId: user.id,
-          isAdmin: Boolean(user.is_admin),
-          dailyQuota: cfg.relayerDailyQuota
-        });
-        quotaConsumed = Boolean(qRes?.consumed);
-
         // Horizontally center newly drawn voxel clouds on their local origin (0, 0)
         // and shift (lat, lng) by the centroid offset so the art ALWAYS fits dead-center inside its land.
         const centeredVoxelCloud = centerVoxelsHorizontally(validation.cleanVoxels);
@@ -3209,10 +3192,75 @@ export default {
             : { lat: locationBundle.lat, lng: locationBundle.lng };
         const publishedLat = Number.isFinite(shiftedGeo.lat) ? shiftedGeo.lat : locationBundle.lat;
         const publishedLng = Number.isFinite(shiftedGeo.lng) ? shiftedGeo.lng : locationBundle.lng;
+
+        const provisionalFittedVol = buildObjectFittedLandVolume({
+          parcelId: locationBundle.parcelId,
+          geohash: locationBundle.geohash,
+          lat: publishedLat,
+          lng: publishedLng,
+          voxels: publishedVoxels,
+          anchorOffset: anchorCheck.offset,
+          paddingFraction: 0.1
+        });
+
+        const resolvedTarget = await resolveMobilePublishParcel(d1Adapter, {
+          lat: publishedLat,
+          lng: publishedLng,
+          userLat: locationBundle.lat,
+          userLng: locationBundle.lng,
+          defaultParcelId: locationBundle.parcelId,
+          defaultGeohash: locationBundle.geohash,
+          requestedParcelId: body?.targetParcelId || '',
+          fittedVolume: provisionalFittedVol
+        });
+
+        if (resolvedTarget.blockedOverlap) {
+          return jsonResponse(
+            {
+              error: `Cannot mint a new land overlapping "${resolvedTarget.conflictingLandName}". Move inside "${resolvedTarget.conflictingLandName}" to add art to it, or step outside its boundary.`,
+              conflictingParcelId: resolvedTarget.conflictingParcelId,
+              conflictingLandName: resolvedTarget.conflictingLandName
+            },
+            409,
+            request
+          );
+        }
+
+        const effectiveParcelId = resolvedTarget.parcelId || locationBundle.parcelId;
+        const effectiveGeohash = resolvedTarget.geohash || locationBundle.geohash;
+        const effectiveParcelBytes32 =
+          effectiveParcelId === locationBundle.parcelId
+            ? locationBundle.parcelBytes32
+            : ethers.keccak256(ethers.toUtf8Bytes(effectiveParcelId));
+        const effectiveParcelBounds = resolvedTarget.parcelBounds || locationBundle.parcelBounds;
+
+        const targetLandSettings = await getLandSettingsInternal(d1Adapter, effectiveParcelId);
+        if (targetLandSettings.frozen) {
+          const frozenLabel = resolvedTarget.displayName || effectiveParcelId;
+          return jsonResponse(
+            {
+              error: `Virtual Land "${frozenLabel}" is frozen by its owner — no new sculptures can be placed here.`
+            },
+            403,
+            request
+          );
+        }
+
+        const qRes = await checkAndConsumeRelayerQuota(d1Adapter, {
+          userId: user.id,
+          isAdmin: Boolean(user.is_admin),
+          dailyQuota: cfg.relayerDailyQuota
+        });
+        quotaConsumed = Boolean(qRes?.consumed);
+
         const publishedLocationBundle = {
           ...locationBundle,
           lat: publishedLat,
-          lng: publishedLng
+          lng: publishedLng,
+          parcelId: effectiveParcelId,
+          geohash: effectiveGeohash,
+          parcelBytes32: effectiveParcelBytes32,
+          parcelBounds: effectiveParcelBounds
         };
 
         const sculptureId = crypto.randomUUID();
@@ -3243,7 +3291,7 @@ export default {
             {
               recipientAddress,
               metadataUri: ipfsResult.metadataUri,
-              parcelBytes32: locationBundle.parcelBytes32,
+              parcelBytes32: effectiveParcelBytes32,
               proofHash: locationBundle.proofHash,
               lat: publishedLat,
               lng: publishedLng
@@ -3260,7 +3308,7 @@ export default {
             category: /pinata|ipfs/i.test(err?.message || '') ? 'pinata' : 'relayer_mint',
             status: 'error',
             actorId: user.id,
-            parcelId: locationBundle.parcelId,
+            parcelId: effectiveParcelId,
             detail: err?.message || 'Worker publish pipeline failure'
           }).catch(() => {});
           throw err;
@@ -3270,12 +3318,13 @@ export default {
           category: 'relayer_mint',
           status: 'ok',
           actorId: user.id,
-          parcelId: locationBundle.parcelId,
+          parcelId: effectiveParcelId,
           detail: `Minted ${sculptureId} (${mintResult.simulated ? 'sim' : 'live'})`
         }).catch(() => {});
         logStructured('info', 'worker_sculpture_published', {
           sculptureId,
-          parcelId: locationBundle.parcelId,
+          parcelId: effectiveParcelId,
+          addedToExistingLand: Boolean(resolvedTarget.matchedExisting),
           simulated: Boolean(mintResult.simulated)
         });
 
@@ -3304,8 +3353,8 @@ export default {
             locationBundle.altitude,
             locationBundle.accuracy,
             locationBundle.heading,
-            locationBundle.parcelId,
-            locationBundle.geohash,
+            effectiveParcelId,
+            effectiveGeohash,
             locationBundle.geoInfo.placeName,
             locationBundle.geoInfo.country,
             locationBundle.timezone,
@@ -3332,29 +3381,29 @@ export default {
           )
           .run();
 
-        const fittedVol = buildObjectFittedLandVolume({
-          parcelId: locationBundle.parcelId,
-          geohash: locationBundle.geohash,
-          lat: publishedLat,
-          lng: publishedLng,
-          voxels: publishedVoxels,
-          anchorOffset: anchorCheck.offset,
-          paddingFraction: 0.1
-        });
-        const parcelCenterLat = fittedVol?.centerLat ?? locationBundle.parcelBounds.center[0];
-        const parcelCenterLng = fittedVol?.centerLng ?? locationBundle.parcelBounds.center[1];
-
         const existingParcel = await env.DB.prepare(
           'SELECT * FROM land_parcels WHERE parcel_id = ?'
         )
-          .bind(locationBundle.parcelId)
+          .bind(effectiveParcelId)
           .first();
+        const attachingToExistingLand = Boolean(existingParcel || resolvedTarget.matchedExisting);
+        const fittedVol = attachingToExistingLand ? null : provisionalFittedVol;
+        const parcelCenterLat =
+          fittedVol?.centerLat ??
+          resolvedTarget.volume?.centerLat ??
+          effectiveParcelBounds?.center?.[0] ??
+          publishedLat;
+        const parcelCenterLng =
+          fittedVol?.centerLng ??
+          resolvedTarget.volume?.centerLng ??
+          effectiveParcelBounds?.center?.[1] ??
+          publishedLng;
 
-        if (existingParcel) {
+        if (attachingToExistingLand) {
           await env.DB.prepare(
-            'UPDATE land_parcels SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ? WHERE parcel_id = ?'
+            'UPDATE land_parcels SET sculpture_count = sculpture_count + 1, updated_at = ? WHERE parcel_id = ?'
           )
-            .bind(recipientAddress, now, locationBundle.parcelId)
+            .bind(now, effectiveParcelId)
             .run();
         } else {
           await env.DB.prepare(
@@ -3365,8 +3414,8 @@ export default {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
           )
             .bind(
-              locationBundle.parcelId,
-              locationBundle.geohash,
+              effectiveParcelId,
+              effectiveGeohash,
               parcelCenterLat,
               parcelCenterLng,
               user.id,
@@ -3375,20 +3424,20 @@ export default {
               now
             )
             .run();
+
+          await seedLandSecurityPolicy(d1Adapter, {
+            parcelId: effectiveParcelId,
+            ownerSub: user.id,
+            originSource: 'mobile_ar',
+            lat: parcelCenterLat,
+            lng: parcelCenterLng,
+            geoInfo: locationBundle.geoInfo || null,
+            skipRemoteLookup: true
+          }).catch(() => null);
         }
 
-        await seedLandSecurityPolicy(d1Adapter, {
-          parcelId: locationBundle.parcelId,
-          ownerSub: user.id,
-          originSource: 'mobile_ar',
-          lat: parcelCenterLat,
-          lng: parcelCenterLng,
-          geoInfo: locationBundle.geoInfo || null,
-          skipRemoteLookup: true
-        }).catch(() => null);
-
         await recordLandView(d1Adapter, {
-          parcelId: locationBundle.parcelId,
+          parcelId: effectiveParcelId,
           viewType: 'in_person',
           viewerKey: buildViewerDedupKey({ userId: user.id }),
           verifiedInPerson: true
@@ -3422,7 +3471,7 @@ export default {
 
         await upsertAnchorAndRevision(d1Adapter, {
           sculptureId,
-          parcelId: locationBundle.parcelId,
+          parcelId: effectiveParcelId,
           revNum: 1,
           anchorOffset: anchorCheck.offset,
           erc4906TxHash: mintResult.txHash || '',
@@ -3439,7 +3488,7 @@ export default {
         });
 
         const awakening = await awakenParcelByHumanVisit(d1Adapter, {
-          parcelId: locationBundle.parcelId,
+          parcelId: effectiveParcelId,
           sculptureId,
           artistUser: user,
           artistAddress: recipientAddress,
@@ -3462,7 +3511,10 @@ export default {
             sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
             mint: mintResult,
             ipfs: ipfsResult,
-            awakening
+            awakening,
+            addedToExistingLand: attachingToExistingLand,
+            mintedNewLand: !attachingToExistingLand,
+            landDisplayName: resolvedTarget.displayName || ''
           },
           201,
           request

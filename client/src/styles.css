@@ -8475,6 +8475,16 @@ select {
   gap: 6px;
 }
 
+.profile-item-card.is-clickable {
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
+}
+
+.profile-item-card.is-clickable:hover {
+  border-color: rgba(0, 245, 212, 0.48);
+  background: rgba(12, 22, 38, 0.92);
+}
+
 .profile-item-head {
   display: flex;
   align-items: flex-start;
@@ -8605,6 +8615,21 @@ select {
   border-color: rgba(255, 209, 102, 0.92);
   color: #fff7d6;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 14px rgba(255, 209, 102, 0.28);
+}
+
+.ar-nearby-land-pill.is-adding-art {
+  background: linear-gradient(135deg, rgba(28, 22, 6, 0.96), rgba(8, 30, 32, 0.95));
+  border-color: rgba(255, 209, 102, 0.98);
+  color: #fff8db;
+  font-weight: 600;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.56), 0 0 18px rgba(255, 209, 102, 0.36);
+}
+
+.ar-nearby-land-pill.is-frozen-land {
+  background: rgba(34, 10, 22, 0.95);
+  border-color: rgba(255, 92, 138, 0.92);
+  color: #ffe3ec;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55), 0 0 14px rgba(255, 92, 138, 0.3);
 }
 
 .ar-nearby-land-pill-main {
@@ -9432,6 +9457,16 @@ select {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ar-land-sc-row.is-clickable {
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.ar-land-sc-row.is-clickable:hover {
+  border-color: rgba(0, 245, 212, 0.52);
+  background: rgba(0, 245, 212, 0.08);
 }
 
 .ar-land-sc-info {

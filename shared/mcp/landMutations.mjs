@@ -12,6 +12,7 @@ import {
   computeOrientedFootprintLngLat,
   ensureLandVolumeFitsSculptures,
   resolveLandDisplayName,
+  resolveMobilePublishParcel,
   slugifyLandTitle,
   validateLandTitle
 } from '../landVolume.mjs';
@@ -2447,10 +2448,56 @@ export async function applyPublishOnBehalf(
   db,
   { ownerUser, ownerAddress, payload, pinSculptureFn, mintSculptureFn, proofSignature = '' }
 ) {
-  const locBundle = payload.locationBundle;
-  const landSettings = await getLandSettingsInternal(db, locBundle.parcelId);
+  const rawLocBundle = payload.locationBundle;
+  const provisionalFittedVolume = buildObjectFittedLandVolume({
+    parcelId: rawLocBundle.parcelId,
+    geohash: rawLocBundle.geohash,
+    lat: rawLocBundle.lat,
+    lng: rawLocBundle.lng,
+    voxels: payload.cleanVoxels,
+    anchorOffset: payload.anchorOffset || null,
+    paddingFraction: 0.1
+  });
+
+  const resolvedTarget = await resolveMobilePublishParcel(db, {
+    lat: rawLocBundle.lat,
+    lng: rawLocBundle.lng,
+    userLat: rawLocBundle.lat,
+    userLng: rawLocBundle.lng,
+    defaultParcelId: rawLocBundle.parcelId,
+    defaultGeohash: rawLocBundle.geohash,
+    requestedParcelId: payload.targetParcelId || '',
+    fittedVolume: provisionalFittedVolume
+  });
+
+  if (resolvedTarget.blockedOverlap) {
+    throw new McpServiceError(
+      `Cannot mint a new land overlapping "${resolvedTarget.conflictingLandName}". Move inside "${resolvedTarget.conflictingLandName}" to add art to it, or step outside its boundary.`,
+      409,
+      {
+        conflictingParcelId: resolvedTarget.conflictingParcelId,
+        conflictingLandName: resolvedTarget.conflictingLandName
+      }
+    );
+  }
+
+  const effectiveParcelId = resolvedTarget.parcelId || rawLocBundle.parcelId;
+  const effectiveGeohash = resolvedTarget.geohash || rawLocBundle.geohash;
+  const effectiveParcelBytes32 =
+    effectiveParcelId === rawLocBundle.parcelId
+      ? rawLocBundle.parcelBytes32
+      : ethers.keccak256(ethers.toUtf8Bytes(effectiveParcelId));
+  const locBundle = {
+    ...rawLocBundle,
+    parcelId: effectiveParcelId,
+    geohash: effectiveGeohash,
+    parcelBytes32: effectiveParcelBytes32,
+    parcelBounds: resolvedTarget.parcelBounds || rawLocBundle.parcelBounds
+  };
+
+  const landSettings = await getLandSettingsInternal(db, effectiveParcelId);
   if (landSettings.frozen) {
-    const landLabel = await getLatestParcelDisplayName(db, locBundle.parcelId);
+    const landLabel = resolvedTarget.displayName || (await getLatestParcelDisplayName(db, effectiveParcelId));
     throw new McpServiceError(
       `Virtual Land "${landLabel}" is frozen — no new sculptures can be placed here.`,
       403
@@ -2533,25 +2580,20 @@ export async function applyPublishOnBehalf(
     ]
   );
 
-  const fittedVolume = buildObjectFittedLandVolume({
-    parcelId: locBundle.parcelId,
-    geohash: locBundle.geohash,
-    lat: locBundle.lat,
-    lng: locBundle.lng,
-    voxels: payload.cleanVoxels,
-    anchorOffset: payload.anchorOffset || null,
-    paddingFraction: 0.1
-  });
-
   const existingParcel = await db.get('SELECT * FROM land_parcels WHERE parcel_id = ?', [
     locBundle.parcelId
   ]);
-  if (existingParcel) {
+  const attachingToExistingLand = Boolean(existingParcel || resolvedTarget.matchedExisting);
+  const fittedVolume = attachingToExistingLand ? null : provisionalFittedVolume;
+
+  if (attachingToExistingLand) {
     await db.run(
-      'UPDATE land_parcels SET latest_claimant_address = ?, sculpture_count = sculpture_count + 1, updated_at = ? WHERE parcel_id = ?',
-      [ownerAddress, now, locBundle.parcelId]
+      'UPDATE land_parcels SET sculpture_count = sculpture_count + 1, updated_at = ? WHERE parcel_id = ?',
+      [now, locBundle.parcelId]
     );
   } else {
+    const centerLat = fittedVolume ? fittedVolume.centerLat : locBundle.parcelBounds.center[0];
+    const centerLng = fittedVolume ? fittedVolume.centerLng : locBundle.parcelBounds.center[1];
     await db.run(
       `INSERT INTO land_parcels (
         parcel_id, geohash, center_lat, center_lng,
@@ -2561,38 +2603,36 @@ export async function applyPublishOnBehalf(
       [
         locBundle.parcelId,
         locBundle.geohash,
-        fittedVolume ? fittedVolume.centerLat : locBundle.parcelBounds.center[0],
-        fittedVolume ? fittedVolume.centerLng : locBundle.parcelBounds.center[1],
+        centerLat,
+        centerLng,
         ownerUser.id,
         ownerAddress,
         ownerAddress,
         now
       ]
     );
-  }
 
-  await seedLandSecurityPolicy(db, {
-    parcelId: locBundle.parcelId,
-    ownerSub: ownerUser.id,
-    originSource: 'mobile_ar',
-    lat: fittedVolume ? fittedVolume.centerLat : locBundle.parcelBounds.center[0],
-    lng: fittedVolume ? fittedVolume.centerLng : locBundle.parcelBounds.center[1],
-    geoInfo: locBundle.geoInfo || null,
-    skipRemoteLookup: true
-  }).catch(() => null);
+    await seedLandSecurityPolicy(db, {
+      parcelId: locBundle.parcelId,
+      ownerSub: ownerUser.id,
+      originSource: 'mobile_ar',
+      lat: centerLat,
+      lng: centerLng,
+      geoInfo: locBundle.geoInfo || null,
+      skipRemoteLookup: true
+    }).catch(() => null);
+  }
 
   if (fittedVolume) {
     await db
       .run(
         `INSERT OR IGNORE INTO land_volumes (
-          parcel_id, geohash, center_lat, center_lng,
-          width_meters, depth_meters, height_meters, z_scale, rotation_deg,
-          base_altitude_m, footprint_area_sqm, volume_cubic_m, corners_json,
-          claimed_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          parcel_id, center_lat, center_lng, width_meters, depth_meters, height_meters,
+          z_scale, rotation_deg, base_altitude_m, footprint_area_sqm, volume_cubic_m,
+          corners_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           fittedVolume.parcelId,
-          fittedVolume.geohash,
           fittedVolume.centerLat,
           fittedVolume.centerLng,
           fittedVolume.widthMeters,
@@ -2603,9 +2643,7 @@ export async function applyPublishOnBehalf(
           fittedVolume.baseAltitudeM,
           fittedVolume.footprintAreaSqM,
           fittedVolume.volumeCubicM,
-          JSON.stringify(fittedVolume.corners),
-          ownerUser.id,
-          now,
+          JSON.stringify(fittedVolume.corners || []),
           now
         ]
       )
@@ -2639,7 +2677,10 @@ export async function applyPublishOnBehalf(
   return {
     sculpture: serializeSculptureRow(saved, { includeVoxels: true }),
     mint: mintResult,
-    ipfs: ipfsResult
+    ipfs: ipfsResult,
+    addedToExistingLand: attachingToExistingLand,
+    mintedNewLand: !attachingToExistingLand,
+    landDisplayName: resolvedTarget.displayName || ''
   };
 }
 

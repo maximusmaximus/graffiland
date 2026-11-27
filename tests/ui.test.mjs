@@ -1515,7 +1515,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     assert.equal(nameTargetBtns.length, 2);
     RTL.fireEvent.click(nameTargetBtns[1]);
     assert.deepEqual(focusedParcels, ['GLAND-NEAR', 'GLAND-FAR']);
-    RTL.fireEvent.click(RTL.within(nestedItems[0]).getByRole('button', { name: /3D/i }));
+    // Redundant explicit "3D" button is removed from artwork items; clicking the item window opens it directly
+    assert.equal(RTL.within(nestedItems[0]).queryByRole('button', { name: /^\s*3D\s*$/i }), null);
+    RTL.fireEvent.click(nestedItems[0]);
     assert.deepEqual(selectedSculptures, ['sc-voxel-1']);
 
     // Clicking triangle on card #2 again collapses it cleanly
@@ -2550,17 +2552,31 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       onOpenAreaMap: () => {}
     };
 
-    // 1) Initial camera drawing view: live On Land pill + normal HUD controls visible
+    // 1) Initial camera drawing view inside an existing land: shows unmistakable "Adding Art to:" label at top
     const view1 = RTL.render(
       React.createElement(StudioHudTopBar, { ...baseProps, isInteractingWithLand: false })
     );
     const pill = view1.getByTestId('ar-nearby-land-pill');
-    assert.ok(pill.textContent.includes('On Land:'));
+    assert.ok(pill.textContent.includes('Adding Art to:'));
     assert.ok(pill.textContent.includes('Magnolia Lot'));
+    assert.equal(pill.getAttribute('data-adding-to-land'), 'true');
     assert.ok(view1.getByTestId('mobile-pair-hub-btn'));
     assert.ok(view1.getByLabelText('Open Nearest Lands Map'));
     RTL.fireEvent.click(pill);
     assert.deepEqual(inspected, ['GLAND-9R16561P']);
+    cleanup();
+
+    // 1b) In preview mode inside the same land, pill reads "On Land:"
+    const view1Preview = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        ...baseProps,
+        mode: 'preview',
+        isInteractingWithLand: false
+      })
+    );
+    const previewPill = view1Preview.getByTestId('ar-nearby-land-pill');
+    assert.ok(previewPill.textContent.includes('On Land:'));
+    assert.ok(previewPill.textContent.includes('Magnolia Lot'));
     cleanup();
 
     // 2) Interacting with land: non-useful buttons temporarily hidden; Back to Draw pill active
@@ -8856,5 +8872,249 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       globalThis.fetch = origFetch;
       cleanup();
     }
+  });
+
+  test('Redundant 3D buttons are removed on artworks and mobile HUD/Publish modal clearly indicate adding art to an existing land', async () => {
+    const { default: ARLandInspectorPanel } = await loadJsxModule(
+      'client/src/components/studio/ARLandInspectorPanel.jsx'
+    );
+    const { default: ProfileModal } = await loadJsxModule(
+      'client/src/components/ProfileModal.jsx'
+    );
+    const { default: PlotVisitView } = await loadJsxModule(
+      'client/src/components/PlotVisitView.jsx'
+    );
+    const { default: StudioHudTopBar } = await loadJsxModule(
+      'client/src/components/studio/StudioHudTopBar.jsx'
+    );
+    const { default: PublishSculptureModal } = await loadJsxModule(
+      'client/src/components/studio/PublishSculptureModal.jsx'
+    );
+
+    const sampleSc = {
+      id: 'sc-art-no3d-1',
+      title: 'Turkey Day 2026 Coffee',
+      description: 'Hot latte in 3D.',
+      parcelId: 'GLAND-STIBBLEZ',
+      parcelName: 'Stibblez Land',
+      modelType: 'custom-3d',
+      customModel: { format: 'glb', url: 'https://example.com/coffee.glb' },
+      voxelCount: 0,
+      polScore: 95,
+      creatorSub: 'u-bigdog',
+      creatorUsername: 'bigdog',
+      creatorName: 'bigdog',
+      createdAt: '2026-11-26T00:00:00Z'
+    };
+
+    const stibblezLand = {
+      parcelId: 'GLAND-STIBBLEZ',
+      geohash: '9r4p1234',
+      displayName: 'Stibblez Land',
+      customName: 'Stibblez Land',
+      centerLat: 39.7302,
+      centerLng: -121.8406,
+      isInside: true,
+      isNear: true,
+      isFrozen: false,
+      isOwned: false,
+      edgeDistanceMeters: 0,
+      distanceMeters: 0,
+      sculptures: [sampleSc],
+      volume: {
+        parcelId: 'GLAND-STIBBLEZ',
+        centerLat: 39.7302,
+        centerLng: -121.8406,
+        widthMeters: 54.25,
+        depthMeters: 35.66,
+        heightMeters: 11,
+        rotationDeg: 0
+      }
+    };
+
+    // 1) ARLandInspectorPanel: no "View 3D" button; clicking the artwork item window opens it directly
+    const arOpened = [];
+    const arView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: stibblezLand,
+        nearbyLands: [stibblezLand],
+        onInspectSculpture: (sc) => arOpened.push(sc.id),
+        onClose: () => {}
+      })
+    );
+    assert.equal(arView.queryByText(/View 3D/i), null);
+    const scRow = arView.getByTestId('ar-land-sculpture-row');
+    RTL.fireEvent.click(scRow);
+    assert.deepEqual(arOpened, ['sc-art-no3d-1']);
+    cleanup();
+
+    // 2) ProfileModal Sculptures tab: no "Review 3D" button; clicking the artwork card opens it directly
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    try {
+      const profileOpened = [];
+      const profView = RTL.render(
+        React.createElement(ProfileModal, {
+          handle: 'bigdog',
+          user: { id: 'u-bigdog', username: 'bigdog' },
+          config: {},
+          fetchProfileFn: async () => ({
+            profile: {
+              id: 'u-bigdog',
+              userNumber: 7,
+              userNumberLabel: '#0007',
+              username: 'bigdog',
+              displayName: 'BigDog',
+              bio: 'Sculpting in 3D AR',
+              picture: '',
+              avatarImage: '',
+              headerImage: '',
+              accountType: 'human',
+              walletAddress: '0x1111111111111111111111111111111111111111',
+              stats: { landsCount: 0, sculpturesCount: 1, totalBlocks: 0, xp: 100 }
+            },
+            lands: [],
+            sculptures: [sampleSc],
+            listings: [],
+            actions: []
+          }),
+          onSelectSculpture: (sc) => profileOpened.push(sc.id),
+          onClose: () => {}
+        })
+      );
+      const scCard = await profView.findByTestId('profile-sculpture-item');
+      assert.equal(profView.queryByText(/Review 3D/i), null);
+      RTL.fireEvent.click(scCard);
+      assert.deepEqual(profileOpened, ['sc-art-no3d-1']);
+      cleanup();
+
+      // 3) PlotVisitView artwork detail card: no redundant "Inspect Full 3D" button
+      const plotView = RTL.render(
+        React.createElement(PlotVisitView, {
+          variant: 'desktop',
+          parcel: stibblezLand,
+          sculptures: [sampleSc],
+          allParcels: [stibblezLand],
+          onSelectSculpture: () => {},
+          onClose: () => {}
+        })
+      );
+      RTL.fireEvent.click(plotView.getByTestId('plot-artwork-label'));
+      RTL.fireEvent.click(plotView.getByTestId('plot-details-toggle'));
+      assert.ok(plotView.getByTestId('plot-artwork-details'));
+      assert.equal(plotView.queryByTestId('plot-open-artwork-viewer-btn'), null);
+      assert.equal(plotView.queryByText(/Inspect Full 3D/i), null);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+
+    // 4) StudioHudTopBar in draw mode inside existing land (normal + frozen)
+    const hudDraw = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        user: { id: 'u-artist', username: 'artist' },
+        mode: 'draw',
+        dockOpen: false,
+        voxels: [{ x: 0, y: 0, z: 0 }],
+        cameraReady: true,
+        originStatus: { originBlocked: false, reason: '' },
+        sceneScan: { optimal: true },
+        isInteractingWithLand: false,
+        nearbyCameraLand: stibblezLand,
+        nearbyCameraLandCount: 1,
+        onInspectArLand: () => {}
+      })
+    );
+    const drawPill = hudDraw.getByTestId('ar-nearby-land-pill');
+    assert.ok(drawPill.textContent.includes('Adding Art to:'));
+    assert.ok(drawPill.textContent.includes('Stibblez Land'));
+    assert.equal(drawPill.getAttribute('data-adding-to-land'), 'true');
+    cleanup();
+
+    const hudFrozen = RTL.render(
+      React.createElement(StudioHudTopBar, {
+        user: { id: 'u-artist', username: 'artist' },
+        mode: 'draw',
+        dockOpen: false,
+        voxels: [{ x: 0, y: 0, z: 0 }],
+        cameraReady: true,
+        originStatus: { originBlocked: false, reason: '' },
+        sceneScan: { optimal: true },
+        isInteractingWithLand: false,
+        nearbyCameraLand: { ...stibblezLand, isFrozen: true },
+        nearbyCameraLandCount: 1,
+        onInspectArLand: () => {}
+      })
+    );
+    const frozenPill = hudFrozen.getByTestId('ar-nearby-land-pill');
+    assert.ok(frozenPill.textContent.includes('Frozen Land:'));
+    assert.ok(frozenPill.textContent.includes('Stibblez Land'));
+    assert.equal(frozenPill.getAttribute('data-frozen-land'), 'true');
+    cleanup();
+
+    // 5) PublishSculptureModal clearly communicates adding art to Stibblez Land (not minting a new land)
+    const basePubProps = {
+      config: { policy: { titleMax: 48, descriptionMax: 240, descriptionMaxWords: 45 } },
+      user: { id: 'u-artist', email: 'artist@test.com', activeMintRecipient: '0x2222222222222222222222222222222222222222' },
+      voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }],
+      polStats: { frames: 12, flow: 92 },
+      location: { lat: 39.7302, lng: -121.8406, altitude: 60 },
+      orbStatus: { features: 0, keyframes: 0 },
+      passkeyCount: 0,
+      passkeyBusy: false,
+      title: 'Street Neon',
+      setTitle: () => {},
+      description: 'Painted inside Stibblez Land.',
+      setDescription: () => {},
+      cluePrompt: '',
+      setCluePrompt: () => {},
+      clueAnswer: '',
+      setClueAnswer: () => {},
+      termsAccepted: true,
+      setTermsAccepted: () => {},
+      publishing: false,
+      publishError: '',
+      setPublishError: () => {},
+      mintReceipt: null,
+      mcpPairingsState: { mcpActive: false, activePairing: null },
+      agentPublishPrompt: null,
+      draftsBusy: false,
+      draftStatusText: '',
+      onSubmitPublish: (e) => e.preventDefault(),
+      onCopyAgentPublishPrompt: () => {},
+      onManualSaveDraft: () => {},
+      onOpenInfo: () => {},
+      onOpenPair: () => {},
+      onOpenManageLand: () => {},
+      onViewInARPreview: () => {},
+      onShowHint: () => {},
+      onClose: () => {}
+    };
+
+    const pubView = RTL.render(
+      React.createElement(PublishSculptureModal, {
+        ...basePubProps,
+        activeTargetLand: stibblezLand
+      })
+    );
+    const banner = pubView.getByTestId('publish-target-land-banner');
+    assert.ok(banner.textContent.includes('Adding Art to: Stibblez Land'));
+    assert.ok(banner.textContent.includes('will not mint a new land'));
+    const submitBtn = pubView.getByRole('button', { name: /Add Art to Stibblez Land/i });
+    assert.equal(submitBtn.disabled, false);
+    cleanup();
+
+    const pubFrozenView = RTL.render(
+      React.createElement(PublishSculptureModal, {
+        ...basePubProps,
+        activeTargetLand: { ...stibblezLand, isFrozen: true }
+      })
+    );
+    const frozenBanner = pubFrozenView.getByTestId('publish-target-land-banner');
+    assert.ok(frozenBanner.textContent.includes('Stibblez Land is frozen'));
+    const frozenSubmit = pubFrozenView.getByRole('button', { name: /Land Frozen/i });
+    assert.equal(frozenSubmit.disabled, true);
+    cleanup();
   });
 });

@@ -1,7 +1,11 @@
 import { ethers } from 'ethers';
 import { verifyAndEnrichLocation } from '../../server/services/pol.mjs';
 import { validatePublishPayload } from '../../server/services/moderation.mjs';
-import { resolveLandDisplayName } from '../landVolume.mjs';
+import {
+  buildObjectFittedLandVolume,
+  resolveLandDisplayName,
+  resolveMobilePublishParcel
+} from '../landVolume.mjs';
 import { extractCustomModelInput, validate3dModelUrl } from '../model3d.mjs';
 import { computeVerticalBounds } from '../sculpture.mjs';
 import {
@@ -810,20 +814,63 @@ export async function createPublishSignatureRequestForMobile(
     );
   }
 
+  const provisionalFittedVol = buildObjectFittedLandVolume({
+    parcelId: locationBundle.parcelId,
+    geohash: locationBundle.geohash,
+    lat: locationBundle.lat,
+    lng: locationBundle.lng,
+    voxels: validation.cleanVoxels,
+    anchorOffset: body?.anchorOffset || null,
+    paddingFraction: 0.1
+  });
+  const resolvedTarget = await resolveMobilePublishParcel(db, {
+    lat: locationBundle.lat,
+    lng: locationBundle.lng,
+    userLat: locationBundle.lat,
+    userLng: locationBundle.lng,
+    defaultParcelId: locationBundle.parcelId,
+    defaultGeohash: locationBundle.geohash,
+    requestedParcelId: body?.targetParcelId || '',
+    fittedVolume: provisionalFittedVol
+  });
+  if (resolvedTarget.blockedOverlap) {
+    throw new McpServiceError(
+      `Cannot mint a new land overlapping "${resolvedTarget.conflictingLandName}". Move inside "${resolvedTarget.conflictingLandName}" to add art to it, or step outside its boundary.`,
+      409,
+      {
+        conflictingParcelId: resolvedTarget.conflictingParcelId,
+        conflictingLandName: resolvedTarget.conflictingLandName
+      }
+    );
+  }
+  const effectiveParcelId = resolvedTarget.parcelId || locationBundle.parcelId;
+  const effectiveGeohash = resolvedTarget.geohash || locationBundle.geohash;
+  const effectiveLocationBundle = {
+    ...locationBundle,
+    parcelId: effectiveParcelId,
+    geohash: effectiveGeohash,
+    parcelBytes32:
+      effectiveParcelId === locationBundle.parcelId
+        ? locationBundle.parcelBytes32
+        : ethers.keccak256(ethers.toUtf8Bytes(effectiveParcelId)),
+    parcelBounds: resolvedTarget.parcelBounds || locationBundle.parcelBounds
+  };
+
   const ownerAddress = resolvePreferredOwnerWallet(user);
   const reqObj = await enqueueSignatureRequest(db, {
     pairingCode: cleanPairingCode,
     ownerUser: user,
     ownerAddress,
     action: 'publish_sculpture',
-    parcelId: locationBundle.parcelId,
+    parcelId: effectiveParcelId,
     payload: {
       title: validation.title,
       description: validation.description,
       cleanVoxels: validation.cleanVoxels,
       previewDataUrl: String(body?.previewDataUrl || '').slice(0, 450000),
       draftId: body?.draftId || '',
-      locationBundle
+      targetParcelId: body?.targetParcelId || (resolvedTarget.matchedExisting ? effectiveParcelId : ''),
+      locationBundle: effectiveLocationBundle
     },
     requestedBy: 'mobile',
     agentName: 'mobile-delegated-publish',
@@ -836,7 +883,7 @@ export async function createPublishSignatureRequestForMobile(
       apiOrigin,
       pairingCode: cleanPairingCode,
       requestId: reqObj.id,
-      parcelId: locationBundle.parcelId,
+      parcelId: effectiveParcelId,
       title: validation.title,
       ownerAddress,
       canonicalMessage: reqObj.canonicalMessage
