@@ -2850,19 +2850,20 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       'pencil',
       'stack',
       'erase',
+      'search',
       'undo',
       'clear',
       'transform',
       'recenter',
       'preview',
       'drafts',
-      'occlusion',
-      'pair',
       'agent',
       'publish'
     ]) {
       assert.ok(ids.includes(requiredId), `Expected "${requiredId}" in bottom-center KEY_TOOLS`);
     }
+    assert.equal(ids.includes('pair'), false, 'Pair must NOT be in bottom-center KEY_TOOLS');
+    assert.equal(ids.includes('occlusion'), false, 'Occlusion must NOT be in bottom-center KEY_TOOLS');
 
     const picked = { tool: 'brush', size: 1, color: '#00f5d4', material: 'matte', reach: 1.8 };
     let isOpen = false;
