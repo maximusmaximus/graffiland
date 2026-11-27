@@ -22,6 +22,30 @@ import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
+const ENV_TIER_LABELS = {
+  dense_urban: 'Dense Urban',
+  suburban_plaza: 'Suburban / Plaza',
+  open_nature: 'Open Nature',
+  unknown: 'Balanced'
+};
+
+const ORIGIN_SOURCE_LABELS = {
+  mobile_ar: 'Mobile AR',
+  browser_map: 'Browser Map',
+  agent_mcp: 'AI Agent',
+  unknown: ''
+};
+
+function formatLightingSlotsLabel(slots = []) {
+  if (!Array.isArray(slots) || slots.length === 0) return '';
+  const hasDay = slots.includes('daylight');
+  const hasNight = slots.includes('lowlight');
+  if (hasDay && hasNight) return 'Day + Night';
+  if (hasNight) return 'Night';
+  if (hasDay) return 'Day';
+  return '';
+}
+
 export default function LandManagementModal({
   user,
   initialParcelId = '',
@@ -49,7 +73,10 @@ export default function LandManagementModal({
   const [frozen, setFrozen] = useState(false);
   const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
   const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
-  const [minOrbInliers, setMinOrbInliers] = useState(8);
+  const [useAutoOrb, setUseAutoOrb] = useState(true);
+  const [lightingAdaptive, setLightingAdaptive] = useState(true);
+  const [minOrbInliers, setMinOrbInliers] = useState(6);
+  const [maxReprojErrPx, setMaxReprojErrPx] = useState(8.0);
   const [passkeys, setPasskeys] = useState([]);
   const [expandedRevIds, setExpandedRevIds] = useState({});
   const [manualContribInput, setManualContribInput] = useState('');
@@ -93,7 +120,14 @@ export default function LandManagementModal({
         setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
         setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
         setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
-        setMinOrbInliers(Number(picked.securityPolicy?.minOrbInliers || 8));
+        setUseAutoOrb(
+          picked.securityPolicy?.overrideFlag !== undefined
+            ? !picked.securityPolicy.overrideFlag
+            : picked.securityPolicy?.isAuto !== false
+        );
+        setLightingAdaptive(picked.securityPolicy?.lightingAdaptive !== false);
+        setMinOrbInliers(Number(picked.securityPolicy?.minOrbInliers || 6));
+        setMaxReprojErrPx(Number(picked.securityPolicy?.maxReprojErrPx || 8.0));
       } else {
         setSelectedParcelId('');
       }
@@ -123,7 +157,14 @@ export default function LandManagementModal({
     setFrozen(Boolean(p.settings?.frozen || p.frozen));
     setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
     setRequireOrbUnlock(Boolean(p.securityPolicy?.requireOrbUnlock));
-    setMinOrbInliers(Number(p.securityPolicy?.minOrbInliers || 8));
+    setUseAutoOrb(
+      p.securityPolicy?.overrideFlag !== undefined
+        ? !p.securityPolicy.overrideFlag
+        : p.securityPolicy?.isAuto !== false
+    );
+    setLightingAdaptive(p.securityPolicy?.lightingAdaptive !== false);
+    setMinOrbInliers(Number(p.securityPolicy?.minOrbInliers || 6));
+    setMaxReprojErrPx(Number(p.securityPolicy?.maxReprojErrPx || 8.0));
     setEraseConfirmInput('');
     setNotice('');
     setErrorMsg('');
@@ -277,7 +318,15 @@ export default function LandManagementModal({
       await api.updateLandSecurityPolicy(activeParcel.parcelId, {
         requirePasskeyUnlock,
         requireOrbUnlock,
-        minOrbInliers: Number(minOrbInliers || 8)
+        useAuto: useAutoOrb,
+        overrideFlag: !useAutoOrb,
+        lightingAdaptive,
+        ...(!useAutoOrb
+          ? {
+              minOrbInliers: Number(minOrbInliers || 6),
+              maxReprojErrPx: Number(maxReprojErrPx || 8.0)
+            }
+          : {})
       });
       await loadWorkspace();
       onWorkspaceChanged?.();
@@ -693,112 +742,228 @@ export default function LandManagementModal({
                   </div>
 
                   {/* Compact Pin-Unlock & ORB Security Sub-Panel */}
-                  <div className="land-mgmt-security-box">
-                    <div className="land-mgmt-section-head">
-                      <div className="land-mgmt-heading">
-                        <XeroIcon emoji="🔐" size={13} />
-                        <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
-                          Unlock Security
-                        </strong>
-                        <InfoTip title="Pin-Unlock & Visual ORB Security">
-                          Protect encrypted pinned notes on this parcel by requiring a hardware
-                          WebAuthn Passkey (FaceID / biometrics) and/or a live camera ORB visual
-                          landmark match on-site.
-                        </InfoTip>
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span className={`badge ${activeParcel.landmarkAnchor?.hasLandmark ? 'teal' : ''}`} style={{ fontSize: 10 }}>
-                          {activeParcel.landmarkAnchor?.hasLandmark
-                            ? `ORB: ${activeParcel.landmarkAnchor.featureCount} pts`
-                            : 'No ORB Pack'}
-                        </span>
-                        {isWebAuthnSupported() && (
-                          <button
-                            type="button"
-                            className="btn btn-xs"
-                            disabled={busy !== ''}
-                            onClick={handleRegisterPasskey}
-                          >
-                            <XeroIcon emoji="🛡️" size={11} />{' '}
-                            {passkeys.length > 0 ? `Passkeys (${passkeys.length})` : '+ Passkey'}
-                          </button>
+                  {(() => {
+                    const secPol = activeParcel.securityPolicy || {};
+                    const envTierKey = secPol.envTier || 'unknown';
+                    const envTierLabel = ENV_TIER_LABELS[envTierKey] || 'Balanced';
+                    const originLabel = ORIGIN_SOURCE_LABELS[secPol.originSource || 'unknown'] || '';
+                    const hasPack = Boolean(
+                      activeParcel.landmarkAnchor?.hasLandmark || secPol.hasLandmarkPack
+                    );
+                    const lightingSlots =
+                      activeParcel.landmarkAnchor?.lightingSlots?.length > 0
+                        ? activeParcel.landmarkAnchor.lightingSlots
+                        : secPol.lightingSlots || [];
+                    const slotsLabel = formatLightingSlotsLabel(lightingSlots);
+                    const autoMinVal = Number(secPol.autoMinOrbInliers ?? secPol.minOrbInliers ?? 6);
+                    const autoErrVal = Number(secPol.autoMaxReprojErrPx ?? secPol.maxReprojErrPx ?? 8.0);
+
+                    return (
+                      <div className="land-mgmt-security-box">
+                        <div className="land-mgmt-section-head">
+                          <div className="land-mgmt-heading">
+                            <XeroIcon emoji="🔐" size={13} />
+                            <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                              Unlock Security
+                            </strong>
+                            <InfoTip title="Pin-Unlock & Visual ORB Security">
+                              Auto-calibrated ORB Visual Match keeps AR alignment locked accurately
+                              across urban, plaza, and nature spots. Optionally require a hardware
+                              WebAuthn Passkey and/or strict ORB unlock for encrypted pinned notes.
+                            </InfoTip>
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span
+                              className={`badge ${useAutoOrb ? 'teal' : 'gold'}`}
+                              data-testid="orb-calibration-mode-badge"
+                              style={{ fontSize: 10 }}
+                            >
+                              {useAutoOrb ? `Auto (${envTierLabel})` : 'Custom Override'}
+                            </span>
+                            {originLabel && (
+                              <span className="badge" style={{ fontSize: 10 }}>
+                                {originLabel}
+                              </span>
+                            )}
+                            <span
+                              className={`badge ${hasPack ? 'teal' : ''}`}
+                              data-testid="orb-pack-status-badge"
+                              style={{ fontSize: 10 }}
+                            >
+                              {hasPack
+                                ? `ORB: ${activeParcel.landmarkAnchor?.featureCount || 0} pts${slotsLabel ? ` · ${slotsLabel}` : ''}`
+                                : 'No ORB Pack — Scan on Mobile'}
+                            </span>
+                            {isWebAuthnSupported() && (
+                              <button
+                                type="button"
+                                className="btn btn-xs"
+                                disabled={busy !== ''}
+                                onClick={handleRegisterPasskey}
+                              >
+                                <XeroIcon emoji="🛡️" size={11} />{' '}
+                                {passkeys.length > 0 ? `Passkeys (${passkeys.length})` : '+ Passkey'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {passkeys.length > 0 && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {passkeys.map((pk) => (
+                              <span
+                                key={pk.id}
+                                className="badge"
+                                style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                              >
+                                <XeroIcon emoji="🛡️" size={10} />
+                                <span>{pk.deviceLabel || pk.id.slice(0, 8)}</span>
+                                <button
+                                  type="button"
+                                  aria-label={`Delete passkey ${pk.deviceLabel || pk.id}`}
+                                  disabled={busy !== ''}
+                                  onClick={() => handleDeletePasskey(pk.id)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#ffb3c1',
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    fontWeight: 700
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="land-mgmt-toggle-grid">
+                          <div className="land-mgmt-toggle-item">
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={requirePasskeyUnlock}
+                                onChange={(e) => setRequirePasskeyUnlock(e.target.checked)}
+                              />
+                              <span>Passkey Unlock</span>
+                            </label>
+                            <InfoTip title="Hardware Passkey Unlock">
+                              Requires a registered WebAuthn Passkey (FaceID, TouchID, or security key)
+                              before unlocking encrypted pinned notes here.
+                            </InfoTip>
+                          </div>
+
+                          <div className="land-mgmt-toggle-item">
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={requireOrbUnlock}
+                                onChange={(e) => setRequireOrbUnlock(e.target.checked)}
+                              />
+                              <span>Strict ORB Unlock</span>
+                            </label>
+                            <InfoTip title="Strict ORB Unlock Gate" align="right">
+                              Opt-in gate requiring on-site camera visual pose matching before
+                              decrypting pinned notes. Visual Match stays active for AR alignment
+                              even when this unlock gate is off.
+                            </InfoTip>
+                          </div>
+
+                          <div className="land-mgmt-toggle-item">
+                            <label>
+                              <input
+                                type="checkbox"
+                                aria-label="Use Auto ORB calibration"
+                                checked={useAutoOrb}
+                                onChange={(e) => {
+                                  const nextAuto = e.target.checked;
+                                  setUseAutoOrb(nextAuto);
+                                  if (nextAuto) {
+                                    setMinOrbInliers(autoMinVal);
+                                    setMaxReprojErrPx(autoErrVal);
+                                  }
+                                }}
+                              />
+                              <span>Use Auto</span>
+                            </label>
+                            <InfoTip title="Auto ORB Calibration">
+                              Automatically tunes min inliers and max reprojection error from the
+                              parcel&apos;s location type and captured Mobile AR scene scans.
+                              Editing values manually switches to Custom Override.
+                            </InfoTip>
+                          </div>
+
+                          <div className="land-mgmt-toggle-item">
+                            <label>
+                              <input
+                                type="checkbox"
+                                aria-label="Lighting-adaptive ORB thresholds"
+                                checked={lightingAdaptive}
+                                onChange={(e) => setLightingAdaptive(e.target.checked)}
+                              />
+                              <span>Day/Night Adaptive</span>
+                            </label>
+                            <InfoTip title="Day/Night Lighting Adaptation" align="right">
+                              Automatically relaxes ORB thresholds during twilight and nighttime
+                              while maintaining separate Day and Night landmark slots.
+                            </InfoTip>
+                          </div>
+                        </div>
+
+                        <div className="land-mgmt-orb-calibration-row">
+                          <label className="land-mgmt-orb-field">
+                            <span>Min Inliers</span>
+                            <input
+                              type="number"
+                              aria-label="Minimum ORB inliers"
+                              min={4}
+                              max={64}
+                              step={1}
+                              value={useAutoOrb ? autoMinVal : minOrbInliers}
+                              onChange={(e) => {
+                                setUseAutoOrb(false);
+                                setMinOrbInliers(Number(e.target.value || 6));
+                              }}
+                              className="land-mgmt-inliers-input"
+                              title="Minimum ORB visual match inliers (4–64)"
+                            />
+                          </label>
+                          <label className="land-mgmt-orb-field">
+                            <span>Max Error (px)</span>
+                            <input
+                              type="number"
+                              aria-label="Max ORB reprojection error px"
+                              min={1.5}
+                              max={25}
+                              step={0.5}
+                              value={useAutoOrb ? autoErrVal : maxReprojErrPx}
+                              onChange={(e) => {
+                                setUseAutoOrb(false);
+                                setMaxReprojErrPx(Number(e.target.value || 8.0));
+                              }}
+                              className="land-mgmt-inliers-input"
+                              title="Maximum ORB reprojection error in pixels (1.5–25.0)"
+                            />
+                          </label>
+                          {useAutoOrb && (
+                            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                              Auto target: {autoMinVal} pts · {autoErrVal}px
+                            </span>
+                          )}
+                        </div>
+
+                        {!hasPack && (
+                          <div className="land-mgmt-orb-nopack-note" data-testid="orb-nopack-cta">
+                            <XeroIcon emoji="📱" size={11} /> No Mobile AR scan captured yet —
+                            open this land on mobile AR on-site to calibrate Visual Match
+                            (unlocks won&apos;t block until calibrated).
+                          </div>
                         )}
                       </div>
-                    </div>
-
-                    {passkeys.length > 0 && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {passkeys.map((pk) => (
-                          <span
-                            key={pk.id}
-                            className="badge"
-                            style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                          >
-                            <XeroIcon emoji="🛡️" size={10} />
-                            <span>{pk.deviceLabel || pk.id.slice(0, 8)}</span>
-                            <button
-                              type="button"
-                              aria-label={`Delete passkey ${pk.deviceLabel || pk.id}`}
-                              disabled={busy !== ''}
-                              onClick={() => handleDeletePasskey(pk.id)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: '#ffb3c1',
-                                cursor: 'pointer',
-                                padding: 0,
-                                fontWeight: 700
-                              }}
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="land-mgmt-toggle-grid">
-                      <div className="land-mgmt-toggle-item">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={requirePasskeyUnlock}
-                            onChange={(e) => setRequirePasskeyUnlock(e.target.checked)}
-                          />
-                          <span>Passkey Unlock</span>
-                        </label>
-                        <InfoTip title="Hardware Passkey Unlock">
-                          Requires a registered WebAuthn Passkey (FaceID, TouchID, or security key)
-                          before unlocking encrypted pinned notes here.
-                        </InfoTip>
-                      </div>
-
-                      <div className="land-mgmt-toggle-item">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={requireOrbUnlock}
-                            onChange={(e) => setRequireOrbUnlock(e.target.checked)}
-                          />
-                          <span>ORB Visual Match</span>
-                        </label>
-                        <input
-                          type="number"
-                          aria-label="Minimum ORB inliers"
-                          min={4}
-                          max={64}
-                          value={minOrbInliers}
-                          onChange={(e) => setMinOrbInliers(Number(e.target.value || 8))}
-                          className="land-mgmt-inliers-input"
-                          title="Minimum ORB visual match inliers"
-                        />
-                        <InfoTip title="ORB Visual Landmark Match" align="right">
-                          Requires on-site camera visual pose matching against this parcel&apos;s
-                          ORB landmark pack (higher min inliers = stricter physical match).
-                        </InfoTip>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   <div className="land-mgmt-save-row">
                     <button

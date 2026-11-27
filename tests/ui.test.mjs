@@ -8543,4 +8543,157 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       cleanup();
     }
   });
+
+  test('LandManagementModal displays Auto vs Custom Override ORB calibration, pack status, lighting slots, and preserves Auto mode on save', async () => {
+    const { default: LandManagementModal } = await loadJsxModule(
+      'client/src/components/LandManagementModal.jsx'
+    );
+    const ownerUser = {
+      id: 'user-orb-ui-1',
+      name: 'Orb Tuner',
+      walletAddress: '0x9999999999999999999999999999999999999001'
+    };
+    const securityPayloads = [];
+    const parcelNoPack = {
+      parcelId: 'GLAND-NOPACK01',
+      geohash: 'nopack01',
+      customName: 'Browser Meadow',
+      description: 'Created from browser map',
+      settings: { allowAgentErase: true, allowContributorEdits: true, requireApproval: false, frozen: false },
+      securityPolicy: {
+        parcelId: 'GLAND-NOPACK01',
+        requirePasskeyUnlock: false,
+        requireOrbUnlock: false,
+        minOrbInliers: 4,
+        maxReprojErrPx: 12.0,
+        originSource: 'browser_map',
+        envTier: 'open_nature',
+        autoMinOrbInliers: 4,
+        autoMaxReprojErrPx: 12.0,
+        overrideFlag: false,
+        isAuto: true,
+        lightingAdaptive: true,
+        hasLandmarkPack: false,
+        lightingSlots: []
+      },
+      landmarkAnchor: { hasLandmark: false, keyframeCount: 0, featureCount: 0, lightingSlots: [] },
+      contributors: [],
+      eligibleVisitors: [],
+      sculptures: []
+    };
+    const parcelCalibrated = {
+      parcelId: 'GLAND-URBAN001',
+      geohash: 'urban001',
+      customName: 'Urban Brick Wall',
+      description: 'Scanned day and night',
+      settings: { allowAgentErase: true, allowContributorEdits: true, requireApproval: false, frozen: false },
+      securityPolicy: {
+        parcelId: 'GLAND-URBAN001',
+        requirePasskeyUnlock: false,
+        requireOrbUnlock: true,
+        minOrbInliers: 9,
+        maxReprojErrPx: 5.5,
+        originSource: 'mobile_ar',
+        envTier: 'dense_urban',
+        autoMinOrbInliers: 9,
+        autoMaxReprojErrPx: 5.5,
+        overrideFlag: false,
+        isAuto: true,
+        lightingAdaptive: true,
+        hasLandmarkPack: true,
+        lightingSlots: ['daylight', 'lowlight']
+      },
+      landmarkAnchor: {
+        hasLandmark: true,
+        keyframeCount: 6,
+        featureCount: 44,
+        lightingSlots: ['daylight', 'lowlight']
+      },
+      contributors: [],
+      eligibleVisitors: [],
+      sculptures: []
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      const method = String(opts.method || 'GET').toUpperCase();
+      if (u.includes('/api/lands/mine')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ownerAddress: ownerUser.walletAddress,
+            parcelCount: 2,
+            parcels: [parcelNoPack, parcelCalibrated]
+          })
+        };
+      }
+      if (u.includes('/api/passkeys/status')) {
+        return { ok: true, status: 200, json: async () => ({ passkeys: [] }) };
+      }
+      if (u.includes('/security') && method === 'POST') {
+        const body = JSON.parse(opts.body || '{}');
+        securityPayloads.push({ url: u, body });
+        return { ok: true, status: 200, json: async () => ({ policy: body }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+
+    try {
+      const view = RTL.render(
+        React.createElement(LandManagementModal, {
+          user: ownerUser,
+          initialParcelId: 'GLAND-NOPACK01',
+          onClose: () => {}
+        })
+      );
+
+      // 1) Packless browser land shows Auto (Open Nature), No ORB Pack — Scan on Mobile, and non-blocking note
+      await RTL.waitFor(() => {
+        assert.ok(view.getByTestId('orb-calibration-mode-badge'));
+      });
+      assert.equal(view.getByTestId('orb-calibration-mode-badge').textContent, 'Auto (Open Nature)');
+      assert.match(view.getByTestId('orb-pack-status-badge').textContent || '', /No ORB Pack/i);
+      assert.ok(view.getByTestId('orb-nopack-cta'));
+
+      // Saving in Auto mode MUST send useAuto:true and MUST NOT leak manual thresholds
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('land-mgmt-save-settings-btn'));
+      });
+      await RTL.waitFor(() => assert.equal(securityPayloads.length, 1));
+      assert.equal(securityPayloads[0].body.useAuto, true);
+      assert.equal(securityPayloads[0].body.overrideFlag, false);
+      assert.equal(securityPayloads[0].body.minOrbInliers, undefined);
+      assert.equal(securityPayloads[0].body.maxReprojErrPx, undefined);
+
+      // 2) Editing maxReprojErrPx flips badge immediately to Custom Override and sends custom thresholds on save
+      const maxErrInput = view.getByLabelText('Max ORB reprojection error px');
+      const minInliersInput = view.getByLabelText('Minimum ORB inliers');
+      RTL.fireEvent.change(minInliersInput, { target: { value: '12' } });
+      RTL.fireEvent.change(maxErrInput, { target: { value: '4.5' } });
+      assert.equal(view.getByTestId('orb-calibration-mode-badge').textContent, 'Custom Override');
+
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('land-mgmt-save-settings-btn'));
+      });
+      await RTL.waitFor(() => assert.equal(securityPayloads.length, 2));
+      assert.equal(securityPayloads[1].body.useAuto, false);
+      assert.equal(securityPayloads[1].body.overrideFlag, true);
+      assert.equal(securityPayloads[1].body.minOrbInliers, 12);
+      assert.equal(securityPayloads[1].body.maxReprojErrPx, 4.5);
+
+      // 3) Switching to calibrated Urban parcel shows Auto (Dense Urban) + Day + Night slots & hides no-pack CTA
+      RTL.fireEvent.click(view.getByRole('tab', { name: /Urban Brick Wall/i }));
+      await RTL.waitFor(() => {
+        assert.equal(view.getByTestId('orb-calibration-mode-badge').textContent, 'Auto (Dense Urban)');
+      });
+      assert.match(view.getByTestId('orb-pack-status-badge').textContent || '', /44 pts · Day \+ Night/);
+      assert.equal(view.queryByTestId('orb-nopack-cta'), null);
+      cleanup();
+    } finally {
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });
