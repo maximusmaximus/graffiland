@@ -50,7 +50,9 @@ export function useProofOfLocation({
   onCameraRefreshed = null,
   onNetworkReconnect = null,
   mappingPausedRef = null,
-  cameraSuspendedRef = null
+  cameraSuspendedRef = null,
+  backgroundCalibrationActiveRef = null,
+  walkingApproachRef = null
 }) {
   const videoRef = useRef(null);
   const polRef = useRef(new ProofOfLocationTracker());
@@ -76,6 +78,8 @@ export function useProofOfLocation({
   const onNetworkReconnectRef = useRef(onNetworkReconnect);
   const mappingPausedBridgeRef = useRef(mappingPausedRef);
   const cameraSuspendedBridgeRef = useRef(cameraSuspendedRef);
+  const backgroundCalBridgeRef = useRef(backgroundCalibrationActiveRef);
+  const walkingApproachBridgeRef = useRef(walkingApproachRef);
 
   const cameraOpIdRef = useRef(0);
   const unmountedRef = useRef(false);
@@ -111,7 +115,17 @@ export function useProofOfLocation({
     onNetworkReconnectRef.current = onNetworkReconnect;
     mappingPausedBridgeRef.current = mappingPausedRef;
     cameraSuspendedBridgeRef.current = cameraSuspendedRef;
-  }, [onLocationUpdate, onCameraRefreshed, onNetworkReconnect, mappingPausedRef, cameraSuspendedRef]);
+    backgroundCalBridgeRef.current = backgroundCalibrationActiveRef;
+    walkingApproachBridgeRef.current = walkingApproachRef;
+  }, [
+    onLocationUpdate,
+    onCameraRefreshed,
+    onNetworkReconnect,
+    mappingPausedRef,
+    cameraSuspendedRef,
+    backgroundCalibrationActiveRef,
+    walkingApproachRef
+  ]);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraRecovering, setCameraRecovering] = useState(false);
@@ -870,10 +884,43 @@ export function useProofOfLocation({
         setCalibrationElapsedTick((n) => (n + 1) % 10000);
       }
 
+      const bgCalEnabled = Boolean(backgroundCalBridgeRef.current?.current);
+      const walkInfo = walkingApproachBridgeRef.current?.current || null;
+      const isWalkingNow = Boolean(walkInfo?.isWalking);
+      const isWalkingTowardLand = Boolean(
+        walkInfo?.isWalking && walkInfo?.primaryApproachingParcelId
+      );
+      const hasUnsavedDraft = Boolean(walkInfo?.hasUnsavedDraft);
+      const allowSilentWalkRefresh = Boolean(
+        bgCalEnabled &&
+          (isWalkingTowardLand ||
+            (isWalkingNow && !hasUnsavedDraft) ||
+            (mappingPausedBridgeRef.current?.current && !hasUnsavedDraft))
+      );
+
+      // If a prior relocation prompt exists while user is actively walking toward a land
+      // with the camera open and no locked unsaved draft, seamlessly resume background calibration.
+      if (
+        mappingRestartPromptRef.current?.code === 'relocated' &&
+        allowSilentWalkRefresh &&
+        isWalkingNow
+      ) {
+        mappingRestartPromptRef.current = null;
+        setMappingRestartPrompt(null);
+        setCalibrationLoss(null);
+        calibrationHealthRef.current = createCalibrationHealthState();
+        calibratedAnchorLocRef.current = locationRef.current ? { ...locationRef.current } : null;
+        calibrationStateRef.current = 'calibrating';
+        setCalibrationState('calibrating');
+        setCalibrationStartedAt(Date.now());
+        orbKeyframesRef.current.clear();
+        setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0 }));
+      }
+
       // Continuous lightweight health & silent ORB relocalization monitor while calibrated/relocalizing
       if (
         (curCalState === 'calibrated' || curCalState === 'relocalizing') &&
-        !mappingPausedBridgeRef.current?.current &&
+        (!mappingPausedBridgeRef.current?.current || bgCalEnabled) &&
         !mappingRestartPromptRef.current
       ) {
         if (nowMs - lastHealthCheckAt >= 900) {
@@ -905,10 +952,22 @@ export function useProofOfLocation({
             currentLocation: locationRef.current,
             currentLocationTs: lastLocationTsRef.current,
             hasSessionOrbKeyframes: hasSessionOrb,
-            orbRelockMatched: false
+            orbRelockMatched: false,
+            backgroundWalkCalibration: allowSilentWalkRefresh
           });
 
-          if (healthResult.status === 'relocalizing') {
+          if (healthResult.backgroundWalkRefresh) {
+            if (locationRef.current) {
+              calibratedAnchorLocRef.current = { ...locationRef.current };
+            }
+            // Refresh session ORB visual keyframes silently in the background as user walks up to the land
+            orbKeyframesRef.current.clear();
+            setOrbStatus((prev) => ({ ...prev, keyframes: 0, features: 0 }));
+            if (calibrationStateRef.current !== 'calibrated') {
+              calibrationStateRef.current = 'calibrated';
+              setCalibrationState('calibrated');
+            }
+          } else if (healthResult.status === 'relocalizing') {
             if (calibrationStateRef.current !== 'relocalizing') {
               calibrationStateRef.current = 'relocalizing';
               setCalibrationState('relocalizing');
@@ -972,10 +1031,21 @@ export function useProofOfLocation({
         if (!checkPendingReturn) return;
       }
 
-      if (mappingPausedBridgeRef.current?.current && !checkPendingReturn) return;
+      const uiMappingPaused = Boolean(mappingPausedBridgeRef.current?.current);
+      if (uiMappingPaused && !bgCalEnabled && !checkPendingReturn) return;
       if (mappingRestartPromptRef.current) return;
       const isAlreadyOptimal = polRef.current.getSceneCoverage().optimal;
-      if (isAlreadyOptimal && curCalState === 'calibrated' && !checkPendingReturn) return;
+      const needsBgOrbRefresh = Boolean(
+        bgCalEnabled && (isWalkingNow || orbKeyframesRef.current.size < 3)
+      );
+      if (
+        isAlreadyOptimal &&
+        curCalState === 'calibrated' &&
+        !needsBgOrbRefresh &&
+        !checkPendingReturn
+      ) {
+        return;
+      }
       if (
         videoRef.current &&
         videoRef.current.readyState >= 2 &&
@@ -1028,9 +1098,11 @@ export function useProofOfLocation({
             flow: Math.round(snap.opticalFlowCorrelation * 100)
           });
           const cov = polRef.current.getSceneCoverage();
-          if (cov.optimal) {
-            lastUnmappedMaskRef.current = '0'.repeat(48);
-            setUnmappedGrid(Array(48).fill(false));
+          if (cov.optimal || uiMappingPaused) {
+            if (cov.optimal) {
+              lastUnmappedMaskRef.current = '0'.repeat(48);
+              setUnmappedGrid(Array(48).fill(false));
+            }
           } else {
             const vpGrid = polRef.current.getViewportUnmappedGrid(8, 6);
             const vpKey = vpGrid.map((b) => (b ? '1' : '0')).join('');
@@ -1296,7 +1368,13 @@ export function useProofOfLocation({
         }
 
         const now = Date.now();
-        if (now - lastFetchAt > 12000) {
+        const walkingRefreshCooldown =
+          (Number(pos.coords.speed) || 0) >= 0.3 ||
+          (Number(kalmanLoc?.speed) || 0) >= 0.3 ||
+          Boolean(walkingApproachBridgeRef.current?.current?.isWalking)
+            ? 4500
+            : 12000;
+        if (now - lastFetchAt > walkingRefreshCooldown) {
           lastFetchAt = now;
           try {
             await onLocationUpdateRef.current?.(loc, refined);

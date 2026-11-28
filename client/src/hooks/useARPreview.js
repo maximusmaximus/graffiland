@@ -72,7 +72,8 @@ export function useARPreview({
   fadeOtherItems = false,
   isolatePublishArt = false,
   atmosphericTintRef = null,
-  orientationFusionRef = null
+  orientationFusionRef = null,
+  walkingApproachRef = null
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arSculptureEntriesRef = useRef(new Map());
@@ -219,6 +220,9 @@ export function useARPreview({
 
   // Strict < 300 ft (91.44 m) visibility cutoff: never render lands >= 300 ft away in AR camera view
   const renderedCameraLands = cameraLands.visibleLands;
+  const renderedCameraLandsRef = useRef(renderedCameraLands);
+  renderedCameraLandsRef.current = renderedCameraLands;
+  const hasVisibleNearbyLand = renderedCameraLands.length > 0;
 
   const activeArLand = useMemo(() => {
     if (!arSelectedLandId) return null;
@@ -1052,11 +1056,18 @@ export function useARPreview({
     atmosphericTintRef
   ]);
 
-  // Live off-thread ORB visual landmark relocalization loop (runs inside orbWorker.js
-  // during preview AND land visits to lock visual yaw within ~1-2° without UI frame lag).
+  // Live off-thread ORB visual landmark relocalization & background calibration loop
+  // (runs inside orbWorker.js across ALL camera-open modes — draw, transform, preview,
+  // and land visits — whenever approaching or near any land within 300 ft).
   useEffect(() => {
+    const isCameraOpenMode =
+      mode === 'draw' || mode === 'transform' || mode === 'preview' || isArViewOnly;
     const shouldRelocalize = Boolean(
-      (mode === 'preview' || isArViewOnly || arSelectedLandId || focusedLandId) &&
+      (mode === 'preview' ||
+        isArViewOnly ||
+        arSelectedLandId ||
+        focusedLandId ||
+        (isCameraOpenMode && hasVisibleNearbyLand)) &&
         location &&
         cameraReady
     );
@@ -1070,10 +1081,16 @@ export function useARPreview({
       if (cancelled || busy || !videoRef.current || videoRef.current.readyState < 2) return;
       const loc = locationRef.current;
       if (!loc) return;
+      const approachedPid = String(
+        walkingApproachRef?.current?.primaryApproachingParcelId || ''
+      ).trim();
+      const nearestCameraLandPid = renderedCameraLandsRef.current?.[0]?.parcelId || '';
       const activeParcelId =
+        approachedPid ||
         arSelectedLandId ||
         focusedLandId ||
         arTargetedSculpture?.sculpture?.parcelId ||
+        nearestCameraLandPid ||
         nearbySculptures.find((sc) => haversineMeters(loc.lat, loc.lng, sc.lat, sc.lng) <= 65)?.parcelId ||
         '';
       if (!activeParcelId) return;
@@ -1265,6 +1282,7 @@ export function useARPreview({
     arTargetedSculpture?.sculpture,
     cameraReady,
     focusedLandId,
+    hasVisibleNearbyLand,
     isArViewOnly,
     latestOrbProofRef,
     location,
@@ -1278,7 +1296,8 @@ export function useARPreview({
     orientationFusionRef,
     setOrbStatus,
     user?.id,
-    videoRef
+    videoRef,
+    walkingApproachRef
   ]);
 
   const handleRefreshOrbRescan = useCallback(async () => {

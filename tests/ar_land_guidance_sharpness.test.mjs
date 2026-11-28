@@ -419,7 +419,15 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(viewportSrc, /dirLight\.castShadow = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
     assert.match(
       viewportSrc,
-      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*!isMappingPaused &&\s*(?:!isSceneLocked|needsMoreCalibration) &&\s*now - lastScanPosePush > 110\s*\)/
+      /const isUiMappingActive = !arViewOnly && !isTransform && !isMappingPaused;/
+    );
+    assert.match(
+      viewportSrc,
+      /else if \(isUiMappingActive && !cov\.optimal\)/
+    );
+    assert.match(
+      viewportSrc,
+      /if \(\s*\(isUiMappingActive \|\| allowBackgroundCalibration\) &&\s*needsMoreCalibration &&\s*now - lastScanPosePush > 110\s*\)/
     );
     assert.match(
       viewportSrc,
@@ -475,7 +483,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(studioSrc, /\{!isArViewOnly && !isTransformMode && \(\s*<SceneCoverageWidget/);
     assert.match(studioSrc, /occlusionEnabled=\{brush\.occlusionEnabled\}/);
 
-    // 4) useProofOfLocation stops sampling camera frames once 100% locked (except single post-return verification frame)
+    // 4) useProofOfLocation stops redundant camera sampling once 100% locked & stationary (still allows post-return check or silent walking background calibration)
     const polSrc = fs.readFileSync(
       path.resolve(process.cwd(), 'client/src/hooks/useProofOfLocation.js'),
       'utf8'
@@ -483,7 +491,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     assert.match(polSrc, /const isAlreadyOptimal = polRef\.current\.getSceneCoverage\(\)\.optimal;/);
     assert.match(
       polSrc,
-      /if \(isAlreadyOptimal && curCalState === 'calibrated' && !checkPendingReturn\) return;/
+      /if \(\s*isAlreadyOptimal &&\s*curCalState === 'calibrated' &&\s*!needsBgOrbRefresh &&\s*!checkPendingReturn\s*\)\s*\{\s*return;\s*\}/
     );
 
     // 5) useVoxelBrush defaults foreground occlusion OFF (opt-in) so camera background stays flicker-free

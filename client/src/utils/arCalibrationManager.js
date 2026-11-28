@@ -307,7 +307,8 @@ export function stepCalibrationHealthMonitor(
     currentLocation = null,
     currentLocationTs = 0,
     hasSessionOrbKeyframes = false,
-    orbRelockMatched = false
+    orbRelockMatched = false,
+    backgroundWalkCalibration = false
   } = {}
 ) {
   const st = healthState || createCalibrationHealthState();
@@ -425,6 +426,21 @@ export function stepCalibrationHealthMonitor(
     }
 
     if (st.relocatedStreak >= CALIBRATION_RELOCATE_CONFIRMED_FIXES) {
+      // While actively walking toward a land with the camera open (and no locked unsaved draft),
+      // seamlessly re-anchor & refresh calibration behind the scenes instead of interrupting with a blocking modal.
+      if (backgroundWalkCalibration) {
+        st.relocatedStreak = 0;
+        st.relocalizingSinceMs = 0;
+        st.relocalizingReason = '';
+        st.relocalizingMeta = null;
+        return {
+          status: 'calibrated',
+          silentRelocked: false,
+          backgroundWalkRefresh: true,
+          distanceMeters: distM,
+          loss: null
+        };
+      }
       if (hasSessionOrbKeyframes && !st.relocalizingSinceMs) {
         st.relocalizingSinceMs = nowMs;
         st.relocalizingReason = 'relocated';
@@ -449,6 +465,16 @@ export function stepCalibrationHealthMonitor(
       st.relocalizingSinceMs = 0;
       st.relocalizingReason = '';
       st.relocalizingMeta = null;
+      if (backgroundWalkCalibration && code === 'relocated') {
+        st.relocatedStreak = 0;
+        return {
+          status: 'calibrated',
+          silentRelocked: false,
+          backgroundWalkRefresh: true,
+          distanceMeters: finiteNum(meta.distanceMeters) ?? 0,
+          loss: null
+        };
+      }
       return {
         status: 'lost',
         silentRelocked: false,
