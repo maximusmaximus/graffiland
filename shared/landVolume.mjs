@@ -16,6 +16,134 @@ function metersPerDegLngAtLat(lat) {
 }
 
 /**
+ * Normalizes a persisted sculpture yaw (degrees from UI/API or radians from legacy records)
+ * into radians — matching `yawToRadians` in `sculpturePlacement.mjs`.
+ */
+function normalizeVolumeYawToRadians(yaw) {
+  const val = Number(yaw || 0);
+  if (!Number.isFinite(val) || val === 0) return 0;
+  if (Math.abs(val) > Math.PI * 2 + 0.01) {
+    return (val * Math.PI) / 180;
+  }
+  if (Number.isInteger(val) && Math.abs(val) >= 5) {
+    return (val * Math.PI) / 180;
+  }
+  return val;
+}
+
+function parseVolumeMeshStats(raw) {
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Reads uniform scale, 3-axis rotation, and parcel-local offset from either a hydrated API
+ * sculpture object or a raw SQL row (`anchor_dx`, `mesh_stats_json`, `custom_model_scale`).
+ */
+function extractVolumeSculptureTransform(sc) {
+  const parsedStats = parseVolumeMeshStats(sc?.meshStats || sc?.mesh_stats_json);
+  const scaleCandidates = [
+    sc?.scale,
+    sc?.anchorOffset?.scale,
+    parsedStats?.transformScale,
+    sc?.customModel?.scale,
+    sc?.custom_model_scale
+  ];
+  let scale = 1;
+  for (const raw of scaleCandidates) {
+    if (raw === undefined || raw === null || raw === '') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      scale = Math.max(0.001, Math.min(60, n));
+      break;
+    }
+  }
+  const dx = Number(sc?.anchorOffset?.dx ?? sc?.anchor_dx ?? 0);
+  const dy = Math.max(0, Number(sc?.anchorOffset?.dy ?? sc?.anchor_dy ?? 0));
+  const dz = Number(sc?.anchorOffset?.dz ?? sc?.anchor_dz ?? 0);
+  const yaw = Number(sc?.anchorOffset?.yaw ?? sc?.anchor_yaw ?? 0);
+  const rawPitch =
+    sc?.anchorOffset?.pitch !== undefined && sc?.anchorOffset?.pitch !== null
+      ? sc.anchorOffset.pitch
+      : parsedStats?.transformPitch ?? 0;
+  const rawRoll =
+    sc?.anchorOffset?.roll !== undefined && sc?.anchorOffset?.roll !== null
+      ? sc.anchorOffset.roll
+      : parsedStats?.transformRoll ?? 0;
+  return {
+    scale,
+    dx: Number.isFinite(dx) ? dx : 0,
+    dy: Number.isFinite(dy) ? dy : 0,
+    dz: Number.isFinite(dz) ? dz : 0,
+    yaw: Number.isFinite(yaw) ? yaw : 0,
+    pitchDeg: Number.isFinite(Number(rawPitch)) ? Number(rawPitch) : 0,
+    rollDeg: Number.isFinite(Number(rawRoll)) ? Number(rawRoll) : 0
+  };
+}
+
+/**
+ * Computes axis-aligned extents `{ effW, effH, effD }` for a sculpture rotated in parcel-local
+ * space by Euler `(pitchDeg, yaw, rollDeg)` in YXZ order — matching `computeRotatedBoxDimensions`.
+ */
+function computeVolumeRotatedExtents({
+  width,
+  height,
+  depth,
+  yaw = 0,
+  pitchDeg = 0,
+  rollDeg = 0,
+  scale = 1
+}) {
+  const s = Math.max(0.001, Number(scale || 1));
+  const bw = Math.max(0.05, Number(width || 1)) * s;
+  const bh = Math.max(0.05, Number(height || 1)) * s;
+  const bd = Math.max(0.05, Number(depth || 1)) * s;
+
+  const yawRad = normalizeVolumeYawToRadians(yaw);
+  const pitchRad = (Number(pitchDeg || 0) * Math.PI) / 180;
+  const rollRad = (Number(rollDeg || 0) * Math.PI) / 180;
+
+  if (pitchRad === 0 && rollRad === 0) {
+    const absC = Math.abs(Math.cos(yawRad));
+    const absS = Math.abs(Math.sin(yawRad));
+    return {
+      effW: bw * absC + bd * absS,
+      effH: bh,
+      effD: bw * absS + bd * absC
+    };
+  }
+
+  const cy = Math.cos(yawRad);
+  const sy = Math.sin(yawRad);
+  const cx = Math.cos(pitchRad);
+  const sx = Math.sin(pitchRad);
+  const cz = Math.cos(rollRad);
+  const sz = Math.sin(rollRad);
+
+  const m00 = cy * cz + sy * sx * sz;
+  const m01 = -cy * sz + sy * sx * cz;
+  const m02 = sy * cx;
+  const m10 = cx * sz;
+  const m11 = cx * cz;
+  const m12 = -sx;
+  const m20 = -sy * cz + cy * sx * sz;
+  const m21 = sy * sz + cy * sx * cz;
+  const m22 = cy * cx;
+
+  return {
+    effW: Math.abs(m00) * bw + Math.abs(m01) * bh + Math.abs(m02) * bd,
+    effH: Math.abs(m10) * bw + Math.abs(m11) * bh + Math.abs(m12) * bd,
+    effD: Math.abs(m20) * bw + Math.abs(m21) * bh + Math.abs(m22) * bd
+  };
+}
+
+/**
  * Computes the 4 rotated corner coordinates [[lng, lat], ...] and closed GeoJSON ring
  * around (lat, lng) for a widthMeters x depthMeters rectangle rotated clockwise by rotationDeg.
  */
@@ -459,9 +587,10 @@ export function buildObjectFittedLandVolume({
   const roundedW = Number(widthMeters.toFixed(2));
   const roundedD = Number(depthMeters.toFixed(2));
   const roundedH = Number(heightMeters.toFixed(2));
-  // anchorOffset.yaw is Three.js right-handed Y rotation in radians; map rotationDeg is clockwise bearing in degrees
+  // Normalize anchorOffset.yaw (degrees from UI/API or legacy radians) before converting to map clockwise bearing
+  const yawRad = normalizeVolumeYawToRadians(yaw);
   const rotationDeg =
-    Number.isFinite(yaw) && yaw !== 0 ? normalizeRotationDeg((-yaw * 180) / Math.PI) : 0;
+    Number.isFinite(yawRad) && yawRad !== 0 ? normalizeRotationDeg((-yawRad * 180) / Math.PI) : 0;
 
   const resolvedGeohash =
     typeof geohash === 'string' && /^[0-9a-z]{5,10}$/i.test(geohash.trim())
@@ -540,19 +669,15 @@ export function buildMultiObjectFittedLandVolume({
         voxels = [];
       }
     }
-    const anchorOffset = sc.anchorOffset || {
-      dx: Number(sc.anchor_dx || 0),
-      dy: Number(sc.anchor_dy || 0),
-      dz: Number(sc.anchor_dz || 0),
-      yaw: Number(sc.anchor_yaw || 0)
-    };
+    const xf = extractVolumeSculptureTransform(sc);
     return buildObjectFittedLandVolume({
       parcelId,
       geohash,
       lat: Number(sc.lat),
       lng: Number(sc.lng),
       voxels: Array.isArray(voxels) ? voxels : [],
-      anchorOffset,
+      anchorOffset: { dx: xf.dx, dy: xf.dy, dz: xf.dz, yaw: xf.yaw },
+      scale: xf.scale,
       paddingFraction,
       minDimensionMeters
     });
@@ -583,23 +708,22 @@ export function buildMultiObjectFittedLandVolume({
       }
     }
     const vb = computeObjectVoxelBoundsMeters(Array.isArray(voxels) ? voxels : []);
-    const scScale =
-      Number.isFinite(Number(sc.scale)) && Number(sc.scale) > 0 ? Number(sc.scale) : 1;
-    const rawObjW = (vb ? vb.widthMeters : 1.0) * scScale;
-    const rawObjD = (vb ? vb.depthMeters : 1.0) * scScale;
-    const objH = (vb ? vb.heightMeters : 1.0) * scScale;
-    if (objH > maxRawH) maxRawH = objH;
+    const xf = extractVolumeSculptureTransform(sc);
+    const rotExtents = computeVolumeRotatedExtents({
+      width: vb ? vb.widthMeters : 1.0,
+      height: vb ? vb.heightMeters : 1.0,
+      depth: vb ? vb.depthMeters : 1.0,
+      yaw: xf.yaw,
+      pitchDeg: xf.pitchDeg,
+      rollDeg: xf.rollDeg,
+      scale: xf.scale
+    });
+    if (xf.dy + rotExtents.effH > maxRawH) maxRawH = xf.dy + rotExtents.effH;
 
-    const dx = Number(sc.anchorOffset?.dx ?? sc.anchor_dx ?? 0);
-    const dz = Number(sc.anchorOffset?.dz ?? sc.anchor_dz ?? 0);
-    const yaw = Number(sc.anchorOffset?.yaw ?? sc.anchor_yaw ?? 0);
-    const cosY = Number.isFinite(yaw) ? Math.cos(yaw) : 1;
-    const sinY = Number.isFinite(yaw) ? Math.sin(yaw) : 0;
-
-    const effHalfW = (Math.abs(cosY) * rawObjW + Math.abs(sinY) * rawObjD) / 2;
-    const effHalfD = (Math.abs(sinY) * rawObjW + Math.abs(cosY) * rawObjD) / 2;
-    const e = (Number(sc.lng) - refLng) * mPerDegLng + dx;
-    const n = (Number(sc.lat) - refLat) * METERS_PER_DEG_LAT - dz;
+    const effHalfW = rotExtents.effW / 2;
+    const effHalfD = rotExtents.effD / 2;
+    const e = (Number(sc.lng) - refLng) * mPerDegLng + xf.dx;
+    const n = (Number(sc.lat) - refLat) * METERS_PER_DEG_LAT - xf.dz;
     if (e - effHalfW < minE) minE = e - effHalfW;
     if (e + effHalfW > maxE) maxE = e + effHalfW;
     if (n - effHalfD < minN) minN = n - effHalfD;
@@ -719,7 +843,6 @@ export function ensureLandVolumeFitsSculptures(
   let maxV = -Infinity;
   let maxSculptureH = 0;
   let checkedCount = 0;
-  let singleVoxelSculpture = null;
 
   for (const sc of sculptures) {
     if (!sc || sc.hidden) continue;
@@ -740,78 +863,55 @@ export function ensureLandVolumeFitsSculptures(
     const vb = computeObjectVoxelBoundsMeters(voxels);
     if (!vb) continue;
 
-    const scScale =
-      Number.isFinite(Number(sc.scale)) && Number(sc.scale) > 0 ? Number(sc.scale) : 1;
-    const dx = Number(sc.anchorOffset?.dx ?? sc.anchor_dx ?? 0);
-    const dy = Number(sc.anchorOffset?.dy ?? sc.anchor_dy ?? 0);
-    const dz = Number(sc.anchorOffset?.dz ?? sc.anchor_dz ?? 0);
-    const yaw = Number(sc.anchorOffset?.yaw ?? sc.anchor_yaw ?? 0);
-    const cosY = Number.isFinite(yaw) ? Math.cos(yaw) : 1;
-    const sinY = Number.isFinite(yaw) ? Math.sin(yaw) : 0;
-
-    const effHalfW = (Math.abs(cosY) * vb.widthMeters + Math.abs(sinY) * vb.depthMeters) * scScale * 0.5;
-    const effHalfD = (Math.abs(sinY) * vb.widthMeters + Math.abs(cosY) * vb.depthMeters) * scScale * 0.5;
-    const objTopH = Math.max(0, dy) + vb.heightMeters * scScale;
+    // Resolve true saved scale (including mesh_stats_json.transformScale), degree/radian yaw, and pitch/roll
+    const xf = extractVolumeSculptureTransform(sc);
+    const rotExtents = computeVolumeRotatedExtents({
+      width: vb.widthMeters,
+      height: vb.heightMeters,
+      depth: vb.depthMeters,
+      yaw: xf.yaw,
+      pitchDeg: xf.pitchDeg,
+      rollDeg: xf.rollDeg,
+      scale: xf.scale
+    });
+    const effHalfW = rotExtents.effW * 0.5;
+    const effHalfD = rotExtents.effD * 0.5;
+    const objTopH = xf.dy + rotExtents.effH;
     if (objTopH > maxSculptureH) maxSculptureH = objTopH;
 
-    const east = (sLng - cLng) * mPerDegLng + dx;
-    const north = (sLat - cLat) * METERS_PER_DEG_LAT - dz;
+    // Project base (sLat, sLng) into the parcel's rotated (u=localEast, v=localNorth) frame FIRST,
+    // then apply parcel-local (dx, -dz) identically to sculpturePlacement.mjs & map3dSculptureLayer.js.
+    const baseEast = (sLng - cLng) * mPerDegLng;
+    const baseNorth = (sLat - cLat) * METERS_PER_DEG_LAT;
+    const baseU = baseEast * cosR - baseNorth * sinR;
+    const baseV = baseEast * sinR + baseNorth * cosR;
+    const uCenter = baseU + xf.dx;
+    const vCenter = baseV - xf.dz;
 
-    // Check all 4 footprint corners of this sculpture in the volume's rotated frame
-    const cornerOffsets = [
-      [-effHalfW, -effHalfD],
-      [effHalfW, -effHalfD],
-      [effHalfW, effHalfD],
-      [-effHalfW, effHalfD]
-    ];
-    for (const [oe, on] of cornerOffsets) {
-      const pe = east + oe;
-      const pn = north + on;
-      // Inverse of computeOrientedFootprintLngLat rotation:
-      // east = u*cosR + v*sinR, north = -u*sinR + v*cosR
-      const u = pe * cosR - pn * sinR;
-      const v = pe * sinR + pn * cosR;
-      if (u < minU) minU = u;
-      if (u > maxU) maxU = u;
-      if (v < minV) minV = v;
-      if (v > maxV) maxV = v;
-      if (Math.abs(u) > volW / 2 + 0.08 || Math.abs(v) > volD / 2 + 0.08) {
-        anyOutside = true;
-      }
+    const scMinU = uCenter - effHalfW;
+    const scMaxU = uCenter + effHalfW;
+    const scMinV = vCenter - effHalfD;
+    const scMaxV = vCenter + effHalfD;
+
+    if (scMinU < minU) minU = scMinU;
+    if (scMaxU > maxU) maxU = scMaxU;
+    if (scMinV < minV) minV = scMinV;
+    if (scMaxV > maxV) maxV = scMaxV;
+    if (
+      Math.abs(scMinU) > volW / 2 + 0.08 ||
+      Math.abs(scMaxU) > volW / 2 + 0.08 ||
+      Math.abs(scMinV) > volD / 2 + 0.08 ||
+      Math.abs(scMaxV) > volD / 2 + 0.08
+    ) {
+      anyOutside = true;
     }
     checkedCount += 1;
-    singleVoxelSculpture = { sc, voxels, vb, scScale, dx, dy, dz, yaw };
   }
 
   if (checkedCount === 0 || !anyOutside) return volume;
 
-  // If this parcel has a single voxel sculpture whose legacy object-fitted volume had
-  // matching dimensions but un-shifted centerLat/centerLng, re-center cleanly around it!
-  if (checkedCount === 1 && singleVoxelSculpture) {
-    const { sc, voxels, vb, scScale, dx, dy, dz, yaw } = singleVoxelSculpture;
-    const padMult = 1 + 2 * Math.max(0, Math.min(1, Number(paddingFraction || 0.1)));
-    const expectedW = Math.max(0.6, vb.widthMeters * scScale * padMult);
-    const expectedD = Math.max(0.6, vb.depthMeters * scScale * padMult);
-    const looksLikeLegacyObjectFit =
-      Math.abs(volW - expectedW) <= Math.max(0.6, expectedW * 0.25) &&
-      Math.abs(volD - expectedD) <= Math.max(0.6, expectedD * 0.25);
-    if (looksLikeLegacyObjectFit) {
-      return (
-        buildObjectFittedLandVolume({
-          parcelId: volume.parcelId || sc.parcelId || sc.parcel_id || '',
-          geohash: volume.geohash || sc.geohash || '',
-          lat: Number(sc.lat),
-          lng: Number(sc.lng),
-          voxels,
-          anchorOffset: { dx, dy, dz, yaw },
-          scale: scScale,
-          paddingFraction
-        }) || volume
-      );
-    }
-  }
-
-  // Otherwise expand the parcel footprint just enough to enclose both the original parcel and its sculptures
+  // Expand the parcel footprint in its own rotated frame (strictly preserving volume.rotationDeg so
+  // parcel-local offsets & map3dSculptureLayer transforms remain 100% consistent with saved data).
   const padFrac = Math.max(0, Math.min(1, Number(paddingFraction || 0.1)));
   const spanU = Math.max(0.5, maxU - minU);
   const spanV = Math.max(0.5, maxV - minV);
