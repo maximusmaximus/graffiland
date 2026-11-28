@@ -452,4 +452,69 @@ describe('Mobile 3D Search Stability, Camera Hide on Search, and First-Time Came
     assert.equal(loadBoolPreference(CAMERA_FIRST_TOOLS_SEEN_KEY, false), true);
     cleanup();
   });
+
+  test('4. Search to Add modals fill full viewport height (100dvh) cleanly on mobile view', async () => {
+    const { default: MobileCatalogSearchModal } = await loadJsxModule(
+      'client/src/components/studio/MobileCatalogSearchModal.jsx'
+    );
+    const { default: AddLandItemModal } = await loadJsxModule(
+      'client/src/components/AddLandItemModal.jsx'
+    );
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/api/catalog/search')) {
+        return { ok: true, json: async () => ({ items: [], totalMatches: 0 }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    try {
+      const mobileView = RTL.render(
+        React.createElement(MobileCatalogSearchModal, {
+          onPlaceItem: () => {},
+          onClose: () => {}
+        })
+      );
+      const modal = mobileView.getByTestId('mobile-catalog-search-modal');
+      const card = mobileView.getByTestId('mobile-catalog-search-card');
+      assert.equal(modal.getAttribute('data-full-viewport'), 'true');
+      assert.ok(modal.classList.contains('is-fullscreen-sheet'));
+      assert.ok(card.classList.contains('is-full-viewport-height'));
+      cleanup();
+
+      const addItemView = RTL.render(
+        React.createElement(AddLandItemModal, {
+          parcel: { parcelId: 'GLAND-9Q8YYK9P', customName: 'Test Plaza' },
+          user: { id: 'u1', username: 'creator' },
+          onClose: () => {}
+        })
+      );
+      const addBackdrop = addItemView.getByTestId('add-item-modal-backdrop');
+      assert.equal(addBackdrop.getAttribute('data-mobile-full-viewport'), 'true');
+      assert.ok(addBackdrop.classList.contains('add-item-modal-backdrop'));
+      assert.ok(addItemView.getByTestId('add-item-modal-card'));
+      cleanup();
+
+      const css = fs.readFileSync(path.join(ROOT, 'client/src/styles.css'), 'utf8');
+      assert.match(
+        css,
+        /\.modal-backdrop\.mobile-catalog-search-backdrop\.is-fullscreen-sheet[\s\S]*height:\s*100dvh;/,
+        'MobileCatalogSearchModal backdrop must be full 100dvh viewport height'
+      );
+      assert.match(
+        css,
+        /\.mobile-catalog-search-body\s+\.catalog-search-box\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*min-height:\s*100%;/,
+        'Search to Add catalog box inside mobile sheet must stretch to full remaining viewport height'
+      );
+      assert.match(
+        css,
+        /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*\.modal-backdrop\.add-item-modal-backdrop\s+\.add-item-modal-card\s*\{[\s\S]*height:\s*100dvh;/,
+        'AddLandItemModal must fill full 100dvh viewport height on mobile screens'
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });

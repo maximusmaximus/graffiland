@@ -15666,6 +15666,11 @@ html.mobile-portrait-locked .mobile-map-sheet {
 .modal-backdrop.mobile-agent-prompt-backdrop.is-fullscreen-sheet {
   position: fixed;
   inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
   padding: 0;
   align-items: stretch;
   justify-content: stretch;
@@ -15680,8 +15685,10 @@ html.mobile-portrait-locked .mobile-map-sheet {
 .mobile-agent-prompt-backdrop.is-fullscreen-sheet .mobile-agent-prompt-card {
   max-width: none;
   width: 100%;
-  height: 100%;
-  max-height: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
   border-radius: 0;
   border: none;
   box-shadow: none;
@@ -15842,10 +15849,92 @@ html.mobile-portrait-locked .mobile-map-sheet {
 .mobile-catalog-search-body {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   overflow-y: auto;
   padding: 12px 14px calc(max(18px, env(safe-area-inset-bottom)) + 12px);
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
+}
+
+/* Fill the full mobile viewport height inside Search to Add cleanly */
+.mobile-catalog-search-body .catalog-search-box {
+  flex: 1 1 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+}
+
+.mobile-catalog-search-body .catalog-carousel-shell {
+  flex: 1 1 auto;
+  min-height: 220px;
+  align-items: center;
+}
+
+.mobile-catalog-search-body .catalog-results-grid.catalog-results-carousel.is-touch-swipe {
+  align-items: center;
+  padding: 6px 18px 8px 2px;
+  gap: 12px;
+}
+
+.mobile-catalog-search-body .catalog-results-carousel.is-touch-swipe .catalog-item-card {
+  flex: 0 0 clamp(172px, 54vw, 228px);
+  width: clamp(172px, 54vw, 228px);
+  padding: 8px;
+  gap: 7px;
+}
+
+.mobile-catalog-search-body .catalog-results-carousel.is-touch-swipe .catalog-item-card-name {
+  font-size: 12.5px;
+}
+
+.mobile-catalog-search-body .catalog-search-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.mobile-catalog-search-body .catalog-carousel-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.mobile-catalog-search-body .catalog-selected-footer {
+  flex-shrink: 0;
+}
+
+/* Also make Add 3D Item ("Search to Add" on lands) fill full viewport height on mobile screens */
+@media (max-width: 768px) {
+  .modal-backdrop.add-item-modal-backdrop {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    background: #060a14;
+  }
+
+  .modal-backdrop.add-item-modal-backdrop .add-item-modal-card {
+    max-width: none !important;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    padding: calc(max(12px, env(safe-area-inset-top)) + 4px) 14px
+      calc(max(18px, env(safe-area-inset-bottom)) + 14px);
+  }
 }
 
 html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {

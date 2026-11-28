@@ -649,9 +649,15 @@ export default function AddLandItemModal({
   const landDisplayName = resolveLandDisplayName(parcel, { defaultName: 'Virtual Land' });
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className="modal-backdrop add-item-modal-backdrop"
+      data-testid="add-item-modal-backdrop"
+      data-mobile-full-viewport="true"
+      onClick={onClose}
+    >
       <div
         className="modal-card add-item-modal-card"
+        data-testid="add-item-modal-card"
         style={{ maxWidth: 720 }}
         role="dialog"
         aria-modal="true"
