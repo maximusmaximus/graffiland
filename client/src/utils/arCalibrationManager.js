@@ -79,9 +79,9 @@ export function buildCalibrationLossDetails(code, meta = {}) {
         title: 'Location Changed',
         summary:
           distM !== null
-            ? `Moved ~${Math.round(distM)}m — pan slowly to re-lock this spot.`
-            : 'Moved to a new spot — pan slowly to re-lock.',
-        actionHint: 'Pan phone slowly around your new spot to re-lock AR.'
+            ? `You moved ~${Math.round(distM)}m — look around slowly to line up this new spot.`
+            : 'You moved to a new spot — look around slowly to line things up.',
+        actionHint: 'Move your phone slowly around this spot to recalibrate.'
       };
     case 'camera_lost':
       return {
@@ -89,7 +89,7 @@ export function buildCalibrationLossDetails(code, meta = {}) {
         movedSubstantially: false,
         canStartFresh: false,
         title: 'Camera Paused',
-        summary: 'Camera feed paused — tap Resume Camera to re-lock AR.',
+        summary: 'Your camera paused — tap Resume Camera to jump back in.',
         actionHint: 'Allow camera access or tap Resume Camera.'
       };
     case 'camera_occluded':
@@ -98,17 +98,17 @@ export function buildCalibrationLossDetails(code, meta = {}) {
         movedSubstantially: false,
         canStartFresh: false,
         title: 'Camera View Blocked',
-        summary: 'Uncover camera lens and point at your space to re-lock.',
-        actionHint: 'Point the rear camera toward a lit surface.'
+        summary: 'Uncover the back camera and point it at a lit area.',
+        actionHint: 'Point your back camera toward a lit surface.'
       };
     case 'sensor_stalled':
       return {
         code: 'sensor_stalled',
         movedSubstantially: false,
         canStartFresh: false,
-        title: 'Motion Tracking Paused',
-        summary: 'Motion sensor stalled — pan slowly to re-lock AR.',
-        actionHint: 'Keep phone upright and sweep smoothly left & right.'
+        title: 'Tracking Paused',
+        summary: 'Phone movement paused — look slowly left and right to reconnect.',
+        actionHint: 'Hold your phone upright and move it smoothly left & right.'
       };
     case 'magnetic_interference':
       return {
@@ -116,26 +116,26 @@ export function buildCalibrationLossDetails(code, meta = {}) {
         movedSubstantially: false,
         canStartFresh: false,
         title: 'Compass Interference',
-        summary: 'Magnetic interference detected — wave phone in a figure-8.',
-        actionHint: 'Move slightly away from metal and wave in a figure-8.'
+        summary: 'Nearby metal is affecting your compass — wave your phone in a figure-8.',
+        actionHint: 'Step slightly away from metal and wave your phone in a figure-8.'
       };
     case 'webxr_lost':
       return {
         code: 'webxr_lost',
         movedSubstantially: false,
         canStartFresh: false,
-        title: 'AR Tracking Reset',
-        summary: '6-DoF AR session ended — quick sweep to re-lock.',
-        actionHint: 'Pan slowly across the room to re-lock.'
+        title: 'Tracking Reset',
+        summary: 'Your view reset — do a quick look around to line things back up.',
+        actionHint: 'Look slowly around the area to finish lining up.'
       };
     default:
       return {
         code: String(code || 'manual'),
         movedSubstantially: false,
         canStartFresh: false,
-        title: 'Recalibrating AR Space',
-        summary: 'Pan phone slowly around your space to lock tracking.',
-        actionHint: 'Sweep left, right, and tilt slightly to calibrate.'
+        title: 'Line Up Your Space',
+        summary: 'Move your phone slowly around you to line up your view.',
+        actionHint: 'Look left, right, and slightly up or down.'
       };
   }
 }
@@ -216,33 +216,33 @@ export function evaluateCalibrationReadiness({
   const progressPct = sufficient ? 100 : Math.max(0, Math.min(99, rawPct));
 
   let blockingStep = 'ready';
-  let headline = 'Calibrated · Ready to Spray!';
-  let subHint = 'Spatial lock active — draw freely in 3D AR.';
+  let headline = 'Ready to Spray!';
+  let subHint = 'Your space is lined up — start drawing in 3D!';
 
   if (!cameraReady) {
     blockingStep = 'camera';
-    headline = 'Camera Required';
-    subHint = 'Allow camera access to calibrate your AR space.';
+    headline = 'Camera Needed';
+    subHint = 'Allow camera access so we can line up your surroundings.';
   } else if (lensOccluded) {
     blockingStep = 'occluded';
     headline = 'Camera View Too Dark';
-    subHint = 'Uncover the rear lens and aim at a lit surface.';
+    subHint = 'Uncover the back camera and point it at a lit area.';
   } else if (needsGyroTap) {
     blockingStep = 'motion';
-    headline = 'Enable Motion Sensors';
-    subHint = 'Tap Enable Motion & Compass to lock 3D tracking.';
+    headline = 'Allow Motion Access';
+    subHint = 'Tap the button below so your phone can follow how you aim.';
   } else if (!motionOk) {
     blockingStep = 'motion';
-    headline = 'Connecting Motion Sensors…';
-    subHint = 'Hold phone upright and gently tilt to wake sensors.';
+    headline = 'Waking Up Tracking…';
+    subHint = 'Hold your phone upright and gently tilt it side to side.';
   } else if (!sweepOk) {
     blockingStep = 'sweep';
-    headline = 'Calibrating AR Space';
-    subHint = sweepHint || 'Pan phone slowly left, right, and slightly up/down.';
+    headline = 'Look Around to Set Up';
+    subHint = sweepHint || 'Move your phone slowly left, right, and up/down to reveal the logo.';
   } else if (!orbOk) {
     blockingStep = 'orb';
-    headline = 'Locking Visual Anchors';
-    subHint = 'Pan slowly across a textured area to lock visual features.';
+    headline = 'Almost Ready';
+    subHint = 'Hold steady and aim at something with detail (like a wall, sign, or floor).';
   }
 
   return {

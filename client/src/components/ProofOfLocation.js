@@ -541,23 +541,23 @@ export class ProofOfLocationTracker {
       }
     }
 
-    let hint = 'Move phone around scene';
+    let hint = 'Move your phone slowly to reveal the logo';
     if (optimal) {
-      hint = 'Mapping complete for this space!';
+      hint = 'All set — ready to draw!';
     } else if (!hasCamera) {
-      hint = 'Camera needed for scan';
+      hint = 'Allow camera access to get started';
     } else if (scannedCount <= 2) {
-      hint = 'Move phone around scene';
+      hint = 'Move your phone slowly around you to reveal the logo';
     } else if (upMissing >= 2 && upMissing >= leftMissing && upMissing >= rightMissing) {
-      hint = 'Tilt up & sweep scene';
+      hint = 'Aim slightly up to uncover more';
     } else if (downMissing >= 2 && downMissing > leftMissing && downMissing > rightMissing) {
-      hint = 'Tilt down & sweep scene';
+      hint = 'Aim slightly down to uncover more';
     } else if (leftMissing > rightMissing) {
-      hint = 'Pan left to sharpen lock';
+      hint = 'Turn slightly left to uncover more';
     } else if (rightMissing > leftMissing) {
-      hint = 'Pan right to sharpen lock';
+      hint = 'Turn slightly right to uncover more';
     } else {
-      hint = 'Sweep phone for 100%';
+      hint = 'Almost there — keep looking around';
     }
 
     // Visual-inertial local placement precision estimate tightens as angular sweep fills

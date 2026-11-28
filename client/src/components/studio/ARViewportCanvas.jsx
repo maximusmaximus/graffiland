@@ -491,24 +491,52 @@ function ARViewportCanvasInner({
       }
     };
 
+    const resizeSettleTimers = new Set();
     const handleResize = () => {
       if (!host) return;
-      camera.aspect = Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight);
+      const w = host.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0);
+      const h = host.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0);
+      if (w < 10 || h < 10) return;
+      camera.aspect = w / h;
       syncLiveLensFov();
       camera.updateProjectionMatrix();
-      renderer.setSize(host.clientWidth, host.clientHeight);
+      renderer.setSize(w, h);
       if (occlusionCanvasRef.current) {
-        const occW = Math.min(280, Math.max(96, host.clientWidth));
-        const occH = Math.max(
-          96,
-          Math.round((occW * host.clientHeight) / Math.max(1, host.clientWidth))
-        );
+        const occW = Math.min(280, Math.max(96, w));
+        const occH = Math.max(96, Math.round((occW * h) / Math.max(1, w)));
         occlusionCanvasRef.current.width = occW;
         occlusionCanvasRef.current.height = occH;
       }
     };
+    const handleViewportOrFullscreenTransition = () => {
+      handleResize();
+      const vid = videoRef?.current;
+      if (
+        vid &&
+        !cameraHiddenRef.current &&
+        !activeXrSession &&
+        vid.srcObject &&
+        vid.paused &&
+        typeof vid.play === 'function'
+      ) {
+        vid.play().catch(() => {});
+      }
+      for (const delayMs of [140, 380]) {
+        const tid = setTimeout(() => {
+          resizeSettleTimers.delete(tid);
+          handleResize();
+        }, delayMs);
+        resizeSettleTimers.add(tid);
+      }
+    };
     handleResize();
     window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleViewportOrFullscreenTransition);
+    window.visualViewport?.addEventListener?.('resize', handleResize);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('fullscreenchange', handleViewportOrFullscreenTransition);
+      document.addEventListener('webkitfullscreenchange', handleViewportOrFullscreenTransition);
+    }
 
     let rafId = 0;
     let lastFrameAt = performance.now();
@@ -1643,9 +1671,17 @@ function ARViewportCanvasInner({
       }
       originBeaconMatRef.current = null;
       resumeLoopRef.current = null;
+      for (const tid of resizeSettleTimers) clearTimeout(tid);
+      resizeSettleTimers.clear();
       clearTimeout(contextRecoverTimerRef.current);
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleViewportOrFullscreenTransition);
+      window.visualViewport?.removeEventListener?.('resize', handleResize);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('fullscreenchange', handleViewportOrFullscreenTransition);
+        document.removeEventListener('webkitfullscreenchange', handleViewportOrFullscreenTransition);
+      }
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       envUpdaterRef.current?.dispose();

@@ -104,13 +104,21 @@ export function useVisualViewportLayout(active = true) {
       }, 60);
     };
 
+    const onFullscreenTransition = () => {
+      measure();
+      queueTimeout(measure, 140);
+      queueTimeout(measure, 360);
+    };
+
     measure();
 
     const vv = window.visualViewport;
     vv?.addEventListener?.('resize', measure);
     vv?.addEventListener?.('scroll', measure);
     window.addEventListener('resize', measure);
-    window.addEventListener('orientationchange', measure);
+    window.addEventListener('orientationchange', onFullscreenTransition);
+    document.addEventListener('fullscreenchange', onFullscreenTransition);
+    document.addEventListener('webkitfullscreenchange', onFullscreenTransition);
     document.addEventListener('focusin', onFocusIn);
     document.addEventListener('focusout', onFocusOut);
 
@@ -120,7 +128,9 @@ export function useVisualViewportLayout(active = true) {
       vv?.removeEventListener?.('resize', measure);
       vv?.removeEventListener?.('scroll', measure);
       window.removeEventListener('resize', measure);
-      window.removeEventListener('orientationchange', measure);
+      window.removeEventListener('orientationchange', onFullscreenTransition);
+      document.removeEventListener('fullscreenchange', onFullscreenTransition);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenTransition);
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
     };

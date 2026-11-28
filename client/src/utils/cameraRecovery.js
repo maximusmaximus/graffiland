@@ -73,6 +73,57 @@ export function getWatchdogCooldownMs(consecutiveWatchdogRestarts = 0) {
   return Math.min(16000, 3500 * Math.pow(2, clamped));
 }
 
+export function isDocumentInFullscreen(doc = typeof document !== 'undefined' ? document : null) {
+  if (!doc) return false;
+  return Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+}
+
+/**
+ * Safely exits DOM fullscreen (if active) before opening keyboard-driven mobile overlays
+ * like Land Chat so Chrome/Android never abruptly fights fullscreen exit + soft keyboard resize.
+ */
+export function exitDomFullscreenSafely(doc = typeof document !== 'undefined' ? document : null) {
+  if (!isDocumentInFullscreen(doc)) return false;
+  try {
+    const exitFn = doc.exitFullscreen || doc.webkitExitFullscreen;
+    if (typeof exitFn === 'function') {
+      const res = exitFn.call(doc);
+      if (res && typeof res.catch === 'function') res.catch(() => {});
+      return true;
+    }
+  } catch {
+    // ignore fullscreen exit errors
+  }
+  return false;
+}
+
+/**
+ * Re-binds and resumes a camera <video> element after a browser fullscreen or orientation
+ * transition where mobile hardware decoders frequently pause or detach the compositor surface.
+ */
+export async function resumeVideoElementPlayback(videoEl, stream) {
+  if (!videoEl || !stream) return false;
+  const hasLiveTrack =
+    typeof stream.getVideoTracks === 'function' &&
+    stream.getVideoTracks().some((t) => t?.readyState === 'live');
+  if (!hasLiveTrack) return false;
+
+  try {
+    videoEl.playsInline = true;
+    videoEl.muted = true;
+    videoEl.autoplay = true;
+    if (videoEl.srcObject !== stream) {
+      videoEl.srcObject = stream;
+    }
+    if (typeof videoEl.play === 'function') {
+      await videoEl.play();
+    }
+    return !videoEl.paused;
+  } catch {
+    return false;
+  }
+}
+
 export function stopMediaStreamTracks(stream) {
   if (!stream || typeof stream.getTracks !== 'function') return;
   for (const track of stream.getTracks()) {

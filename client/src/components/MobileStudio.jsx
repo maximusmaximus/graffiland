@@ -33,6 +33,7 @@ import {
   saveSeenLands
 } from '../utils/seenLands.js';
 import { recordLastViewedItem, recordUserAction } from '../utils/userHistory.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import {
   CAMERA_FIRST_TOOLS_SEEN_KEY,
   loadBoolPreference,
@@ -1046,6 +1047,8 @@ export default function MobileStudio({
     arTargetedSculpture: ar.arTargetedSculpture,
     locationRef: pol.locationRef,
     cameraReadyRef: pol.cameraReadyRef,
+    webxrActiveRef: pol.webxrActiveRef,
+    ensureCameraLive: pol.ensureCameraLive,
     polRef: pol.polRef,
     videoRef: pol.videoRef,
     orbPackCacheRef: pol.orbPackCacheRef,
@@ -2109,7 +2112,7 @@ export default function MobileStudio({
 
   const openLandChatSafely = useCallback(
     (targetLand, canonicalTargetOverride = null) => {
-      if (!targetLand) return;
+      if (!targetLand) return false;
       const canonicalTarget =
         canonicalTargetOverride || resolveLandChatTarget(targetLand, targetLand.displayName || '');
       const avail = evaluateLandChatAvailability({
@@ -2118,27 +2121,32 @@ export default function MobileStudio({
         isDesktop: false,
         isSignedIn: Boolean(user),
         userId: user?.id || '',
-        cameraReady: Boolean(pol.cameraReady),
+        cameraReady: Boolean(pol.cameraReady || pol.webxrActive),
         hasLocation: Boolean(pol.location),
         unitSystem
       });
       if (!avail.canChat) {
-        showTemporaryHint(
-          avail.reason || `Visit ${targetLand?.displayName || 'this land'} in person to join Land Chat.`
-        );
+        const msg =
+          avail.reason || `Visit ${targetLand?.displayName || 'this land'} in person to join Land Chat.`;
+        showTemporaryHint(msg);
+        notifySettingsSaved(msg, { tone: 'warning', durationMs: 4200 });
         if (avail.code === 'signed_out') {
           setLoginOpen(true);
         }
-        return;
+        return false;
       }
-      if (!canonicalTarget) return;
-      chat.openCameraSelectedChat(
-        canonicalTarget,
-        targetLand?.distanceMeters ?? 0,
-        chat.arPinPreview
+      if (!canonicalTarget) return false;
+      const onLandDist = targetLand?.isInside
+        ? 0
+        : targetLand?.edgeDistanceMetersExact ??
+          targetLand?.edgeDistanceMeters ??
+          targetLand?.distanceMeters ??
+          0;
+      return Boolean(
+        chat.openCameraSelectedChat(canonicalTarget, onLandDist, chat.arPinPreview)
       );
     },
-    [chat, pol.cameraReady, pol.location, showTemporaryHint, unitSystem, user]
+    [chat, pol.cameraReady, pol.location, pol.webxrActive, showTemporaryHint, unitSystem, user]
   );
 
   const handleMobileNotificationAction = async (item) => {
@@ -2747,7 +2755,7 @@ export default function MobileStudio({
             isDesktop={false}
             isSignedIn={Boolean(user)}
             userId={user?.id || ''}
-            cameraReady={Boolean(pol.cameraReady)}
+            cameraReady={Boolean(pol.cameraReady || pol.webxrActive)}
             hasLocation={Boolean(pol.location)}
             onOpenLandChat={(targetLand, canonicalTarget) => {
               openLandChatSafely(targetLand, canonicalTarget);
@@ -3038,10 +3046,12 @@ export default function MobileStudio({
               `Adding art to ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
             );
           }}
-          cameraReady={Boolean(pol.cameraReady)}
+          cameraReady={Boolean(pol.cameraReady || pol.webxrActive)}
           onOpenLandChat={(targetLand, canonicalTarget) => {
-            setParcelVisit(null);
-            openLandChatSafely(targetLand, canonicalTarget);
+            const opened = openLandChatSafely(targetLand, canonicalTarget);
+            if (opened) {
+              setParcelVisit(null);
+            }
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
           onOpenManageLand={(pid) => {

@@ -6,6 +6,7 @@ import {
   resolveSafeUserAvatar
 } from '../../../shared/userDisplay.mjs';
 import { api } from '../utils/api.js';
+import { exitDomFullscreenSafely } from '../utils/cameraRecovery.js';
 import { useVisualViewportLayout } from '../hooks/useVisualViewportLayout.js';
 import {
   computeRoomPossessionProof,
@@ -83,11 +84,33 @@ export default function SculptureChatDrawer({
   const reqSentRef = useRef(false);
   const autoInitRef = useRef(false);
   const pinAttemptedRef = useRef(false);
+  const syncInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
   const lastUnlockedSeqRef = useRef(Number(initialPinData?.batchSeq || 0));
   const sightRef = useRef(initialSightProof);
+  const locationRef = useRef(location);
+  const cameraReadyRef = useRef(cameraReady);
+  const polTrackerRef = useRef(polTracker);
+  const pinUnlockStatusRef = useRef(pinUnlockStatus);
   const boardIdRef = useRef(sculpture.id);
   const listEndRef = useRef(null);
   const feedRef = useRef(null);
+
+  locationRef.current = location;
+  cameraReadyRef.current = cameraReady;
+  polTrackerRef.current = polTracker;
+  pinUnlockStatusRef.current = pinUnlockStatus;
+  if (initialSightProof && !sightRef.current) {
+    sightRef.current = initialSightProof;
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    exitDomFullscreenSafely();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const scrollFeedToBottom = useCallback((smooth = false) => {
     if (feedRef.current) {
@@ -100,25 +123,38 @@ export default function SculptureChatDrawer({
 
   useEffect(() => {
     boardIdRef.current = sculpture.id;
-  }, [sculpture.id]);
+    sightRef.current = initialSightProof;
+    reqSentRef.current = false;
+    autoInitRef.current = false;
+    pinAttemptedRef.current = false;
+  }, [initialSightProof, sculpture.id]);
 
   const activeBoardId = entered?.board?.sculptureId || entered?.boardId || sculpture.id;
 
   const buildFreshSightProof = useCallback(
     async (idObj) => {
-      const snap = polTracker?.getSnapshot ? polTracker.getSnapshot() : {};
+      const tracker = polTrackerRef.current;
+      const snap = tracker?.getSnapshot ? tracker.getSnapshot() : {};
+      const liveLoc = locationRef.current;
+      const initSight = sightRef.current || {};
+      const resolvedCamReady = Boolean(cameraReadyRef.current || initSight.cameraReady);
       const base = {
-        ...(sightRef.current || {}),
+        ...initSight,
         selectionMethod: 'ar-camera-raycast',
         rayHit: true,
         inFrustum: true,
-        cameraReady: Boolean(cameraReady),
-        cameraFrames: Math.max(snap.cameraFrames || 0, sightRef.current?.cameraFrames || 2),
-        opticalFlowCorrelation: snap.opticalFlowCorrelation ?? sightRef.current?.opticalFlowCorrelation ?? 0.65,
-        visualDHash: snap.visualDHash || sightRef.current?.visualDHash || '',
-        lat: location?.lat ?? sightRef.current?.lat,
-        lng: location?.lng ?? sightRef.current?.lng,
-        altitude: location?.altitude ?? sightRef.current?.altitude ?? null,
+        cameraReady: resolvedCamReady,
+        cameraFrames: Math.max(
+          resolvedCamReady ? 2 : 0,
+          Number(snap.cameraFrames || 0),
+          Number(initSight.cameraFrames || 0)
+        ),
+        opticalFlowCorrelation:
+          snap.opticalFlowCorrelation ?? initSight.opticalFlowCorrelation ?? 0.65,
+        visualDHash: snap.visualDHash || initSight.visualDHash || '',
+        lat: liveLoc?.lat ?? initSight.lat,
+        lng: liveLoc?.lng ?? initSight.lng,
+        altitude: liveLoc?.altitude ?? initSight.altitude ?? null,
         selectedAt: new Date().toISOString()
       };
       if (!idObj) return base;
@@ -128,7 +164,7 @@ export default function SculptureChatDrawer({
         sightProof: base
       });
     },
-    [cameraReady, location, polTracker, sculpture.id, sculpture.parcelId]
+    [sculpture.id, sculpture.parcelId]
   );
 
   const autoWrapPendingGrants = useCallback(
@@ -183,7 +219,11 @@ export default function SculptureChatDrawer({
       }
 
       if (res?.isLandHolder) {
-        if (lastUnlockedSeqRef.current === serverSeq && serverSeq > 0 && pinUnlockStatus === 'unlocked') {
+        if (
+          lastUnlockedSeqRef.current === serverSeq &&
+          serverSeq > 0 &&
+          pinUnlockStatusRef.current === 'unlocked'
+        ) {
           return;
         }
         try {
@@ -218,7 +258,7 @@ export default function SculptureChatDrawer({
         return;
       }
 
-      if (lastUnlockedSeqRef.current === serverSeq && pinUnlockStatus === 'unlocked') {
+      if (lastUnlockedSeqRef.current === serverSeq && pinUnlockStatusRef.current === 'unlocked') {
         return;
       }
       if (pinAttemptedRef.current && serverSeq <= lastUnlockedSeqRef.current) {
@@ -230,7 +270,8 @@ export default function SculptureChatDrawer({
         const ch = await api.issueParcelPinChallenge(sculpture.id, {
           deviceProfile: { isMobile: true }
         });
-        const snap = polTracker?.getSnapshot ? polTracker.getSnapshot() : {};
+        const tracker = polTrackerRef.current;
+        const snap = tracker?.getSnapshot ? tracker.getSnapshot() : {};
         const signed = await signParcelPresenceProof(idObj, {
           sculptureId: sculpture.id,
           parcelId: sculpture.parcelId,
@@ -269,14 +310,16 @@ export default function SculptureChatDrawer({
         );
       }
     },
-    [pinUnlockStatus, polTracker, sculpture.geohash, sculpture.id, sculpture.isParcelChat, sculpture.parcelId]
+    [sculpture.geohash, sculpture.id, sculpture.isParcelChat, sculpture.parcelId]
   );
 
-  const syncBoard = useCallback(async () => {
+  const syncBoard = useCallback(async ({ force = false } = {}) => {
     if (!user) {
       setLoading(false);
       return;
     }
+    if (syncInFlightRef.current && !force) return;
+    syncInFlightRef.current = true;
     try {
       const idObj = await getOrCreateDeviceIdentity(user.id);
       setIdentity(idObj);
@@ -409,9 +452,14 @@ export default function SculptureChatDrawer({
         setMessages([]);
       }
     } catch (err) {
-      setErrorMsg(err.message || 'Unable to verify AR camera sight for chat');
+      if (mountedRef.current) {
+        setErrorMsg(err.message || 'Unable to verify AR camera sight for chat');
+      }
     } finally {
-      setLoading(false);
+      syncInFlightRef.current = false;
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [autoWrapPendingGrants, buildFreshSightProof, sculpture.id, syncPinnedBatch, user]);
 
@@ -477,7 +525,7 @@ export default function SculptureChatDrawer({
         sightProof: freshSight,
         deviceProfile: { isMobile: true }
       });
-      await syncBoard();
+      await syncBoard({ force: true });
     } catch (err) {
       setErrorMsg(err.message || 'Could not initialize encrypted board');
       setLoading(false);
@@ -522,7 +570,7 @@ export default function SculptureChatDrawer({
         deviceProfile: { isMobile: true }
       });
       setClueInput('');
-      await syncBoard();
+      await syncBoard({ force: true });
     } catch {
       setClueError(
         'Incorrect real-world clue answer. Inspect this location carefully or wait for an admitted peer.'
@@ -558,7 +606,7 @@ export default function SculptureChatDrawer({
         deviceProfile: { isMobile: true }
       });
       setMsgInput('');
-      await syncBoard();
+      await syncBoard({ force: true });
     } catch (err) {
       setErrorMsg(err.message || 'Failed to send encrypted message');
     } finally {
@@ -590,7 +638,7 @@ export default function SculptureChatDrawer({
       });
       setClueEditOpen(false);
       setNewClueAnswer('');
-      await syncBoard();
+      await syncBoard({ force: true });
     } catch (err) {
       setErrorMsg(err.message || 'Failed to update on-site clue');
     } finally {
@@ -820,9 +868,27 @@ export default function SculptureChatDrawer({
                 </button>
               </div>
             ) : loading ? (
-              <div className="chat-board-empty-card">
+              <div className="chat-board-empty-card" data-testid="chat-loading-card">
                 <XeroIcon emoji="⏳" size={22} />
-                <p>Verifying AR camera sight &amp; decrypting messages…</p>
+                <p>Loading Land Chat…</p>
+              </div>
+            ) : !entered && errorMsg ? (
+              <div className="chat-board-empty-card" data-testid="chat-error-retry-card">
+                <XeroIcon emoji="⚠️" size={24} />
+                <strong>Could Not Load Land Chat</strong>
+                <p>{errorMsg}</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  data-testid="chat-retry-btn"
+                  onClick={() => {
+                    setLoading(true);
+                    setErrorMsg('');
+                    syncBoard({ force: true });
+                  }}
+                >
+                  <XeroIcon emoji="🔄" size={14} /> Try Again
+                </button>
               </div>
             ) : entered && !entered.initialized ? (
               <div className="chat-board-empty-card">
@@ -1000,7 +1066,7 @@ export default function SculptureChatDrawer({
                     style={{ alignSelf: 'flex-start', marginTop: 6 }}
                     onClick={() => {
                       pinAttemptedRef.current = false;
-                      syncBoard();
+                      syncBoard({ force: true });
                     }}
                   >
                     Retry Parcel Unlock
