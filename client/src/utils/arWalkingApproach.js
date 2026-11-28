@@ -8,6 +8,66 @@ export const APPROACH_FULL_OPACITY_METERS = 12;
 export const APPROACH_CLOSING_START_METERS = 85;
 export const APPROACH_MIN_CLOSING_DELTA_M = 0.25;
 export const APPROACH_WALK_AWAY_RESET_M = 2.5;
+export const AR_WORLD_ANCHOR_STATIONARY_DEADZONE_M = 4.5;
+export const AR_WORLD_ANCHOR_WALK_STEP_M = 2.2;
+export const AR_WORLD_ANCHOR_WEBXR_RELOCATE_M = 35;
+
+/**
+ * Stabilizes the GPS world-origin anchor used by AR `nearbyGroup` so sculptures and
+ * virtual land boundaries stay rock-solid STILL when standing or looking around inside
+ * a land instead of slipping/jumping on ±1–4m stationary GPS multipath jitter.
+ *
+ * - In WebXR 6-DoF ARCore mode, ARCore tracks physical walking at centimeter accuracy,
+ *   so the GPS anchor stays frozen unless confirmed macro relocation (>= 35 m) occurs.
+ * - In standard cross-browser AR, stationary GPS jitter below `max(4.5m, accuracy * 0.9)`
+ *   is ignored; walking updates the anchor smoothly once displacement exceeds 2.2 m.
+ */
+export function resolveStableArWorldAnchor(
+  prevAnchor,
+  nextLocation,
+  { webxrActive = false, isWalking = false } = {}
+) {
+  const lat = Number(nextLocation?.lat);
+  const lng = Number(nextLocation?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return prevAnchor || null;
+  }
+  const acc = Number.isFinite(Number(nextLocation?.accuracy))
+    ? Math.max(2, Number(nextLocation.accuracy))
+    : 12;
+  const alt =
+    nextLocation?.altitude !== null &&
+    nextLocation?.altitude !== undefined &&
+    Number.isFinite(Number(nextLocation.altitude))
+      ? Number(nextLocation.altitude)
+      : prevAnchor?.altitude ?? null;
+
+  if (!prevAnchor || !Number.isFinite(Number(prevAnchor.lat)) || !Number.isFinite(Number(prevAnchor.lng))) {
+    return { lat, lng, altitude: alt, accuracy: acc };
+  }
+
+  const moveM = haversineMeters(prevAnchor.lat, prevAnchor.lng, lat, lng);
+  if (webxrActive) {
+    if (moveM < AR_WORLD_ANCHOR_WEBXR_RELOCATE_M) {
+      return prevAnchor;
+    }
+    return { lat, lng, altitude: alt, accuracy: acc };
+  }
+
+  const prevAcc = Number.isFinite(Number(prevAnchor.accuracy)) ? Number(prevAnchor.accuracy) : 12;
+  const stationaryThresholdM = Math.max(
+    AR_WORLD_ANCHOR_STATIONARY_DEADZONE_M,
+    Math.min(14, Math.max(acc, prevAcc) * 0.9)
+  );
+  const effectiveThresholdM = isWalking
+    ? Math.min(stationaryThresholdM, AR_WORLD_ANCHOR_WALK_STEP_M)
+    : stationaryThresholdM;
+
+  if (moveM < effectiveThresholdM) {
+    return prevAnchor;
+  }
+  return { lat, lng, altitude: alt, accuracy: acc };
+}
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));

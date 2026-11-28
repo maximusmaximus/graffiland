@@ -491,9 +491,10 @@ function ARViewportCanvasInner({
       }
     };
 
+    let activeXrSession = null;
     const resizeSettleTimers = new Set();
     const handleResize = () => {
-      if (!host) return;
+      if (!host || activeXrSession) return;
       const w = host.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0);
       const h = host.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0);
       if (w < 10 || h < 10) return;
@@ -554,7 +555,6 @@ function ARViewportCanvasInner({
     let lastPixelRatio = renderer.getPixelRatio();
     let lastCanvasFilter = '';
     let orbExtractBusy = false;
-    let activeXrSession = null;
     const walkingTracker = createWalkingApproachTracker();
     const maxAnisotropy = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 8);
     const fusedQuat = new THREE.Quaternion();
@@ -589,31 +589,39 @@ function ARViewportCanvasInner({
         syncLiveLensFov();
       }
 
-      if (activeXrSession && xrFrame) {
-        const xrWorldPose = activeXrSession.processFrame(xrFrame, baseCameraPos);
-        if (xrWorldPose) {
-          if (xrWorldPose.rigPosition && xrWorldPose.rigQuaternion) {
-            xrRig.position.copy(xrWorldPose.rigPosition);
-            xrRig.quaternion.copy(xrWorldPose.rigQuaternion);
-            xrRig.updateMatrixWorld(true);
-          }
-          camera.position.copy(xrWorldPose.position);
-          camera.quaternion.copy(xrWorldPose.quaternion);
-          if (
-            Array.isArray(xrWorldPose.projectionMatrix) &&
-            xrWorldPose.projectionMatrix.length === 16
-          ) {
-            camera.projectionMatrix.fromArray(xrWorldPose.projectionMatrix);
-            camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-            const m5 = camera.projectionMatrix.elements[5];
-            if (Number.isFinite(m5) && Math.abs(m5) > 0.001) {
-              camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(1 / Math.abs(m5)));
+      if (activeXrSession) {
+        // Keep XR framebuffer strictly transparent so hardware ARCore camera passthrough shows cleanly.
+        scene.background = null;
+        renderer.setClearColor(0x000000, 0);
+        renderer.setClearAlpha(0);
+        // Lock nearbyGroup cleanly to world origin; ARCore 6-DoF handles all physical parallax with zero slip.
+        nearbyGroup.position.set(baseCameraPos.x, 0, baseCameraPos.z);
+        if (xrFrame) {
+          const xrWorldPose = activeXrSession.processFrame(xrFrame, baseCameraPos);
+          if (xrWorldPose) {
+            if (xrWorldPose.rigPosition && xrWorldPose.rigQuaternion) {
+              xrRig.position.copy(xrWorldPose.rigPosition);
+              xrRig.quaternion.copy(xrWorldPose.rigQuaternion);
+              xrRig.updateMatrixWorld(true);
+            }
+            camera.position.copy(xrWorldPose.position);
+            camera.quaternion.copy(xrWorldPose.quaternion);
+            if (
+              Array.isArray(xrWorldPose.projectionMatrix) &&
+              xrWorldPose.projectionMatrix.length === 16
+            ) {
+              camera.projectionMatrix.fromArray(xrWorldPose.projectionMatrix);
+              camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+              const m5 = camera.projectionMatrix.elements[5];
+              if (Number.isFinite(m5) && Math.abs(m5) > 0.001) {
+                camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(1 / Math.abs(m5)));
+              }
             }
           }
         }
       } else if (orientationFusionRef?.current?.initialized) {
         orientationFusionRef.current.getCameraQuaternion(fusedQuat);
-        camera.quaternion.slerp(fusedQuat, 0.52);
+        camera.quaternion.slerp(fusedQuat, 0.78);
       } else if (rawOrientationRef.current) {
         const { alpha, beta, gamma } = rawOrientationRef.current;
         const screenAngle = window.screen?.orientation?.angle || 0;
@@ -623,7 +631,7 @@ function ARViewportCanvasInner({
           gamma,
           screenAngle
         );
-        camera.quaternion.slerp(q, 0.45);
+        camera.quaternion.slerp(q, 0.68);
       } else {
         const euler = new THREE.Euler(
           fallbackEulerRef.current.pitch,
@@ -646,14 +654,20 @@ function ARViewportCanvasInner({
       }
 
       // 6-DoF World-Anchored Spatial Camera Translation (when WebXR is not driving pose):
-      // Fuses gyro-compensated visual odometry + ZUPT IMU acceleration + Kalman walking ENU
-      // so physically moving your phone moves the CAMERA through 3D space while your artwork
-      // stays locked right where you painted it!
+      // In Review / Inspect / View-Only modes, freeze noisy monocular VIO `localOffset` and
+      // stationary GPS jitter so items inside a land stay rock-solid still. Only run monocular
+      // VIO while actively drawing so strokes track hand motion without making land items slip.
       if (!activeXrSession) {
         const spatial = spatialDrawTrackerRef?.current;
         const pf = positionFilterRef?.current;
+        const isViewingMode = Boolean(
+          modeRef.current === 'preview' ||
+            isArViewOnlyRef?.current ||
+            isInteractingWithLandRef?.current
+        );
+        const isActivelyWalking = Boolean(walkingApproachRef?.current?.isWalking);
         const subDelta =
-          pf?.initialized && locationRef.current
+          isActivelyWalking && pf?.initialized && locationRef.current
             ? pf.getLiveSubmeterDeltaMeters(locationRef.current)
             : { east: 0, north: 0 };
 
@@ -666,7 +680,7 @@ function ARViewportCanvasInner({
               dtSec: dtMs / 1000
             });
           }
-          if (videoRef.current && modeRef.current !== 'transform') {
+          if (!isViewingMode && modeRef.current === 'draw' && videoRef.current) {
             const activeDepthM =
               surfaceAnchorRef.current?.locked && Number(surfaceAnchorRef.current?.depthM) > 0
                 ? Number(surfaceAnchorRef.current.depthM)
@@ -679,10 +693,15 @@ function ARViewportCanvasInner({
               depthMeters: activeDepthM,
               nowMs: now
             });
+            spatial.getWorldCameraPosition(baseCameraPos, camera.position);
+            const nearbyPos = spatial.getNearbyGroupPosition(baseCameraPos, subDelta);
+            nearbyGroup.position.set(nearbyPos.x, nearbyPos.y, nearbyPos.z);
+          } else {
+            const walkX = Number(spatial.walkOffset?.x) || 0;
+            const walkZ = Number(spatial.walkOffset?.z) || 0;
+            camera.position.set(baseCameraPos.x + walkX, baseCameraPos.y, baseCameraPos.z + walkZ);
+            nearbyGroup.position.set(baseCameraPos.x + walkX, 0, baseCameraPos.z + walkZ);
           }
-          spatial.getWorldCameraPosition(baseCameraPos, camera.position);
-          const nearbyPos = spatial.getNearbyGroupPosition(baseCameraPos, subDelta);
-          nearbyGroup.position.set(nearbyPos.x, nearbyPos.y, nearbyPos.z);
         } else {
           camera.position.set(baseCameraPos.x, baseCameraPos.y, baseCameraPos.z);
           nearbyGroup.position.set(
@@ -1116,6 +1135,7 @@ function ARViewportCanvasInner({
 
       const envRefreshMs = 1100;
       const shouldRefreshEnv =
+        !activeXrSession &&
         !arViewOnly &&
         !isTransform &&
         !paintingRef.current &&
@@ -1140,6 +1160,7 @@ function ARViewportCanvasInner({
       }
 
       if (
+        !activeXrSession &&
         !arViewOnly &&
         !isTransform &&
         occlusionEnabledRef.current &&
@@ -1443,29 +1464,36 @@ function ARViewportCanvasInner({
             pt.clone().applyMatrix4(nearbyGroupRef.current.matrixWorld)
           );
           const effectiveSelDist = selectedLandLiveDist ?? ud.distanceMeters ?? 0;
-          const guidance = computeArLandCameraGuidance({
-            targetWorld: guidanceTargetWorld,
-            cornersWorld,
-            camera,
-            isInside: Boolean(ud.insideParcel || effectiveSelDist <= 1.5),
-            distanceMeters: effectiveSelDist
-          });
+          const isInsideSelectedLand = Boolean(ud.insideParcel || effectiveSelDist <= 1.5);
+          const guidance = isInsideSelectedLand
+            ? null
+            : computeArLandCameraGuidance({
+                targetWorld: guidanceTargetWorld,
+                cornersWorld,
+                camera,
+                isInside: false,
+                distanceMeters: effectiveSelDist
+              });
           const sharpProfile =
             selectedLandApproach?.sharpnessProfile ||
             computeProximitySharpness(effectiveSelDist);
 
-          const nativeDpr = Math.min(window.devicePixelRatio || 1, 2.5);
-          const targetDpr = Math.max(
-            0.85,
-            Number((nativeDpr * sharpProfile.pixelRatioScale).toFixed(2))
-          );
-          if (Math.abs(targetDpr - lastPixelRatio) >= 0.08) {
-            lastPixelRatio = targetDpr;
-            renderer.setPixelRatio(targetDpr);
+          if (!activeXrSession) {
+            const nativeDpr = Math.min(window.devicePixelRatio || 1, 2.5);
+            const targetDpr = Math.max(
+              0.85,
+              Number((nativeDpr * sharpProfile.pixelRatioScale).toFixed(2))
+            );
+            if (Math.abs(targetDpr - lastPixelRatio) >= 0.08) {
+              lastPixelRatio = targetDpr;
+              renderer.setPixelRatio(targetDpr);
+            }
           }
 
           const hasDraftBlocks = (voxelsRef.current?.length || 0) > 0;
           const nextFilter =
+            !activeXrSession &&
+            !isInsideSelectedLand &&
             interactingLand &&
             !hasDraftBlocks &&
             guidance?.inView &&
@@ -1491,6 +1519,7 @@ function ARViewportCanvasInner({
               lastGuidanceKey = key;
               onArLandGuidanceRef.current?.({
                 ...guidance,
+                isInside: false,
                 parcelId: selectedLandId,
                 displayName: ud.displayName || 'Nearby Land',
                 distanceMeters: effectiveSelDist,
@@ -1500,16 +1529,21 @@ function ARViewportCanvasInner({
                 tierLabel: sharpProfile.tierLabel
               });
             }
+          } else if (lastGuidanceKey !== '') {
+            lastGuidanceKey = '';
+            onArLandGuidanceRef.current?.(null);
           }
         } else {
           if (lastCanvasFilter !== '') {
             lastCanvasFilter = '';
             renderer.domElement.style.filter = '';
           }
-          const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
-          if (Math.abs(baseDpr - lastPixelRatio) >= 0.12) {
-            lastPixelRatio = baseDpr;
-            renderer.setPixelRatio(baseDpr);
+          if (!activeXrSession) {
+            const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
+            if (Math.abs(baseDpr - lastPixelRatio) >= 0.12) {
+              lastPixelRatio = baseDpr;
+              renderer.setPixelRatio(baseDpr);
+            }
           }
           if (lastGuidanceKey !== '') {
             lastGuidanceKey = '';
@@ -1602,6 +1636,10 @@ function ARViewportCanvasInner({
             typeof document !== 'undefined'
               ? document.getElementById('root') || document.querySelector('.mobile-fullscreen')
               : null;
+          if (typeof document !== 'undefined') {
+            document.documentElement?.classList?.add('webxr-ar-active');
+            document.body?.classList?.add('webxr-ar-active');
+          }
           try {
             const sessionCtrl = await startWebXrArSession({
               renderer,
@@ -1625,10 +1663,6 @@ function ARViewportCanvasInner({
               }
             });
             tryLockPortraitOrientation();
-            if (typeof document !== 'undefined') {
-              document.documentElement?.classList?.add('webxr-ar-active');
-              document.body?.classList?.add('webxr-ar-active');
-            }
             activeXrSession = sessionCtrl;
             onWebxrStateChange?.(true);
             renderer.setAnimationLoop((_t, xrFrame) => {
@@ -1911,7 +1945,7 @@ function ARViewportCanvasInner({
       />
       {!cameraHidden && (
         <>
-          {!isArViewOnly && !isTransformMode && !isPublishIsolated && occlusionEnabled && (
+          {!webxrActive && !isArViewOnly && !isTransformMode && !isPublishIsolated && occlusionEnabled && (
             <canvas
               ref={occlusionCanvasRef}
               className="occlusion-overlay"

@@ -23,6 +23,7 @@ import {
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import ArTrackingSettings from './ArTrackingSettings.jsx';
 import BrandLogo from './BrandLogo.jsx';
+import EthAddressBadge from './EthAddressBadge.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
@@ -1120,11 +1121,12 @@ export default function InfoTermsModal({
                     <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
                       Embedded Robinhood Chain Wallet:
                     </div>
-                    <div
-                      className="mono"
-                      style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)' }}
-                    >
-                      {user.walletAddress}
+                    <div style={{ marginTop: 4 }}>
+                      <EthAddressBadge
+                        address={user.walletAddress}
+                        testId="info-terms-wallet-address"
+                        copyTestId="info-terms-wallet-copy-btn"
+                      />
                     </div>
                   </div>
 

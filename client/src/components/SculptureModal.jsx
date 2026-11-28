@@ -69,6 +69,7 @@ import {
   pushSculptureUndoSnapshot
 } from '../utils/sculptureEditHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import EthAddressBadge from './EthAddressBadge.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureViewer3D from './SculptureViewer3D.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
@@ -3087,24 +3088,26 @@ export default function SculptureModal({
               </tr>
               <tr>
                 <th>Current Owner</th>
-                <td className="mono" style={{ wordBreak: 'break-all' }}>{ownerAddr}</td>
+                <td className="mono">
+                  <EthAddressBadge
+                    address={ownerAddr}
+                    testId="sculpture-owner-wallet"
+                    copyTestId="sculpture-owner-wallet-copy-btn"
+                  />
+                </td>
               </tr>
               <tr>
                 <th>Token ID / Contract</th>
-                <td className="mono" style={{ wordBreak: 'break-all' }}>
-                  #{sculpture.chain?.tokenId} ·{' '}
-                  {explorerContractUrl ? (
-                    <a
-                      href={explorerContractUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: 'var(--accent)' }}
-                    >
-                      {sculpture.chain?.contractAddress}
-                    </a>
-                  ) : (
-                    sculpture.chain?.contractAddress
-                  )}
+                <td className="mono">
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span>#{sculpture.chain?.tokenId} ·</span>
+                    <EthAddressBadge
+                      address={sculpture.chain?.contractAddress}
+                      href={explorerContractUrl || ''}
+                      testId="sculpture-contract-address"
+                      copyTestId="sculpture-contract-copy-btn"
+                    />
+                  </span>
                 </td>
               </tr>
               <tr>

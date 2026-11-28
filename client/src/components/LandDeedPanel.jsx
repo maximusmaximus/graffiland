@@ -6,6 +6,7 @@ import {
 } from '../../../shared/transferMessage.mjs';
 import { api } from '../utils/api.js';
 import { getAddressExplorerUrl, getTxExplorerUrl } from '../utils/chainLinks.js';
+import EthAddressBadge from './EthAddressBadge.jsx';
 import InfoTip from './InfoTip.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -296,8 +297,13 @@ export default function LandDeedPanel({
       {deed && (
         <>
           <div className="land-deed-meta-row mono">
-            <span>
-              Owner: <strong>{deed.ownerAddress.slice(0, 8)}…{deed.ownerAddress.slice(-4)}</strong>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              Owner:{' '}
+              <EthAddressBadge
+                address={deed.ownerAddress}
+                testId="land-deed-owner-wallet"
+                copyTestId="land-deed-owner-copy-btn"
+              />
             </span>
             <span>·</span>
             <span>{deed.chainName}</span>

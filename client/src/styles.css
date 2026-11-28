@@ -67,10 +67,10 @@ select option:hover {
 }
 
 /* Mobile Full-Screen Studio */
-html:fullscreen,
-html:-webkit-full-screen,
-body:fullscreen,
-body:-webkit-full-screen {
+html:fullscreen:not(.webxr-ar-active),
+html:-webkit-full-screen:not(.webxr-ar-active),
+body:fullscreen:not(.webxr-ar-active),
+body:-webkit-full-screen:not(.webxr-ar-active) {
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -99,12 +99,30 @@ html:-webkit-full-screen .mobile-fullscreen {
   max-height: none;
 }
 
-/* WebXR immersive-ar DOM overlay must be strictly transparent so the hardware ARCore
-   camera passthrough and Three.js WebXR 3D framebuffer render crisply underneath the HUD! */
+/* WebXR immersive-ar DOM overlay must be strictly transparent (including :fullscreen,
+   :xr-overlay, and ::backdrop pseudo-elements) so the hardware ARCore camera passthrough
+   and Three.js WebXR 3D framebuffer render crisply underneath the HUD! */
 html.webxr-ar-active,
+html.webxr-ar-active:fullscreen,
+html.webxr-ar-active:-webkit-full-screen,
 body.webxr-ar-active,
+body.webxr-ar-active:fullscreen,
+body.webxr-ar-active:-webkit-full-screen,
 html.webxr-ar-active #root,
-.mobile-fullscreen.is-webxr-active {
+html.webxr-ar-active #root:fullscreen,
+html.webxr-ar-active #root:-webkit-full-screen,
+#root:xr-overlay,
+.mobile-fullscreen.is-webxr-active,
+.mobile-fullscreen.is-webxr-active:fullscreen,
+.mobile-fullscreen.is-webxr-active:xr-overlay {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+html.webxr-ar-active::backdrop,
+body.webxr-ar-active::backdrop,
+#root::backdrop,
+.mobile-fullscreen.is-webxr-active::backdrop {
   background: transparent !important;
 }
 
@@ -390,6 +408,97 @@ html.webxr-ar-active #root,
   justify-content: center;
   cursor: pointer;
   z-index: 25;
+}
+
+/* Right-edge prominent 2-button AR mode toggle (Current Tool <-> Review) */
+.ar-mode-switch-toggle {
+  position: absolute;
+  top: 50%;
+  right: max(10px, env(safe-area-inset-right));
+  transform: translateY(-50%);
+  z-index: 36;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 72px;
+  padding: 5px;
+  gap: 5px;
+  border-radius: 22px;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  background: rgba(8, 12, 24, 0.78);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.52);
+  pointer-events: auto;
+}
+
+.ar-mode-switch-toggle.is-tool-active {
+  border-color: rgba(0, 245, 212, 0.45);
+}
+
+.ar-mode-switch-toggle.is-review-active {
+  border-color: rgba(255, 209, 102, 0.55);
+}
+
+.ar-mode-switch-divider {
+  height: 1px;
+  margin: 0 6px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.ar-mode-switch-btn {
+  appearance: none;
+  border: 1.5px solid transparent;
+  border-radius: 16px;
+  min-height: 62px;
+  padding: 8px 4px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(226, 232, 240, 0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: transform 0.14s ease, background 0.16s ease, border-color 0.16s ease,
+    box-shadow 0.16s ease, color 0.16s ease;
+}
+
+.ar-mode-switch-btn:active {
+  transform: scale(0.94);
+}
+
+.ar-mode-switch-btn--tool.is-active {
+  background: linear-gradient(180deg, rgba(0, 245, 212, 0.28), rgba(0, 245, 212, 0.12));
+  border-color: rgba(0, 245, 212, 0.88);
+  color: #ecfeff;
+  box-shadow: 0 0 18px rgba(0, 245, 212, 0.34), inset 0 0 10px rgba(0, 245, 212, 0.16);
+}
+
+.ar-mode-switch-btn--review.is-active {
+  background: linear-gradient(180deg, rgba(255, 209, 102, 0.3), rgba(255, 209, 102, 0.12));
+  border-color: rgba(255, 209, 102, 0.9);
+  color: #fef9c3;
+  box-shadow: 0 0 18px rgba(255, 209, 102, 0.32), inset 0 0 10px rgba(255, 209, 102, 0.16);
+}
+
+.ar-mode-switch-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.ar-mode-switch-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .floating-agent-prompt-btn {
@@ -17059,6 +17168,76 @@ html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {
   border-radius: 7px;
   background: rgba(239, 68, 68, 0.14);
   border: 1px solid rgba(239, 68, 68, 0.32);
+}
+
+/* Abbreviated Ethereum address badge with inline one-tap copy button */
+.eth-address-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.eth-address-text,
+.eth-address-link {
+  color: inherit;
+  white-space: nowrap;
+}
+
+.eth-address-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.eth-address-copy-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 245, 212, 0.32);
+  background: rgba(0, 245, 212, 0.08);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
+}
+
+.eth-address-copy-btn:hover {
+  background: rgba(0, 245, 212, 0.18);
+  border-color: rgba(0, 245, 212, 0.65);
+}
+
+.eth-address-copy-btn:active {
+  transform: scale(0.92);
+}
+
+.eth-address-copy-btn.is-copied {
+  background: rgba(16, 185, 129, 0.24);
+  border-color: rgba(52, 211, 153, 0.8);
+  color: #6ee7b7;
+}
+
+.publish-field-label-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.publish-wallet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* Respect the OS "reduce motion" setting. */

@@ -496,7 +496,17 @@ export async function initChatBoard(
     isPairedAgent
   });
 
-  if (existing) {
+  const canRotateEpoch = Boolean(
+    existing &&
+      body?.forceResetEpoch === true &&
+      (chatPerm.isLandHolder || existing.creator_sub === user.id)
+  );
+
+  if (existing && body?.forceResetEpoch === true && !canRotateEpoch) {
+    throw new ChatHttpError(403, 'Only the land holder or chat creator can reset the chat encryption epoch.');
+  }
+
+  if (existing && !canRotateEpoch) {
     return {
       initialized: true,
       boardId: existing.sculpture_id,
@@ -533,18 +543,28 @@ export async function initChatBoard(
   const { cluePrompt, clueWrappedJson } = sanitizeClueInput(body);
   const now = new Date().toISOString();
 
-  await db.run(
-    `INSERT OR IGNORE INTO sculpture_chat_boards (
-      sculpture_id, creator_sub, key_epoch, room_key_commit, clue_prompt, clue_wrapped_json,
-      auto_grant_pol, created_at, updated_at
-    ) VALUES (?, ?, 1, ?, ?, ?, 1, ?, ?)`,
-    [boardId, user.id, roomKeyCommit.toLowerCase(), cluePrompt, clueWrappedJson, now, now]
-  );
+  if (canRotateEpoch) {
+    const nextEpoch = Math.max(2, Number(existing.key_epoch || 1) + 1);
+    await db.run(
+      `UPDATE sculpture_chat_boards
+       SET key_epoch = ?, room_key_commit = ?, clue_prompt = ?, clue_wrapped_json = ?, updated_at = ?
+       WHERE sculpture_id = ?`,
+      [nextEpoch, roomKeyCommit.toLowerCase(), cluePrompt, clueWrappedJson, now, boardId]
+    );
+  } else {
+    await db.run(
+      `INSERT OR IGNORE INTO sculpture_chat_boards (
+        sculpture_id, creator_sub, key_epoch, room_key_commit, clue_prompt, clue_wrapped_json,
+        auto_grant_pol, created_at, updated_at
+      ) VALUES (?, ?, 1, ?, ?, ?, 1, ?, ?)`,
+      [boardId, user.id, roomKeyCommit.toLowerCase(), cluePrompt, clueWrappedJson, now, now]
+    );
+  }
 
   const board = await db.get('SELECT * FROM sculpture_chat_boards WHERE sculpture_id = ?', [boardId]);
 
-  // If this request created Epoch 1 cleanly, register founder's self-grant row
-  if (board && board.creator_sub === user.id) {
+  // Register founder/holder's self-grant row for the newly created/rotated epoch
+  if (board && (board.creator_sub === user.id || canRotateEpoch)) {
     await db.run(
       `INSERT OR IGNORE INTO sculpture_chat_grants (
         id, sculpture_id, key_epoch, requester_sub, requester_name,
@@ -675,14 +695,25 @@ export async function enterChatBoard(
 
   const pubFp = body?.requesterPubFp ? sanitizeFingerprint(body.requesterPubFp) : '';
   let myGrantRow = null;
+  let otherDeviceHasGrant = false;
   if (pubFp) {
     myGrantRow = await db.get(
       `SELECT * FROM sculpture_chat_grants
        WHERE sculpture_id = ? AND key_epoch = ? AND requester_pub_fp = ?`,
       [boardId, Number(board.key_epoch), pubFp]
     );
-  }
-  if (!myGrantRow) {
+    if (!myGrantRow) {
+      // Never return an incompatible grant envelope wrapped for a DIFFERENT device's ECDH keypair:
+      // unwrapping a different fingerprint's envelope always fails ECDSA verification!
+      const otherDevRow = await db.get(
+        `SELECT id FROM sculpture_chat_grants
+         WHERE sculpture_id = ? AND key_epoch = ? AND requester_sub = ? AND status = 'granted'
+         LIMIT 1`,
+        [boardId, Number(board.key_epoch), user.id]
+      );
+      otherDeviceHasGrant = Boolean(otherDevRow?.id);
+    }
+  } else {
     myGrantRow = await db.get(
       `SELECT * FROM sculpture_chat_grants
        WHERE sculpture_id = ? AND key_epoch = ? AND requester_sub = ?
@@ -720,6 +751,7 @@ export async function enterChatBoard(
     sight,
     board: sanitizeBoardRow(board),
     myGrant: formatGrantRow(myGrantRow),
+    otherDeviceHasGrant,
     pendingRequestsCount,
     messages: (msgRows || []).map(formatMessageRow)
   };

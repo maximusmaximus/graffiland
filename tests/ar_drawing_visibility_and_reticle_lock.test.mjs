@@ -179,7 +179,10 @@ describe('AR Drawing Visibility (WebXR Rig & DOM Overlay), Top Pill Removal & Re
     assert.match(mobileSrc, /webxrActive=\{pol\.webxrActive\}/);
 
     // Camera watchdog does not fight WebXR ARCore for rear camera
-    assert.match(polSrc, /if\s*\(webxrActiveRef\.current\s*&&\s*reason\s*!==\s*'webxr_ended'\)/);
+    assert.match(
+      polSrc,
+      /if\s*\(\(?webxrActiveRef\.current(?:\s*\|\|\s*webxrStartingRef\.current\)?)?\s*&&\s*reason\s*!==\s*'webxr_ended'/
+    );
   });
 
   test('3. StudioHudTopBar removes both top 6-DoF ARCore Lock pill and top pinned Surface pill', async () => {

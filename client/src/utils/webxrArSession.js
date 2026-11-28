@@ -144,7 +144,12 @@ export async function startWebXrArSession({
   }
 
   const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+  const gl = renderer.getContext?.();
+  if (gl && typeof gl.makeXRCompatible === 'function') {
+    await gl.makeXRCompatible().catch(() => {});
+  }
   renderer.setClearColor?.(0x000000, 0);
+  renderer.setClearAlpha?.(0);
   renderer.clear?.();
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local');

@@ -39,17 +39,12 @@ import {
 import ArTrackingSettings from './ArTrackingSettings.jsx';
 import BrandLogo from './BrandLogo.jsx';
 import { EmojiTextarea } from './EmojiField.jsx';
+import EthAddressBadge from './EthAddressBadge.jsx';
 import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import { GlobalNotificationBell, useNotificationCenter } from './NotificationCenter.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XeroIcon from './XeroIcon.jsx';
-
-function shortenAddress(addr) {
-  const s = String(addr || '').trim();
-  if (s.length <= 12) return s;
-  return `${s.slice(0, 6)}...${s.slice(-4)}`;
-}
 
 function formatMonthYear(iso) {
   if (!iso) return '';
@@ -945,9 +940,12 @@ export default function ProfileModal({
                     </div>
                     <div className="profile-banner-sub-row">
                       {profile.walletAddress && (
-                        <span className="profile-banner-meta-pill mono" title={profile.walletAddress}>
-                          {shortenAddress(profile.walletAddress)}
-                        </span>
+                        <EthAddressBadge
+                          address={profile.walletAddress}
+                          className="profile-banner-meta-pill"
+                          testId="profile-wallet-address"
+                          copyTestId="profile-wallet-copy-btn"
+                        />
                       )}
                       {profile.joinedAt && (
                         <span className="profile-banner-meta-pill">

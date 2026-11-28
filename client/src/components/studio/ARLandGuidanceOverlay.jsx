@@ -49,6 +49,9 @@ export default function ARLandGuidanceOverlay({
   const { unitSystem } = useMeasurementUnits(null, resolveLandCoords(land));
   if (!land) return null;
 
+  // Never direct the user to a land they are already physically standing inside!
+  if (land.isInside || guidance?.isInside) return null;
+
   if (land.outOfArRange) {
     const outName = land.displayName || 'Virtual Land';
     const outDist = Number.isFinite(Number(land.edgeDistanceMeters ?? land.distanceMeters))

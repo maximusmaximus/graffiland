@@ -247,8 +247,12 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         onClose: () => {}
       })
     );
-    assert.ok(preView.getByText(/Neon Plinth Challenge/i));
-    assert.ok(preView.getByText(/Add at least 2 more voxel\(s\)/i));
+    const questHeading = preView.getByText(/Neon Plinth Challenge/i);
+    assert.ok(questHeading);
+    const questInfoBtn = questHeading.closest('.card')?.querySelector('button[aria-expanded]');
+    assert.ok(questInfoBtn, 'Expected info button on active quest card');
+    RTL.fireEvent.click(questInfoBtn);
+    assert.ok(preView.getByText(/Add at least 2 more (?:voxel|block)\(s\)/i));
     cleanup();
 
     const receiptView = RTL.render(
@@ -9109,6 +9113,9 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
     );
     const banner = pubView.getByTestId('publish-target-land-banner');
     assert.ok(banner.textContent.includes('Adding Art to: Stibblez Land'));
+    const bannerInfoBtn = banner.querySelector('button[aria-expanded]');
+    assert.ok(bannerInfoBtn, 'Expected info button inside target land banner');
+    RTL.fireEvent.click(bannerInfoBtn);
     assert.ok(banner.textContent.includes('will not mint a new land'));
     const submitBtn = pubView.getByRole('button', { name: /Add Art to Stibblez Land/i });
     assert.equal(submitBtn.disabled, false);
@@ -9167,8 +9174,8 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
       ]
     };
 
-    // 2) ARLandGuidanceOverlay renders clean legible off-screen guidance & omits .has-inspector when collapsed
-    const guideView = RTL.render(
+    // 2A) Inside-land MUST NOT render directional guidance arrows (never direct user to a land they are already inside!)
+    const insideGuideView = RTL.render(
       React.createElement(ARLandGuidanceOverlay, {
         land,
         guidance: {
@@ -9185,11 +9192,33 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         hasBottomInspector: false
       })
     );
+    assert.equal(insideGuideView.queryByTestId('ar-land-guidance-overlay'), null);
+    cleanup();
+
+    // 2B) Outside-land ARLandGuidanceOverlay renders clean legible off-screen guidance & omits .has-inspector when collapsed
+    const outsideLand = { ...land, isInside: false, edgeDistanceMeters: 18, distanceMeters: 18 };
+    const guideView = RTL.render(
+      React.createElement(ARLandGuidanceOverlay, {
+        land: outsideLand,
+        guidance: {
+          inView: false,
+          isInside: false,
+          edge: 'right',
+          instruction: 'Move camera right',
+          turnDegrees: 108,
+          angleDeg: 108,
+          distanceMeters: 18,
+          sharpnessPct: 84,
+          tier: 'sharp',
+          tierLabel: 'Sharp'
+        },
+        hasBottomInspector: false
+      })
+    );
     const stageEl = guideView.getByTestId('ar-land-guidance-overlay');
     assert.equal(stageEl.className.includes('has-inspector'), false);
     const guidePill = guideView.getByTestId('ar-land-guide-pill');
     assert.ok(guidePill.textContent.includes('Stibblez Land'));
-    assert.ok(guidePill.textContent.includes('Inside'));
     assert.ok(guidePill.textContent.includes('Move camera right'));
     assert.ok(guidePill.textContent.includes('108°'));
     cleanup();
