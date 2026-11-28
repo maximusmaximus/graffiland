@@ -44,9 +44,12 @@ import {
 } from '../utils/map3dProjection.js';
 export { hitTestMintedParcelPrism };
 import {
+  buildProjectedLandBox,
+  drawArtworkCalloutLeader,
   drawFloatingCenterArrow,
   drawFloatingLandLabel,
-  getPrismLabelAnchor
+  getPrismLabelAnchor,
+  planOutsideBoxArtworkTag
 } from '../utils/map3dLabelOverlay.js';
 import { buildDefaultHudReservedRects, rectsOverlap } from '../utils/canvasLabelLayout.js';
 import { createSculptureThreeLayer } from '../utils/map3dSculptureLayer.js';
@@ -1102,6 +1105,7 @@ export default function MapView3D({
       }
       artworkEntries.push({
         scId,
+        scPid,
         el,
         isSelected: scId === selectedSculptureIdRef.current,
         isPendingPreview: Boolean(sc.isPendingPreview),
@@ -1110,75 +1114,73 @@ export default function MapView3D({
     }
     artworkEntries.sort((a, b) => (b.pt.depth || 0) - (a.pt.depth || 0));
 
+    const landBoxByParcel = new Map();
+    const allLandBoxEntries = [];
+    for (const [pid, entry] of parcelGeomMap.entries()) {
+      const lBox = buildProjectedLandBox(entry?.geom);
+      if (lBox) {
+        landBoxByParcel.set(pid, lBox);
+        allLandBoxEntries.push({
+          pid,
+          rect: { x: lBox.minX, y: lBox.minY, w: lBox.width, h: lBox.height }
+        });
+      }
+    }
+
     for (const item of artworkEntries) {
-      const { el, pt, isSelected, isPendingPreview } = item;
+      const { el, pt, scPid, isSelected, isPendingPreview } = item;
       el.style.display = 'inline-flex';
       const elW = el.offsetWidth || 124;
       const elH = el.offsetHeight || 28;
-      const minCenterX = Math.min(w / 2, elW / 2 + 10);
-      const maxCenterX = Math.max(w / 2, w - elW / 2 - 10);
-      const baseCenterX = Math.max(minCenterX, Math.min(maxCenterX, pt.x));
-      const baseBottomY = Math.max(elH + 12, Math.min(h - 14, pt.y - 18));
+      const parentBox = scPid ? landBoxByParcel.get(scPid) || null : null;
+      const siblingBoxRects = allLandBoxEntries
+        .filter((entry) => entry.pid !== scPid)
+        .map((entry) => entry.rect);
 
-      // Avoid blocking land labels or sibling artwork pills even in dense clusters
-      const stepY = elH + 10;
-      const stepX = Math.max(elW * 0.92 + 14, 128);
-      const candidates = [
-        { cx: baseCenterX, by: baseBottomY },
-        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY) },
-        { cx: Math.min(maxCenterX, baseCenterX + stepX), by: baseBottomY },
-        { cx: Math.max(minCenterX, baseCenterX - stepX), by: baseBottomY },
-        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18) },
-        { cx: Math.min(maxCenterX, baseCenterX + stepX), by: Math.max(elH + 12, baseBottomY - stepY) },
-        { cx: Math.max(minCenterX, baseCenterX - stepX), by: Math.max(elH + 12, baseBottomY - stepY) },
-        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY * 2) },
-        { cx: baseCenterX, by: Math.min(h - 14, pt.y + elH + 18 + stepY) },
-        { cx: Math.min(maxCenterX, baseCenterX + stepX * 1.45), by: baseBottomY },
-        { cx: Math.max(minCenterX, baseCenterX - stepX * 1.45), by: baseBottomY },
-        { cx: baseCenterX, by: Math.max(elH + 12, baseBottomY - stepY * 3) }
-      ];
-      let chosen = candidates[0];
-      let bestOverlapScore = Infinity;
-      for (const cand of candidates) {
-        const rect = { x: cand.cx - elW / 2, y: cand.by - elH, w: elW, h: elH };
-        if (!placedOverlayRects.some((r) => rectsOverlap(rect, r, 6))) {
-          chosen = cand;
-          bestOverlapScore = 0;
-          break;
-        }
-        let overlapScore = 0;
-        for (const r of placedOverlayRects) {
-          const ox = Math.max(0, Math.min(rect.x + rect.w + 4, r.x + r.w) - Math.max(rect.x - 4, r.x));
-          const oy = Math.max(0, Math.min(rect.y + rect.h + 4, r.y + r.h) - Math.max(rect.y - 4, r.y));
-          overlapScore += ox * oy;
-        }
-        if (overlapScore < bestOverlapScore) {
-          bestOverlapScore = overlapScore;
-          chosen = cand;
-        }
-      }
-      placedOverlayRects.push({
-        x: chosen.cx - elW / 2,
-        y: chosen.by - elH,
-        w: elW,
-        h: elH
+      const plan = planOutsideBoxArtworkTag({
+        targetPt: pt,
+        elWidth: elW,
+        elHeight: elH,
+        viewportWidth: w,
+        viewportHeight: h,
+        parentBox,
+        placedOverlayRects,
+        avoidBoxRects: siblingBoxRects,
+        boxGapPx: 18,
+        marginPx: 10
       });
 
-      el.style.transform = `translate3d(${Math.round(chosen.cx)}px, ${Math.round(
-        chosen.by
+      placedOverlayRects.push(plan.rect);
+      el.dataset.calloutSide = plan.side;
+      el.style.transform = `translate3d(${Math.round(plan.cx)}px, ${Math.round(
+        plan.by
       )}px, 0) translate(-50%, -100%)`;
 
-      const stemFromY = chosen.by < pt.y ? chosen.by : chosen.by - elH;
-      const artLineColor = isSelected || isPendingPreview ? '#ffd166' : '#00f5d4';
-      const artDotColor = isSelected || isPendingPreview ? '#fff8dc' : '#eafffc';
-      drawFloatingCenterArrow(ctx, {
-        fromX: chosen.cx,
-        fromY: stemFromY,
-        toX: pt.x,
-        toY: pt.y,
-        color: artLineColor,
-        dotColor: artDotColor
-      });
+      if (parentBox) {
+        drawArtworkCalloutLeader(ctx, {
+          fromX: plan.fromX,
+          fromY: plan.fromY,
+          elbowX: plan.elbowX,
+          elbowY: plan.elbowY,
+          targetX: plan.targetX,
+          targetY: plan.targetY,
+          boxEntry: plan.boxEntry,
+          fadeInsideBox: true,
+          isSelected,
+          isPendingPreview
+        });
+      } else {
+        const artLineColor = isSelected || isPendingPreview ? '#ffd166' : '#00f5d4';
+        const artDotColor = isSelected || isPendingPreview ? '#fff8dc' : '#eafffc';
+        drawFloatingCenterArrow(ctx, {
+          fromX: plan.fromX,
+          fromY: plan.fromY,
+          toX: plan.targetX,
+          toY: plan.targetY,
+          color: artLineColor,
+          dotColor: artDotColor
+        });
+      }
     }
 
     // PASS 2c: Off-screen clickable edge tags so lands & sculptures outside the viewport stay reachable on the edges

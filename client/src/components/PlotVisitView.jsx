@@ -33,7 +33,10 @@ import {
   resolveParcelVolume,
   resolveSculptureWorldTarget
 } from '../utils/landPreviewHelpers.js';
-import { computeSideArtworkCallouts } from '../utils/map3dLabelOverlay.js';
+import {
+  buildProjectedLandBox,
+  computeSideArtworkCallouts
+} from '../utils/map3dLabelOverlay.js';
 import { useMeasurementUnits } from '../utils/measurementUnits.js';
 import { getLeafletTileConfig, useMapTheme } from '../utils/mapTheme.js';
 import { computeNeighborEdgeArrows } from '../utils/neighborEdgeArrows.js';
@@ -827,6 +830,7 @@ export default function PlotVisitView({
       }
     }
 
+    const landBox2d = pts.length >= 3 ? buildProjectedLandBox(pts) : null;
     const allCallouts = computeSideArtworkCallouts({
       sculptures: visibleSculpturesRef.current || [],
       volume: curParcel?.volume || null,
@@ -838,6 +842,9 @@ export default function PlotVisitView({
       marginPx: w < 520 ? 8 : 14,
       labelHeight: w < 520 ? 34 : 40,
       gapPx: 8,
+      landBox: landBox2d,
+      dockOutsideBox: Boolean(isDesktopVariantRef.current || w >= 520),
+      boxGapPx: 20,
       projectScreenPt: (lng, lat) => {
         const pt = map.latLngToContainerPoint([Number(lat), Number(lng)]);
         return { x: pt.x, y: pt.y };
@@ -1750,37 +1757,108 @@ export default function PlotVisitView({
                         />
                       </g>
                     )}
-                    {map2dOverlay.callouts.map((c) => (
-                      <g
-                        key={c.sculptureId}
-                        data-testid="plot-artwork-leader-line"
-                        data-sculpture-id={c.sculptureId}
-                      >
-                        <polyline
-                          points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
-                          fill="none"
-                          stroke="rgba(4, 10, 20, 0.78)"
-                          strokeWidth={c.isSelected ? '3.4' : '2.6'}
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                        />
-                        <polyline
-                          points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
-                          fill="none"
-                          stroke={c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4'}
-                          strokeWidth={c.isPendingPreview || c.isSelected ? '1.8' : '1.25'}
-                          strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                        />
-                        <circle
-                          cx={c.targetX}
-                          cy={c.targetY}
-                          r={c.isPendingPreview || c.isSelected ? '3.2' : '2.4'}
-                          fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
-                        />
-                      </g>
-                    ))}
+                    {map2dOverlay.callouts.map((c, idx) => {
+                      const lineColor = c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4';
+                      const gradId = `plot2dLeaderFade-${idx}`;
+                      const hasBoxEntry =
+                        c.boxEntry &&
+                        !c.boxEntry.fromInside &&
+                        Number.isFinite(c.boxEntry.x) &&
+                        Number.isFinite(c.boxEntry.y);
+                      const outsidePts = hasBoxEntry
+                        ? c.boxEntry.segment === 'stub'
+                          ? `${c.fromX},${c.fromY} ${c.boxEntry.x},${c.boxEntry.y}`
+                          : `${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.boxEntry.x},${c.boxEntry.y}`
+                        : null;
+                      const insidePts = hasBoxEntry
+                        ? c.boxEntry.segment === 'stub'
+                          ? `${c.boxEntry.x},${c.boxEntry.y} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`
+                          : `${c.boxEntry.x},${c.boxEntry.y} ${c.targetX},${c.targetY}`
+                        : null;
+                      return (
+                        <g
+                          key={c.sculptureId}
+                          data-testid="plot-artwork-leader-line"
+                          data-sculpture-id={c.sculptureId}
+                        >
+                          {hasBoxEntry ? (
+                            <>
+                              <defs>
+                                <linearGradient
+                                  id={gradId}
+                                  gradientUnits="userSpaceOnUse"
+                                  x1={c.boxEntry.x}
+                                  y1={c.boxEntry.y}
+                                  x2={c.targetX}
+                                  y2={c.targetY}
+                                >
+                                  <stop
+                                    offset="0%"
+                                    stopColor={lineColor}
+                                    stopOpacity={c.isSelected || c.isPendingPreview ? '0.68' : '0.56'}
+                                  />
+                                  <stop
+                                    offset="55%"
+                                    stopColor={lineColor}
+                                    stopOpacity={c.isSelected || c.isPendingPreview ? '0.38' : '0.28'}
+                                  />
+                                  <stop
+                                    offset="100%"
+                                    stopColor={lineColor}
+                                    stopOpacity={c.isSelected || c.isPendingPreview ? '0.28' : '0.2'}
+                                  />
+                                </linearGradient>
+                              </defs>
+                              <polyline
+                                points={outsidePts}
+                                fill="none"
+                                stroke="rgba(4, 10, 20, 0.68)"
+                                strokeWidth={c.isSelected ? '3.0' : '2.3'}
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                              />
+                              <polyline
+                                points={outsidePts}
+                                fill="none"
+                                stroke={lineColor}
+                                strokeOpacity="0.94"
+                                strokeWidth={c.isPendingPreview || c.isSelected ? '1.7' : '1.2'}
+                                strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                              />
+                              <polyline
+                                points={insidePts}
+                                fill="none"
+                                stroke={`url(#${gradId})`}
+                                strokeWidth={c.isPendingPreview || c.isSelected ? '1.45' : '1.05'}
+                                strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                              />
+                            </>
+                          ) : (
+                            <polyline
+                              points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+                              fill="none"
+                              stroke={lineColor}
+                              strokeOpacity={c.fadeInsideBox ? '0.45' : '0.92'}
+                              strokeWidth={c.isPendingPreview || c.isSelected ? '1.6' : '1.15'}
+                              strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                              strokeLinejoin="round"
+                              strokeLinecap="round"
+                            />
+                          )}
+                          <circle
+                            cx={c.targetX}
+                            cy={c.targetY}
+                            r={c.isPendingPreview || c.isSelected ? '3.0' : '2.2'}
+                            fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
+                            fillOpacity="0.82"
+                          />
+                        </g>
+                      );
+                    })}
                   </svg>
                 )}
                 <div

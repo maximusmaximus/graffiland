@@ -30,6 +30,7 @@ import {
   projectLngLatAltToScreen
 } from '../../utils/map3dProjection.js';
 import {
+  buildProjectedLandBox,
   computeFloatingLandLabelBox,
   computeSideArtworkCallouts,
   drawArtworkCalloutLeader,
@@ -127,6 +128,7 @@ function MobileIsoSvgFallback({
   bearingDeg,
   sculptureCount,
   showcaseMode = false,
+  isDesktop = false,
   sculptures = [],
   selectedSculptureId = '',
   landSelected = false,
@@ -204,6 +206,7 @@ function MobileIsoSvgFallback({
   const topCenterX = (t[0][0] + t[1][0] + t[2][0] + t[3][0]) / 4;
   const topCenterY = (t[0][1] + t[1][1] + t[2][1] + t[3][1]) / 4;
 
+  const fallbackLandBox = buildProjectedLandBox([...b, ...t]);
   const fallbackCallouts =
     showcaseMode || sculptures.length > 0
       ? computeSideArtworkCallouts({
@@ -217,6 +220,9 @@ function MobileIsoSvgFallback({
           marginPx: 8,
           labelHeight: 32,
           gapPx: 6,
+          landBox: fallbackLandBox,
+          dockOutsideBox: Boolean(isDesktop),
+          boxGapPx: 14,
           projectScreenPt: (_lng, _lat, _alt, _sc, idx, total) => {
             const frac = total <= 1 ? 0 : idx / (total - 1) - 0.5;
             return {
@@ -325,23 +331,73 @@ function MobileIsoSvgFallback({
             </text>
           </>
         )}
-        {fallbackCallouts.map((c) => (
-          <g key={c.sculptureId} data-testid="plot-artwork-leader-line" data-sculpture-id={c.sculptureId}>
-            <polyline
-              points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
-              fill="none"
-              stroke={c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4'}
-              strokeWidth={c.isPendingPreview || c.isSelected ? '1.8' : '1.25'}
-              strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
-            />
-            <circle
-              cx={c.targetX}
-              cy={c.targetY}
-              r={c.isPendingPreview || c.isSelected ? '3.4' : '2.4'}
-              fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
-            />
-          </g>
-        ))}
+        {fallbackCallouts.map((c, idx) => {
+          const lineColor = c.isPendingPreview || c.isSelected ? '#ffd166' : '#00f5d4';
+          const gradId = `isoFallbackLeaderGrad-${idx}`;
+          const hasBoxEntry =
+            c.boxEntry && !c.boxEntry.fromInside && Number.isFinite(c.boxEntry.x) && Number.isFinite(c.boxEntry.y);
+          return (
+            <g key={c.sculptureId} data-testid="plot-artwork-leader-line" data-sculpture-id={c.sculptureId}>
+              {hasBoxEntry ? (
+                <>
+                  <defs>
+                    <linearGradient
+                      id={gradId}
+                      gradientUnits="userSpaceOnUse"
+                      x1={c.boxEntry.x}
+                      y1={c.boxEntry.y}
+                      x2={c.targetX}
+                      y2={c.targetY}
+                    >
+                      <stop offset="0%" stopColor={lineColor} stopOpacity={c.isSelected ? '0.68' : '0.56'} />
+                      <stop offset="55%" stopColor={lineColor} stopOpacity={c.isSelected ? '0.38' : '0.28'} />
+                      <stop offset="100%" stopColor={lineColor} stopOpacity={c.isSelected ? '0.28' : '0.2'} />
+                    </linearGradient>
+                  </defs>
+                  <polyline
+                    points={
+                      c.boxEntry.segment === 'stub'
+                        ? `${c.fromX},${c.fromY} ${c.boxEntry.x},${c.boxEntry.y}`
+                        : `${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.boxEntry.x},${c.boxEntry.y}`
+                    }
+                    fill="none"
+                    stroke={lineColor}
+                    strokeOpacity="0.92"
+                    strokeWidth={c.isPendingPreview || c.isSelected ? '1.7' : '1.2'}
+                    strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                  />
+                  <polyline
+                    points={
+                      c.boxEntry.segment === 'stub'
+                        ? `${c.boxEntry.x},${c.boxEntry.y} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`
+                        : `${c.boxEntry.x},${c.boxEntry.y} ${c.targetX},${c.targetY}`
+                    }
+                    fill="none"
+                    stroke={`url(#${gradId})`}
+                    strokeWidth={c.isPendingPreview || c.isSelected ? '1.45' : '1.05'}
+                    strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                  />
+                </>
+              ) : (
+                <polyline
+                  points={`${c.fromX},${c.fromY} ${c.elbowX},${c.elbowY} ${c.targetX},${c.targetY}`}
+                  fill="none"
+                  stroke={lineColor}
+                  strokeOpacity={c.fadeInsideBox ? '0.5' : '0.92'}
+                  strokeWidth={c.isPendingPreview || c.isSelected ? '1.6' : '1.15'}
+                  strokeDasharray={c.isPendingPreview ? '5 3' : undefined}
+                />
+              )}
+              <circle
+                cx={c.targetX}
+                cy={c.targetY}
+                r={c.isPendingPreview || c.isSelected ? '3.1' : '2.2'}
+                fill={c.isPendingPreview || c.isSelected ? '#ffd166' : '#eafffc'}
+                fillOpacity="0.82"
+              />
+            </g>
+          );
+        })}
       </svg>
 
       {(showcaseMode || fallbackCallouts.length > 0) && (
@@ -971,6 +1027,7 @@ export default function MobileIsometricMap({
         )
       : (hydratedSculpturesRef.current || []).filter((sc) => sc && !sc.hidden && sc.id);
 
+    const primaryLandBox = primaryGeom ? buildProjectedLandBox(primaryGeom) : null;
     const allCallouts = computeSideArtworkCallouts({
       sculptures: focusedCalloutSculptures,
       volume: activeVol,
@@ -982,6 +1039,9 @@ export default function MobileIsometricMap({
       marginPx: w < 520 ? 8 : 14,
       labelHeight: w < 520 ? 34 : 40,
       gapPx: 8,
+      landBox: primaryLandBox,
+      dockOutsideBox: Boolean(isDesktopRef.current || w >= 520),
+      boxGapPx: 20,
       getSculptureTransform: (id) => threeLayerRef.current?.getTransform?.(id) || null,
       projectScreenPt: (lng, lat, alt) =>
         projectLngLatAltToScreen(map, maplibregl, lng, lat, alt)
@@ -2309,6 +2369,7 @@ export default function MobileIsometricMap({
           bearingDeg={liveBearing}
           sculptureCount={primarySculptureCount}
           showcaseMode={showcaseMode}
+          isDesktop={isDesktop}
           sculptures={visibleShowcaseSculptures}
           selectedSculptureId={selectedSculptureId}
           landSelected={landSelected}
