@@ -43,7 +43,7 @@ function makeValidPol(lat, lng, overrides = {}) {
   };
 }
 
-describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, Off) — API, MCP & UI', () => {
+describe('Land Chat Access Policy (Default Everyone On Site + Paired Agentic Users, Contributors, Whitelist, Off) — API, MCP & UI', () => {
   let srv;
   let baseUrl;
 
@@ -207,9 +207,125 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
       })
     });
     assert.equal(initRes.status, 200, JSON.stringify(initRes.body));
-    assert.equal(initRes.body.chatAccessMode, 'contributors');
+    assert.equal(initRes.body.chatAccessMode, 'open');
+    assert.equal(initRes.body.chatAllowAgents, true);
 
-    // A) DEFAULT ('contributors'): Art contributor CAN enter chat immediately!
+    // Helper: create & connect a paired MCP agent for any Google-signed-in user
+    async function pairAgentFor(actor, agentName) {
+      const pCreate = await apiJson('/api/mcp/pairings', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${actor.token}` },
+        body: JSON.stringify({ label: agentName })
+      });
+      assert.equal(pCreate.status, 200, JSON.stringify(pCreate.body));
+      const code = pCreate.body.pairing.code;
+      const pConn = await apiJson('/api/mcp/pairings/connect', {
+        method: 'POST',
+        body: JSON.stringify({ pairingCode: code, agentName })
+      });
+      assert.equal(pConn.status, 200, JSON.stringify(pConn.body));
+      return code;
+    }
+
+    async function callMcpTool(code, name, args) {
+      return apiJson('/api/mcp', {
+        method: 'POST',
+        headers: { 'X-Graffiland-Pairing-Code': code },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Math.floor(Math.random() * 1e6),
+          method: 'tools/call',
+          params: { name, arguments: args }
+        })
+      });
+    }
+
+    const ownerAgentCode = await pairAgentFor(owner, 'owner-agent');
+    const contribAgentCode = await pairAgentFor(contrib, 'contrib-agent');
+    const guestAgentCode = await pairAgentFor(guest, 'guest-agent');
+
+    // A) DEFAULT ('open' — Everyone On Site Google Login + chatAllowAgents = true):
+    //    1) Non-contributor signed-in Google visitor CAN enter chat immediately!
+    const guestEnterDefault = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${guest.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: guestId.pubFingerprint,
+        sightProof: await makeSight(guestId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(guestEnterDefault.status, 200, JSON.stringify(guestEnterDefault.body));
+    assert.equal(guestEnterDefault.body.chatAccessMode, 'open');
+    assert.equal(guestEnterDefault.body.chatAllowAgents, true);
+
+    //    2) Paired agent for non-contributor Google user CAN ALSO enter chat by default!
+    const guestAgentEnterOpen = await callMcpTool(guestAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter',
+      requesterPubFp: guestId.pubFingerprint
+    });
+    assert.equal(guestAgentEnterOpen.status, 200, JSON.stringify(guestAgentEnterOpen.body));
+    assert.equal(guestAgentEnterOpen.body.result.structuredContent.chatAccessMode, 'open');
+    assert.equal(guestAgentEnterOpen.body.result.structuredContent.chatAllowAgents, true);
+    assert.equal(guestAgentEnterOpen.body.result.structuredContent.viewerChatRole, 'paired_agent');
+
+    // A2) DISABLING PAIRED AGENTIC USERS (chatAllowAgents = false) in 'open' mode:
+    //     Blocks ALL paired agents (guest, contributor, AND owner's paired agent) while human mobile users stay allowed!
+    const disableAgentsRes = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ chatAllowAgents: false })
+    });
+    assert.equal(disableAgentsRes.status, 200);
+    assert.equal(disableAgentsRes.body.settings.chatAccessMode, 'open');
+    assert.equal(disableAgentsRes.body.settings.chatAllowAgents, false);
+
+    const guestAgentBlocked = await callMcpTool(guestAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(guestAgentBlocked.status, 403, JSON.stringify(guestAgentBlocked.body));
+    assert.match(guestAgentBlocked.body?.error?.message || '', /Paired agentic users are disabled/i);
+
+    const ownerAgentBlocked = await callMcpTool(ownerAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(ownerAgentBlocked.status, 403, JSON.stringify(ownerAgentBlocked.body));
+    assert.match(ownerAgentBlocked.body?.error?.message || '', /Paired agentic users are disabled/i);
+
+    // Human mobile guest is STILL allowed when chatAllowAgents = false
+    const humanStillAllowed = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${guest.token}`, 'User-Agent': mobileUa },
+      body: JSON.stringify({
+        requesterPubFp: guestId.pubFingerprint,
+        sightProof: await makeSight(guestId),
+        deviceProfile: { isMobile: true }
+      })
+    });
+    assert.equal(humanStillAllowed.status, 200, JSON.stringify(humanStillAllowed.body));
+    assert.equal(humanStillAllowed.body.chatAllowAgents, false);
+
+    // Re-enable Paired Agentic Users for remaining mode checks
+    const reEnableAgentsRes = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ chatAllowAgents: true })
+    });
+    assert.equal(reEnableAgentsRes.status, 200);
+    assert.equal(reEnableAgentsRes.body.settings.chatAllowAgents, true);
+
+    // B) CONTRIBUTORS ONLY: Owner switches to 'contributors' -> art contributor & their paired agent allowed; guest & guest's paired agent blocked!
+    const setContribMode = await apiJson(`/api/lands/${parcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ chatAccessMode: 'contributors' })
+    });
+    assert.equal(setContribMode.status, 200);
+    assert.equal(setContribMode.body.settings.chatAccessMode, 'contributors');
+
     const contribEnter = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${contrib.token}`, 'User-Agent': mobileUa },
@@ -223,8 +339,14 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     assert.equal(contribEnter.body.chatAccessMode, 'contributors');
     assert.equal(contribEnter.body.viewerChatRole, 'contributor');
 
-    // Non-contributor guest is BLOCKED by default ('contributors')
-    const guestBlockedDefault = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
+    const contribAgentEnter = await callMcpTool(contribAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(contribAgentEnter.status, 200, JSON.stringify(contribAgentEnter.body));
+    assert.equal(contribAgentEnter.body.result.structuredContent.viewerChatRole, 'paired_agent');
+
+    const guestBlockedContrib = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${guest.token}`, 'User-Agent': mobileUa },
       body: JSON.stringify({
@@ -233,10 +355,16 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
         deviceProfile: { isMobile: true }
       })
     });
-    assert.equal(guestBlockedDefault.status, 403);
-    assert.equal(guestBlockedDefault.body.code, 'chat_contributors_only');
+    assert.equal(guestBlockedContrib.status, 403);
+    assert.equal(guestBlockedContrib.body.code, 'chat_contributors_only');
 
-    // B) WHITELIST ONLY: Owner switches to 'whitelist' and whitelists @walkupguest by username
+    const guestAgentBlockedContrib = await callMcpTool(guestAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(guestAgentBlockedContrib.status, 403);
+
+    // C) WHITELIST ONLY: Owner switches to 'whitelist' and whitelists @walkupguest by username
     const setWhitelistMode = await apiJson(`/api/lands/${parcelId}/settings`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${owner.token}` },
@@ -254,13 +382,14 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     assert.equal(addWl.body.whitelist.length, 1);
     assert.equal(addWl.body.whitelist[0].userSub, guest.user.id);
 
-    // Public /api/parcels reflects chatAccessMode='whitelist' and chatWhitelistSubs
+    // Public /api/parcels reflects chatAccessMode='whitelist', chatAllowAgents=true, and chatWhitelistSubs
     const parcelsRes = await apiJson('/api/parcels');
     const liveParcel = parcelsRes.body.parcels.find((p) => p.parcelId === parcelId);
     assert.equal(liveParcel.chatAccessMode, 'whitelist');
+    assert.equal(liveParcel.chatAllowAgents, true);
     assert.ok(liveParcel.chatWhitelistSubs.includes(guest.user.id));
 
-    // Whitelisted guest CAN enter chat; non-whitelisted art contributor is now BLOCKED!
+    // Whitelisted guest & their paired agent CAN enter chat; non-whitelisted contributor & their paired agent are BLOCKED!
     const guestWhitelistedEnter = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${guest.token}`, 'User-Agent': mobileUa },
@@ -272,6 +401,12 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     });
     assert.equal(guestWhitelistedEnter.status, 200, JSON.stringify(guestWhitelistedEnter.body));
     assert.equal(guestWhitelistedEnter.body.viewerChatRole, 'whitelisted');
+
+    const guestAgentWhitelistEnter = await callMcpTool(guestAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(guestAgentWhitelistEnter.status, 200, JSON.stringify(guestAgentWhitelistEnter.body));
 
     const contribBlockedWhitelist = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
       method: 'POST',
@@ -285,7 +420,13 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     assert.equal(contribBlockedWhitelist.status, 403);
     assert.equal(contribBlockedWhitelist.body.code, 'chat_whitelist_only');
 
-    // Removing guest from whitelist immediately revokes access
+    const contribAgentBlockedWhitelist = await callMcpTool(contribAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(contribAgentBlockedWhitelist.status, 403);
+
+    // Removing guest from whitelist immediately revokes both human & paired agent access
     const delWl = await apiJson(
       `/api/lands/${parcelId}/chat-whitelist/${encodeURIComponent(guest.user.id)}`,
       {
@@ -308,7 +449,7 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     assert.equal(guestAfterRemove.status, 403);
     assert.equal(guestAfterRemove.body.code, 'chat_whitelist_only');
 
-    // C) OFF MODE: Owner turns Land Chat off -> everyone blocked (code: 'chat_disabled')
+    // D) OFF MODE: Owner turns Land Chat off -> everyone (human & paired agents) blocked (code: 'chat_disabled')
     const setOffMode = await apiJson(`/api/lands/${parcelId}/settings`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${owner.token}` },
@@ -329,56 +470,59 @@ describe('Land Chat Access Policy (Default Contributors, Whitelist Only, Open, O
     assert.equal(ownerEnterOff.status, 403);
     assert.equal(ownerEnterOff.body.code, 'chat_disabled');
 
-    // D) OPEN MODE: Owner opens chat to everyone on site -> non-contributor guest enters cleanly
+    const ownerAgentOff = await callMcpTool(ownerAgentCode, 'land_chat', {
+      parcelId,
+      action: 'enter'
+    });
+    assert.equal(ownerAgentOff.status, 403);
+
+    // E) OPEN MODE + MCP manage_land_chat_whitelist & E2EE paired agent message post
     const setOpenMode = await apiJson(`/api/lands/${parcelId}/settings`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${owner.token}` },
-      body: JSON.stringify({ chatAccessMode: 'open' })
+      body: JSON.stringify({ chatAccessMode: 'open', chatAllowAgents: true })
     });
     assert.equal(setOpenMode.status, 200);
 
-    const guestEnterOpen = await apiJson(`/api/sculptures/${ownerSc.id}/chat/enter`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${guest.token}`, 'User-Agent': mobileUa },
-      body: JSON.stringify({
-        requesterPubFp: guestId.pubFingerprint,
-        sightProof: await makeSight(guestId),
-        deviceProfile: { isMobile: true }
-      })
-    });
-    assert.equal(guestEnterOpen.status, 200, JSON.stringify(guestEnterOpen.body));
-    assert.equal(guestEnterOpen.body.chatAccessMode, 'open');
-
-    // E) MCP manage_land_chat_whitelist works over active pairing
-    const pairCreate = await apiJson('/api/mcp/pairings', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${owner.token}` },
-      body: JSON.stringify({ label: 'Chat Policy Agent' })
-    });
-    assert.equal(pairCreate.status, 200);
-    const code = pairCreate.body.pairing.code;
-    const pairConn = await apiJson('/api/mcp/pairings/connect', {
-      method: 'POST',
-      body: JSON.stringify({ pairingCode: code, agentName: 'policy-bot' })
-    });
-    assert.equal(pairConn.status, 200);
-
-    const mcpAddWl = await apiJson('/api/mcp', {
-      method: 'POST',
-      headers: { 'X-Graffiland-Pairing-Code': code },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: {
-          name: 'manage_land_chat_whitelist',
-          arguments: { parcelId, action: 'add', username: 'artcontrib' }
-        }
-      })
+    const mcpAddWl = await callMcpTool(ownerAgentCode, 'manage_land_chat_whitelist', {
+      parcelId,
+      action: 'add',
+      username: 'artcontrib'
     });
     assert.equal(mcpAddWl.status, 200, JSON.stringify(mcpAddWl.body));
     assert.equal(mcpAddWl.body.result.structuredContent.whitelist.length, 1);
     assert.equal(mcpAddWl.body.result.structuredContent.whitelist[0].userSub, contrib.user.id);
+
+    // Paired owner agent can post an E2EE encrypted message (and plaintext is still rejected!)
+    const rejectPlain = await callMcpTool(ownerAgentCode, 'land_chat', {
+      parcelId,
+      action: 'post_message',
+      text: 'hello plaintext should fail'
+    });
+    assert.equal(rejectPlain.status, 400);
+
+    const encMsg = await chatCrypto.encryptChatMessage({
+      roomKeyB64,
+      identity: ownerId,
+      sculptureId: ownerSc.id,
+      keyEpoch: 1,
+      senderSub: owner.user.id,
+      authorName: '@chatowner (AI)',
+      text: 'Encrypted hello from paired MCP agent!'
+    });
+    const postAgentMsg = await callMcpTool(ownerAgentCode, 'land_chat', {
+      parcelId,
+      action: 'post_message',
+      id: encMsg.id,
+      senderPubFp: encMsg.senderPubFp,
+      senderSignPubJwk: encMsg.senderSignPubJwk,
+      ivB64: encMsg.ivB64,
+      ciphertextB64: encMsg.ciphertextB64,
+      aadJson: encMsg.aadJson,
+      signatureB64: encMsg.signatureB64
+    });
+    assert.equal(postAgentMsg.status, 200, JSON.stringify(postAgentMsg.body));
+    assert.equal(postAgentMsg.body.result.structuredContent.message.senderSub, owner.user.id);
   });
 });
 
@@ -521,7 +665,7 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
     assert.equal(opened, 1);
     cleanup();
 
-    // Non-contributor visitor -> LOCKED under default 'contributors' mode with "i" reason
+    // Non-contributor visitor -> LOCKED under 'contributors' mode with "i" reason
     const guestView = RTL.render(
       React.createElement(ARLandInspectorPanel, {
         land: baseLand,
@@ -539,7 +683,24 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
     assert.equal(guestBtn.getAttribute('data-locked'), 'true');
     const guestInfo = guestView.getByTestId('ar-land-chat-lock-info');
     RTL.fireEvent.click(guestInfo.querySelector('.info-tip-btn'));
-    assert.match(guestInfo.textContent, /contributors by default/i);
+    assert.match(guestInfo.textContent, /restricted to the land holder and contributors/i);
+    cleanup();
+
+    // Default ('open' — Everyone On Site Google Login) unlocks non-contributor signed-in visitor!
+    const openGuestView = RTL.render(
+      React.createElement(ARLandInspectorPanel, {
+        land: { ...baseLand, chatAccessMode: undefined },
+        isSignedIn: true,
+        userId: 'u-stranger',
+        cameraReady: true,
+        hasLocation: true,
+        onOpenLandChat: () => {
+          opened += 1;
+        },
+        onClose: () => {}
+      })
+    );
+    assert.equal(openGuestView.getByTestId('ar-land-chat-btn').getAttribute('data-locked'), 'false');
     cleanup();
 
     // Whitelist-only mode -> blocks art contributor, unlocks whitelisted VIP
@@ -597,7 +758,7 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
     cleanup();
   });
 
-  test('3. LandManagementModal lets land holder switch chatAccessMode (Contributors / Open / Whitelist / Off) and manage Chat Whitelist', async () => {
+  test('3. LandManagementModal defaults to Everyone On Site + Paired Agentic Users (checked), renders clean panels + legible dark dropdown CSS, and saves changes', async () => {
     const { default: LandManagementModal } = await loadJsxModule(
       'client/src/components/LandManagementModal.jsx'
     );
@@ -625,9 +786,17 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
                   allowContributorEdits: true,
                   requireApproval: false,
                   frozen: false,
-                  chatAccessMode: savedSettingsPayload?.chatAccessMode || 'contributors'
+                  chatAccessMode: savedSettingsPayload?.chatAccessMode || 'open',
+                  chatAllowAgents:
+                    savedSettingsPayload?.chatAllowAgents !== undefined
+                      ? savedSettingsPayload.chatAllowAgents
+                      : true
                 },
-                chatAccessMode: savedSettingsPayload?.chatAccessMode || 'contributors',
+                chatAccessMode: savedSettingsPayload?.chatAccessMode || 'open',
+                chatAllowAgents:
+                  savedSettingsPayload?.chatAllowAgents !== undefined
+                    ? savedSettingsPayload.chatAllowAgents
+                    : true,
                 contributors: [],
                 chatWhitelist: whitelistMembers,
                 eligibleVisitors: [
@@ -703,11 +872,17 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
     );
 
     const select = await view.findByTestId('land-chat-access-select');
-    assert.equal(select.value, 'contributors');
+    assert.equal(select.value, 'open');
+    assert.ok(view.getByTestId('land-permissions-box'));
+    const agentsCheckbox = view.getByTestId('land-chat-allow-agents-checkbox');
+    assert.equal(agentsCheckbox.checked, true);
+    assert.equal(agentsCheckbox.disabled, false);
 
-    // Switch to Whitelist Only -> shows badge & lets holder whitelist @bigdog
+    // Switch to Whitelist Only & uncheck Paired Agentic Users -> shows badge & lets holder whitelist @bigdog
     RTL.fireEvent.change(select, { target: { value: 'whitelist' } });
     assert.ok(view.getByTestId('land-chat-whitelist-section').textContent.includes('Whitelist Only Active'));
+    RTL.fireEvent.click(agentsCheckbox);
+    assert.equal(agentsCheckbox.checked, false);
 
     const wlInput = view.getByTestId('chat-whitelist-input');
     RTL.fireEvent.change(wlInput, { target: { value: '@bigdog' } });
@@ -717,19 +892,27 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
     assert.deepEqual(addedWhitelistPayload, { identifier: '@bigdog' });
     await view.findByTestId('chat-whitelist-member-row');
 
-    // Save settings -> persists chatAccessMode: 'whitelist'
+    // Save settings -> persists chatAccessMode: 'whitelist' AND chatAllowAgents: false
     await RTL.act(async () => {
       RTL.fireEvent.submit(select.closest('form'));
     });
     assert.equal(savedSettingsPayload.chatAccessMode, 'whitelist');
+    assert.equal(savedSettingsPayload.chatAllowAgents, false);
 
-    // Switch to Off -> Chat Whitelist section cleanly hides
+    // Switch to Off -> Chat Whitelist section hides & Paired Agentic Users checkbox disables
     RTL.fireEvent.change(view.getByTestId('land-chat-access-select'), { target: { value: 'off' } });
     assert.equal(view.queryByTestId('land-chat-whitelist-section'), null);
+    assert.equal(view.getByTestId('land-chat-allow-agents-checkbox').disabled, true);
     cleanup();
+
+    // Verify styles.css enforces dark legible select + option contrast (no white-on-white dropdown!)
+    const css = fs.readFileSync(path.join(ROOT, 'client/src/styles.css'), 'utf8');
+    assert.match(css, /color-scheme:\s*dark;/);
+    assert.match(css, /select option[\s\S]*background-color:\s*#0f1629;/);
+    assert.match(css, /\.land-chat-access-select[\s\S]*background-color:\s*#0e1424;/);
   });
 
-  test('4. In-app Guide and ENCRYPTED_LOCATION_CHAT docs document default contributor chat, whitelist, and off mode', async () => {
+  test('4. In-app Guide and ENCRYPTED_LOCATION_CHAT docs document default Everyone On Site, Paired Agentic Users, whitelist, and off mode', async () => {
     const { default: InfoTermsModal } = await loadJsxModule(
       'client/src/components/InfoTermsModal.jsx'
     );
@@ -741,9 +924,11 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
       })
     );
     RTL.fireEvent.click(view.getByText(/Mobile AR Studio/i));
+    assert.match(view.container.textContent, /Everyone On Site/i);
+    assert.match(view.container.textContent, /Paired Agentic Users/i);
     assert.match(view.container.textContent, /Whitelist Only/i);
-    assert.match(view.container.textContent, /contributors/i);
     RTL.fireEvent.click(view.getByText(/AI Agents & Collectors/i));
+    assert.match(view.container.textContent, /Paired Agentic Users/i);
     assert.match(view.container.textContent, /Whitelist Only/i);
     cleanup();
 
@@ -752,7 +937,9 @@ describe('Land Chat Access Policy & Whitelist UI (React + jsdom)', () => {
       'utf8'
     );
     assert.match(docText, /chat_access_mode/);
+    assert.match(docText, /chat_allow_agents/);
     assert.match(docText, /land_chat_whitelist/);
     assert.match(docText, /manage_land_chat_whitelist/);
+    assert.match(docText, /land_chat/);
   });
 });

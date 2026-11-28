@@ -320,7 +320,8 @@ CREATE TABLE IF NOT EXISTS land_settings (
   allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
   freeze_placements INTEGER NOT NULL DEFAULT 0,
   require_approval INTEGER NOT NULL DEFAULT 0,
-  chat_access_mode TEXT NOT NULL DEFAULT 'contributors',
+  chat_access_mode TEXT NOT NULL DEFAULT 'open',
+  chat_allow_agents INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
 

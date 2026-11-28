@@ -1,7 +1,8 @@
 import { ethers } from 'ethers';
 import {
   DEFAULT_LAND_CHAT_ACCESS_MODE,
-  normalizeLandChatAccessMode
+  normalizeLandChatAccessMode,
+  normalizeLandChatAllowAgents
 } from '../chatPolicy.mjs';
 import {
   HUMAN_MAX_DRAW_SPAN_FEET,
@@ -389,6 +390,9 @@ export async function listLandsWithCurations(db) {
       chatAccessMode: normalizeLandChatAccessMode(
         settingsMap.get(parcelId)?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
       ),
+      chatAllowAgents: normalizeLandChatAllowAgents(
+        settingsMap.get(parcelId)?.chat_allow_agents
+      ),
       settings: {
         allowAgentErase: settingsMap.has(parcelId)
           ? Boolean(settingsMap.get(parcelId).allow_agent_erase)
@@ -400,6 +404,9 @@ export async function listLandsWithCurations(db) {
         frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
         chatAccessMode: normalizeLandChatAccessMode(
           settingsMap.get(parcelId)?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+        ),
+        chatAllowAgents: normalizeLandChatAllowAgents(
+          settingsMap.get(parcelId)?.chat_allow_agents
         )
       },
       contributorSubs: [
@@ -620,6 +627,7 @@ export async function getLandSettingsInternal(db, parcelId) {
     chatAccessMode: normalizeLandChatAccessMode(
       row?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
     ),
+    chatAllowAgents: normalizeLandChatAllowAgents(row?.chat_allow_agents),
     updatedAt: row?.updated_at || ''
   };
 }
@@ -1108,6 +1116,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       chatAccessMode: normalizeLandChatAccessMode(
         sRow?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
       ),
+      chatAllowAgents: normalizeLandChatAllowAgents(sRow?.chat_allow_agents),
       updatedAt: sRow?.updated_at || ''
     };
     const contribRows = contribsByParcel.get(pid) || [];
@@ -1224,6 +1233,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       frozen: Boolean(settings.frozen),
       requireApproval: Boolean(settings.requireApproval),
       chatAccessMode: settings.chatAccessMode,
+      chatAllowAgents: Boolean(settings.chatAllowAgents),
       settings,
       securityPolicy,
       landmarkAnchor: landmarkAnchor
@@ -3304,19 +3314,29 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       : body?.chatEnabled === false
       ? 'off'
       : body?.chatEnabled === true && current.chatAccessMode === 'off'
-      ? 'contributors'
+      ? DEFAULT_LAND_CHAT_ACCESS_MODE
       : undefined;
   const chatAccessMode =
     chatAccessInput !== undefined
       ? normalizeLandChatAccessMode(chatAccessInput)
       : current.chatAccessMode;
+  const chatAllowAgentsInput =
+    body?.chatAllowAgents !== undefined
+      ? body.chatAllowAgents
+      : body?.chat_allow_agents !== undefined
+      ? body.chat_allow_agents
+      : undefined;
+  const chatAllowAgents =
+    chatAllowAgentsInput !== undefined
+      ? normalizeLandChatAllowAgents(chatAllowAgentsInput)
+      : current.chatAllowAgents;
   const now = new Date().toISOString();
   const ownerAddress = resolvePreferredOwnerWallet(user);
 
   await db.run(
     `INSERT INTO land_settings (
-      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval, chat_access_mode, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval, chat_access_mode, chat_allow_agents, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       owner_sub = excluded.owner_sub,
       owner_address = excluded.owner_address,
@@ -3325,6 +3345,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       freeze_placements = excluded.freeze_placements,
       require_approval = excluded.require_approval,
       chat_access_mode = excluded.chat_access_mode,
+      chat_allow_agents = excluded.chat_allow_agents,
       updated_at = excluded.updated_at`,
     [
       parcelCtx.parcelId,
@@ -3335,6 +3356,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       frozen ? 1 : 0,
       requireApproval ? 1 : 0,
       chatAccessMode,
+      chatAllowAgents ? 1 : 0,
       now
     ]
   );
@@ -3368,6 +3390,7 @@ export async function listLandChatWhitelist(db, { parcelId, user }) {
   return {
     parcelId: parcelCtx.parcelId,
     chatAccessMode: settings.chatAccessMode,
+    chatAllowAgents: settings.chatAllowAgents,
     whitelist: (rows || []).map(formatChatWhitelistRow),
     eligibleVisitors,
     settings

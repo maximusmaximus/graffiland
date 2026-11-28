@@ -11,18 +11,19 @@ export const CHAT_MSG_MAX_CIPHERTEXT_LEN = 12000;
 export const CHAT_CLUE_PROMPT_MAX = 140;
 export const CHAT_CLUE_PBKDF2_ITERATIONS = 210000;
 
-export const LAND_CHAT_ACCESS_MODES = ['contributors', 'open', 'whitelist', 'off'];
-export const DEFAULT_LAND_CHAT_ACCESS_MODE = 'contributors';
+export const LAND_CHAT_ACCESS_MODES = ['open', 'contributors', 'whitelist', 'off'];
+export const DEFAULT_LAND_CHAT_ACCESS_MODE = 'open';
+export const DEFAULT_LAND_CHAT_ALLOW_AGENTS = true;
 
 export function normalizeLandChatAccessMode(raw) {
   const clean = String(raw ?? '')
     .trim()
     .toLowerCase();
-  if (!clean || clean === 'default' || clean === 'contributors' || clean === 'contributors_only') {
-    return 'contributors';
-  }
-  if (clean === 'open' || clean === 'everyone' || clean === 'all' || clean === 'public') {
+  if (!clean || clean === 'default' || clean === 'open' || clean === 'everyone' || clean === 'all' || clean === 'public') {
     return 'open';
+  }
+  if (clean === 'contributors' || clean === 'contributors_only') {
+    return 'contributors';
   }
   if (clean === 'whitelist' || clean === 'whitelist_only' || clean === 'allowlist') {
     return 'whitelist';
@@ -33,12 +34,25 @@ export function normalizeLandChatAccessMode(raw) {
   return DEFAULT_LAND_CHAT_ACCESS_MODE;
 }
 
+export function normalizeLandChatAllowAgents(raw) {
+  if (raw === undefined || raw === null || raw === '') {
+    return DEFAULT_LAND_CHAT_ALLOW_AGENTS;
+  }
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw !== 0;
+  const clean = String(raw).trim().toLowerCase();
+  if (clean === '0' || clean === 'false' || clean === 'off' || clean === 'no' || clean === 'disabled') {
+    return false;
+  }
+  return true;
+}
+
 export function formatLandChatAccessModeLabel(mode) {
   const normalized = normalizeLandChatAccessMode(mode);
-  if (normalized === 'open') return 'Everyone On Site';
+  if (normalized === 'contributors') return 'Contributors Only';
   if (normalized === 'whitelist') return 'Whitelist Only';
   if (normalized === 'off') return 'Off (Disabled)';
-  return 'Contributors (Default)';
+  return 'Everyone On Site (Google Login)';
 }
 
 export class ChatHttpError extends Error {

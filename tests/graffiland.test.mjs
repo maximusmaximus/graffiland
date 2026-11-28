@@ -593,7 +593,15 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
     assert.equal(post1.status, 200, JSON.stringify(post1.body));
     assert.ok(post1.body.message.ciphertextB64);
 
-    // 4. Default chat policy ('contributors') blocks non-contributor Visitor A (403); opening chat to 'open' admits in-person visitors
+    // 4. Default chat policy is 'open' (Everyone On Site); switching to 'contributors' blocks non-contributor Visitor A (403); switching back to 'open' admits Visitor A
+    const contribOnlySettings = await apiJson(`/api/lands/${createdParcelId}/settings`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${artistToken}` },
+      body: JSON.stringify({ chatAccessMode: 'contributors' })
+    });
+    assert.equal(contribOnlySettings.status, 200);
+    assert.equal(contribOnlySettings.body.settings.chatAccessMode, 'contributors');
+
     const blockedVisA = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${visAAuth.body.token}`, 'User-Agent': mobileUa },
@@ -613,6 +621,7 @@ describe('SPRAY.LAND Full-Stack Verification', () => {
     });
     assert.equal(openChatSettings.status, 200);
     assert.equal(openChatSettings.body.settings.chatAccessMode, 'open');
+    assert.equal(openChatSettings.body.settings.chatAllowAgents, true);
 
     // Visitor A taps sculpture in person through camera -> enters -> verifies server response has ZERO plaintext
     const enterVisA = await apiJson(`/api/sculptures/${createdSculptureId}/chat/enter`, {

@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { normalizeLandChatAccessMode } from '../../../shared/chatPolicy.mjs';
+import {
+  DEFAULT_LAND_CHAT_ACCESS_MODE,
+  DEFAULT_LAND_CHAT_ALLOW_AGENTS,
+  normalizeLandChatAccessMode,
+  normalizeLandChatAllowAgents
+} from '../../../shared/chatPolicy.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import {
   buildParcelShareUrl,
@@ -73,7 +78,8 @@ export default function LandManagementModal({
   const [allowContributorEdits, setAllowContributorEdits] = useState(true);
   const [requireApproval, setRequireApproval] = useState(false);
   const [frozen, setFrozen] = useState(false);
-  const [chatAccessMode, setChatAccessMode] = useState('contributors');
+  const [chatAccessMode, setChatAccessMode] = useState(DEFAULT_LAND_CHAT_ACCESS_MODE);
+  const [chatAllowAgents, setChatAllowAgents] = useState(DEFAULT_LAND_CHAT_ALLOW_AGENTS);
   const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
   const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
   const [useAutoOrb, setUseAutoOrb] = useState(true);
@@ -136,6 +142,9 @@ export default function LandManagementModal({
         setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
         setChatAccessMode(
           normalizeLandChatAccessMode(picked.settings?.chatAccessMode ?? picked.chatAccessMode)
+        );
+        setChatAllowAgents(
+          normalizeLandChatAllowAgents(picked.settings?.chatAllowAgents ?? picked.chatAllowAgents)
         );
         setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
         setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
@@ -222,6 +231,9 @@ export default function LandManagementModal({
     setFrozen(Boolean(p.settings?.frozen || p.frozen));
     setChatAccessMode(
       normalizeLandChatAccessMode(p.settings?.chatAccessMode ?? p.chatAccessMode)
+    );
+    setChatAllowAgents(
+      normalizeLandChatAllowAgents(p.settings?.chatAllowAgents ?? p.chatAllowAgents)
     );
     setWhitelistInput('');
     setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
@@ -383,7 +395,8 @@ export default function LandManagementModal({
         allowContributorEdits,
         requireApproval,
         frozen,
-        chatAccessMode
+        chatAccessMode,
+        chatAllowAgents
       });
       await api.updateLandSecurityPolicy(activeParcel.parcelId, {
         requirePasskeyUnlock,
@@ -927,113 +940,152 @@ export default function LandManagementModal({
                     </label>
                   </div>
 
-                  {/* Concise Permission Checkboxes with Clickable "i" Context */}
-                  <div className="land-mgmt-toggle-grid">
-                    <div className="land-mgmt-toggle-item">
-                      <label>
-                        <input
-                          type="checkbox"
-                          data-testid="land-require-approval-checkbox"
-                          checked={requireApproval}
-                          onChange={(e) => setRequireApproval(e.target.checked)}
-                        />
-                        <span>🛡️ Require Approval</span>
-                      </label>
-                      <InfoTip title="Require Approval">
-                        By default, anyone can add 3D art to your open land (you get notified and
-                        can hide or moderate items anytime). Turn this ON to require your approval
-                        before guests or outside AI agents can place artwork here. Approved artworks
-                        still mint directly to the proposing artist.
-                      </InfoTip>
+                  {/* 1A) Land Permissions Sub-Panel */}
+                  <div className="land-mgmt-subcard" data-testid="land-permissions-box">
+                    <div className="land-mgmt-subcard-title">
+                      <XeroIcon emoji="⚙️" size={13} />
+                      <strong>Land Permissions</strong>
                     </div>
+                    <div className="land-mgmt-toggle-grid">
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            data-testid="land-require-approval-checkbox"
+                            checked={requireApproval}
+                            onChange={(e) => setRequireApproval(e.target.checked)}
+                          />
+                          <span>🛡️ Require Approval</span>
+                        </label>
+                        <InfoTip title="Require Approval">
+                          By default, anyone can add 3D art to your open land (you get notified and
+                          can hide or moderate items anytime). Turn this ON to require your approval
+                          before guests or outside AI agents can place artwork here. Approved artworks
+                          still mint directly to the proposing artist.
+                        </InfoTip>
+                      </div>
 
-                    <div className="land-mgmt-toggle-item">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={allowContributorEdits}
-                          onChange={(e) => setAllowContributorEdits(e.target.checked)}
-                        />
-                        <span>Contributor Edits</span>
-                      </label>
-                      <InfoTip title="Contributor Edits">
-                        Allows verified IRL chat visitors you add in the Contributors section below
-                        to edit and refine artworks on this land.
-                      </InfoTip>
-                    </div>
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={allowContributorEdits}
+                            onChange={(e) => setAllowContributorEdits(e.target.checked)}
+                          />
+                          <span>Contributor Edits</span>
+                        </label>
+                        <InfoTip title="Contributor Edits">
+                          Allows verified IRL chat visitors you add in the Contributors section below
+                          to edit and refine artworks on this land.
+                        </InfoTip>
+                      </div>
 
-                    <div className="land-mgmt-toggle-item">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={frozen}
-                          onChange={(e) => setFrozen(e.target.checked)}
-                        />
-                        <span>❄️ Freeze Land</span>
-                      </label>
-                      <InfoTip title="Freeze Land">
-                        Blocks all new sculptures and 3D models from being placed on{' '}
-                        <strong>
-                          {resolveLandDisplayName(
-                            { ...activeParcel, customName: customName || activeParcel.customName },
-                            { defaultName: 'this land' }
-                          )}
-                        </strong>
-                        . Mobile visitors can still view existing art in AR.
-                      </InfoTip>
-                    </div>
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={frozen}
+                            onChange={(e) => setFrozen(e.target.checked)}
+                          />
+                          <span>❄️ Freeze Land</span>
+                        </label>
+                        <InfoTip title="Freeze Land">
+                          Blocks all new sculptures and 3D models from being placed on{' '}
+                          <strong>
+                            {resolveLandDisplayName(
+                              { ...activeParcel, customName: customName || activeParcel.customName },
+                              { defaultName: 'this land' }
+                            )}
+                          </strong>
+                          . Mobile visitors can still view existing art in AR.
+                        </InfoTip>
+                      </div>
 
-                    <div className="land-mgmt-toggle-item">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={allowAgentErase}
-                          onChange={(e) => setAllowAgentErase(e.target.checked)}
-                        />
-                        <span>Agent Erase</span>
-                      </label>
-                      <InfoTip title="Agent Erase Permission" align="right">
-                        Allows your paired MCP agent (with your EIP-191 signature or mobile
-                        approval) to run <code>erase_land</code> on this parcel.
-                      </InfoTip>
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={allowAgentErase}
+                            onChange={(e) => setAllowAgentErase(e.target.checked)}
+                          />
+                          <span>Agent Erase</span>
+                        </label>
+                        <InfoTip title="Agent Erase Permission" align="right">
+                          Allows your paired MCP agent (with your EIP-191 signature or mobile
+                          approval) to run <code>erase_land</code> on this parcel.
+                        </InfoTip>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Land Chat Access Policy */}
+                  {/* 1B) Land Chat Access Policy Sub-Panel */}
                   <div className="land-mgmt-chat-policy-box" data-testid="land-chat-policy-box">
-                    <div className="land-mgmt-heading">
-                      <XeroIcon emoji="💬" size={14} />
-                      <strong style={{ fontSize: 12.5 }}>Land Chat Access</strong>
-                      <InfoTip title="Who Can Chat on This Land">
-                        <strong>Contributors (Default):</strong> You (land holder) + any user who
-                        contributed art to this land (or is in Contributors / Chat Whitelist) can
-                        chat in person within 75m.
-                        <br />
-                        <strong>Everyone On Site:</strong> Any signed-in mobile visitor within 75m
-                        can join chat.
-                        <br />
-                        <strong>Whitelist Only:</strong> Only you and accounts you add to the Chat
-                        Whitelist below can chat (turns off open contributor chat).
-                        <br />
-                        <strong>Off (Disabled):</strong> Turns Land Chat off completely on this
-                        land.
-                      </InfoTip>
+                    <div className="land-mgmt-chat-policy-row">
+                      <div className="land-mgmt-heading">
+                        <XeroIcon emoji="💬" size={14} />
+                        <strong style={{ fontSize: 12.5 }}>Land Chat Access</strong>
+                        <InfoTip title="Who Can Chat on This Land">
+                          <strong>Everyone On Site (Google Login · Default):</strong> Any signed-in
+                          Google visitor on site (within 75m) can join encrypted Land Chat.
+                          <br />
+                          <strong>Contributors Only:</strong> You (land holder) + any user who
+                          contributed art to this land (or is in Contributors / Chat Whitelist).
+                          <br />
+                          <strong>Whitelist Only:</strong> Only you and accounts you add to the Chat
+                          Whitelist below can chat.
+                          <br />
+                          <strong>Off (Disabled):</strong> Turns Land Chat off completely on this
+                          land.
+                        </InfoTip>
+                      </div>
+                      <select
+                        className="input land-chat-access-select"
+                        aria-label="Land Chat Access"
+                        data-testid="land-chat-access-select"
+                        value={chatAccessMode}
+                        onChange={(e) => setChatAccessMode(normalizeLandChatAccessMode(e.target.value))}
+                      >
+                        <option value="open">🌐 Everyone On Site (Google Login · Default)</option>
+                        <option value="contributors">🤝 Contributors Only</option>
+                        <option value="whitelist">📋 Whitelist Only</option>
+                        <option value="off">🔇 Off (Disabled)</option>
+                      </select>
                     </div>
-                    <select
-                      className="input land-chat-access-select"
-                      aria-label="Land Chat Access"
-                      data-testid="land-chat-access-select"
-                      value={chatAccessMode}
-                      onChange={(e) => setChatAccessMode(normalizeLandChatAccessMode(e.target.value))}
+
+                    <div
+                      className={`land-mgmt-chat-agents-row ${
+                        chatAccessMode === 'off' ? 'is-disabled' : ''
+                      }`}
                     >
-                      <option value="contributors">🤝 Contributors (Default)</option>
-                      <option value="open">🌐 Everyone On Site (75m)</option>
-                      <option value="whitelist">📋 Whitelist Only</option>
-                      <option value="off">🔇 Off (Disabled)</option>
-                    </select>
+                      <div className="land-mgmt-toggle-item">
+                        <label>
+                          <input
+                            type="checkbox"
+                            data-testid="land-chat-allow-agents-checkbox"
+                            checked={chatAllowAgents}
+                            disabled={chatAccessMode === 'off'}
+                            onChange={(e) => setChatAllowAgents(e.target.checked)}
+                          />
+                          <span>🤖 Paired Agentic Users (Allowed)</span>
+                        </label>
+                        <InfoTip title="Paired Agentic Users">
+                          Checked by default. When enabled, users who have paired an AI agent via
+                          MCP can let their agent chat on this land following the access rule above
+                          (<strong>Everyone On Site</strong>, <strong>Contributors Only</strong>, or{' '}
+                          <strong>Whitelist Only</strong>). Uncheck to keep Land Chat humans-only.
+                        </InfoTip>
+                      </div>
+                      <span className="land-mgmt-chat-agents-hint">
+                        {chatAccessMode === 'off'
+                          ? 'Disabled while Land Chat is Off'
+                          : chatAllowAgents
+                          ? 'Follows selected access rule'
+                          : 'Humans only'}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Compact Pin-Unlock & ORB Security Sub-Panel */}
+                  {/* 1C) Compact Pin-Unlock & ORB Security Sub-Panel */}
                   {(() => {
                     const secPol = activeParcel.securityPolicy || {};
                     const envTierKey = secPol.envTier || 'unknown';
@@ -1055,7 +1107,7 @@ export default function LandManagementModal({
                         <div className="land-mgmt-section-head">
                           <div className="land-mgmt-heading">
                             <XeroIcon emoji="🔐" size={13} />
-                            <strong style={{ fontSize: 12, color: 'var(--accent)' }}>
+                            <strong style={{ fontSize: 12.5, color: 'var(--accent)' }}>
                               Unlock Security
                             </strong>
                             <InfoTip title="Pin-Unlock & Visual ORB Security">
@@ -1064,40 +1116,41 @@ export default function LandManagementModal({
                               WebAuthn Passkey and/or strict ORB unlock for encrypted pinned notes.
                             </InfoTip>
                           </div>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <span
-                              className={`badge ${useAutoOrb ? 'teal' : 'gold'}`}
-                              data-testid="orb-calibration-mode-badge"
-                              style={{ fontSize: 10 }}
+                          {isWebAuthnSupported() && (
+                            <button
+                              type="button"
+                              className="btn btn-xs"
+                              disabled={busy !== ''}
+                              onClick={handleRegisterPasskey}
                             >
-                              {useAutoOrb ? `Auto (${envTierLabel})` : 'Custom Override'}
+                              <XeroIcon emoji="🛡️" size={11} />{' '}
+                              {passkeys.length > 0 ? `Passkeys (${passkeys.length})` : '+ Passkey'}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="land-mgmt-status-strip">
+                          <span
+                            className={`badge ${useAutoOrb ? 'teal' : 'gold'}`}
+                            data-testid="orb-calibration-mode-badge"
+                            style={{ fontSize: 10 }}
+                          >
+                            {useAutoOrb ? `Auto (${envTierLabel})` : 'Custom Override'}
+                          </span>
+                          {originLabel && (
+                            <span className="badge" style={{ fontSize: 10 }}>
+                              {originLabel}
                             </span>
-                            {originLabel && (
-                              <span className="badge" style={{ fontSize: 10 }}>
-                                {originLabel}
-                              </span>
-                            )}
-                            <span
-                              className={`badge ${hasPack ? 'teal' : ''}`}
-                              data-testid="orb-pack-status-badge"
-                              style={{ fontSize: 10 }}
-                            >
-                              {hasPack
-                                ? `ORB: ${activeParcel.landmarkAnchor?.featureCount || 0} pts${slotsLabel ? ` · ${slotsLabel}` : ''}`
-                                : 'No ORB Pack — Scan on Mobile'}
-                            </span>
-                            {isWebAuthnSupported() && (
-                              <button
-                                type="button"
-                                className="btn btn-xs"
-                                disabled={busy !== ''}
-                                onClick={handleRegisterPasskey}
-                              >
-                                <XeroIcon emoji="🛡️" size={11} />{' '}
-                                {passkeys.length > 0 ? `Passkeys (${passkeys.length})` : '+ Passkey'}
-                              </button>
-                            )}
-                          </div>
+                          )}
+                          <span
+                            className={`badge ${hasPack ? 'teal' : ''}`}
+                            data-testid="orb-pack-status-badge"
+                            style={{ fontSize: 10 }}
+                          >
+                            {hasPack
+                              ? `ORB: ${activeParcel.landmarkAnchor?.featureCount || 0} pts${slotsLabel ? ` · ${slotsLabel}` : ''}`
+                              : 'No ORB Pack — Scan on Mobile'}
+                          </span>
                         </div>
 
                         {passkeys.length > 0 && (
@@ -1305,9 +1358,10 @@ export default function LandManagementModal({
                           Add specific accounts by <strong>@username</strong>, email, or{' '}
                           <code>0x</code> wallet so they can chat on this land. In{' '}
                           <strong>Whitelist Only</strong> mode, only you and accounts listed here
-                          can join Land Chat. In default <strong>Contributors</strong> mode, art
-                          contributors can already chat automatically and whitelisted users are also
-                          admitted.
+                          can join Land Chat. In <strong>Contributors Only</strong> mode, art
+                          contributors and whitelisted users are admitted. By default (
+                          <strong>Everyone On Site</strong>), any signed-in Google visitor on site
+                          can already join.
                         </InfoTip>
                       </div>
                     </div>
@@ -1451,11 +1505,12 @@ export default function LandManagementModal({
                         Artwork Contributors ({activeParcel.contributors?.length || 0})
                       </strong>
                       <InfoTip title="How Contributors Work">
-                        Anyone who places artwork on this land automatically gets Land Chat access
-                        under the default <strong>Contributors</strong> chat setting. Add art
+                        Anyone who places artwork on this land can also join Land Chat when set to{' '}
+                        <strong>Contributors Only</strong> (by default,{' '}
+                        <strong>Everyone On Site</strong> with Google login can chat). Add art
                         contributors or accounts that physically visited this parcel in person here
-                        to also grant artwork editing access (when <strong>Contributor Edits</strong>{' '}
-                        is checked above).
+                        to grant artwork editing access (when <strong>Contributor Edits</strong> is
+                        checked above).
                       </InfoTip>
                     </div>
                   </div>

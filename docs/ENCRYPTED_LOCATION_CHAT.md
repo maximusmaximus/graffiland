@@ -40,19 +40,20 @@ To retrieve encrypted ciphertext history (`POST /api/sculptures/:id/chat/enter`)
 
 > **Desktop Isolation:** Desktop (`MapView`, `PlotVisitView`, `SculptureModal`, `PairWorkbench3D`) never loads `K_room`, never calls chat unlock endpoints, and displays a locked, greyed-out `🔒 Land Chat` control with a clickable `i` tooltip explaining why chat is unavailable.
 
-### Gate A2 — Per-Land Chat Access Policy & Whitelist (`land_settings.chat_access_mode`, `land_chat_whitelist`)
+### Gate A2 — Per-Land Chat Access Policy, Paired Agentic Users & Whitelist (`land_settings.chat_access_mode`, `land_settings.chat_allow_agents`, `land_chat_whitelist`)
 In addition to physical camera sight verification, every Virtual Land enforces a land-level chat access policy (`evaluateUserLandChatPermission` in `shared/chatService.mjs`):
 
-| `chatAccessMode` | Default? | Who Can Chat In Person (`<= 75m`) |
+| `chatAccessMode` | Default? | Who Can Chat |
 | :--- | :---: | :--- |
-| **`contributors`** | **Yes (Default)** | **Land Holder** + **any user contributor to that land** (anyone who published visible artwork on the parcel, any added Land Contributor in `land_contributors`, or anyone on `land_chat_whitelist`). |
-| **`open`** | No | Any signed-in mobile visitor physically on site (`<= 75m`) with live AR camera. |
+| **`open`** | **Yes (Default)** | **Everyone On Site (Google Login)** — any signed-in Google visitor physically on site (`<= 75m`, live AR camera), plus paired agentic users when `chatAllowAgents` is enabled. |
+| **`contributors`** | No | **Land Holder** + **Contributors Only** (anyone who published visible artwork on the parcel, any added Land Contributor in `land_contributors`, or anyone on `land_chat_whitelist`). |
 | **`whitelist`** | No | **Land Holder** + **only** users explicitly listed in `land_chat_whitelist` (blocks other art contributors unless whitelisted). |
-| **`off`** | No | Nobody — Land Chat is disabled on this land (and on-land live chat bell alerts are suppressed). |
+| **`off`** | No | Nobody — Land Chat is disabled on this land for humans and paired agents alike (and on-land live chat bell alerts are suppressed). |
 
+- **Paired Agentic Users (`chat_allow_agents`, default `1` / `true`)**: Checked by default in **Land Management**. When enabled, users who have paired an AI agent via MCP (`GLP-...`) can let their paired agent participate in encrypted Land Chat via MCP tool `land_chat`, strictly governed by the active `chatAccessMode` above (`open`, `contributors`, or `whitelist`, and blocked on `off`). Unchecking `Paired Agentic Users` restricts Land Chat to humans only (`403 chat_agents_disabled`). Paired agents still use client-side zero-plaintext `AES-256-GCM` + `ECDSA` encryption and never spoof physical IRL human awakening.
 - **UI Feedback**: Whenever a user cannot chat at a land (policy restriction, off, desktop, distance > 75m, missing GPS/camera, or signed out), the **Land Chat** button renders locked (`🔒`) and greyed out alongside an **`i`** (`InfoTip`) explaining the exact reason.
 - **On-Land Live Chat Bell Notification**: When standing physically on a land with an active chat (and chat is not turned `off`), the notification bell (`🔔`) highlights a **Live Land Chat** alert with a direct button to open the chat view.
-- **Land Holder Management**: Land holders can switch `chatAccessMode` and add/remove whitelist accounts (by `@username`, email, `0x` wallet, or 1-click from art contributors / IRL visitors) inside **Land Management**, via REST (`POST /api/lands/:parcelId/settings`, `GET/POST/DELETE /api/lands/:parcelId/chat-whitelist`), or via paired MCP (`update_land_settings`, `manage_land_chat_whitelist`).
+- **Land Holder Management**: Land holders can switch `chatAccessMode`, toggle `Paired Agentic Users` (`chatAllowAgents`), and add/remove whitelist accounts (by `@username`, email, `0x` wallet, or 1-click from art contributors / IRL visitors) inside **Land Management**, via REST (`POST /api/lands/:parcelId/settings`, `GET/POST/DELETE /api/lands/:parcelId/chat-whitelist`), or via paired MCP (`update_land_settings`, `manage_land_chat_whitelist`, `land_chat`).
 
 ---
 
@@ -114,7 +115,7 @@ Before `POST /api/sculptures/:id/chat/messages`:
 - `sculpture_chat_boards`: `sculpture_id`, `creator_sub`, `key_epoch`, `room_key_commit`, `clue_prompt`, `clue_wrapped_json`, `auto_grant_pol`, timestamps.
 - `sculpture_chat_grants`: `id`, `sculpture_id`, `key_epoch`, `requester_sub`, `requester_name`, `requester_ecdh_pub_jwk`, `requester_sign_pub_jwk`, `requester_pub_fp`, `sight_proof_json`, `sight_score`, `sight_distance_m`, `status`, `grantor_*`, `wrapped_key_json`, `grant_sig`, timestamps.
 - `sculpture_chat_messages`: `id`, `sculpture_id`, `key_epoch`, `sender_sub`, `sender_pub_fp`, `sender_sign_pub_jwk`, `iv_b64`, `ciphertext_b64`, `aad_json`, `signature_b64`, `created_at`.
-- `land_settings`: includes `chat_access_mode` (`'contributors'` default | `'open'` | `'whitelist'` | `'off'`).
+- `land_settings`: includes `chat_access_mode` (`'open'` default | `'contributors'` | `'whitelist'` | `'off'`) and `chat_allow_agents` (`1` default | `0`).
 - `land_chat_whitelist`: `id`, `parcel_id`, `user_sub`, `username`, `email`, `wallet_address`, `added_by_sub`, timestamps.
 
 Notice there are **zero** plaintext text, body, or symmetric room-key columns in any database table.
@@ -123,7 +124,8 @@ Notice there are **zero** plaintext text, body, or symmetric room-key columns in
 
 ## 4. API Endpoints (`shared/chatService.mjs` & `shared/mcp/landMutations.mjs`)
 
-- `POST /api/lands/:parcelId/settings` — Land holder sets `chatAccessMode` (`contributors` | `open` | `whitelist` | `off`), `frozen`, `requireApproval`, `allowContributorEdits`, `allowAgentErase` (also via MCP `update_land_settings`).
+- `POST /api/lands/:parcelId/settings` — Land holder sets `chatAccessMode` (`open` | `contributors` | `whitelist` | `off`), `chatAllowAgents` (`true` default | `false`), `frozen`, `requireApproval`, `allowContributorEdits`, `allowAgentErase` (also via MCP `update_land_settings`).
+- MCP `land_chat` — Paired agentic users (`GLP-...`) can inspect/enter/init/request_grant/claim_grant/post_message in zero-plaintext E2EE Land Chat when `chatAllowAgents` is enabled and their paired Google account satisfies `chatAccessMode`.
 - `GET /api/lands/:parcelId/chat-whitelist` — Land holder lists whitelisted chat accounts and eligible art contributors / IRL visitors.
 - `POST /api/lands/:parcelId/chat-whitelist` — Land holder adds a user to the Land Chat whitelist by `@username`, email, `0x` wallet, or `userId` (also via MCP `manage_land_chat_whitelist`).
 - `DELETE /api/lands/:parcelId/chat-whitelist/:userSub` — Land holder removes a user from the Land Chat whitelist.
