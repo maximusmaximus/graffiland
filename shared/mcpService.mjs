@@ -1,6 +1,13 @@
 import { buildAgentSpec } from './agentService.mjs';
 import { getAgentProfile } from './agentAuthService.mjs';
 import {
+  claimClueUnlockedGrant,
+  enterChatBoard,
+  initChatBoard,
+  postEncryptedChatMessage,
+  requestChatGrant
+} from './chatService.mjs';
+import {
   batchBuildLand,
   claimDormantLand,
   createArtQuest,
@@ -785,6 +792,9 @@ export async function handleMcpJsonRpc(
             : {}),
           ...(args.chatAccessMode !== undefined
             ? { chatAccessMode: String(args.chatAccessMode) }
+            : {}),
+          ...(args.chatAllowAgents !== undefined
+            ? { chatAllowAgents: Boolean(args.chatAllowAgents) }
             : {})
         },
         signature: args.signature || '',
@@ -835,6 +845,39 @@ export async function handleMcpJsonRpc(
           parcelId: args.parcelId,
           user: ownerUser
         });
+      }
+    } else if (toolName === 'land_chat') {
+      const targetId = String(args.sculptureId || args.parcelId || '').trim();
+      if (!targetId) {
+        throw new McpServiceError('parcelId or sculptureId is required for land_chat.', 400);
+      }
+      const isPairedHumanAgent = pairing.code !== 'DIRECT-AGENT-WALLET';
+      const chatAction = String(args.action || 'status').trim().toLowerCase();
+      const chatCtx = {
+        sculptureId: targetId,
+        user: ownerUser,
+        body: args,
+        viaAgent: true,
+        isPairedAgent: isPairedHumanAgent,
+        agentName: pairing.agentName || 'paired-agent'
+      };
+      try {
+        if (chatAction === 'init') {
+          toolResult = await initChatBoard(db, chatCtx);
+        } else if (chatAction === 'request_grant') {
+          toolResult = await requestChatGrant(db, chatCtx);
+        } else if (chatAction === 'claim_grant') {
+          toolResult = await claimClueUnlockedGrant(db, chatCtx);
+        } else if (chatAction === 'post_message') {
+          toolResult = await postEncryptedChatMessage(db, chatCtx);
+        } else {
+          toolResult = await enterChatBoard(db, chatCtx);
+        }
+      } catch (err) {
+        if (err?.statusCode) {
+          throw new McpServiceError(err.message, err.statusCode, err.extra || {});
+        }
+        throw err;
       }
     } else if (toolName === 'rollback_sculpture_revision') {
       const perm = await checkSculptureOrLandOwnership(db, {

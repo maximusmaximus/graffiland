@@ -1138,6 +1138,14 @@ export default function SculptureChatDrawer({
                   {formatLandChatAccessModeLabel(entered?.chatAccessMode)}
                 </strong>
               </div>
+              {entered?.chatAllowAgents !== undefined && (
+                <div className="chat-access-stat" data-testid="chat-access-agents-stat">
+                  <span className="chat-access-label">Paired Agents</span>
+                  <strong className="chat-access-val">
+                    {entered.chatAllowAgents ? '🤖 Allowed' : '🚫 Humans Only'}
+                  </strong>
+                </div>
+              )}
               {entered?.viewerChatRole && (
                 <div className="chat-access-stat" data-testid="chat-access-role-stat">
                   <span className="chat-access-label">Your Access</span>

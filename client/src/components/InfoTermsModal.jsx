@@ -719,18 +719,19 @@ export default function InfoTermsModal({
                         Every human piece is verified via live phone camera, motion sensors, and
                         GPS, and stored as a standard ERC-721 + 3D <code>.glb</code> asset. Every
                         marketplace trade splits 90% Seller · 5% Platform · 3% AI Agent Steward · 2%
-                        verified IRL Human Artists. Encrypted Land Chat is mobile in-person only
-                        (within 75m) and open to the land holder &amp; any contributor to that land
-                        by default — land holders can manage <strong>Land Chat Access</strong>{' '}
-                        (Contributors, Everyone On Site, Whitelist Only, or Off) and the{' '}
-                        <strong>Chat Whitelist</strong> anytime in <strong>Land Management</strong>{' '}
-                        or via paired MCP tools.
+                        verified IRL Human Artists. Encrypted Land Chat defaults to{' '}
+                        <strong>Everyone On Site (Google Login)</strong> with{' '}
+                        <strong>Paired Agentic Users</strong> allowed — land holders can manage{' '}
+                        <strong>Land Chat Access</strong> (Everyone On Site, Contributors Only,
+                        Whitelist Only, or Off), toggle <strong>Paired Agentic Users</strong>, and
+                        edit the <strong>Chat Whitelist</strong> anytime in{' '}
+                        <strong>Land Management</strong> or via paired MCP tools.
                       </InfoTip>
                     </div>
                     <p>
                       Collect verified 3D NFTs (90% / 5% / 3% / 2% split) and manage Land Chat
-                      access (Contributors default, Whitelist Only, Open, or Off) in Land
-                      Management.
+                      access (Everyone On Site default, Contributors Only, Whitelist Only, or Off
+                      + Paired Agentic Users) in Land Management.
                     </p>
                   </div>
                 </div>
@@ -830,21 +831,24 @@ export default function InfoTermsModal({
                         Publishing in person IRL pins your 3D art to IPFS and mints gas-free on{' '}
                         <strong>{config?.chain?.network?.name || 'Robinhood Chain'}</strong> as an
                         ERC-721 NFT + <code>.glb</code> file with permanent land ownership (no
-                        expiry timer) and a 5% ERC-2981 royalty. By default, the land holder and{' '}
-                        <strong>any user contributor to that land</strong> can join camera-locked
-                        AES-256-GCM AR Land Chat within 75m to unlock pinned notes (and get a Bell
-                        🔔 notification when on a land with live chat). Land holders can switch chat
+                        expiry timer) and a 5% ERC-2981 royalty. By default,{' '}
+                        <strong>Everyone On Site (Google Login)</strong> within 75m — plus{' '}
+                        <strong>Paired Agentic Users</strong> via MCP — can join encrypted
+                        AES-256-GCM Land Chat to unlock pinned notes (and get a Bell 🔔
+                        notification when on a land with live chat). Land holders can switch chat
                         anytime in <strong>Land Management</strong> (or via paired MCP) to{' '}
-                        <strong>Contributors (Default)</strong>, <strong>Everyone On Site</strong>,{' '}
-                        <strong>Whitelist Only</strong>, or <strong>Off</strong>. If chat is locked,
-                        tap the <strong>i</strong> beside the greyed-out 🔒 Land Chat button to see
-                        why.
+                        <strong>Everyone On Site (Default)</strong>,{' '}
+                        <strong>Contributors Only</strong>, <strong>Whitelist Only</strong>, or{' '}
+                        <strong>Off</strong>, and toggle <strong>Paired Agentic Users</strong>{' '}
+                        on/off. If chat is locked, tap the <strong>i</strong> beside the greyed-out
+                        🔒 Land Chat button to see why.
                       </InfoTip>
                     </div>
                     <p>
                       Publish IRL to IPFS for permanent gas-free land (5% royalty) &amp; pinned
-                      notes. Land contributors can chat by default within 75m; land holders can
-                      switch to Whitelist Only, Open, or Off in Land Management.
+                      notes. Everyone On Site (Google Login) &amp; Paired Agentic Users can chat by
+                      default; land holders can switch to Contributors Only, Whitelist Only, or Off
+                      in Land Management.
                     </p>
                   </div>
 

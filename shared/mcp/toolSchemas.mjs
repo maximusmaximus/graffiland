@@ -276,7 +276,7 @@ export const MCP_TOOLS = [
   {
     name: 'update_land_settings',
     description:
-      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks new placements), requireApproval (default false), allowContributorEdits, allowAgentErase, and chatAccessMode ("contributors" default so any contributor to that land can chat, "open" for anyone on site within 75m, "whitelist" for land holder + explicitly whitelisted users only, or "off" to disable Land Chat).',
+      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks new placements), requireApproval (default false), allowContributorEdits, allowAgentErase, chatAccessMode ("open" default for Everyone On Site with Google login, "contributors" for land holder + contributors only, "whitelist" for land holder + whitelisted users only, or "off" to disable Land Chat), and chatAllowAgents (default true — allows paired agentic users to chat on this land subject to chatAccessMode).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -287,9 +287,14 @@ export const MCP_TOOLS = [
         allowAgentErase: { type: 'boolean' },
         chatAccessMode: {
           type: 'string',
-          enum: ['contributors', 'open', 'whitelist', 'off'],
+          enum: ['open', 'contributors', 'whitelist', 'off'],
           description:
-            'Who can join encrypted Land Chat on this parcel: "contributors" (default — land holder + art/land contributors + whitelist), "open" (everyone on site within 75m), "whitelist" (land holder + whitelisted users only), or "off" (disabled).'
+            'Who can join encrypted Land Chat on this parcel: "open" (default — Everyone On Site with Google login), "contributors" (land holder + art/land contributors + whitelist), "whitelist" (land holder + whitelisted users only), or "off" (disabled).'
+        },
+        chatAllowAgents: {
+          type: 'boolean',
+          description:
+            'Whether paired agentic users can use their paired MCP agent to chat on this land following chatAccessMode (default true).'
         },
         signature: { type: 'string' }
       },
@@ -299,7 +304,7 @@ export const MCP_TOOLS = [
   {
     name: 'manage_land_chat_whitelist',
     description:
-      'List, add, or remove users on a Virtual Land chat whitelist (owned parcel). Identify users by @username, email, 0x walletAddress, or userId. Used with chatAccessMode="whitelist" (or to pre-approve non-contributors in default "contributors" mode).',
+      'List, add, or remove users on a Virtual Land chat whitelist (owned parcel). Identify users by @username, email, 0x walletAddress, or userId. Used with chatAccessMode="whitelist" (or to pre-approve specific users in "contributors" mode).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -311,6 +316,41 @@ export const MCP_TOOLS = [
         userId: { type: 'string' }
       },
       required: ['parcelId', 'action']
+    }
+  },
+  {
+    name: 'land_chat',
+    description:
+      'Participate in a Virtual Land E2EE chat via a paired MCP agent when Paired Agentic Users (chatAllowAgents) is enabled on that land. Strictly enforces the land chatAccessMode ("open", "contributors", "whitelist", or "off") against the paired Google account and maintains zero-plaintext AES-256-GCM + ECDSA encryption.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string', description: 'Target Virtual Land parcelId (GLAND-...)' },
+        sculptureId: { type: 'string', description: 'Optional sculptureId on the target land (alternative to parcelId)' },
+        action: {
+          type: 'string',
+          enum: ['status', 'enter', 'init', 'request_grant', 'claim_grant', 'post_message']
+        },
+        requesterPubFp: { type: 'string' },
+        requesterEcdhPubJwk: { type: 'object' },
+        requesterSignPubJwk: { type: 'object' },
+        ownerEcdhPubJwk: { type: 'object' },
+        ownerSignPubJwk: { type: 'object' },
+        ownerPubFp: { type: 'string' },
+        selfGrantEnvelope: { type: 'object' },
+        selfGrantSig: { type: 'string' },
+        roomKeyCommit: { type: 'string' },
+        roomProofToken: { type: 'string' },
+        cluePrompt: { type: 'string' },
+        clueWrappedJson: { type: 'object' },
+        senderPubFp: { type: 'string' },
+        senderSignPubJwk: { type: 'object' },
+        ivB64: { type: 'string' },
+        ciphertextB64: { type: 'string' },
+        aadJson: { type: 'string' },
+        signatureB64: { type: 'string' }
+      },
+      required: ['action']
     }
   },
   {

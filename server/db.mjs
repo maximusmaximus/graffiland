@@ -327,7 +327,8 @@ export function getDb() {
       allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
       freeze_placements INTEGER NOT NULL DEFAULT 0,
       require_approval INTEGER NOT NULL DEFAULT 0,
-      chat_access_mode TEXT NOT NULL DEFAULT 'contributors',
+      chat_access_mode TEXT NOT NULL DEFAULT 'open',
+      chat_allow_agents INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL
     );
 
@@ -875,7 +876,7 @@ export function getDb() {
     "ALTER TABLE land_steward_state ADD COLUMN inactivity_expires_at TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE land_steward_state ADD COLUMN had_human_interaction INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE land_settings ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE land_settings ADD COLUMN chat_access_mode TEXT NOT NULL DEFAULT 'contributors'",
+    "ALTER TABLE land_settings ADD COLUMN chat_access_mode TEXT NOT NULL DEFAULT 'open'",
     "ALTER TABLE land_security_policies ADD COLUMN origin_source TEXT NOT NULL DEFAULT 'unknown'",
     "ALTER TABLE land_security_policies ADD COLUMN env_tier TEXT NOT NULL DEFAULT 'unknown'",
     'ALTER TABLE land_security_policies ADD COLUMN auto_min_orb_inliers INTEGER',
@@ -888,6 +889,13 @@ export function getDb() {
     } catch {
       // Column already exists on upgraded SQLite DBs
     }
+  }
+
+  try {
+    db.exec('ALTER TABLE land_settings ADD COLUMN chat_allow_agents INTEGER NOT NULL DEFAULT 1');
+    db.exec("UPDATE land_settings SET chat_access_mode = 'open' WHERE chat_access_mode = 'contributors'");
+  } catch {
+    // Column already exists on upgraded SQLite DBs
   }
 
   try {

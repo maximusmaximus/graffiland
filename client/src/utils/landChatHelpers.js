@@ -1,9 +1,11 @@
 import {
   CHAT_SIGHT_MAX_DISTANCE_M,
   DEFAULT_LAND_CHAT_ACCESS_MODE,
+  DEFAULT_LAND_CHAT_ALLOW_AGENTS,
   PIN_PARCEL_MAX_DISTANCE_M,
   formatLandChatAccessModeLabel,
-  normalizeLandChatAccessMode
+  normalizeLandChatAccessMode,
+  normalizeLandChatAllowAgents
 } from '../../../shared/chatPolicy.mjs';
 import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../shared/constants.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
@@ -11,8 +13,10 @@ import { formatDistanceMeters } from './landMapHelpers.js';
 
 export {
   DEFAULT_LAND_CHAT_ACCESS_MODE,
+  DEFAULT_LAND_CHAT_ALLOW_AGENTS,
   formatLandChatAccessModeLabel,
-  normalizeLandChatAccessMode
+  normalizeLandChatAccessMode,
+  normalizeLandChatAllowAgents
 };
 
 function parseFiniteMetric(value) {
@@ -180,6 +184,9 @@ export function evaluateLandChatAvailability({
   const chatAccessMode = normalizeLandChatAccessMode(
     land?.chatAccessMode ?? land?.settings?.chatAccessMode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
   );
+  const chatAllowAgents = normalizeLandChatAllowAgents(
+    land?.chatAllowAgents ?? land?.settings?.chatAllowAgents
+  );
   const uid = String(userId || user?.id || '').trim();
 
   if (chatAccessMode === 'off') {
@@ -187,6 +194,7 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'chat_disabled',
       chatAccessMode: 'off',
+      chatAllowAgents,
       title: 'Land Chat is turned off',
       reason: `The land holder has turned off Land Chat on ${label}.`
     };
@@ -197,6 +205,7 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'desktop_only',
       chatAccessMode,
+      chatAllowAgents,
       title: 'Why Land Chat is locked',
       reason: `Land Chat is mobile in-person only — visit ${label} on your phone within ${withinLabel} with live AR camera to join encrypted chat.`
     };
@@ -207,6 +216,7 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'no_gps',
       chatAccessMode,
+      chatAllowAgents,
       title: 'Why Land Chat is locked',
       reason: `Enable GPS location and stand within ${withinLabel} of ${label} to verify your presence and unlock encrypted Land Chat.`
     };
@@ -219,6 +229,7 @@ export function evaluateLandChatAvailability({
         canChat: false,
         code: 'out_of_range',
         chatAccessMode,
+        chatAllowAgents,
         title: 'Why Land Chat is locked',
         reason: `You're ${distLabel} away — walk within ${withinLabel} of ${label} in person with live AR camera to unlock encrypted Land Chat.`
       };
@@ -227,6 +238,7 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'no_gps',
       chatAccessMode,
+      chatAllowAgents,
       title: 'Why Land Chat is locked',
       reason: `Enable GPS location and visit ${label} in person (within ${withinLabel}) to unlock encrypted Land Chat.`
     };
@@ -237,6 +249,7 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'no_camera',
       chatAccessMode,
+      chatAllowAgents,
       title: 'Why Land Chat is locked',
       reason: `Enable your live mobile AR camera at ${label} to verify Proof of Sight and unlock encrypted Land Chat.`
     };
@@ -247,8 +260,9 @@ export function evaluateLandChatAvailability({
       canChat: false,
       code: 'signed_out',
       chatAccessMode,
+      chatAllowAgents,
       title: 'Why Land Chat is locked',
-      reason: `Sign in with your account while on site at ${label} to unlock your encrypted chat key and join Land Chat.`
+      reason: `Sign in with Google while on site at ${label} to unlock your encrypted chat key and join Land Chat.`
     };
   }
 
@@ -270,6 +284,7 @@ export function evaluateLandChatAvailability({
         canChat: false,
         code: 'chat_whitelist_only',
         chatAccessMode: 'whitelist',
+        chatAllowAgents,
         title: 'Whitelist-Only Land Chat',
         reason: `Land Chat on ${label} is whitelist-only — ask the land holder to add you to the chat whitelist.`
       };
@@ -286,8 +301,9 @@ export function evaluateLandChatAvailability({
         canChat: false,
         code: 'chat_contributors_only',
         chatAccessMode: 'contributors',
-        title: 'Contributors Land Chat',
-        reason: `Land Chat on ${label} is open to the land holder and contributors by default — add artwork to this land (or ask the land holder to whitelist you) to unlock chat.`
+        chatAllowAgents,
+        title: 'Contributors-Only Land Chat',
+        reason: `Land Chat on ${label} is restricted to the land holder and contributors — add artwork to this land (or ask the land holder to whitelist you) to unlock chat.`
       };
     }
   }
@@ -296,6 +312,7 @@ export function evaluateLandChatAvailability({
     canChat: true,
     code: 'ready',
     chatAccessMode,
+    chatAllowAgents,
     title: '',
     reason: ''
   };

@@ -5,6 +5,7 @@ import {
   DEFAULT_LAND_CHAT_ACCESS_MODE,
   looksMobileRequest,
   normalizeLandChatAccessMode,
+  normalizeLandChatAllowAgents,
   verifyCameraSightProof
 } from './chatPolicy.mjs';
 import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
@@ -232,25 +233,47 @@ async function resolveLandChatContext(db, requestedId) {
 }
 
 /**
- * Evaluates per-land chat access permissions for a user.
+ * Evaluates per-land chat access permissions for a user (human or paired agentic user).
  *
  * Modes (`land_settings.chat_access_mode`):
- * - `'contributors'` (default): Land holder + anyone who has contributed visible art to this
- *   land, is an added Land Contributor, or is on the Land Chat Whitelist.
- * - `'open'`: Any signed-in mobile visitor physically on site (<= 75m).
+ * - `'open'` (default): Everyone on site (signed-in Google account, <= 75m on mobile AR,
+ *   or via paired agent when `chat_allow_agents` is enabled).
+ * - `'contributors'`: Land holder + anyone who has contributed visible art to this land,
+ *   is an added Land Contributor, or is on the Land Chat Whitelist.
  * - `'whitelist'`: Land holder + only users explicitly on the Land Chat Whitelist.
- * - `'off'`: Land Chat is disabled on this land.
+ * - `'off'`: Land Chat is disabled on this land for everyone.
+ *
+ * Agentic flag (`land_settings.chat_allow_agents`, default `1` / `true`):
+ * - When enabled (`true`), paired agentic users can chat on this land subject to the
+ *   active access mode above (`open`, `contributors`, or `whitelist`).
+ * - When disabled (`false`), all agentic callers are blocked while humans remain governed
+ *   by `chat_access_mode`.
  */
-export async function evaluateUserLandChatPermission(db, { parcelId, sculpture = null, user }) {
+export async function evaluateUserLandChatPermission(
+  db,
+  { parcelId, sculpture = null, user, viaAgent = false, isPairedAgent = false }
+) {
   const cleanParcelId = normalizeParcelId(parcelId || sculpture?.parcel_id || '');
   const settingsRow = cleanParcelId
     ? await db
-        .get('SELECT chat_access_mode FROM land_settings WHERE parcel_id = ?', [cleanParcelId])
-        .catch(() => null)
+        .get(
+          'SELECT chat_access_mode, chat_allow_agents FROM land_settings WHERE parcel_id = ?',
+          [cleanParcelId]
+        )
+        .catch(() =>
+          db
+            .get('SELECT chat_access_mode FROM land_settings WHERE parcel_id = ?', [cleanParcelId])
+            .catch(() => null)
+        )
     : null;
   const chatAccessMode = normalizeLandChatAccessMode(
     settingsRow?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
   );
+  const chatAllowAgents = normalizeLandChatAllowAgents(settingsRow?.chat_allow_agents);
+  const isAutonomousWalletAgent =
+    !isPairedAgent &&
+    (user?.actorType === 'agent' || String(user?.id || '').startsWith('agent:'));
+  const isAgentActor = Boolean(viaAgent || isPairedAgent || user?.viaAgent || isAutonomousWalletAgent);
   const isLandHolder = user
     ? await isUserLandHolder(db, { sculpture, user }).catch(() => false)
     : false;
@@ -260,6 +283,7 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
       allowed: false,
       code: 'chat_disabled',
       chatAccessMode: 'off',
+      chatAllowAgents,
       isLandHolder,
       role: isLandHolder ? 'land_holder' : 'visitor',
       reason: 'Land Chat has been turned off by the land holder on this land.'
@@ -271,9 +295,22 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
       allowed: false,
       code: 'signed_out',
       chatAccessMode,
+      chatAllowAgents,
       isLandHolder: false,
       role: 'visitor',
-      reason: 'Sign in with your account to join Land Chat.'
+      reason: 'Sign in with your Google account to join Land Chat.'
+    };
+  }
+
+  if (isAgentActor && !chatAllowAgents) {
+    return {
+      allowed: false,
+      code: 'chat_agents_disabled',
+      chatAccessMode,
+      chatAllowAgents: false,
+      isLandHolder,
+      role: isLandHolder ? 'land_holder' : 'agent',
+      reason: 'Paired agentic users are disabled for Land Chat on this land by the land holder.'
     };
   }
 
@@ -282,8 +319,9 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
       allowed: true,
       code: 'land_holder',
       chatAccessMode,
+      chatAllowAgents,
       isLandHolder: true,
-      role: 'land_holder',
+      role: isAgentActor ? 'paired_agent' : 'land_holder',
       reason: ''
     };
   }
@@ -304,8 +342,9 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
         allowed: true,
         code: 'whitelisted',
         chatAccessMode: 'whitelist',
+        chatAllowAgents,
         isLandHolder: false,
-        role: 'whitelisted',
+        role: isAgentActor ? 'paired_agent' : 'whitelisted',
         reason: ''
       };
     }
@@ -313,6 +352,7 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
       allowed: false,
       code: 'chat_whitelist_only',
       chatAccessMode: 'whitelist',
+      chatAllowAgents,
       isLandHolder: false,
       role: 'visitor',
       reason:
@@ -321,24 +361,38 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
   }
 
   if (chatAccessMode === 'open') {
+    if (isAutonomousWalletAgent) {
+      return {
+        allowed: false,
+        code: 'google_login_required',
+        chatAccessMode: 'open',
+        chatAllowAgents,
+        isLandHolder: false,
+        role: 'agent',
+        reason:
+          'Land Chat on this land requires a Google-signed-in account (or a paired AI agent linked to a Google account).'
+      };
+    }
     return {
       allowed: true,
       code: 'open',
       chatAccessMode: 'open',
+      chatAllowAgents,
       isLandHolder: false,
-      role: isWhitelisted ? 'whitelisted' : 'visitor',
+      role: isAgentActor ? 'paired_agent' : isWhitelisted ? 'whitelisted' : 'visitor',
       reason: ''
     };
   }
 
-  // Default: 'contributors' — any artwork contributor, added contributor, or whitelisted user
+  // 'contributors' — any artwork contributor, added contributor, or whitelisted user
   if (isWhitelisted) {
     return {
       allowed: true,
       code: 'whitelisted',
       chatAccessMode: 'contributors',
+      chatAllowAgents,
       isLandHolder: false,
-      role: 'whitelisted',
+      role: isAgentActor ? 'paired_agent' : 'whitelisted',
       reason: ''
     };
   }
@@ -365,8 +419,9 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
       allowed: true,
       code: 'contributor',
       chatAccessMode: 'contributors',
+      chatAllowAgents,
       isLandHolder: false,
-      role: 'contributor',
+      role: isAgentActor ? 'paired_agent' : 'contributor',
       reason: ''
     };
   }
@@ -375,48 +430,85 @@ export async function evaluateUserLandChatPermission(db, { parcelId, sculpture =
     allowed: false,
     code: 'chat_contributors_only',
     chatAccessMode: 'contributors',
+    chatAllowAgents,
     isLandHolder: false,
     role: 'visitor',
     reason:
-      'Land Chat on this land is open to the land holder and contributors by default. Add artwork to this land (or ask the land holder to whitelist you) to unlock chat.'
+      'Land Chat on this land is restricted to the land holder and contributors. Add artwork to this land (or ask the land holder to whitelist you) to unlock chat.'
   };
 }
 
-async function assertUserCanAccessLandChat(db, { parcelId, sculpture, user }) {
-  const perm = await evaluateUserLandChatPermission(db, { parcelId, sculpture, user });
+async function assertUserCanAccessLandChat(
+  db,
+  { parcelId, sculpture, user, viaAgent = false, isPairedAgent = false }
+) {
+  const perm = await evaluateUserLandChatPermission(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
+  });
   if (!perm.allowed) {
     throw new ChatHttpError(403, perm.reason, {
       code: perm.code,
-      chatAccessMode: perm.chatAccessMode
+      chatAccessMode: perm.chatAccessMode,
+      chatAllowAgents: perm.chatAllowAgents
     });
   }
   return perm;
 }
 
-export async function initChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
+function buildPairedAgentSightSummary(agentName = 'paired-agent') {
+  const now = new Date().toISOString();
+  return {
+    ok: true,
+    distanceMeters: 0,
+    altDeltaMeters: 0,
+    sightScore: 100,
+    proofSummary: {
+      selectionMethod: 'paired-mcp-agent',
+      agentName: String(agentName || 'paired-agent').slice(0, 64),
+      distanceMeters: 0,
+      selectedAt: now
+    }
+  };
+}
+
+export async function initChatBoard(
+  db,
+  { sculptureId, user, body, userAgent = '', viaAgent = false, isPairedAgent = false }
+) {
   const { target: sculpture, parcelId, board: existing, boardId } = await resolveLandChatContext(
     db,
     sculptureId
   );
 
-  if (!looksMobileRequest(body?.deviceProfile, userAgent)) {
+  if (!isPairedAgent && !looksMobileRequest(body?.deviceProfile, userAgent)) {
     throw new ChatHttpError(403, 'Initializing an AR chat board requires a mobile device.');
   }
 
-  const chatPerm = await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
+  const chatPerm = await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
+  });
 
   if (existing) {
     return {
       initialized: true,
       boardId: existing.sculpture_id,
       board: sanitizeBoardRow(existing),
-      chatAccessMode: chatPerm.chatAccessMode
+      chatAccessMode: chatPerm.chatAccessMode,
+      chatAllowAgents: chatPerm.chatAllowAgents
     };
   }
 
-  // Only the sculpture/land creator can initialize right after minting, OR an in-person camera viewer
+  // Only the sculpture/land creator can initialize right after minting, OR an in-person camera viewer (or paired agent when enabled)
   const landHolder = chatPerm.isLandHolder;
-  if (sculpture.creator_sub !== user.id && !landHolder) {
+  if (!isPairedAgent && sculpture.creator_sub !== user.id && !landHolder) {
     verifyCameraSightProof({
       sightProof: body?.sightProof,
       deviceProfile: body?.deviceProfile,
@@ -488,7 +580,8 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
     initialized: true,
     boardId,
     board: sanitizeBoardRow(board),
-    chatAccessMode: chatPerm.chatAccessMode
+    chatAccessMode: chatPerm.chatAccessMode,
+    chatAllowAgents: chatPerm.chatAllowAgents
   };
 }
 
@@ -514,20 +607,39 @@ export async function updateBoardClue(db, { sculptureId, user, body, userAgent =
   return { boardId, board: sanitizeBoardRow(updated) };
 }
 
-export async function enterChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
+export async function enterChatBoard(
+  db,
+  {
+    sculptureId,
+    user,
+    body,
+    userAgent = '',
+    viaAgent = false,
+    isPairedAgent = false,
+    agentName = ''
+  }
+) {
   const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
     db,
     sculptureId
   );
-  const sight = verifyCameraSightProof({
-    sightProof: body?.sightProof,
-    deviceProfile: body?.deviceProfile,
-    userAgent,
-    sculpture
+  const sight = isPairedAgent
+    ? buildPairedAgentSightSummary(agentName)
+    : verifyCameraSightProof({
+        sightProof: body?.sightProof,
+        deviceProfile: body?.deviceProfile,
+        userAgent,
+        sculpture
+      });
+  const chatPerm = await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
   });
-  const chatPerm = await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
-  if (sculpture?.parcel_id) {
+  if (!isPairedAgent && sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
       parcelId: sculpture.parcel_id,
       user,
@@ -547,8 +659,10 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     return {
       initialized: false,
       boardId,
+      parcelId,
       isLandHolder,
       chatAccessMode: chatPerm.chatAccessMode,
+      chatAllowAgents: chatPerm.chatAllowAgents,
       viewerChatRole: chatPerm.role,
       pinMeta: pinMetaResult.meta,
       sight,
@@ -597,8 +711,10 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
   return {
     initialized: true,
     boardId,
+    parcelId,
     isLandHolder,
     chatAccessMode: chatPerm.chatAccessMode,
+    chatAllowAgents: chatPerm.chatAllowAgents,
     viewerChatRole: chatPerm.role,
     pinMeta: pinMetaResult.meta,
     sight,
@@ -609,20 +725,39 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
   };
 }
 
-export async function requestChatGrant(db, { sculptureId, user, body, userAgent = '' }) {
+export async function requestChatGrant(
+  db,
+  {
+    sculptureId,
+    user,
+    body,
+    userAgent = '',
+    viaAgent = false,
+    isPairedAgent = false,
+    agentName = ''
+  }
+) {
   const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
     db,
     sculptureId
   );
-  const sight = verifyCameraSightProof({
-    sightProof: body?.sightProof,
-    deviceProfile: body?.deviceProfile,
-    userAgent,
-    sculpture
+  const sight = isPairedAgent
+    ? buildPairedAgentSightSummary(agentName)
+    : verifyCameraSightProof({
+        sightProof: body?.sightProof,
+        deviceProfile: body?.deviceProfile,
+        userAgent,
+        sculpture
+      });
+  await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
   });
-  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
-  if (sculpture?.parcel_id) {
+  if (!isPairedAgent && sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
       parcelId: sculpture.parcel_id,
       user,
@@ -696,20 +831,39 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
  * (without ever revealing K_room or the clue answer) before promoting the viewer
  * to an admitted member/peer grantor.
  */
-export async function claimClueUnlockedGrant(db, { sculptureId, user, body, userAgent = '' }) {
+export async function claimClueUnlockedGrant(
+  db,
+  {
+    sculptureId,
+    user,
+    body,
+    userAgent = '',
+    viaAgent = false,
+    isPairedAgent = false,
+    agentName = ''
+  }
+) {
   const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
     db,
     sculptureId
   );
-  const sight = verifyCameraSightProof({
-    sightProof: body?.sightProof,
-    deviceProfile: body?.deviceProfile,
-    userAgent,
-    sculpture
+  const sight = isPairedAgent
+    ? buildPairedAgentSightSummary(agentName)
+    : verifyCameraSightProof({
+        sightProof: body?.sightProof,
+        deviceProfile: body?.deviceProfile,
+        userAgent,
+        sculpture
+      });
+  await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
   });
-  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
-  if (sculpture?.parcel_id) {
+  if (!isPairedAgent && sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
       parcelId: sculpture.parcel_id,
       user,
@@ -913,7 +1067,10 @@ export async function submitPeerGrant(db, { sculptureId, user, body }) {
   return { boardId, grant: formatGrantRow(updated) };
 }
 
-export async function postEncryptedChatMessage(db, { sculptureId, user, body, userAgent = '' }) {
+export async function postEncryptedChatMessage(
+  db,
+  { sculptureId, user, body, userAgent = '', viaAgent = false, isPairedAgent = false }
+) {
   // Enforce strict zero-plaintext contract
   if (
     body?.text !== undefined ||
@@ -931,13 +1088,21 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     db,
     sculptureId
   );
-  verifyCameraSightProof({
-    sightProof: body?.sightProof,
-    deviceProfile: body?.deviceProfile,
-    userAgent,
-    sculpture
+  if (!isPairedAgent) {
+    verifyCameraSightProof({
+      sightProof: body?.sightProof,
+      deviceProfile: body?.deviceProfile,
+      userAgent,
+      sculpture
+    });
+  }
+  await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user,
+    viaAgent,
+    isPairedAgent
   });
-  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
   if (!board) throw new ChatHttpError(404, 'Land chat board is not initialized.');
 
@@ -1004,7 +1169,7 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
   );
 
   const saved = await db.get('SELECT * FROM sculpture_chat_messages WHERE id = ?', [id]);
-  if (sculpture?.parcel_id) {
+  if (!isPairedAgent && sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
       parcelId: sculpture.parcel_id,
       user,

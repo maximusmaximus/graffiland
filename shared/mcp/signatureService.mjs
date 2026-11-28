@@ -307,12 +307,19 @@ export function describeSignatureAction({
     }
     if (p.chatAccessMode !== undefined) {
       const chatLabels = {
-        contributors: 'Land Chat: Contributors (default)',
-        open: 'Land Chat: Everyone on site',
+        open: 'Land Chat: Everyone on site (Google login · default)',
+        contributors: 'Land Chat: Contributors only',
         whitelist: 'Land Chat: Whitelist only',
         off: 'Land Chat: Off'
       };
       flags.push(chatLabels[p.chatAccessMode] || `Land Chat: ${p.chatAccessMode}`);
+    }
+    if (p.chatAllowAgents !== undefined) {
+      flags.push(
+        p.chatAllowAgents
+          ? 'Paired agentic users: Allowed'
+          : 'Paired agentic users: Disabled'
+      );
     }
     return {
       summaryTitle: p.frozen === true ? 'Freeze Land' : p.frozen === false ? 'Unfreeze Land' : 'Update Land Settings',
