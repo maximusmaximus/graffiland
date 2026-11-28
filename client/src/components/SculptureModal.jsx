@@ -49,6 +49,7 @@ import {
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import { GHOST_SELECT_VIEWPORT_AREA_FRACTION } from '../utils/isometricCameraFraming.js';
 import {
   applySculptureRedo,
   applySculptureUndo,
@@ -205,6 +206,7 @@ export default function SculptureModal({
   const [showGizmoHandles, setShowGizmoHandles] = useState(true);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [studioCameraFocus, setStudioCameraFocus] = useState('model'); // 'model' | 'land'
+  const [ghostFocusedSculptureId, setGhostFocusedSculptureId] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [parcelFrozen, setParcelFrozen] = useState(Boolean(initialSculpture?.parcelFrozen));
   const [showAllMetadata, setShowAllMetadata] = useState(false);
@@ -1168,6 +1170,9 @@ export default function SculptureModal({
       loadSculptureIntoEditor(nextSibling, { preserveHistory: true });
       setStudioOpen(true);
       setShowLandBoundsPreview(true);
+      setStudioCameraFocus('model');
+      setGhostFocusedSculptureId(nextSibling.id || '');
+      setPreviewResetTick((t) => t + 1);
 
       const switchMsg = needsSave
         ? `Saved "${prevTitle}" and switched live to edit "${nextSibling.title || 'Artwork'}".`
@@ -1570,6 +1575,8 @@ export default function SculptureModal({
         ? 'Scale (3D handle)'
         : role === 'move'
         ? 'Move (3D handle)'
+        : role === 'face'
+        ? 'Move (3D face)'
         : role === 'rotate'
         ? 'Rotate (3D handle)'
         : 'Height (3D handle)';
@@ -1789,6 +1796,14 @@ export default function SculptureModal({
               cameraFocus={
                 isPendingPreview ? (showPendingLandView ? 'land' : 'model') : studioCameraFocus
               }
+              targetViewportAreaFraction={
+                !isPendingPreview &&
+                studioCameraFocus === 'model' &&
+                ghostFocusedSculptureId &&
+                ghostFocusedSculptureId === sculpture?.id
+                  ? GHOST_SELECT_VIEWPORT_AREA_FRACTION
+                  : null
+              }
               resetViewTick={previewResetTick}
               liveTransform={
                 isPendingPreview
@@ -1900,6 +1915,7 @@ export default function SculptureModal({
                       className={`viewer-corner-btn ${studioCameraFocus === 'model' ? 'is-active' : ''}`}
                       data-testid="sculpture-focus-model-btn"
                       onClick={() => {
+                        setGhostFocusedSculptureId('');
                         setStudioCameraFocus('model');
                         setPreviewResetTick((t) => t + 1);
                       }}
@@ -1915,6 +1931,7 @@ export default function SculptureModal({
                         }`}
                         data-testid="sculpture-fit-land-btn"
                         onClick={() => {
+                          setGhostFocusedSculptureId('');
                           setShowLandBoundsPreview(true);
                           setStudioCameraFocus('land');
                           setPreviewResetTick((t) => t + 1);
