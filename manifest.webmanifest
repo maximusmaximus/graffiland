@@ -1,0 +1,23 @@
+{
+  "name": "SPRAY.LAND",
+  "short_name": "SPRAY.LAND",
+  "description": "Make 3D art in the real world.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#060a14",
+  "theme_color": "#060a14",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
