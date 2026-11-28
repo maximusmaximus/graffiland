@@ -73,18 +73,56 @@ import {
 
 export async function listLandsWithCurations(db) {
   await reapAndArchiveExpiredLands(db).catch(() => {});
-  const scRows = await db.all(
-    `SELECT
-      parcel_id,
-      geohash,
-      COUNT(*) AS visible_count,
-      MAX(created_at) AS latest_at,
-      MIN(created_at) AS first_at
-     FROM sculptures
-     WHERE hidden = 0
-     GROUP BY parcel_id, geohash`
-  );
-  const lpRows = await db.all('SELECT * FROM land_parcels ORDER BY updated_at DESC');
+  const scRows = await db
+    .all(
+      `SELECT
+        s.parcel_id,
+        s.geohash,
+        COUNT(*) AS visible_count,
+        MAX(s.created_at) AS latest_at,
+        MIN(s.created_at) AS first_at,
+        (SELECT COUNT(*) FROM sculpture_chat_boards b
+          LEFT JOIN sculptures bs ON bs.id = b.sculpture_id
+          WHERE b.sculpture_id = s.parcel_id OR (bs.parcel_id = s.parcel_id AND bs.hidden = 0)) AS chat_initialized,
+        (SELECT COUNT(*) FROM sculpture_chat_messages m
+          LEFT JOIN sculptures ms ON ms.id = m.sculpture_id
+          WHERE m.sculpture_id = s.parcel_id OR (ms.parcel_id = s.parcel_id AND ms.hidden = 0)) AS chat_message_count,
+        COALESCE((SELECT SUM(pb.pin_count) FROM sculpture_pin_batches pb
+          LEFT JOIN sculptures ps ON ps.id = pb.sculpture_id
+          WHERE pb.sculpture_id = s.parcel_id OR (ps.parcel_id = s.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count
+       FROM sculptures s
+       WHERE s.hidden = 0
+       GROUP BY s.parcel_id, s.geohash`
+    )
+    .catch(() =>
+      db.all(
+        `SELECT
+          parcel_id,
+          geohash,
+          COUNT(*) AS visible_count,
+          MAX(created_at) AS latest_at,
+          MIN(created_at) AS first_at
+         FROM sculptures
+         WHERE hidden = 0
+         GROUP BY parcel_id, geohash`
+      )
+    );
+  const lpRows = await db
+    .all(
+      `SELECT lp.*,
+        (SELECT COUNT(*) FROM sculpture_chat_boards b
+          LEFT JOIN sculptures bs ON bs.id = b.sculpture_id
+          WHERE b.sculpture_id = lp.parcel_id OR (bs.parcel_id = lp.parcel_id AND bs.hidden = 0)) AS chat_initialized,
+        (SELECT COUNT(*) FROM sculpture_chat_messages m
+          LEFT JOIN sculptures ms ON ms.id = m.sculpture_id
+          WHERE m.sculpture_id = lp.parcel_id OR (ms.parcel_id = lp.parcel_id AND ms.hidden = 0)) AS chat_message_count,
+        COALESCE((SELECT SUM(pb.pin_count) FROM sculpture_pin_batches pb
+          LEFT JOIN sculptures ps ON ps.id = pb.sculpture_id
+          WHERE pb.sculpture_id = lp.parcel_id OR (ps.parcel_id = lp.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count
+       FROM land_parcels lp
+       ORDER BY lp.updated_at DESC`
+    )
+    .catch(() => db.all('SELECT * FROM land_parcels ORDER BY updated_at DESC'));
   const stewardRows = await db.all('SELECT * FROM land_steward_state');
   const questCounts = await db.all(
     `SELECT parcel_id, COUNT(*) AS cnt FROM land_quests WHERE status = 'open' GROUP BY parcel_id`
@@ -351,6 +389,17 @@ export async function listLandsWithCurations(db) {
       },
       pageViews: viewCountsMap.get(parcelId)?.pageViews || 0,
       inPersonViews: viewCountsMap.get(parcelId)?.inPersonViews || 0,
+      chatInitialized: Boolean(lp?.chat_initialized || sc?.chat_initialized),
+      chatMessageCount: Math.max(
+        0,
+        Number(lp?.chat_message_count || 0),
+        Number(sc?.chat_message_count || 0)
+      ),
+      chatPinCount: Math.max(
+        0,
+        Number(lp?.chat_pin_count || 0),
+        Number(sc?.chat_pin_count || 0)
+      ),
       landDeed: serializeLandDeedRow(deedRow),
       landDeedEligible: Boolean(deedRow || deedEligibility.eligible),
       landDeedStatus: deedRow ? 'minted' : deedEligibility.status,

@@ -13,7 +13,12 @@ import {
   testBoundingBoxAgainstPlacedItems
 } from '../utils/arItemCollision.js';
 import { useInAppBackHistory } from '../utils/inAppHistory.js';
-import { setLastKnownUnitLocation } from '../utils/measurementUnits.js';
+import {
+  buildLiveLandChatNotification,
+  evaluateLandChatAvailability,
+  resolveLandChatTarget
+} from '../utils/landChatHelpers.js';
+import { setLastKnownUnitLocation, useMeasurementUnits } from '../utils/measurementUnits.js';
 import {
   describeApiErrorForMobile,
   describeCameraNeededAction,
@@ -1214,6 +1219,8 @@ export default function MobileStudio({
     [ar, lands]
   );
 
+  const { unitSystem } = useMeasurementUnits(pol.location);
+
   const activeInsideLand = useMemo(() => {
     const insideLands = (ar.immediateCameraLands || []).filter((l) => l?.isInside);
     if (preferredDrawLandId) {
@@ -1223,6 +1230,30 @@ export default function MobileStudio({
     if (ar.primaryCameraLand?.isInside) return ar.primaryCameraLand;
     return insideLands[0] || null;
   }, [ar.immediateCameraLands, ar.primaryCameraLand, preferredDrawLandId]);
+
+  const liveLandChats = useMemo(() => {
+    const candidates = [];
+    const seen = new Set();
+    const pushCandidate = (land) => {
+      if (!land?.parcelId || !land.isInside || seen.has(land.parcelId)) return;
+      seen.add(land.parcelId);
+      candidates.push(land);
+    };
+    pushCandidate(activeInsideLand);
+    for (const land of ar.immediateCameraLands || []) {
+      pushCandidate(land);
+    }
+    const opts = {
+      isDesktop: false,
+      isSignedIn: Boolean(user),
+      cameraReady: Boolean(pol.cameraReady),
+      hasLocation: Boolean(pol.location),
+      unitSystem
+    };
+    return candidates
+      .map((land) => buildLiveLandChatNotification(land, opts))
+      .filter(Boolean);
+  }, [activeInsideLand, ar.immediateCameraLands, user, pol.cameraReady, pol.location, unitSystem]);
 
   const openPublishSheet = useCallback(
     ({ skipVoxelCheck = false, userOverride = null } = {}) => {
@@ -2059,8 +2090,56 @@ export default function MobileStudio({
     if (!keepParcelVisit) setParcelVisit(null);
   };
 
+  const openLandChatSafely = useCallback(
+    (targetLand, canonicalTargetOverride = null) => {
+      if (!targetLand) return;
+      const canonicalTarget =
+        canonicalTargetOverride || resolveLandChatTarget(targetLand, targetLand.displayName || '');
+      const avail = evaluateLandChatAvailability({
+        land: targetLand,
+        displayName: targetLand.displayName || '',
+        isDesktop: false,
+        isSignedIn: Boolean(user),
+        cameraReady: Boolean(pol.cameraReady),
+        hasLocation: Boolean(pol.location),
+        unitSystem
+      });
+      if (!avail.canChat) {
+        showTemporaryHint(
+          avail.reason || `Visit ${targetLand?.displayName || 'this land'} in person to join Land Chat.`
+        );
+        if (avail.code === 'signed_out') {
+          setLoginOpen(true);
+        }
+        return;
+      }
+      if (!canonicalTarget) return;
+      chat.openCameraSelectedChat(
+        canonicalTarget,
+        targetLand?.distanceMeters ?? 0,
+        chat.arPinPreview
+      );
+    },
+    [chat, pol.cameraReady, pol.location, showTemporaryHint, unitSystem, user]
+  );
+
   const handleMobileNotificationAction = async (item) => {
     if (!item) return;
+    if (item.actionType === 'open_land_chat') {
+      dismissMobileOverlaysForNotification();
+      const targetLand =
+        item.land ||
+        (ar.immediateCameraLands || []).find((l) => l?.parcelId === item.parcelId) ||
+        (ar.visibleCameraLands || []).find((l) => l?.parcelId === item.parcelId) ||
+        (ar.allLandsSorted || []).find((l) => l?.parcelId === item.parcelId) ||
+        null;
+      if (targetLand) {
+        openLandChatSafely(targetLand, item.chatTarget || null);
+      } else if (item.parcelId) {
+        await navigateToLandById(item.parcelId);
+      }
+      return;
+    }
     if (item.actionType === 'open_pair_mobile') {
       dismissMobileOverlaysForNotification();
       setOpenPairHubSignal({ tab: 'pair', ts: Date.now() });
@@ -2164,6 +2243,7 @@ export default function MobileStudio({
       refreshSignal={lands.ownedLandCount + notifRefreshBump}
       pendingApprovals={pairing.pendingSignatures}
       pendingApprovalsLoaded={pairing.pendingSignaturesLoaded}
+      liveLandChats={liveLandChats}
       onRequestPendingRefresh={() => pairing.refreshPendingSignatures({ includeHistory: false })}
       onApprovalResolved={handleMobileApprovalResolved}
       onAction={handleMobileNotificationAction}
@@ -2644,19 +2724,12 @@ export default function MobileStudio({
             onInspectSculpture={(sc) => {
               ar.setMapSelectedSculpture(sc);
             }}
+            isDesktop={false}
+            isSignedIn={Boolean(user)}
+            cameraReady={Boolean(pol.cameraReady)}
+            hasLocation={Boolean(pol.location)}
             onOpenLandChat={(targetLand, canonicalTarget) => {
-              const gate = evaluateArLandActionProximity(targetLand);
-              if (!gate.canChatAtLand) {
-                showTemporaryHint(
-                  `Visit ${targetLand?.displayName || 'this land'} in person to join Land Chat.`
-                );
-                return;
-              }
-              chat.openCameraSelectedChat(
-                canonicalTarget,
-                targetLand?.distanceMeters ?? 0,
-                chat.arPinPreview
-              );
+              openLandChatSafely(targetLand, canonicalTarget);
             }}
             onShowHint={showTemporaryHint}
             onClose={handleExitArLand}
@@ -2943,6 +3016,11 @@ export default function MobileStudio({
             showTemporaryHint(
               `Adding art to ${resolveLandDisplayName(visitedParcel, { defaultName: 'Virtual Land' })}!`
             );
+          }}
+          cameraReady={Boolean(pol.cameraReady)}
+          onOpenLandChat={(targetLand, canonicalTarget) => {
+            setParcelVisit(null);
+            openLandChatSafely(targetLand, canonicalTarget);
           }}
           onSelectSculpture={(sc) => ar.setMapSelectedSculpture(sc)}
           onOpenManageLand={(pid) => {

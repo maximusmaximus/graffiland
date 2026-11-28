@@ -472,7 +472,7 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     }
   });
 
-  test('StudioHudTopBar displays True North / 6-DoF ARCore status pill without on-screen 6-DoF toggle button', async () => {
+  test('StudioHudTopBar removes top GPS/True North tag pill and on-screen 6-DoF toggle button across all states', async () => {
     const { default: StudioHudTopBar } = await loadJsxModule(
       'client/src/components/studio/StudioHudTopBar.jsx'
     );
@@ -503,16 +503,23 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
     };
 
     const view = RTL.render(React.createElement(StudioHudTopBar, baseProps));
-    const pill = view.getByTestId('ar-sensor-status-pill');
-    assert.ok(pill.textContent.includes('True North ±6° · GPS ±4m'));
-    assert.equal(pill.getAttribute('data-true-north'), 'true');
+    assert.equal(
+      view.queryByTestId('ar-sensor-status-pill'),
+      null,
+      'Top GPS / True North tag pill must be removed from StudioHudTopBar'
+    );
+    assert.equal(
+      view.container.textContent.includes('True North'),
+      false,
+      'Top GPS / True North text must not appear in top HUD'
+    );
     assert.equal(
       view.queryByTestId('ar-webxr-toggle-btn'),
       null,
       'On-screen 6-DoF AR button must be removed from StudioHudTopBar'
     );
 
-    // Rerender in magnetic-interference calibration warning state
+    // Rerender in magnetic-interference & active WebXR states: still no top GPS/sensor tag pill
     view.rerender(
       React.createElement(StudioHudTopBar, {
         ...baseProps,
@@ -523,22 +530,15 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
         }
       })
     );
-    assert.ok(
-      view.getByTestId('ar-sensor-status-pill').textContent.includes('figure-8')
-    );
+    assert.equal(view.queryByTestId('ar-sensor-status-pill'), null);
 
-    // Rerender in active WebXR 6-DoF state: top 6-DoF ARCore Lock pill & on-screen button are both hidden
     view.rerender(
       React.createElement(StudioHudTopBar, {
         ...baseProps,
         webxrActive: true
       })
     );
-    assert.equal(
-      view.queryByTestId('ar-sensor-status-pill'),
-      null,
-      'Top 6-DoF ARCore Lock pill must be removed when WebXR is active'
-    );
+    assert.equal(view.queryByTestId('ar-sensor-status-pill'), null);
     assert.equal(view.queryByTestId('ar-webxr-toggle-btn'), null);
     view.unmount();
   });
