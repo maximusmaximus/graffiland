@@ -16440,6 +16440,98 @@ html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {
   background: rgba(44, 24, 8, 0.72);
 }
 
+/* Locked Land Chat Button + Info ("i") & On-Land Live Chat Notification */
+.ar-land-chat-lock-row,
+.plot-land-chat-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ar-land-chat-lock-row > .btn,
+.plot-land-chat-lock-row > .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ar-land-chat-lock-info {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-locked-inline-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn.is-action-locked,
+.plot-land-chat-btn.is-action-locked,
+.notif-open-land-chat-btn.is-action-locked {
+  background: rgba(30, 38, 54, 0.62);
+  border: 1px dashed rgba(148, 163, 184, 0.32);
+  color: rgba(148, 163, 184, 0.74);
+  box-shadow: none;
+  filter: grayscale(0.8);
+  opacity: 0.68;
+  cursor: not-allowed;
+}
+
+.btn.is-action-locked:hover,
+.plot-land-chat-btn.is-action-locked:hover,
+.notif-open-land-chat-btn.is-action-locked:hover {
+  background: rgba(36, 46, 64, 0.72);
+  border-color: rgba(255, 209, 102, 0.42);
+  color: rgba(203, 213, 225, 0.86);
+}
+
+.notif-item.is-live-land-chat {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 245, 212, 0.13),
+    rgba(16, 30, 52, 0.86)
+  );
+  border-color: rgba(0, 245, 212, 0.42);
+}
+
+.notif-item.is-live-land-chat:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 245, 212, 0.2),
+    rgba(16, 30, 52, 0.92)
+  );
+  border-color: rgba(0, 245, 212, 0.65);
+}
+
+.notif-live-chat-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #00f5d4, #00c4a7);
+  color: #041816;
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.35;
+  vertical-align: middle;
+  box-shadow: 0 1px 6px rgba(0, 245, 212, 0.42);
+}
+
+.notif-open-land-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -1,0 +1,299 @@
+import {
+  CHAT_SIGHT_MAX_DISTANCE_M,
+  PIN_PARCEL_MAX_DISTANCE_M
+} from '../../../shared/chatPolicy.mjs';
+import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../shared/constants.mjs';
+import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
+import { formatDistanceMeters } from './landMapHelpers.js';
+
+function parseFiniteMetric(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Computes physical on-site proximity gates for AR Land Inspector actions so users
+ * cannot trigger in-person-only actions (drawing, check-in, Land Chat, AR alignment)
+ * while viewing a land remotely.
+ */
+export function evaluateArLandActionProximity(land) {
+  if (!land) {
+    return {
+      edgeDistM: null,
+      isInside: false,
+      outOfArRange: true,
+      canDrawAtLand: false,
+      canCheckInAtLand: false,
+      canChatAtLand: false,
+      canAlignAtLand: false
+    };
+  }
+  const edgeDistM =
+    parseFiniteMetric(land.edgeDistanceMetersExact) ??
+    parseFiniteMetric(land.edgeDistanceMeters) ??
+    parseFiniteMetric(land.distanceMeters);
+  const isInside = Boolean(land.isInside);
+  const outOfArRange =
+    Boolean(land.outOfArRange) ||
+    (!isInside && edgeDistM !== null && edgeDistM >= AR_MAX_VISIBLE_DISTANCE_METERS);
+
+  const canAlignAtLand =
+    !outOfArRange &&
+    (isInside || (edgeDistM !== null && edgeDistM < AR_MAX_VISIBLE_DISTANCE_METERS));
+  const canChatAtLand =
+    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= CHAT_SIGHT_MAX_DISTANCE_M));
+  const canCheckInAtLand =
+    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= PIN_PARCEL_MAX_DISTANCE_M));
+  const canDrawAtLand = !land.isFrozen && canCheckInAtLand;
+
+  return {
+    edgeDistM,
+    isInside,
+    outOfArRange,
+    canDrawAtLand,
+    canCheckInAtLand,
+    canChatAtLand,
+    canAlignAtLand
+  };
+}
+
+/**
+ * Resolves the single canonical chat target for a Virtual Land so all visitors and
+ * artworks on that land share one chat room (preferring an initialized board, else
+ * the earliest sculpture on the land, else the parcel itself for an empty land).
+ */
+export function resolveLandChatTarget(land, displayName = '') {
+  if (!land) return null;
+  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const label =
+    displayName ||
+    resolveLandDisplayName({
+      customName: String(land.customName || '').trim(),
+      displayName: land.displayName || '',
+      firstSculptureTitle: sculptures[0]?.title || ''
+    });
+
+  if (sculptures.length > 0) {
+    const initialized = sculptures.find((s) => s?.chatSummary?.initialized);
+    const chosen = initialized || sculptures[0];
+    return {
+      ...chosen,
+      parcelId: chosen.parcelId || land.parcelId,
+      parcelName: chosen.parcelName || land.customName || label
+    };
+  }
+
+  if (!land.parcelId) return null;
+  const lat = land.centerLat ?? land.volume?.centerLat ?? null;
+  const lng = land.centerLng ?? land.volume?.centerLng ?? null;
+  return {
+    id: land.parcelId,
+    parcelId: land.parcelId,
+    parcelName: label,
+    customName: land.customName || '',
+    title: label,
+    lat: Number.isFinite(Number(lat)) ? Number(lat) : null,
+    lng: Number.isFinite(Number(lng)) ? Number(lng) : null,
+    creatorSub: land.ownerSub || land.stewardSub || '',
+    creatorUsername: land.stewardUsername || '',
+    creatorName: land.stewardName || '',
+    creatorAvatar: land.stewardAvatar || '',
+    isParcelChat: true
+  };
+}
+
+/**
+ * Aggregates whether a Virtual Land currently has a live/initialized Land Chat board,
+ * encrypted messages, or pinned IPFS notes.
+ */
+export function getLandChatLiveSummary(land) {
+  if (!land) {
+    return {
+      hasLiveChat: false,
+      initialized: false,
+      messageCount: 0,
+      pinCount: 0
+    };
+  }
+  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const initialized = Boolean(
+    land.chatInitialized ||
+      land.chatSummary?.initialized ||
+      sculptures.some((sc) => Boolean(sc?.chatSummary?.initialized))
+  );
+  let messageCount = Math.max(
+    0,
+    Number(land.chatMessageCount || 0),
+    Number(land.chatSummary?.messageCount || 0)
+  );
+  let pinCount = Math.max(0, Number(land.chatPinCount || 0), Number(land.pinSummary?.pinCount || 0));
+  for (const sc of sculptures) {
+    messageCount = Math.max(messageCount, Number(sc?.chatSummary?.messageCount || 0));
+    pinCount = Math.max(pinCount, Number(sc?.pinSummary?.pinCount || 0));
+  }
+  const hasLiveChat = Boolean(initialized || messageCount > 0 || pinCount > 0);
+  return {
+    hasLiveChat,
+    initialized,
+    messageCount,
+    pinCount
+  };
+}
+
+/**
+ * Evaluates whether the user can currently enter encrypted Land Chat on a given land,
+ * returning a clear human-readable reason for the info ("i") tooltip whenever locked.
+ */
+export function evaluateLandChatAvailability({
+  land = null,
+  displayName = '',
+  proximity = null,
+  isDesktop = false,
+  isSignedIn = true,
+  cameraReady = true,
+  hasLocation = true,
+  unitSystem = 'metric'
+} = {}) {
+  const sculptures = Array.isArray(land?.sculptures) ? land.sculptures : [];
+  const label =
+    displayName ||
+    resolveLandDisplayName({
+      customName: String(land?.customName || '').trim(),
+      displayName: land?.displayName || '',
+      firstSculptureTitle: sculptures[0]?.title || ''
+    }) ||
+    'this land';
+  const gate = proximity || evaluateArLandActionProximity(land);
+  const withinLabel = formatDistanceMeters(CHAT_SIGHT_MAX_DISTANCE_M, unitSystem) || '75m';
+
+  if (isDesktop) {
+    return {
+      canChat: false,
+      code: 'desktop_only',
+      title: 'Why Land Chat is locked',
+      reason: `Land Chat is mobile in-person only — visit ${label} on your phone within ${withinLabel} with live AR camera to join encrypted chat.`
+    };
+  }
+
+  if (!hasLocation) {
+    return {
+      canChat: false,
+      code: 'no_gps',
+      title: 'Why Land Chat is locked',
+      reason: `Enable GPS location and stand within ${withinLabel} of ${label} to verify your presence and unlock encrypted Land Chat.`
+    };
+  }
+
+  if (!gate.canChatAtLand) {
+    if (gate.edgeDistM !== null) {
+      const distLabel = formatDistanceMeters(gate.edgeDistM, unitSystem);
+      return {
+        canChat: false,
+        code: 'out_of_range',
+        title: 'Why Land Chat is locked',
+        reason: `You're ${distLabel} away — walk within ${withinLabel} of ${label} in person with live AR camera to unlock encrypted Land Chat.`
+      };
+    }
+    return {
+      canChat: false,
+      code: 'no_gps',
+      title: 'Why Land Chat is locked',
+      reason: `Enable GPS location and visit ${label} in person (within ${withinLabel}) to unlock encrypted Land Chat.`
+    };
+  }
+
+  if (!cameraReady) {
+    return {
+      canChat: false,
+      code: 'no_camera',
+      title: 'Why Land Chat is locked',
+      reason: `Enable your live mobile AR camera at ${label} to verify Proof of Sight and unlock encrypted Land Chat.`
+    };
+  }
+
+  if (!isSignedIn) {
+    return {
+      canChat: false,
+      code: 'signed_out',
+      title: 'Why Land Chat is locked',
+      reason: `Sign in with your account while on site at ${label} to unlock your encrypted chat key and join Land Chat.`
+    };
+  }
+
+  return {
+    canChat: true,
+    code: 'ready',
+    title: '',
+    reason: ''
+  };
+}
+
+/**
+ * Builds an on-land live chat alert object for NotificationCenter whenever the user
+ * is physically standing on a land that has an active/live Land Chat.
+ */
+export function buildLiveLandChatNotification(
+  land,
+  {
+    isDesktop = false,
+    isSignedIn = true,
+    cameraReady = true,
+    hasLocation = true,
+    unitSystem = 'metric'
+  } = {}
+) {
+  if (!land?.parcelId || !land.isInside) return null;
+  const summary = getLandChatLiveSummary(land);
+  if (!summary.hasLiveChat) return null;
+
+  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const displayName =
+    land.displayName ||
+    resolveLandDisplayName({
+      customName: String(land.customName || '').trim(),
+      displayName: land.displayName || '',
+      firstSculptureTitle: sculptures[0]?.title || ''
+    });
+  const chatTarget = resolveLandChatTarget(land, displayName);
+  if (!chatTarget) return null;
+
+  const chatAvailability = evaluateLandChatAvailability({
+    land,
+    displayName,
+    isDesktop,
+    isSignedIn,
+    cameraReady,
+    hasLocation,
+    unitSystem
+  });
+
+  let message = `You're on ${displayName} — encrypted Land Chat is live here. Tap below to join.`;
+  if (summary.messageCount > 0 && summary.pinCount > 0) {
+    message = `You're on ${displayName} — ${summary.messageCount} encrypted ${
+      summary.messageCount === 1 ? 'message' : 'messages'
+    } & ${summary.pinCount} pinned ${summary.pinCount === 1 ? 'note' : 'notes'} live here.`;
+  } else if (summary.messageCount > 0) {
+    message = `You're on ${displayName} — ${summary.messageCount} encrypted ${
+      summary.messageCount === 1 ? 'message' : 'messages'
+    } live here. Tap below to open chat.`;
+  } else if (summary.pinCount > 0) {
+    message = `You're on ${displayName} — ${summary.pinCount} pinned ${
+      summary.pinCount === 1 ? 'note' : 'notes'
+    } & live encrypted Land Chat available here.`;
+  }
+
+  return {
+    id: `live-land-chat:${land.parcelId}`,
+    parcelId: land.parcelId,
+    displayName,
+    land,
+    chatTarget,
+    messageCount: summary.messageCount,
+    pinCount: summary.pinCount,
+    initialized: summary.initialized,
+    chatAvailability,
+    title: `Live Land Chat at ${displayName}`,
+    message
+  };
+}

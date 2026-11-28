@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  CHAT_SIGHT_CLIENT_DISTANCE_M,
+  CHAT_SIGHT_MAX_DISTANCE_M,
   haversineMeters
 } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
@@ -348,10 +348,14 @@ export function useChat({
         { defaultName: sc.title || 'this land' }
       );
       if (Number.isFinite(targetLat) && Number.isFinite(targetLng)) {
-        const distM = haversineMeters(loc.lat, loc.lng, targetLat, targetLng);
-        if (distM > CHAT_SIGHT_CLIENT_DISTANCE_M) {
+        const centerDistM = haversineMeters(loc.lat, loc.lng, targetLat, targetLng);
+        const effectiveDistM =
+          rayHitDistanceM !== null && Number.isFinite(Number(rayHitDistanceM))
+            ? Math.min(centerDistM, Math.max(0, Number(rayHitDistanceM)))
+            : centerDistM;
+        if (effectiveDistM > CHAT_SIGHT_MAX_DISTANCE_M) {
           showTemporaryHint(
-            `"${landLabel}" is ${Math.round(distM)}m away — walk within ${CHAT_SIGHT_CLIENT_DISTANCE_M}m in person to unlock Land Chat.`
+            `"${landLabel}" is ${Math.round(effectiveDistM)}m away — walk within ${CHAT_SIGHT_MAX_DISTANCE_M}m in person to unlock Land Chat.`
           );
           return;
         }

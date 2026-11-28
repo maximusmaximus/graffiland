@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
+import { evaluateLandChatAvailability } from '../../utils/landChatHelpers.js';
 import {
   formatDistance,
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
 import { describeCameraNeededAction } from '../../utils/permissionMessages.js';
+import { notifySettingsSaved } from '../../utils/toastNotice.js';
 import NotificationCenter from '../NotificationCenter.jsx';
 import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
@@ -80,8 +82,6 @@ export default function StudioHudTopBar({
   isInteractingWithLand = false,
   nearbyCameraLand = null,
   nearbyCameraLandCount = 0,
-  sensorStatus = null,
-  webxrActive = false,
   onInspectArLand = null,
   onExitArLand = null,
   arExitLabel = 'Back to Draw',
@@ -355,63 +355,6 @@ export default function StudioHudTopBar({
           isInteractingWithLand ? 'is-land-inspect' : ''
         }`}
       >
-        {sensorStatus &&
-          !webxrActive &&
-          (isInteractingWithLand ||
-            mode === 'preview' ||
-            sensorStatus.needsCompassCalibration) && (
-            <div className="ar-sensor-hud-row hud-interactive">
-              <div
-                className={`ar-sensor-status-pill ${
-                  sensorStatus.needsCompassCalibration
-                    ? 'is-warn'
-                    : sensorStatus.trueNorthLocked
-                    ? 'is-locked'
-                    : ''
-                }`}
-                data-testid="ar-sensor-status-pill"
-                data-sensor-source={sensorStatus.source || 'none'}
-                data-true-north={sensorStatus.trueNorthLocked ? 'true' : 'false'}
-              >
-                <XeroIcon
-                  emoji={sensorStatus.needsCompassCalibration ? '⚠️' : '🧭'}
-                  size={12}
-                />
-                <span>
-                  {sensorStatus.needsCompassCalibration
-                    ? sensorStatus.magneticInterference
-                      ? 'Magnetic interference · Wave phone in figure-8'
-                      : 'Calibrate compass (wave figure-8)'
-                    : sensorStatus.trueNorthLocked
-                    ? `True North${
-                        sensorStatus.headingAccuracyDeg != null
-                          ? ` ±${sensorStatus.headingAccuracyDeg}°`
-                          : ''
-                      }${
-                        sensorStatus.gpsAccuracyM != null
-                          ? ` · GPS ±${sensorStatus.gpsAccuracyM}m`
-                          : ''
-                      }`
-                    : `Compass Waiting${
-                        sensorStatus.gpsAccuracyM != null
-                          ? ` · GPS ±${sensorStatus.gpsAccuracyM}m`
-                          : ''
-                      }`}
-                </span>
-                <InfoTip title="Multi-Sensor AR Alignment">
-                  Automatically fuses True-North compass, gyroscope, gravity horizon, geomagnetic
-                  declination ({sensorStatus.declinationDeg >= 0 ? '+' : ''}
-                  {sensorStatus.declinationDeg ?? 0}°), Kalman GPS + step motion, visual ORB
-                  landmarks, and 6-DoF ARCore (manageable in Profile ⚙️ Settings) so lands stay
-                  locked in real-world position and direction.
-                  {sensorStatus.needsCompassCalibration
-                    ? ' Move your phone smoothly in a figure-8 away from steel or cars to recalibrate.'
-                    : ''}
-                </InfoTip>
-              </div>
-            </div>
-          )}
-
         {!isInteractingWithLand &&
           nearbyCameraLand &&
           (mode === 'draw' || mode === 'preview') &&
@@ -732,41 +675,93 @@ export default function StudioHudTopBar({
       {!isInteractingWithLand && mode === 'preview' && arTargetedSculpture && (() => {
         const targetSc = arTargetedSculpture.sculpture;
         const activePin = arPinPreview?.sculptureId === targetSc.id ? arPinPreview : null;
+        const targetLandLabel = resolveLandDisplayName(
+          {
+            customName: targetSc.parcelName || '',
+            displayName: targetSc.landDisplayName || '',
+            firstSculptureTitle: targetSc.title || ''
+          },
+          { defaultName: 'Virtual Land' }
+        );
+        const targetChatAvail = evaluateLandChatAvailability({
+          land: {
+            parcelId: targetSc.parcelId,
+            displayName: targetLandLabel,
+            edgeDistanceMeters: arTargetedSculpture.distanceM,
+            isInside: Number(arTargetedSculpture.distanceM) <= 1.5
+          },
+          displayName: targetLandLabel,
+          isDesktop: false,
+          isSignedIn: Boolean(user),
+          cameraReady: cameraReady !== false,
+          hasLocation: Boolean(location),
+          unitSystem
+        });
         return (
           <div
             className="ar-select-card hud-interactive"
             role="region"
             aria-label={`Selected sculpture ${targetSc.title}`}
-            onClick={() =>
-              onOpenCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin)
-            }
+            onClick={() => {
+              if (!targetChatAvail.canChat) {
+                notifySettingsSaved(targetChatAvail.reason, { tone: 'warning' });
+                return;
+              }
+              onOpenCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
+            }}
           >
             <div className="ar-select-card-head">
               <div style={{ minWidth: 0 }}>
                 <div className="ar-select-title">{targetSc.title}</div>
                 <div className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                  {Math.round(arTargetedSculpture.distanceM)}m away ·{' '}
-                  {resolveLandDisplayName(
-                    {
-                      customName: targetSc.parcelName || '',
-                      displayName: targetSc.landDisplayName || '',
-                      firstSculptureTitle: targetSc.title || ''
-                    },
-                    { defaultName: 'Virtual Land' }
-                  )}
+                  {Math.round(arTargetedSculpture.distanceM)}m away · {targetLandLabel}
                 </div>
               </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ fontSize: 12, padding: '6px 10px', flexShrink: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
-                }}
-              >
-                <XeroIcon emoji="💬" size={14} /> Land Chat
-              </button>
+              {targetChatAvail.canChat ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  data-testid="ar-select-land-chat-btn"
+                  data-locked="false"
+                  style={{ fontSize: 12, padding: '6px 10px', flexShrink: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenCameraSelectedChat(targetSc, arTargetedSculpture.distanceM, activePin);
+                  }}
+                >
+                  <XeroIcon emoji="💬" size={14} /> Land Chat
+                </button>
+              ) : (
+                <span
+                  className="chat-locked-inline-group"
+                  style={{ flexShrink: 0 }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="btn is-action-locked"
+                    data-testid="ar-select-land-chat-btn"
+                    data-locked="true"
+                    aria-disabled="true"
+                    style={{ fontSize: 12, padding: '6px 10px' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      notifySettingsSaved(targetChatAvail.reason, { tone: 'warning' });
+                    }}
+                  >
+                    <XeroIcon emoji="🔒" size={13} /> Land Chat
+                  </button>
+                  <span data-testid="ar-select-land-chat-lock-info">
+                    <InfoTip
+                      title={targetChatAvail.title || 'Why Land Chat is locked'}
+                      mode="popover"
+                      align="right"
+                    >
+                      {targetChatAvail.reason}
+                    </InfoTip>
+                  </span>
+                </span>
+              )}
             </div>
 
             {targetSc.description && (

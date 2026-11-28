@@ -14,6 +14,11 @@ import {
   copyToClipboard
 } from '../utils/clipboard.js';
 import {
+  evaluateLandChatAvailability,
+  getLandChatLiveSummary,
+  resolveLandChatTarget
+} from '../utils/landChatHelpers.js';
+import {
   formatDistanceMeters,
   formatLandDimensions,
   formatLandExpiration,
@@ -99,10 +104,12 @@ export default function PlotVisitView({
   ownedParcelIds = EMPTY_ARRAY,
   config = null,
   userLocation = null,
+  cameraReady = false,
   loading = false,
   error = '',
   onViewInAR = null,
   onMakeArt = null,
+  onOpenLandChat = null,
   onSelectSculpture = null,
   onSelectNeighborParcel = null,
   onOpenManageLand = null,
@@ -114,6 +121,7 @@ export default function PlotVisitView({
   onPlotUpdated = null,
   onClose
 }) {
+  const isDesktop = variant === 'desktop';
   const mapHostRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
@@ -627,6 +635,53 @@ export default function PlotVisitView({
   }, [activeParcel]);
 
   const isNearProperty = distanceMeters !== null && distanceMeters <= nearThresholdMeters;
+
+  const plotChatLand = useMemo(
+    () =>
+      activeParcel
+        ? {
+            ...activeParcel,
+            displayName: landDisplayName,
+            sculptures: visibleSculptures,
+            edgeDistanceMeters: distanceMeters,
+            distanceMeters,
+            isInside:
+              isNearProperty &&
+              distanceMeters !== null &&
+              distanceMeters <= Math.max(15, nearThresholdMeters - 35),
+            outOfArRange: distanceMeters !== null && !isNearProperty
+          }
+        : null,
+    [
+      activeParcel,
+      landDisplayName,
+      visibleSculptures,
+      distanceMeters,
+      isNearProperty,
+      nearThresholdMeters
+    ]
+  );
+  const plotChatSummary = useMemo(() => getLandChatLiveSummary(plotChatLand), [plotChatLand]);
+  const plotChatTarget = useMemo(
+    () => resolveLandChatTarget(plotChatLand, landDisplayName),
+    [plotChatLand, landDisplayName]
+  );
+  const plotChatAvailability = useMemo(
+    () =>
+      evaluateLandChatAvailability({
+        land: plotChatLand,
+        displayName: landDisplayName,
+        isDesktop,
+        isSignedIn: Boolean(user),
+        cameraReady: isDesktop ? false : Boolean(cameraReady),
+        hasLocation: Boolean(userLocation),
+        unitSystem
+      }),
+    [plotChatLand, landDisplayName, isDesktop, user, cameraReady, userLocation, unitSystem]
+  );
+  const canOpenPlotChat = Boolean(
+    plotChatAvailability.canChat && plotChatTarget && typeof onOpenLandChat === 'function'
+  );
 
   const directionsUrl = hasCenter
     ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
@@ -1330,8 +1385,6 @@ export default function PlotVisitView({
   }
 
   const stewardHandle = activeParcel?.stewardUsername || activeParcel?.ownerSub || '';
-
-  const isDesktop = variant === 'desktop';
 
   // Record a deduplicated Land Page view on mount / parcel switch
   useEffect(() => {
@@ -2810,6 +2863,56 @@ export default function PlotVisitView({
                                 )}
                               </div>
                             )}
+                            {plotChatTarget &&
+                              (canOpenPlotChat ? (
+                                <button
+                                  type="button"
+                                  className="btn mobile-parcel-cta plot-land-chat-btn"
+                                  data-testid="plot-land-chat-btn"
+                                  data-locked="false"
+                                  onClick={() => onOpenLandChat(plotChatLand, plotChatTarget)}
+                                >
+                                  <XeroIcon emoji="💬" size={16} /> Land Chat
+                                  {plotChatSummary.messageCount > 0
+                                    ? ` (${plotChatSummary.messageCount})`
+                                    : ''}
+                                </button>
+                              ) : (
+                                <div
+                                  className="plot-land-chat-lock-row"
+                                  data-testid="plot-land-chat-lock-row"
+                                >
+                                  <button
+                                    type="button"
+                                    className="btn mobile-parcel-cta plot-land-chat-btn is-action-locked"
+                                    data-testid="plot-land-chat-btn"
+                                    data-locked="true"
+                                    aria-disabled="true"
+                                    title={plotChatAvailability.reason}
+                                    onClick={() =>
+                                      notifySettingsSaved(plotChatAvailability.reason, {
+                                        tone: 'warning'
+                                      })
+                                    }
+                                  >
+                                    <XeroIcon emoji="🔒" size={15} /> Land Chat
+                                    {plotChatSummary.messageCount > 0
+                                      ? ` (${plotChatSummary.messageCount})`
+                                      : ''}
+                                  </button>
+                                  <span data-testid="plot-land-chat-lock-info">
+                                    <InfoTip
+                                      title={
+                                        plotChatAvailability.title || 'Why Land Chat is locked'
+                                      }
+                                      mode="popover"
+                                      align="right"
+                                    >
+                                      {plotChatAvailability.reason}
+                                    </InfoTip>
+                                  </span>
+                                </div>
+                              ))}
                           </div>
                         </>
                       )}
@@ -2834,6 +2937,40 @@ export default function PlotVisitView({
                             >
                               <XeroIcon emoji="🧭" size={13} /> Navigate
                             </a>
+                          )}
+                          {plotChatTarget && (
+                            <span
+                              className="chat-locked-inline-group"
+                              data-testid="plot-land-chat-lock-row"
+                            >
+                              <button
+                                type="button"
+                                className="btn btn-sm plot-land-chat-btn is-action-locked"
+                                data-testid="plot-land-chat-btn"
+                                data-locked="true"
+                                aria-disabled="true"
+                                title={plotChatAvailability.reason}
+                                onClick={() =>
+                                  notifySettingsSaved(plotChatAvailability.reason, {
+                                    tone: 'warning'
+                                  })
+                                }
+                              >
+                                <XeroIcon emoji="🔒" size={13} /> Land Chat
+                                {plotChatSummary.messageCount > 0
+                                  ? ` (${plotChatSummary.messageCount})`
+                                  : ''}
+                              </button>
+                              <span data-testid="plot-land-chat-lock-info">
+                                <InfoTip
+                                  title={plotChatAvailability.title || 'Why Land Chat is locked'}
+                                  mode="popover"
+                                  align="right"
+                                >
+                                  {plotChatAvailability.reason}
+                                </InfoTip>
+                              </span>
+                            </span>
                           )}
                           {!isLandOwner && !isFrozen && user && onOpenAddLandItem && (
                             <button

@@ -3,13 +3,18 @@ import {
   CHAT_SIGHT_MAX_DISTANCE_M,
   PIN_PARCEL_MAX_DISTANCE_M
 } from '../../../../shared/chatPolicy.mjs';
-import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../../shared/constants.mjs';
 import {
   buildParcelShareUrl,
   resolveLandDisplayName
 } from '../../../../shared/landVolume.mjs';
 import { api } from '../../utils/api.js';
 import { copyToClipboard } from '../../utils/clipboard.js';
+import {
+  evaluateArLandActionProximity,
+  evaluateLandChatAvailability,
+  getLandChatLiveSummary,
+  resolveLandChatTarget
+} from '../../utils/landChatHelpers.js';
 import {
   formatDistanceMeters,
   formatLandDimensions,
@@ -20,111 +25,11 @@ import {
 import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../../utils/toastNotice.js';
 import { EmojiInput } from '../EmojiField.jsx';
+import InfoTip from '../InfoTip.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
-function parseFiniteMetric(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
-
-/**
- * Computes physical on-site proximity gates for AR Land Inspector actions so users
- * cannot trigger in-person-only actions (drawing, check-in, Land Chat, AR alignment)
- * while viewing a land remotely.
- */
-export function evaluateArLandActionProximity(land) {
-  if (!land) {
-    return {
-      edgeDistM: null,
-      isInside: false,
-      outOfArRange: true,
-      canDrawAtLand: false,
-      canCheckInAtLand: false,
-      canChatAtLand: false,
-      canAlignAtLand: false
-    };
-  }
-  const edgeDistM =
-    parseFiniteMetric(land.edgeDistanceMetersExact) ??
-    parseFiniteMetric(land.edgeDistanceMeters) ??
-    parseFiniteMetric(land.distanceMeters);
-  const isInside = Boolean(land.isInside);
-  const outOfArRange =
-    Boolean(land.outOfArRange) ||
-    (!isInside && edgeDistM !== null && edgeDistM >= AR_MAX_VISIBLE_DISTANCE_METERS);
-
-  const canAlignAtLand =
-    !outOfArRange &&
-    (isInside || (edgeDistM !== null && edgeDistM < AR_MAX_VISIBLE_DISTANCE_METERS));
-  const canChatAtLand =
-    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= CHAT_SIGHT_MAX_DISTANCE_M));
-  const canCheckInAtLand =
-    !outOfArRange && (isInside || (edgeDistM !== null && edgeDistM <= PIN_PARCEL_MAX_DISTANCE_M));
-  const canDrawAtLand = !land.isFrozen && canCheckInAtLand;
-
-  return {
-    edgeDistM,
-    isInside,
-    outOfArRange,
-    canDrawAtLand,
-    canCheckInAtLand,
-    canChatAtLand,
-    canAlignAtLand
-  };
-}
-
-/**
- * Interactive Land Details & Quick Actions overlay displayed directly over the live AR camera
- * view when the user taps on a visible nearby land (or the live "On / Near Land" camera pill).
- * While active, non-essential drawing HUD buttons are temporarily hidden so the user can
- * inspect and interact with the land effortlessly.
- */
-/**
- * Resolves the single canonical chat target for a Virtual Land so all visitors and
- * artworks on that land share one chat room (preferring an initialized board, else
- * the earliest sculpture on the land, else the parcel itself for an empty land).
- */
-export function resolveLandChatTarget(land, displayName = '') {
-  if (!land) return null;
-  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
-  const label =
-    displayName ||
-    resolveLandDisplayName({
-      customName: String(land.customName || '').trim(),
-      displayName: land.displayName || '',
-      firstSculptureTitle: sculptures[0]?.title || ''
-    });
-
-  if (sculptures.length > 0) {
-    const initialized = sculptures.find((s) => s?.chatSummary?.initialized);
-    const chosen = initialized || sculptures[0];
-    return {
-      ...chosen,
-      parcelId: chosen.parcelId || land.parcelId,
-      parcelName: chosen.parcelName || land.customName || label
-    };
-  }
-
-  if (!land.parcelId) return null;
-  const lat = land.centerLat ?? land.volume?.centerLat ?? null;
-  const lng = land.centerLng ?? land.volume?.centerLng ?? null;
-  return {
-    id: land.parcelId,
-    parcelId: land.parcelId,
-    parcelName: label,
-    customName: land.customName || '',
-    title: label,
-    lat: Number.isFinite(Number(lat)) ? Number(lat) : null,
-    lng: Number.isFinite(Number(lng)) ? Number(lng) : null,
-    creatorSub: land.ownerSub || land.stewardSub || '',
-    creatorUsername: land.stewardUsername || '',
-    creatorName: land.stewardName || '',
-    creatorAvatar: land.stewardAvatar || '',
-    isParcelChat: true
-  };
-}
+export { evaluateArLandActionProximity, resolveLandChatTarget };
 
 export default function ARLandInspectorPanel({
   land,
@@ -140,6 +45,10 @@ export default function ARLandInspectorPanel({
   onOpenLandChat = null,
   onOpenSculptureChat = null,
   onShowHint = null,
+  isDesktop = false,
+  isSignedIn = true,
+  cameraReady = true,
+  hasLocation = true,
   expanded = undefined,
   defaultExpanded = true,
   onToggleExpanded = null,
@@ -217,10 +126,19 @@ export default function ARLandInspectorPanel({
     canonicalChatTarget &&
       (typeof onOpenLandChat === 'function' || typeof onOpenSculptureChat === 'function')
   );
-  const landChatMessageCount = sculptures.reduce(
-    (maxCnt, sc) => Math.max(maxCnt, Number(sc?.chatSummary?.messageCount || 0)),
-    Number(land?.chatMessageCount || 0)
-  );
+  const landChatSummary = getLandChatLiveSummary(land);
+  const landChatMessageCount = landChatSummary.messageCount;
+  const chatAvailability = evaluateLandChatAvailability({
+    land,
+    displayName,
+    proximity,
+    isDesktop,
+    isSignedIn,
+    cameraReady,
+    hasLocation,
+    unitSystem
+  });
+  const isChatUnlocked = chatAvailability.canChat;
   const notifyVisitRequired = (actionLabel, maxDistMeters) => {
     const withinLabel = formatDistanceMeters(maxDistMeters, unitSystem);
     const awayDetail =
@@ -253,6 +171,17 @@ export default function ARLandInspectorPanel({
   const handleOpenLandChat = () => {
     if (!canChatAtLand) {
       notifyVisitRequired('join Land Chat', CHAT_SIGHT_MAX_DISTANCE_M);
+      return;
+    }
+    if (!isChatUnlocked) {
+      const msg = chatAvailability.reason || `Land Chat is currently locked at ${displayName}.`;
+      setVisitLockNotice(msg);
+      setVisitLockPulse(true);
+      if (visitLockTimerRef.current) clearTimeout(visitLockTimerRef.current);
+      visitLockTimerRef.current = setTimeout(() => {
+        setVisitLockPulse(false);
+      }, 4500);
+      notifySettingsSaved(msg, { tone: 'warning', durationMs: 4800 });
       return;
     }
     if (!canonicalChatTarget) return;
@@ -755,33 +684,53 @@ export default function ARLandInspectorPanel({
                 <span>{exp.state !== 'permanent' ? 'Draw Here to Own' : 'Draw Here'}</span>
               </button>
             )}
-            {canOpenLandChat && (
-              <button
-                type="button"
-                className={`btn ar-land-secondary-primary-btn ${
-                  canChatAtLand ? '' : 'is-action-locked'
-                }`}
-                data-testid="ar-land-chat-btn"
-                data-locked={canChatAtLand ? 'false' : 'true'}
-                aria-disabled={canChatAtLand ? undefined : 'true'}
-                aria-label={
-                  canChatAtLand
-                    ? `Open chat for ${displayName}`
-                    : `Visit ${displayName} in person to open Land Chat`
-                }
-                title={
-                  canChatAtLand
-                    ? `Open encrypted in-person chat for ${displayName}`
-                    : `Visit ${displayName} in person to join Land Chat`
-                }
-                onClick={handleOpenLandChat}
-              >
-                <XeroIcon emoji={canChatAtLand ? '💬' : '🔒'} size={14} />
-                <span>
-                  Land Chat{landChatMessageCount > 0 ? ` (${landChatMessageCount})` : ''}
-                </span>
-              </button>
-            )}
+            {canOpenLandChat &&
+              (isChatUnlocked ? (
+                <button
+                  type="button"
+                  className="btn ar-land-secondary-primary-btn"
+                  data-testid="ar-land-chat-btn"
+                  data-locked="false"
+                  aria-label={`Open chat for ${displayName}`}
+                  title={`Open encrypted in-person chat for ${displayName}`}
+                  onClick={handleOpenLandChat}
+                >
+                  <XeroIcon emoji="💬" size={14} />
+                  <span>
+                    Land Chat{landChatMessageCount > 0 ? ` (${landChatMessageCount})` : ''}
+                  </span>
+                </button>
+              ) : (
+                <div className="ar-land-chat-lock-row" data-testid="ar-land-chat-lock-row">
+                  <button
+                    type="button"
+                    className="btn ar-land-secondary-primary-btn is-action-locked"
+                    data-testid="ar-land-chat-btn"
+                    data-locked="true"
+                    aria-disabled="true"
+                    aria-label={chatAvailability.reason || `Land Chat locked for ${displayName}`}
+                    title={chatAvailability.reason || `Land Chat locked for ${displayName}`}
+                    onClick={handleOpenLandChat}
+                  >
+                    <XeroIcon emoji="🔒" size={14} />
+                    <span>
+                      Land Chat{landChatMessageCount > 0 ? ` (${landChatMessageCount})` : ''}
+                    </span>
+                  </button>
+                  <span
+                    className="ar-land-chat-lock-info"
+                    data-testid="ar-land-chat-lock-info"
+                  >
+                    <InfoTip
+                      title={chatAvailability.title || 'Why Land Chat is locked'}
+                      mode="popover"
+                      align="right"
+                    >
+                      {chatAvailability.reason}
+                    </InfoTip>
+                  </span>
+                </div>
+              ))}
             {hasPrimaryCheckIn && (
               <button
                 type="button"

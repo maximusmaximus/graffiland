@@ -12,6 +12,7 @@ import { LAND_VOLUME_LIMITS } from '../../../shared/constants.mjs';
 import { api } from '../utils/api';
 import { isPendingSculptureAction } from '../utils/pendingApprovalPreview.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
+import InfoTip from './InfoTip.jsx';
 import MeasurementUnitSetting from './MeasurementUnitSetting.jsx';
 import XeroIcon from './XeroIcon.jsx';
 
@@ -122,6 +123,7 @@ function useNotificationEngine({
   refreshSignal = 0,
   pendingApprovals = null,
   pendingApprovalsLoaded = true,
+  liveLandChats = null,
   onRequestPendingRefresh = null,
   onApprovalResolved = null,
   onAction = null,
@@ -136,6 +138,8 @@ function useNotificationEngine({
   const [fetchedPendingLoaded, setFetchedPendingLoaded] = useState(false);
   const [resolvedRequestIds, setResolvedRequestIds] = useState(() => new Set());
   const [viewedWhileOpenIds, setViewedWhileOpenIds] = useState(() => new Set());
+  const [dismissedLiveChatIds, setDismissedLiveChatIds] = useState(() => new Set());
+  const [seenLiveChatIds, setSeenLiveChatIds] = useState(() => new Set());
   const [approvalBusyId, setApprovalBusyId] = useState('');
   const [approvalErrors, setApprovalErrors] = useState({});
   const [approvalNotice, setApprovalNotice] = useState(null);
@@ -170,6 +174,7 @@ function useNotificationEngine({
   const popoverRef = useRef(null);
   const seenIdsRef = useRef(new Set());
   const viewedWhileOpenIdsRef = useRef(new Set());
+  const viewedLiveChatIdsRef = useRef(new Set());
   const requestedPendingSyncIdsRef = useRef(new Set());
   const openRef = useRef(false);
   const initializedRef = useRef(false);
@@ -226,10 +231,115 @@ function useNotificationEngine({
     [allNotifications, resolvedRequestIds, pendingById, hasPendingSync, open, viewedWhileOpenIds]
   );
 
+  const activeLiveLandChatNotifs = useMemo(() => {
+    const list = Array.isArray(liveLandChats) ? liveLandChats : [];
+    return list
+      .filter((entry) => entry && entry.parcelId && !dismissedLiveChatIds.has(entry.parcelId))
+      .map((entry) => ({
+        id: entry.id || `live-land-chat:${entry.parcelId}`,
+        isLiveLandChat: true,
+        isSyntheticPending: true,
+        read: seenLiveChatIds.has(entry.parcelId),
+        category: 'live_land_chat',
+        severity: 'action',
+        title: entry.title || `Live Land Chat at ${entry.displayName || 'this land'}`,
+        message:
+          entry.message ||
+          `You're on ${entry.displayName || 'this land'} — encrypted Land Chat is live here.`,
+        parcelId: entry.parcelId,
+        displayName: entry.displayName || 'this land',
+        land: entry.land || null,
+        chatTarget: entry.chatTarget || null,
+        chatAvailability: entry.chatAvailability || {
+          canChat: true,
+          code: 'ready',
+          title: '',
+          reason: ''
+        },
+        messageCount: Number(entry.messageCount || 0),
+        pinCount: Number(entry.pinCount || 0),
+        actionType: 'open_land_chat',
+        actionLabel: 'Open Land Chat',
+        createdAt: '',
+        meta: {
+          parcelId: entry.parcelId,
+          landTitle: entry.displayName || ''
+        }
+      }));
+  }, [liveLandChats, dismissedLiveChatIds, seenLiveChatIds]);
+
+  // Prune dismissed/seen live land chat entries once the user leaves those lands so re-entering alerts fresh
+  useEffect(() => {
+    const activeIds = new Set(
+      (Array.isArray(liveLandChats) ? liveLandChats : [])
+        .map((entry) => entry?.parcelId)
+        .filter(Boolean)
+    );
+    setDismissedLiveChatIds((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set();
+      for (const id of prev) {
+        if (activeIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    setSeenLiveChatIds((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set();
+      for (const id of prev) {
+        if (activeIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [liveLandChats]);
+
+  useEffect(() => {
+    if (!open || activeTab !== 'inbox' || activeLiveLandChatNotifs.length === 0) return;
+    for (const item of activeLiveLandChatNotifs) {
+      if (item.parcelId) viewedLiveChatIdsRef.current.add(item.parcelId);
+    }
+  }, [open, activeTab, activeLiveLandChatNotifs]);
+
+  const markLiveChatSeen = useCallback((parcelId) => {
+    if (!parcelId) return;
+    viewedLiveChatIdsRef.current.delete(parcelId);
+    setSeenLiveChatIds((prev) => {
+      if (prev.has(parcelId)) return prev;
+      const next = new Set(prev);
+      next.add(parcelId);
+      return next;
+    });
+  }, []);
+
+  const handleDismissLiveChat = useCallback((e, parcelId) => {
+    e?.stopPropagation?.();
+    if (!parcelId) return;
+    viewedLiveChatIdsRef.current.delete(parcelId);
+    setDismissedLiveChatIds((prev) => {
+      if (prev.has(parcelId)) return prev;
+      const next = new Set(prev);
+      next.add(parcelId);
+      return next;
+    });
+  }, []);
+
   const closePopover = useCallback(() => {
     openRef.current = false;
     setOpen(false);
     setApprovalNotice(null);
+    if (viewedLiveChatIdsRef.current.size > 0) {
+      const seenNow = Array.from(viewedLiveChatIdsRef.current);
+      viewedLiveChatIdsRef.current.clear();
+      setSeenLiveChatIds((prev) => {
+        const next = new Set(prev);
+        for (const pid of seenNow) next.add(pid);
+        return next;
+      });
+    }
     if (viewedWhileOpenIdsRef.current.size > 0) {
       const dismissedIds = new Set(viewedWhileOpenIdsRef.current);
       viewedWhileOpenIdsRef.current.clear();
@@ -796,7 +906,11 @@ function useNotificationEngine({
       };
     });
 
-  const displayNotifications = [...syntheticPendingNotifs, ...notifications].filter((item) => {
+  const displayNotifications = [
+    ...activeLiveLandChatNotifs,
+    ...syntheticPendingNotifs,
+    ...notifications
+  ].filter((item) => {
     const reqId = item.actionType === 'open_land_approval' ? item.meta?.requestId : '';
     return !(reqId && resolvedRequestIds.has(reqId));
   });
@@ -828,8 +942,15 @@ function useNotificationEngine({
     serverUnreadCount
   ]);
 
-  // Bell badge ALWAYS reflects every unread notification + every unresolved pending approval
-  const badgeCount = unreadRegularCount + livePendingList.length;
+  const unseenLiveChatCount = useMemo(() => {
+    if (open && activeTab === 'inbox') return 0;
+    return activeLiveLandChatNotifs.filter((n) => !seenLiveChatIds.has(n.parcelId)).length;
+  }, [activeLiveLandChatNotifs, seenLiveChatIds, open, activeTab]);
+
+  // Bell badge reflects unread notifications + unresolved pending approvals + active unseen on-land live chats
+  const badgeCount = unreadRegularCount + livePendingList.length + unseenLiveChatCount;
+  const hasLiveChatAlerts = activeLiveLandChatNotifs.length > 0;
+  const canShowBell = Boolean(user || hasLiveChatAlerts);
 
   const renderNotificationList = (items) => (
     <div className="notif-list">
@@ -840,7 +961,15 @@ function useNotificationEngine({
         const parcelHref =
           item.meta?.parcelUrl ||
           (item.parcelId ? `?parcel=${encodeURIComponent(item.parcelId)}` : '');
-        const isApprovalLink = item.actionType === 'open_land_approval';
+        const isLiveLandChat = Boolean(item.isLiveLandChat);
+        const liveChatAvail = item.chatAvailability || {
+          canChat: true,
+          code: 'ready',
+          title: '',
+          reason: ''
+        };
+        const isLiveChatLocked = isLiveLandChat && liveChatAvail.canChat === false;
+        const isApprovalLink = !isLiveLandChat && item.actionType === 'open_land_approval';
         const requestId = isApprovalLink ? String(item.meta?.requestId || '') : '';
         const liveReq = requestId ? pendingById.get(requestId) || null : null;
         const effectiveReq =
@@ -865,8 +994,9 @@ function useNotificationEngine({
           Number(itemApprovalErr?.maxSafeScale) >= 0.001;
         const isRepairAlert = Boolean(item.meta?.needsRepair);
         const isLandLink =
-          !isApprovalLink && item.actionType === 'open_land' && Boolean(parcelHref);
+          !isLiveLandChat && !isApprovalLink && item.actionType === 'open_land' && Boolean(parcelHref);
         const isArtLink =
+          !isLiveLandChat &&
           !isApprovalLink &&
           !isLandLink &&
           Boolean(artHref) &&
@@ -876,19 +1006,37 @@ function useNotificationEngine({
             key={item.id}
             className={`notif-item severity-${item.severity || 'info'} ${
               item.read ? 'is-read' : 'is-unread'
-            }`}
+            } ${isLiveLandChat ? 'is-live-land-chat' : ''}`}
+            data-testid={isLiveLandChat ? 'notif-live-land-chat-item' : undefined}
+            data-parcel-id={isLiveLandChat ? item.parcelId : undefined}
             data-request-id={requestId || undefined}
-            onClick={() =>
-              hasSculpturePreview && effectiveReq
-                ? handleNotificationAction(item, {
-                    actionType: 'preview_pending_sculpture',
-                    pendingRequest: liveReq || effectiveReq
-                  })
-                : handleNotificationAction(item)
-            }
+            onClick={() => {
+              if (isLiveLandChat) {
+                if (isLiveChatLocked) {
+                  notifySettingsSaved(
+                    liveChatAvail.reason || 'Land Chat is currently locked here.',
+                    { tone: 'warning' }
+                  );
+                  return;
+                }
+                markLiveChatSeen(item.parcelId);
+                handleNotificationAction(item, { actionType: 'open_land_chat' });
+                return;
+              }
+              if (hasSculpturePreview && effectiveReq) {
+                handleNotificationAction(item, {
+                  actionType: 'preview_pending_sculpture',
+                  pendingRequest: liveReq || effectiveReq
+                });
+                return;
+              }
+              handleNotificationAction(item);
+            }}
           >
             <div className="notif-item-icon" aria-hidden="true">
-              {isApprovalLink
+              {isLiveLandChat
+                ? '💬'
+                : isApprovalLink
                 ? '✍️'
                 : isRepairAlert
                 ? '🔗'
@@ -901,6 +1049,14 @@ function useNotificationEngine({
             <div className="notif-item-content">
               <div className="notif-item-top">
                 <strong className="notif-item-title">
+                  {isLiveLandChat && (
+                    <span
+                      className="notif-live-chat-pill"
+                      data-testid="notif-live-chat-pill"
+                    >
+                      Live
+                    </span>
+                  )}
                   {hasSculpturePreview && (
                     <span
                       className="map-preview-pill"
@@ -911,7 +1067,9 @@ function useNotificationEngine({
                   )}
                   {item.title}
                 </strong>
-                <span className="notif-item-time">{formatRelativeTime(item.createdAt)}</span>
+                <span className="notif-item-time">
+                  {isLiveLandChat ? 'On site' : formatRelativeTime(item.createdAt)}
+                </span>
               </div>
               <p className="notif-item-msg">{item.message}</p>
               {itemApprovalErr?.message && (
@@ -942,9 +1100,56 @@ function useNotificationEngine({
                   )}
                 </div>
               )}
-              {(item.actionLabel || isLandLink || isArtLink || Boolean(effectiveReq)) && (
+              {(item.actionLabel || isLiveLandChat || isLandLink || isArtLink || Boolean(effectiveReq)) && (
                 <div className="notif-item-actions">
-                  {isApprovalLink && effectiveReq ? (
+                  {isLiveLandChat ? (
+                    isLiveChatLocked ? (
+                      <span
+                        className="chat-locked-inline-group"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="btn btn-xs notif-action-btn notif-open-land-chat-btn is-action-locked"
+                          data-testid="notif-open-land-chat-btn"
+                          data-locked="true"
+                          aria-disabled="true"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            notifySettingsSaved(
+                              liveChatAvail.reason || 'Land Chat is currently locked here.',
+                              { tone: 'warning' }
+                            );
+                          }}
+                        >
+                          <XeroIcon emoji="🔒" size={12} /> Land Chat
+                        </button>
+                        <span data-testid="notif-land-chat-lock-info">
+                          <InfoTip
+                            title={liveChatAvail.title || 'Why Land Chat is locked'}
+                            mode="popover"
+                            align="right"
+                          >
+                            {liveChatAvail.reason}
+                          </InfoTip>
+                        </span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary notif-action-btn notif-open-land-chat-btn"
+                        data-testid="notif-open-land-chat-btn"
+                        data-locked="false"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markLiveChatSeen(item.parcelId);
+                          handleNotificationAction(item, { actionType: 'open_land_chat' });
+                        }}
+                      >
+                        💬 {item.actionLabel || 'Open Land Chat'} →
+                      </button>
+                    )
+                  ) : isApprovalLink && effectiveReq ? (
                     <>
                       <button
                         type="button"
@@ -1058,7 +1263,7 @@ function useNotificationEngine({
                       {item.actionLabel} →
                     </button>
                   )}
-                  {!isApprovalLink && !isLandLink && parcelHref && (
+                  {!isLiveLandChat && !isApprovalLink && !isLandLink && parcelHref && (
                     <a
                       href={parcelHref}
                       className="notif-secondary-link notif-land-pill-link"
@@ -1077,7 +1282,18 @@ function useNotificationEngine({
                 </div>
               )}
             </div>
-            {!item.isSyntheticPending && (
+            {isLiveLandChat ? (
+              <button
+                type="button"
+                className="notif-dismiss-btn"
+                data-testid="notif-dismiss-live-chat-btn"
+                aria-label="Dismiss live land chat alert"
+                title="Dismiss"
+                onClick={(e) => handleDismissLiveChat(e, item.parcelId)}
+              >
+                ×
+              </button>
+            ) : !item.isSyntheticPending ? (
               <button
                 type="button"
                 className="notif-dismiss-btn"
@@ -1087,7 +1303,7 @@ function useNotificationEngine({
               >
                 ×
               </button>
-            )}
+            ) : null}
           </div>
         );
       })}
@@ -1095,7 +1311,7 @@ function useNotificationEngine({
   );
 
   const popoverNode =
-    open && user ? (
+    open && canShowBell ? (
       <div
         ref={popoverRef}
         className={`notif-popover glass-card ${isMobile ? 'notif-popover-mobile' : ''} ${
@@ -1113,7 +1329,12 @@ function useNotificationEngine({
             <strong>🔔 Notifications</strong>
             {badgeCount > 0 && (
               <span className="notif-pill-unread">
-                {badgeCount} {unreadRegularCount > 0 ? 'new' : 'pending'}
+                {badgeCount}{' '}
+                {unseenLiveChatCount > 0 && unreadRegularCount === 0 && livePendingList.length === 0
+                  ? 'live'
+                  : unreadRegularCount > 0
+                  ? 'new'
+                  : 'pending'}
               </span>
             )}
           </div>
@@ -1129,26 +1350,30 @@ function useNotificationEngine({
               >
                 Inbox
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'history'}
-                data-testid="notif-tab-history"
-                className={`notif-tab ${activeTab === 'history' ? 'active' : ''}`}
-                onClick={() => setActiveTab('history')}
-              >
-                History
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'settings'}
-                data-testid="notif-tab-settings"
-                className={`notif-tab ${activeTab === 'settings' ? 'active' : ''}`}
-                onClick={() => setActiveTab('settings')}
-              >
-                <XeroIcon emoji="⚙️" size={16} /> Settings
-              </button>
+              {user && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'history'}
+                  data-testid="notif-tab-history"
+                  className={`notif-tab ${activeTab === 'history' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('history')}
+                >
+                  History
+                </button>
+              )}
+              {user && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'settings'}
+                  data-testid="notif-tab-settings"
+                  className={`notif-tab ${activeTab === 'settings' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('settings')}
+                >
+                  <XeroIcon emoji="⚙️" size={16} /> Settings
+                </button>
+              )}
             </div>
             <button
               type="button"
@@ -1172,7 +1397,7 @@ function useNotificationEngine({
                   : 'No unread alerts'}
               </span>
               <div className="notif-toolbar-btns">
-                {!preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
+                {user && !preferences.browser_push_enabled && browserPerm !== 'unsupported' && (
                   <button
                     type="button"
                     className="notif-link-btn"
@@ -1349,7 +1574,7 @@ function useNotificationEngine({
     ) : null;
 
   const portalElement =
-    usePortal && open && user && typeof document !== 'undefined' && document.body
+    usePortal && open && canShowBell && typeof document !== 'undefined' && document.body
       ? createPortal(
           <>
             <div
@@ -1371,12 +1596,14 @@ function useNotificationEngine({
     () => ({
       available: true,
       user,
+      canShowBell,
       variant,
       open,
       activeTab,
       badgeCount,
       unreadCount: unreadRegularCount,
       pendingCount: livePendingList.length,
+      liveLandChatCount: activeLiveLandChatNotifs.length,
       historyCount: historyDisplayNotifications.length,
       mintStatus,
       openNotifications,
@@ -1386,12 +1613,14 @@ function useNotificationEngine({
     }),
     [
       user,
+      canShowBell,
       variant,
       open,
       activeTab,
       badgeCount,
       unreadRegularCount,
       livePendingList.length,
+      activeLiveLandChatNotifs.length,
       historyDisplayNotifications.length,
       mintStatus,
       openNotifications,
@@ -1404,6 +1633,7 @@ function useNotificationEngine({
   return {
     containerRef,
     contextValue,
+    canShowBell,
     badgeCount,
     open,
     toggleNotifications,
@@ -1418,6 +1648,7 @@ export function NotificationProvider({
   refreshSignal = 0,
   pendingApprovals = null,
   pendingApprovalsLoaded = true,
+  liveLandChats = null,
   onRequestPendingRefresh = null,
   onApprovalResolved = null,
   onAction = null,
@@ -1430,6 +1661,7 @@ export function NotificationProvider({
     refreshSignal,
     pendingApprovals,
     pendingApprovalsLoaded,
+    liveLandChats,
     onRequestPendingRefresh,
     onApprovalResolved,
     onAction,
@@ -1452,7 +1684,7 @@ export function GlobalNotificationBell({
   testId = ''
 }) {
   const ctx = useContext(NotificationContext);
-  if (!ctx?.available || !ctx.user) return null;
+  if (!ctx?.available || (!ctx.user && !ctx.canShowBell)) return null;
   const isMobile = (variantOverride || ctx.variant) === 'mobile';
   const badgeCount = ctx.badgeCount || 0;
   return (
@@ -1487,14 +1719,14 @@ export function GlobalNotificationBell({
 }
 
 function StandaloneNotificationCenter(props) {
-  const { user = null, variant = 'desktop' } = props;
+  const { variant = 'desktop' } = props;
   const isMobile = variant === 'mobile';
   const engine = useNotificationEngine({
     ...props,
     usePortal: false
   });
 
-  if (!user) return null;
+  if (!engine.canShowBell) return null;
 
   return (
     <div
@@ -1528,7 +1760,7 @@ function StandaloneNotificationCenter(props) {
 export default function NotificationCenter(props) {
   const ctx = useContext(NotificationContext);
   if (ctx?.available) {
-    if (!ctx.user) return null;
+    if (!ctx.user && !ctx.canShowBell) return null;
     const isMobile = (props.variant || ctx.variant) === 'mobile';
     return (
       <div className={`notif-center ${isMobile ? 'notif-center-mobile' : 'notif-center-desktop'}`}>
