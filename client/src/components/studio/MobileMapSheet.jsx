@@ -210,6 +210,18 @@ export default function MobileMapSheet({
     setLocalFocusTick((t) => t + 1);
   }
 
+  function handleActivateLandName(parcelId) {
+    if (!parcelId) return;
+    const wasSelected =
+      Boolean(effectiveSelectedParcelId) &&
+      String(effectiveSelectedParcelId).toUpperCase() === String(parcelId).toUpperCase();
+    handleFocusLandOnMap(parcelId);
+    if (wasSelected) {
+      setExpandedLandIds((prev) => ({ ...prev, [parcelId]: true }));
+      setCollapsedLandIds((prev) => ({ ...prev, [parcelId]: false }));
+    }
+  }
+
   function handleCardBlankAreaClick(e, parcelId) {
     if (!parcelId) return;
     // Preserve clicks on buttons, links, rename inputs/forms, and nested sculpture items
@@ -756,9 +768,17 @@ export default function MobileMapSheet({
                             type="button"
                             className="mobile-land-name-btn mobile-land-name-target-btn"
                             data-testid="land-title-target-trigger"
-                            aria-label={`Target ${land.displayName} on map`}
-                            title={`Target ${land.displayName} on map`}
-                            onClick={() => handleFocusLandOnMap(land.parcelId)}
+                            aria-label={
+                              isSelected
+                                ? `Open details for ${land.displayName}`
+                                : `Target ${land.displayName} on map`
+                            }
+                            title={
+                              isSelected
+                                ? `Tap again to open details for ${land.displayName}`
+                                : `Target ${land.displayName} on map`
+                            }
+                            onClick={() => handleActivateLandName(land.parcelId)}
                           >
                             <span className="mobile-land-name">{land.displayName}</span>
                           </button>

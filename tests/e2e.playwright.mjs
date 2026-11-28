@@ -2555,9 +2555,15 @@ describe('SPRAY.LAND Desktop Browser E2E (Playwright)', { skip: !hasChrome || !h
     await page.getByRole('button', { name: /Mint This Land/i }).click();
     await page.waitForSelector('text=/Minted "Detail Click Plaza"/i');
 
-    // 1) Click the minted land label directly on the map -> opens detailed view (PlotVisitView)!
+    // 1) Click the minted land label directly on the map: 1st click zooms & selects, 2nd click opens detailed view (PlotVisitView)!
     const landLabel = page.locator('[data-testid="map3d-land-label"]', { hasText: 'Detail Click Plaza' }).first();
     await landLabel.waitFor({ state: 'visible', timeout: 10000 });
+    await landLabel.click();
+    await page.waitForFunction(() => {
+      const lbl = globalThis.document.querySelector('[data-testid="map3d-land-label"][data-focused="true"]');
+      return Boolean(lbl && (lbl.textContent || '').includes('Detail Click Plaza'));
+    }, { timeout: 10000 });
+    assert.equal(await page.locator('[data-testid="desktop-plot-visit-view"]').count(), 0);
     await landLabel.click();
     await page.waitForSelector('[data-testid="desktop-plot-visit-view"]', { timeout: 10000 });
     assert.ok(
