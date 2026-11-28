@@ -34,10 +34,13 @@ import {
 } from '../utils/chatCrypto.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
+  buildSculptureOgShareUrl,
   buildSculptureShareUrl,
   buildShareToXUrl,
   copyToClipboard
 } from '../utils/clipboard.js';
+import { composeCenteredLogoOgPng } from '../utils/ogShareComposer.js';
+import { renderSculptureThumbnail } from '../utils/sculptureThumbnailRenderer.js';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import {
   resolveAuthorHandleForStorage,
@@ -639,6 +642,34 @@ export default function SculptureModal({
   const canModerateLand = Boolean(user && (isPropertyOwner || isLandOwner));
   const isContributor = Boolean(user && !canModerateLand && sculpture?.viewerCanContribute);
   const canModifySculpture = Boolean(user && (canModerateLand || isContributor));
+  const sculptureOgUploadedRef = useRef('');
+
+  useEffect(() => {
+    if (!canModerateLand || isPendingPreview || !sculpture?.id || sculpture?.ogPreviewUrl) {
+      return undefined;
+    }
+    const syncKey = `${sculpture.id}:${sculpture.currentRev || 1}`;
+    if (sculptureOgUploadedRef.current === syncKey) return undefined;
+    sculptureOgUploadedRef.current = syncKey;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rawThumb = await renderSculptureThumbnail(sculpture);
+        if (cancelled || !rawThumb) return;
+        const composed = await composeCenteredLogoOgPng({
+          backgroundDataUrl: rawThumb,
+          mode: 'auto'
+        });
+        if (cancelled || !composed) return;
+        await api.uploadSculptureOgPreview(sculpture.id, { previewDataUrl: composed });
+      } catch {
+        // Non-fatal: server renders dynamic sculpture OG PNG on demand
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canModerateLand, isPendingPreview, sculpture]);
   const isEmbeddedOwner = Boolean(
     user?.walletAddress &&
       ownerAddr &&
@@ -1784,12 +1815,15 @@ export default function SculptureModal({
                   className={`btn ${shareLinkCopied ? 'is-copy-confirmed' : ''}`}
                   data-testid="sculpture-header-copy-link-btn"
                   onClick={async () => {
-                    const ok = await copyToClipboard(buildSculptureShareUrl(sculpture.id));
+                    const shareUrl =
+                      buildSculptureOgShareUrl({ sculptureId: sculpture.id }) ||
+                      buildSculptureShareUrl(sculpture.id);
+                    const ok = await copyToClipboard(shareUrl);
                     if (ok) {
                       setShareLinkCopied(true);
                       setTimeout(() => setShareLinkCopied(false), 1800);
                     }
-                    setPropNotice(ok ? 'Copied shareable deep link (?sculpture=...)!' : 'Copy unavailable');
+                    setPropNotice(ok ? 'Copied social share link with OG preview!' : 'Copy unavailable');
                   }}
                   aria-label="Copy direct share link to this sculpture"
                   title="Copy direct share link to this sculpture"

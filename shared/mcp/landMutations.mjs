@@ -5,6 +5,12 @@ import {
   normalizeLandChatAllowAgents
 } from '../chatPolicy.mjs';
 import {
+  computeLandOgContentSig,
+  decodeOgImageDataUrl,
+  DEFAULT_LAND_OG_IMAGE_MODE,
+  normalizeLandOgImageMode
+} from '../landOgImage.mjs';
+import {
   HUMAN_MAX_DRAW_SPAN_FEET,
   HUMAN_MAX_DRAW_SPAN_METERS,
   POLICY
@@ -166,10 +172,12 @@ export async function listLandsWithCurations(db) {
   // Single bulk query for all visible sculptures (eliminates 2*N per-parcel queries inside the loop)
   const allVisibleScRows = await db
     .all(
-      `SELECT s.parcel_id, s.geohash, s.lat, s.lng, s.voxels_json,
+      `SELECT s.id, s.parcel_id, s.geohash, s.lat, s.lng, s.voxels_json,
               s.recipient_address, s.creator_name, s.creator_sub, s.title, s.place_name, s.created_at,
               a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+              a.current_rev AS current_rev,
               a.mesh_stats_json AS mesh_stats_json,
+              m.model_format AS custom_model_format,
               m.scale AS custom_model_scale
        FROM sculptures s
        LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
@@ -393,6 +401,56 @@ export async function listLandsWithCurations(db) {
       chatAllowAgents: normalizeLandChatAllowAgents(
         settingsMap.get(parcelId)?.chat_allow_agents
       ),
+      ogImageMode: normalizeLandOgImageMode(
+        settingsMap.get(parcelId)?.og_image_mode ?? DEFAULT_LAND_OG_IMAGE_MODE
+      ),
+      ogCustomImageUrl: String(settingsMap.get(parcelId)?.og_custom_image_url || ''),
+      ogPreviewImageUrl: String(settingsMap.get(parcelId)?.og_preview_image_url || ''),
+      ogPreviewSig: String(settingsMap.get(parcelId)?.og_preview_sig || ''),
+      ogPreviewUpdatedAt: String(settingsMap.get(parcelId)?.og_preview_updated_at || ''),
+      ogContentSig: computeLandOgContentSig({
+        parcel: {
+          parcelId,
+          customName: cur?.custom_name || '',
+          displayName: resolveLandDisplayName({
+            customName: cur?.custom_name || '',
+            firstSculptureTitle: first?.title || '',
+            placeName: first?.place_name || ''
+          }),
+          volume,
+          frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
+          ogImageMode: normalizeLandOgImageMode(
+            settingsMap.get(parcelId)?.og_image_mode ?? DEFAULT_LAND_OG_IMAGE_MODE
+          ),
+          ogCustomImageUrl: String(settingsMap.get(parcelId)?.og_custom_image_url || '')
+        },
+        sculptures: parcelScRows.map((r) => {
+          let scale = Number(r.custom_model_scale ?? 1);
+          if (r.mesh_stats_json) {
+            try {
+              const ms = JSON.parse(r.mesh_stats_json);
+              if (ms && Number.isFinite(Number(ms.transformScale)) && Number(ms.transformScale) > 0) {
+                scale = Number(ms.transformScale);
+              }
+            } catch {
+              // ignore malformed stats
+            }
+          }
+          return {
+            id: r.id || '',
+            currentRev: Number(r.current_rev || 1),
+            modelType: r.custom_model_format ? 'custom-3d' : 'voxel',
+            anchorOffset: {
+              dx: Number(r.anchor_dx || 0),
+              dy: Number(r.anchor_dy || 0),
+              dz: Number(r.anchor_dz || 0),
+              yaw: Number(r.anchor_yaw || 0),
+              scale
+            },
+            createdAt: r.created_at || ''
+          };
+        })
+      }),
       settings: {
         allowAgentErase: settingsMap.has(parcelId)
           ? Boolean(settingsMap.get(parcelId).allow_agent_erase)
@@ -407,7 +465,14 @@ export async function listLandsWithCurations(db) {
         ),
         chatAllowAgents: normalizeLandChatAllowAgents(
           settingsMap.get(parcelId)?.chat_allow_agents
-        )
+        ),
+        ogImageMode: normalizeLandOgImageMode(
+          settingsMap.get(parcelId)?.og_image_mode ?? DEFAULT_LAND_OG_IMAGE_MODE
+        ),
+        ogCustomImageUrl: String(settingsMap.get(parcelId)?.og_custom_image_url || ''),
+        ogPreviewImageUrl: String(settingsMap.get(parcelId)?.og_preview_image_url || ''),
+        ogPreviewSig: String(settingsMap.get(parcelId)?.og_preview_sig || ''),
+        ogPreviewUpdatedAt: String(settingsMap.get(parcelId)?.og_preview_updated_at || '')
       },
       contributorSubs: [
         ...new Set(
@@ -628,6 +693,11 @@ export async function getLandSettingsInternal(db, parcelId) {
       row?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
     ),
     chatAllowAgents: normalizeLandChatAllowAgents(row?.chat_allow_agents),
+    ogImageMode: normalizeLandOgImageMode(row?.og_image_mode ?? DEFAULT_LAND_OG_IMAGE_MODE),
+    ogCustomImageUrl: String(row?.og_custom_image_url || ''),
+    ogPreviewImageUrl: String(row?.og_preview_image_url || ''),
+    ogPreviewSig: String(row?.og_preview_sig || ''),
+    ogPreviewUpdatedAt: String(row?.og_preview_updated_at || ''),
     updatedAt: row?.updated_at || ''
   };
 }
@@ -1117,6 +1187,13 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
         sRow?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
       ),
       chatAllowAgents: normalizeLandChatAllowAgents(sRow?.chat_allow_agents),
+      ogImageMode: normalizeLandOgImageMode(
+        sRow?.og_image_mode ?? DEFAULT_LAND_OG_IMAGE_MODE
+      ),
+      ogCustomImageUrl: String(sRow?.og_custom_image_url || ''),
+      ogPreviewImageUrl: String(sRow?.og_preview_image_url || ''),
+      ogPreviewSig: String(sRow?.og_preview_sig || ''),
+      ogPreviewUpdatedAt: String(sRow?.og_preview_updated_at || ''),
       updatedAt: sRow?.updated_at || ''
     };
     const contribRows = contribsByParcel.get(pid) || [];
@@ -1234,6 +1311,33 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       requireApproval: Boolean(settings.requireApproval),
       chatAccessMode: settings.chatAccessMode,
       chatAllowAgents: Boolean(settings.chatAllowAgents),
+      ogImageMode: settings.ogImageMode,
+      ogCustomImageUrl: settings.ogCustomImageUrl,
+      ogPreviewImageUrl: settings.ogPreviewImageUrl,
+      ogPreviewSig: settings.ogPreviewSig,
+      ogPreviewUpdatedAt: settings.ogPreviewUpdatedAt,
+      ogContentSig: computeLandOgContentSig({
+        parcel: {
+          parcelId: pid,
+          customName: cur?.custom_name || '',
+          displayName: resolveLandDisplayName({
+            customName: cur?.custom_name || '',
+            firstSculptureTitle: visibleOnLand[0]?.title || onLand[0]?.title || '',
+            placeName: visibleOnLand[0]?.place_name || onLand[0]?.place_name || ''
+          }),
+          volume,
+          frozen: Boolean(settings.frozen),
+          ogImageMode: settings.ogImageMode,
+          ogCustomImageUrl: settings.ogCustomImageUrl
+        },
+        sculptures: visibleOnLand.map((r) =>
+          serializeSculptureRow(r, {
+            includeVoxels: false,
+            viewerIsLandOwner: true,
+            parcelFrozen: settings.frozen
+          })
+        )
+      }),
       settings,
       securityPolicy,
       landmarkAnchor: landmarkAnchor
@@ -1795,7 +1899,7 @@ export async function applyUpdateSculpture(
   await db.run(
     `UPDATE sculptures
      SET title = ?, description = ?, voxels_json = ?, voxel_count = ?,
-         preview_data_url = ?, ipfs_metadata_cid = ?, ipfs_model_cid = ?,
+         preview_data_url = ?, og_preview_url = '', ipfs_metadata_cid = ?, ipfs_model_cid = ?,
          ipfs_image_cid = ?, ipfs_gateway_url = ?
      WHERE id = ?`,
     [
@@ -2756,9 +2860,21 @@ export async function getPublicParcelDetail(
     compact: true
   });
 
+  const serializedSculptures = (scRows || []).map((r) =>
+    serializeSculptureRow(r, {
+      includeVoxels: true,
+      parcelFrozen: Boolean(matched.frozen)
+    })
+  );
+  const ogContentSig = computeLandOgContentSig({
+    parcel: matched,
+    sculptures: serializedSculptures
+  });
+
   return {
     parcel: {
       ...matched,
+      ogContentSig,
       shareUrl,
       openQuests: (openQuests || []).map((q) => ({
         id: q.id,
@@ -2777,12 +2893,7 @@ export async function getPublicParcelDetail(
         })()
       }))
     },
-    sculptures: (scRows || []).map((r) =>
-      serializeSculptureRow(r, {
-        includeVoxels: true,
-        parcelFrozen: Boolean(matched.frozen)
-      })
-    ),
+    sculptures: serializedSculptures,
     shareUrl
   };
 }
@@ -3362,6 +3473,180 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
   );
 
   return { settings: await getLandSettingsInternal(db, parcelCtx.parcelId) };
+}
+
+const MAX_OG_IMAGE_BYTES = Math.round(1.6 * 1024 * 1024);
+
+function assertValidOgDataUrl(raw, label = 'OG preview image') {
+  const clean = String(raw || '').trim();
+  const decoded = decodeOgImageDataUrl(clean, { maxBytes: MAX_OG_IMAGE_BYTES });
+  if (!decoded) {
+    throw new McpServiceError(
+      `Invalid ${label}. Upload a PNG, JPEG, or WebP image under 1.6 MB (recommended 1200×630 px).`,
+      400
+    );
+  }
+  return clean;
+}
+
+/**
+ * Land holder endpoint to configure OG/social preview settings for a Virtual Land:
+ *  - `ogImageMode`: `'auto'` (low-angle isometric 3D), `'custom'` (uploaded image), or `'logo'` (off -> SPRAY.LAND logo)
+ *  - `previewEnabled`: boolean shorthand (`false` -> `'logo'`, `true` -> `'custom'` if custom image else `'auto'`)
+ *  - `customImageDataUrl`: base64 PNG/JPEG/WebP uploaded by land holder (offloaded to R2 on Worker)
+ *  - `clearCustomImage`: clears stored custom image and falls back to `'auto'`
+ *  - `autoPreviewDataUrl` + `contentSig`: fresh 1200×630 3D snapshot with centered logotype
+ */
+export async function updateLandOgSettings(
+  db,
+  { parcelId, user, body = /** @type {any} */ ({}), offloadImageFn = null }
+) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const current = await getLandSettingsInternal(db, parcelCtx.parcelId);
+  const now = new Date().toISOString();
+  const ownerAddress = resolvePreferredOwnerWallet(user);
+
+  let nextMode = current.ogImageMode || DEFAULT_LAND_OG_IMAGE_MODE;
+  let nextCustomUrl = current.ogCustomImageUrl || '';
+  let nextPreviewUrl = current.ogPreviewImageUrl || '';
+  let nextPreviewSig = current.ogPreviewSig || '';
+  let nextPreviewUpdatedAt = current.ogPreviewUpdatedAt || '';
+
+  if (body?.clearCustomImage === true) {
+    nextCustomUrl = '';
+    if (nextMode === 'custom') nextMode = 'auto';
+    nextPreviewUpdatedAt = now;
+  }
+
+  if (body?.customImageDataUrl !== undefined && body?.customImageDataUrl !== null && body?.customImageDataUrl !== '') {
+    const validDataUrl = assertValidOgDataUrl(body.customImageDataUrl, 'custom land share image');
+    let storedUrl = validDataUrl;
+    if (typeof offloadImageFn === 'function') {
+      const off = await offloadImageFn({
+        dataUrl: validDataUrl,
+        prefix: 'previews',
+        id: `land-og-custom-${parcelCtx.parcelId}`
+      });
+      if (off?.url) storedUrl = off.url;
+    }
+    nextCustomUrl = storedUrl;
+    if (body?.ogImageMode === undefined && body?.previewEnabled !== false) {
+      nextMode = 'custom';
+    }
+    nextPreviewUpdatedAt = now;
+  }
+
+  if (body?.autoPreviewDataUrl !== undefined && body?.autoPreviewDataUrl !== null && body?.autoPreviewDataUrl !== '') {
+    const validDataUrl = assertValidOgDataUrl(body.autoPreviewDataUrl, 'land 3D preview snapshot');
+    let storedUrl = validDataUrl;
+    if (typeof offloadImageFn === 'function') {
+      const off = await offloadImageFn({
+        dataUrl: validDataUrl,
+        prefix: 'previews',
+        id: `land-og-auto-${parcelCtx.parcelId}`
+      });
+      if (off?.url) storedUrl = off.url;
+    }
+    nextPreviewUrl = storedUrl;
+    nextPreviewSig = String(body?.contentSig || body?.ogPreviewSig || '').trim().slice(0, 96);
+    nextPreviewUpdatedAt = now;
+  }
+
+  if (body?.previewEnabled === false) {
+    nextMode = 'logo';
+    nextPreviewUpdatedAt = now;
+  } else if (body?.ogImageMode !== undefined) {
+    nextMode = normalizeLandOgImageMode(body.ogImageMode);
+    nextPreviewUpdatedAt = now;
+  } else if (body?.previewEnabled === true && nextMode === 'logo') {
+    nextMode = nextCustomUrl ? 'custom' : 'auto';
+    nextPreviewUpdatedAt = now;
+  }
+
+  if (nextMode === 'custom' && !nextCustomUrl) {
+    throw new McpServiceError(
+      'Upload a custom share image first (recommended 1200×630 px).',
+      400
+    );
+  }
+
+  await db.run(
+    `INSERT INTO land_settings (
+      parcel_id, owner_sub, owner_address,
+      allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval,
+      chat_access_mode, chat_allow_agents,
+      og_image_mode, og_custom_image_url, og_preview_image_url, og_preview_sig, og_preview_updated_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(parcel_id) DO UPDATE SET
+      owner_sub = excluded.owner_sub,
+      owner_address = excluded.owner_address,
+      og_image_mode = excluded.og_image_mode,
+      og_custom_image_url = excluded.og_custom_image_url,
+      og_preview_image_url = excluded.og_preview_image_url,
+      og_preview_sig = excluded.og_preview_sig,
+      og_preview_updated_at = excluded.og_preview_updated_at,
+      updated_at = excluded.updated_at`,
+    [
+      parcelCtx.parcelId,
+      user.id,
+      ownerAddress,
+      current.allowAgentErase ? 1 : 0,
+      current.allowContributorEdits ? 1 : 0,
+      current.frozen ? 1 : 0,
+      current.requireApproval ? 1 : 0,
+      current.chatAccessMode,
+      current.chatAllowAgents ? 1 : 0,
+      nextMode,
+      nextCustomUrl,
+      nextPreviewUrl,
+      nextPreviewSig,
+      nextPreviewUpdatedAt || now,
+      now
+    ]
+  );
+
+  return {
+    ok: true,
+    parcelId: parcelCtx.parcelId,
+    settings: await getLandSettingsInternal(db, parcelCtx.parcelId)
+  };
+}
+
+/**
+ * Stores a freshly rendered 1200×630 OG preview (with centered SPRAY.LAND logotype)
+ * for an individual sculpture. Permitted for sculpture owner/creator or its land holder.
+ */
+export async function updateSculptureOgPreview(
+  db,
+  { sculptureId, user, previewDataUrl, offloadImageFn = null }
+) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const perm = await checkSculptureOrLandOwnership(db, {
+    sculptureId,
+    user,
+    allowHidden: true
+  });
+  const validDataUrl = assertValidOgDataUrl(previewDataUrl, 'sculpture OG preview');
+  let storedUrl = validDataUrl;
+  if (typeof offloadImageFn === 'function') {
+    const off = await offloadImageFn({
+      dataUrl: validDataUrl,
+      prefix: 'previews',
+      id: `sc-og-${perm.row.id}`
+    });
+    if (off?.url) storedUrl = off.url;
+  }
+  await db.run('UPDATE sculptures SET og_preview_url = ? WHERE id = ?', [
+    storedUrl,
+    perm.row.id
+  ]);
+  return {
+    ok: true,
+    sculptureId: perm.row.id,
+    ogPreviewUrl: storedUrl
+  };
 }
 
 export async function listLandChatWhitelist(db, { parcelId, user }) {

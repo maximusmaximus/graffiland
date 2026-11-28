@@ -13,7 +13,7 @@ import {
 export const SCULPTURE_BASE_COLUMNS_NO_VOXELS = `
   s.id, s.title, s.description, s.creator_sub, s.creator_name, s.creator_email, s.recipient_address,
   s.lat, s.lng, s.altitude, s.accuracy, s.heading, s.parcel_id, s.geohash, s.place_name, s.country, s.timezone,
-  s.voxel_count, s.pol_score, s.pol_json, s.proof_hash, s.preview_data_url,
+  s.voxel_count, s.pol_score, s.pol_json, s.proof_hash, s.preview_data_url, s.og_preview_url,
   s.ipfs_metadata_cid, s.ipfs_model_cid, s.ipfs_image_cid, s.ipfs_gateway_url,
   s.chain_id, s.chain_name, s.contract_address, s.token_id, s.tx_hash, s.simulated_chain,
   s.royalty_bps, s.royalty_receiver, s.hidden, s.hidden_reason, s.hidden_by,
@@ -263,6 +263,7 @@ export function serializeSculptureRow(
     proofOfLocation: pol,
     proofHash: row.proof_hash,
     previewDataUrl: row.preview_data_url,
+    ogPreviewUrl: row.og_preview_url || '',
     ipfs: {
       metadataCid: row.ipfs_metadata_cid,
       modelCid: row.ipfs_model_cid,

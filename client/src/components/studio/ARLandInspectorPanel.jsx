@@ -26,6 +26,7 @@ import { useMeasurementUnits } from '../../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../../utils/toastNotice.js';
 import { EmojiInput } from '../EmojiField.jsx';
 import InfoTip from '../InfoTip.jsx';
+import SculptureThumbnail from '../SculptureThumbnail.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -856,6 +857,14 @@ export default function ARLandInspectorPanel({
                     : undefined
                 }
               >
+                <SculptureThumbnail
+                  sculpture={sc}
+                  variant="square"
+                  size={40}
+                  hideBadge
+                  className="ar-land-sc-thumb"
+                  testId="ar-land-sculpture-square-thumb"
+                />
                 <div className="ar-land-sc-info">
                   <div
                     className={`ar-land-sc-title${onInspectSculpture ? ' artwork-title-link-btn' : ''}`}

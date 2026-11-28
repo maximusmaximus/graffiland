@@ -3,6 +3,7 @@ import { buildParcelShareUrl } from '../../../../shared/landVolume.mjs';
 import { api } from '../../utils/api.js';
 import { getSculptureChainLinks } from '../../utils/chainLinks.js';
 import {
+  buildLandOgShareUrl,
   buildSculptureShareUrl,
   copyToClipboard
 } from '../../utils/clipboard.js';
@@ -21,8 +22,10 @@ import {
 } from '../../utils/measurementUnits.js';
 import { buildPendingPreviewSculptures } from '../../utils/pendingApprovalPreview.js';
 import { EmojiInput } from '../EmojiField.jsx';
+import LandCardBackground from '../LandCardBackground.jsx';
 import MapView from '../MapView.jsx';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
+import SculptureThumbnail from '../SculptureThumbnail.jsx';
 import UserHandleBadge from '../UserHandleBadge.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 import MobileIsometricMap from './MobileIsometricMap.jsx';
@@ -235,13 +238,19 @@ export default function MobileMapSheet({
   }
 
   async function handleCopyLandShare(land) {
-    const shareUrl = buildParcelShareUrl({
-      origin: typeof window !== 'undefined' ? window.location.origin : '',
-      pathname: typeof window !== 'undefined' ? window.location.pathname : '/',
-      parcelId: land.parcelId,
-      customName: land.customName || '',
-      compact: true
-    });
+    const shareUrl =
+      buildLandOgShareUrl({
+        parcelId: land.parcelId,
+        customName: land.customName || '',
+        landName: land.displayName || ''
+      }) ||
+      buildParcelShareUrl({
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+        pathname: typeof window !== 'undefined' ? window.location.pathname : '/',
+        parcelId: land.parcelId,
+        customName: land.customName || '',
+        compact: true
+      });
     const ok = await copyToClipboard(shareUrl);
     onShowHint?.(ok ? `Copied share link for ${land.displayName}!` : 'Copy unavailable');
   }
@@ -662,7 +671,7 @@ export default function MobileMapSheet({
                     if (el) cardRefs.current.set(land.parcelId, el);
                     else cardRefs.current.delete(land.parcelId);
                   }}
-                  className={`card mobile-land-card ${isExpanded ? 'is-open' : 'is-closed'} ${
+                  className={`card mobile-land-card has-preview-bg ${isExpanded ? 'is-open' : 'is-closed'} ${
                     isSelected ? 'is-selected' : ''
                   } ${isOwned ? 'is-owned' : ''} ${exp.urgent ? 'is-urgent-expiry' : ''}`}
                   data-testid="mobile-land-card"
@@ -672,6 +681,7 @@ export default function MobileMapSheet({
                   data-expanded={isExpanded ? 'true' : 'false'}
                   onClick={(e) => handleCardBlankAreaClick(e, land.parcelId)}
                 >
+                  <LandCardBackground land={land} sculptures={land.sculptures} />
                   {/* Compact Header Row: Triangle + Clickable #Rank (Focus Map & Open) + Name + Top-Right Share */}
                   <div className="mobile-land-card-head">
                     <div className="mobile-land-title-col">
@@ -1025,6 +1035,14 @@ export default function MobileMapSheet({
                                     }
                                   }}
                                 >
+                                  <SculptureThumbnail
+                                    sculpture={sc}
+                                    variant="square"
+                                    size={44}
+                                    hideBadge
+                                    className="mobile-land-sculpture-thumb"
+                                    testId="mobile-sculpture-square-thumb"
+                                  />
                                   <div className="mobile-land-sculpture-info">
                                     <div className="mobile-land-sculpture-title-row">
                                       <span className="mobile-land-sculpture-title">

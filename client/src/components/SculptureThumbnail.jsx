@@ -7,7 +7,16 @@ import {
   resolveDirectPreviewUrl
 } from '../utils/sculptureThumbnailRenderer.js';
 
-export default function SculptureThumbnail({ sculpture, badgeLabel = '' }) {
+export default function SculptureThumbnail({
+  sculpture,
+  badgeLabel = '',
+  variant = 'card',
+  size = null,
+  hideBadge = false,
+  className = '',
+  testId = 'gallery-sculpture-thumb'
+}) {
+  const isSquare = variant === 'square';
   const directUrl = resolveDirectPreviewUrl(sculpture);
   const sig = getSculptureThumbnailSignature(sculpture);
   const [thumbUrl, setThumbUrl] = useState(() => getCachedSculptureThumbnail(sculpture));
@@ -54,11 +63,14 @@ export default function SculptureThumbnail({ sculpture, badgeLabel = '' }) {
     };
   }, [isVisible, directUrl, thumbUrl, sig, sculpture]);
 
+  const svgW = isSquare ? 120 : 160;
+  const svgH = 120;
+
   const isoCubes = useMemo(() => {
     if (thumbUrl || sculpture?.modelType === 'custom-3d') return [];
     if (!Array.isArray(sculpture?.voxels) || sculpture.voxels.length === 0) return [];
-    return projectVoxelsToIsoCubes(sculpture.voxels, { width: 160, height: 120, maxCubes: 160 });
-  }, [thumbUrl, sculpture]);
+    return projectVoxelsToIsoCubes(sculpture.voxels, { width: svgW, height: svgH, maxCubes: 160 });
+  }, [thumbUrl, sculpture, svgW, svgH]);
 
   const formatTag =
     badgeLabel ||
@@ -67,12 +79,21 @@ export default function SculptureThumbnail({ sculpture, badgeLabel = '' }) {
       : `${sculpture?.voxelCount || sculpture?.voxels?.length || 0} blk`);
 
   const title = sculpture?.title || 'Sculpture';
+  const showBadge = !hideBadge && !(isSquare && Number(size || 0) > 0 && Number(size) <= 68);
+  const frameStyle =
+    isSquare && Number(size) > 0
+      ? { width: Number(size), height: Number(size), flexShrink: 0 }
+      : undefined;
 
   return (
     <div
       ref={hostRef}
-      className="gallery-thumb-frame"
-      data-testid="gallery-sculpture-thumb"
+      className={['gallery-thumb-frame', isSquare ? 'is-square' : '', className]
+        .filter(Boolean)
+        .join(' ')}
+      style={frameStyle}
+      data-testid={testId}
+      data-thumb-variant={variant}
       data-thumb-kind={
         thumbUrl ? 'image' : isoCubes.length > 0 ? 'voxel-iso' : 'model-placeholder'
       }
@@ -88,17 +109,17 @@ export default function SculptureThumbnail({ sculpture, badgeLabel = '' }) {
       ) : isoCubes.length > 0 ? (
         <svg
           className="gallery-thumb-svg"
-          viewBox="0 0 160 120"
+          viewBox={`0 0 ${svgW} ${svgH}`}
           role="img"
           aria-label={`Preview of ${title}`}
         >
           <defs>
-            <radialGradient id={`gThumbBg-${sculpture?.id || 'v'}`} cx="50%" cy="48%" r="62%">
+            <radialGradient id={`gThumbBg-${sculpture?.id || 'v'}-${variant}`} cx="50%" cy="48%" r="62%">
               <stop offset="0%" stopColor="rgba(0, 245, 212, 0.14)" />
               <stop offset="100%" stopColor="rgba(8, 13, 24, 0)" />
             </radialGradient>
           </defs>
-          <rect width="160" height="120" fill={`url(#gThumbBg-${sculpture?.id || 'v'})`} />
+          <rect width={svgW} height={svgH} fill={`url(#gThumbBg-${sculpture?.id || 'v'}-${variant})`} />
           {isoCubes.map((cube, idx) => (
             <g key={idx}>
               <polygon points={cube.left} fill={cube.leftFill} />
@@ -110,31 +131,56 @@ export default function SculptureThumbnail({ sculpture, badgeLabel = '' }) {
       ) : (
         <svg
           className="gallery-thumb-svg"
-          viewBox="0 0 160 120"
+          viewBox={`0 0 ${svgW} ${svgH}`}
           role="img"
           aria-label={`Preview of ${title}`}
         >
-          <polygon
-            points="80,22 114,40 80,58 46,40"
-            fill="rgba(0, 245, 212, 0.16)"
-            stroke="#00f5d4"
-            strokeWidth="1.6"
-          />
-          <polygon
-            points="46,40 80,58 80,94 46,76"
-            fill="rgba(0, 187, 249, 0.12)"
-            stroke="#00bbf9"
-            strokeWidth="1.4"
-          />
-          <polygon
-            points="114,40 80,58 80,94 114,76"
-            fill="rgba(255, 62, 127, 0.14)"
-            stroke="#ff3e7f"
-            strokeWidth="1.4"
-          />
+          {isSquare ? (
+            <>
+              <polygon
+                points="60,20 94,38 60,56 26,38"
+                fill="rgba(0, 245, 212, 0.18)"
+                stroke="#00f5d4"
+                strokeWidth="1.7"
+              />
+              <polygon
+                points="26,38 60,56 60,94 26,76"
+                fill="rgba(0, 187, 249, 0.14)"
+                stroke="#00bbf9"
+                strokeWidth="1.5"
+              />
+              <polygon
+                points="94,38 60,56 60,94 94,76"
+                fill="rgba(255, 62, 127, 0.16)"
+                stroke="#ff3e7f"
+                strokeWidth="1.5"
+              />
+            </>
+          ) : (
+            <>
+              <polygon
+                points="80,22 114,40 80,58 46,40"
+                fill="rgba(0, 245, 212, 0.16)"
+                stroke="#00f5d4"
+                strokeWidth="1.6"
+              />
+              <polygon
+                points="46,40 80,58 80,94 46,76"
+                fill="rgba(0, 187, 249, 0.12)"
+                stroke="#00bbf9"
+                strokeWidth="1.4"
+              />
+              <polygon
+                points="114,40 80,58 80,94 114,76"
+                fill="rgba(255, 62, 127, 0.14)"
+                stroke="#ff3e7f"
+                strokeWidth="1.4"
+              />
+            </>
+          )}
         </svg>
       )}
-      <span className="gallery-thumb-badge mono">{formatTag}</span>
+      {showBadge && <span className="gallery-thumb-badge mono">{formatTag}</span>}
     </div>
   );
 }

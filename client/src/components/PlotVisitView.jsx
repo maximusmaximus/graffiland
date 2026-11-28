@@ -9,8 +9,11 @@ import {
 import { api } from '../utils/api.js';
 import { getSculptureChainLinks } from '../utils/chainLinks.js';
 import {
+  buildLandOgShareUrl,
   buildLandShareToXUrl,
+  buildSculptureOgShareUrl,
   buildSculptureShareUrl,
+  buildShareToXUrl,
   copyToClipboard
 } from '../utils/clipboard.js';
 import {
@@ -46,7 +49,9 @@ import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { recordUserAction } from '../utils/userHistory.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
+import LandOgPreviewCard from './LandOgPreviewCard.jsx';
 import NeighborEdgeArrowsOverlay from './NeighborEdgeArrowsOverlay.jsx';
+import SculptureThumbnail from './SculptureThumbnail.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
 import XLogoIcon from './XLogoIcon.jsx';
 import XeroIcon from './XeroIcon.jsx';
@@ -1228,13 +1233,19 @@ export default function PlotVisitView({
 
   async function handleCopyShareLink() {
     if (!activeParcel?.parcelId) return false;
-    const shareUrl = buildParcelShareUrl({
-      origin: window.location.origin,
-      pathname: window.location.pathname,
-      parcelId: activeParcel.parcelId,
-      customName: activeParcel.customName || '',
-      compact: true
-    });
+    const shareUrl =
+      buildLandOgShareUrl({
+        parcelId: activeParcel.parcelId,
+        customName: activeParcel.customName || '',
+        landName: landDisplayName
+      }) ||
+      buildParcelShareUrl({
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        parcelId: activeParcel.parcelId,
+        customName: activeParcel.customName || '',
+        compact: true
+      });
     const ok = await copyToClipboard(shareUrl);
     if (ok) {
       setLabelLinkCopied(true);
@@ -2166,8 +2177,16 @@ export default function PlotVisitView({
                         data-sculpture-id={sc.id}
                         onClick={() => handleSelectArtworkTarget(sc)}
                       >
+                        <SculptureThumbnail
+                          sculpture={sc}
+                          variant="square"
+                          size={20}
+                          hideBadge
+                          className="plot-tab-square-thumb"
+                          testId="plot-tab-sculpture-thumb"
+                        />
                         <span>
-                          {sc.hidden ? '🙈 ' : '🧊 '}
+                          {sc.hidden ? '🙈 ' : ''}
                           {sc.title || '3D Artwork'}
                         </span>
                       </button>
@@ -2323,7 +2342,16 @@ export default function PlotVisitView({
                     /* ================= ARTWORK DETAILS + MANAGEMENT ================= */
                     <div className="plot-detail-card" data-testid="plot-artwork-details">
                       <div className="plot-detail-head">
-                        <div style={{ minWidth: 0 }}>
+                        <div className="plot-artwork-head-left">
+                          <SculptureThumbnail
+                            sculpture={selectedArtwork}
+                            variant="square"
+                            size={56}
+                            hideBadge
+                            className="plot-artwork-detail-thumb"
+                            testId="plot-artwork-square-thumb"
+                          />
+                          <div style={{ minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             {onSelectSculpture ? (
                               <button
@@ -2418,6 +2446,7 @@ export default function PlotVisitView({
                             </span>
                           </div>
                         </div>
+                        </div>
                         <button
                           type="button"
                           className="btn btn-xs"
@@ -2436,13 +2465,29 @@ export default function PlotVisitView({
                           type="button"
                           className="btn btn-sm"
                           onClick={async () => {
-                            const url = buildSculptureShareUrl(selectedArtwork.id);
+                            const url =
+                              buildSculptureOgShareUrl({ sculptureId: selectedArtwork.id }) ||
+                              buildSculptureShareUrl(selectedArtwork.id);
                             const ok = await copyToClipboard(url);
-                            flashStatus(ok ? `Copied link for "${selectedArtwork.title}"!` : url);
+                            flashStatus(ok ? `Copied social share link for "${selectedArtwork.title}"!` : url);
                           }}
                         >
                           <XeroIcon emoji="📋" size={16} /> Copy Artwork Link
                         </button>
+                        <a
+                          className="btn btn-sm plot-share-x-btn"
+                          data-testid="plot-artwork-share-x-btn"
+                          href={buildShareToXUrl({
+                            title: selectedArtwork.title,
+                            landName: landDisplayName,
+                            sculptureId: selectedArtwork.id
+                          })}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`Share "${selectedArtwork.title}" on X`}
+                        >
+                          𝕏 Share
+                        </a>
                         {(() => {
                           const links = getSculptureChainLinks(selectedArtwork, config);
                           return links.txUrl ? (
@@ -3063,6 +3108,35 @@ export default function PlotVisitView({
                           )}
                         </div>
                       )}
+
+                      {/* Actual Open Graph Social Share Preview (X.com / Facebook) + Owner Controls */}
+                      <LandOgPreviewCard
+                        parcel={activeParcel}
+                        sculptures={activeSculptures}
+                        isLandOwner={isLandOwner}
+                        onOgSettingsUpdated={(updated) => {
+                          if (!updated) return;
+                          const mergedParcel = {
+                            ...activeParcel,
+                            ogImageMode: updated.ogImageMode,
+                            ogCustomImageUrl: updated.ogCustomImageUrl,
+                            ogPreviewImageUrl: updated.ogPreviewImageUrl,
+                            ogPreviewSig: updated.ogPreviewSig,
+                            ogPreviewUpdatedAt: updated.ogPreviewUpdatedAt,
+                            settings: {
+                              ...(activeParcel.settings || {}),
+                              ogImageMode: updated.ogImageMode,
+                              ogCustomImageUrl: updated.ogCustomImageUrl,
+                              ogPreviewImageUrl: updated.ogPreviewImageUrl,
+                              ogPreviewSig: updated.ogPreviewSig,
+                              ogPreviewUpdatedAt: updated.ogPreviewUpdatedAt
+                            }
+                          };
+                          setLocalParcel(mergedParcel);
+                          onPlotUpdated?.({ parcel: mergedParcel, sculptures: activeSculptures });
+                        }}
+                        onStatusMessage={(msg) => flashStatus(msg)}
+                      />
 
                       {/* Logged-In Land Management Controls */}
                       {isLandOwner && (

@@ -24,6 +24,7 @@ import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandDeedPanel from './LandDeedPanel.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
+import LandOgPreviewCard from './LandOgPreviewCard.jsx';
 import { GlobalNotificationBell } from './NotificationCenter.jsx';
 import SculptureRevisionsPanel from './SculptureRevisionsPanel.jsx';
 import UserHandleBadge from './UserHandleBadge.jsx';
@@ -1339,6 +1340,19 @@ export default function LandManagementModal({
                     )}
                   </div>
                 </form>
+
+                {/* 1D) Open Graph / Social Share Preview Card & Owner Image Controls */}
+                <LandOgPreviewCard
+                  compact
+                  parcel={activeParcel}
+                  sculptures={activeParcel.sculptures || []}
+                  isLandOwner
+                  onOgSettingsUpdated={async () => {
+                    await loadWorkspace();
+                    onWorkspaceChanged?.();
+                  }}
+                  onStatusMessage={(msg) => notifySettingsSaved(msg)}
+                />
 
                 {/* 2) Land Chat Whitelist */}
                 {chatAccessMode !== 'off' && (

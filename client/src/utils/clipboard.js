@@ -89,13 +89,31 @@ export function buildSculptureShareUrl(sculptureId) {
   return url.toString();
 }
 
+/**
+ * Builds the dynamic OG share URL for a specific 3D sculpture (backed by Worker/Server
+ * `/share/sculpture/:id`) so X, Facebook, Discord & iMessage render its 1200x630 PNG OG image
+ * with the centered SPRAY.LAND logotype before redirecting to SPRAY.LAND.
+ */
+export function buildSculptureOgShareUrl({ sculptureId = '', apiBase = API_BASE } = {}) {
+  const cleanId = String(sculptureId || '').trim();
+  if (!cleanId) return '';
+  const fallbackOrigin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://spray.land';
+  const base = String(apiBase || fallbackOrigin).replace(/\/+$/, '');
+  return `${base}/share/sculpture/${encodeURIComponent(cleanId)}`;
+}
+
 export function buildShareToXUrl({
   title = '3D Sculpture',
   landName = '',
   parcelName = '',
-  sculptureId = ''
+  sculptureId = '',
+  apiBase = API_BASE
 } = {}) {
-  const shareUrl = buildSculptureShareUrl(sculptureId);
+  const shareUrl =
+    buildSculptureOgShareUrl({ sculptureId, apiBase }) || buildSculptureShareUrl(sculptureId);
   const resolvedLand = resolveLandDisplayName(
     { customName: landName || parcelName || '' },
     { defaultName: 'SPRAY.LAND' }
