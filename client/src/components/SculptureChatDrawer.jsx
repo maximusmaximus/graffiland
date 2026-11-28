@@ -388,24 +388,44 @@ export default function SculptureChatDrawer({
       const epoch = res.board.keyEpoch;
       let activeKey = loadLocalRoomKey(user.id, canonicalBoardId, epoch);
 
-      if (!activeKey && res.myGrant?.status === 'granted' && res.myGrant?.wrappedKeyJson) {
-        try {
-          activeKey = await unwrapRoomKeyFromGrant({
-            wrappedKeyJson: res.myGrant.wrappedKeyJson,
-            grantSig: res.myGrant.grantSig,
-            grantorSignPubJwk: res.myGrant.grantorSignPubJwk,
-            sculptureId: canonicalBoardId,
-            keyEpoch: epoch,
-            identity: idObj
-          });
-          saveLocalRoomKey(user.id, canonicalBoardId, epoch, activeKey);
-        } catch (err) {
-          setErrorMsg(err.message || 'Could not unwrap granted chat key.');
+      // Only unwrap grants specifically addressed to THIS device's ECDH/ECDSA key fingerprint;
+      // grants wrapped for a prior browser/device fingerprint can never verify or decrypt here.
+      const myGrantMatchesDevice = Boolean(
+        res.myGrant &&
+          (!res.myGrant.requesterPubFp || res.myGrant.requesterPubFp === idObj.pubFingerprint)
+      );
+      const myDeviceGrant = myGrantMatchesDevice ? res.myGrant : null;
+
+      if (!activeKey && myDeviceGrant?.status === 'granted' && myDeviceGrant?.wrappedKeyJson) {
+        const candidateIds = Array.from(
+          new Set([myDeviceGrant.sculptureId, canonicalBoardId, sculpture.id].filter(Boolean))
+        );
+        let unwrapErr = null;
+        for (const candId of candidateIds) {
+          try {
+            activeKey = await unwrapRoomKeyFromGrant({
+              wrappedKeyJson: myDeviceGrant.wrappedKeyJson,
+              grantSig: myDeviceGrant.grantSig,
+              grantorSignPubJwk: myDeviceGrant.grantorSignPubJwk,
+              sculptureId: candId,
+              keyEpoch: epoch,
+              identity: idObj
+            });
+            saveLocalRoomKey(user.id, canonicalBoardId, epoch, activeKey);
+            unwrapErr = null;
+            break;
+          } catch (err) {
+            unwrapErr = err;
+          }
+        }
+        if (!activeKey && unwrapErr) {
+          // Non-fatal: fall through to request a fresh grant for this device cleanly
+          setErrorMsg('');
         }
       }
 
-      // If locked and no pending/granted request submitted yet, submit an ECDH grant request automatically
-      if (!activeKey && !res.myGrant && !reqSentRef.current) {
+      // If locked and no pending/granted request exists for THIS device, submit an ECDH grant request automatically
+      if (!activeKey && !myDeviceGrant && !reqSentRef.current) {
         reqSentRef.current = true;
         await api
           .requestSculptureChatGrant(canonicalBoardId, {
@@ -496,14 +516,14 @@ export default function SculptureChatDrawer({
     };
   }, [onClose]);
 
-  async function handleInitializeBoard() {
+  async function handleInitializeBoard({ forceResetEpoch = false } = {}) {
     if (!user || !identity) return;
     setLoading(true);
     setErrorMsg('');
     try {
       const roomId = activeBoardId;
+      const epoch = forceResetEpoch ? Math.max(2, Number(entered?.board?.keyEpoch || 1) + 1) : 1;
       const keyB64 = generateRoomKeyB64();
-      const epoch = 1;
       saveLocalRoomKey(user.id, roomId, epoch, keyB64);
       const { roomKeyCommit } = await computeRoomPossessionProof(keyB64, roomId, epoch);
       const { wrappedKeyJson, grantSig } = await wrapRoomKeyForRecipient({
@@ -522,9 +542,11 @@ export default function SculptureChatDrawer({
         selfGrantEnvelope: wrappedKeyJson,
         selfGrantSig: grantSig,
         roomKeyCommit,
+        forceResetEpoch,
         sightProof: freshSight,
         deviceProfile: { isMobile: true }
       });
+      reqSentRef.current = false;
       await syncBoard({ force: true });
     } catch (err) {
       setErrorMsg(err.message || 'Could not initialize encrypted board');
@@ -897,7 +919,11 @@ export default function SculptureChatDrawer({
                 <p>
                   Generates an end-to-end encrypted AES-256-GCM room key strictly on your device.
                 </p>
-                <button type="button" className="btn btn-primary" onClick={handleInitializeBoard}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleInitializeBoard()}
+                >
                   <XeroIcon emoji="🔑" size={15} /> Create E2EE Board (Epoch 1)
                 </button>
               </div>
@@ -910,9 +936,20 @@ export default function SculptureChatDrawer({
                     {(entered?.messages?.length || 0) === 1 ? 'post' : 'posts'})
                   </strong>
                   <p>
-                    Messages are end-to-end encrypted. Answer the on-site visual clue or wait for a
-                    nearby keyholder to admit your device.
+                    {entered?.otherDeviceHasGrant
+                      ? 'This chat key lives on another device or browser. Unlock it from your other device, answer the on-site clue, or start a fresh key on this phone.'
+                      : 'Messages are end-to-end encrypted. Answer the on-site visual clue or wait for a nearby keyholder to admit your device.'}
                   </p>
+                  {user && (entered?.isLandHolder || entered?.board?.creatorSub === user.id) && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      data-testid="chat-reset-epoch-btn"
+                      onClick={() => handleInitializeBoard({ forceResetEpoch: true })}
+                    >
+                      <XeroIcon emoji="🔑" size={14} /> Unlock Chat on This Phone
+                    </button>
+                  )}
                 </div>
                 {entered?.board?.hasClue && (
                   <form onSubmit={handleUnlockClue} className="chat-board-clue-card">

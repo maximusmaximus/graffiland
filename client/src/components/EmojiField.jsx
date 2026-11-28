@@ -6,21 +6,35 @@ import {
   searchEmojiShortcodes
 } from '../utils/emojiShortcodes.js';
 
-function EmojiFieldBase({
-  as = 'input',
-  value = '',
-  onChange,
-  onKeyDown,
-  onBlur,
-  onClick,
-  maxLength,
-  wrapperClassName = '',
-  wrapperStyle = undefined,
-  ...rest
-}) {
+const EmojiFieldBase = React.forwardRef(function EmojiFieldBase(
+  {
+    as = 'input',
+    value = '',
+    onChange,
+    onKeyDown,
+    onBlur,
+    onClick,
+    maxLength,
+    wrapperClassName = '',
+    wrapperStyle = undefined,
+    ...rest
+  },
+  forwardedRef
+) {
   const fieldRef = useRef(null);
   const rootRef = useRef(null);
   const pendingCaretRef = useRef(null);
+  const setMergedFieldRef = useCallback(
+    (node) => {
+      fieldRef.current = node;
+      if (typeof forwardedRef === 'function') {
+        forwardedRef(node);
+      } else if (forwardedRef && typeof forwardedRef === 'object') {
+        forwardedRef.current = node;
+      }
+    },
+    [forwardedRef]
+  );
   const listId = useId();
   const [caret, setCaret] = useState(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -167,7 +181,7 @@ function EmojiFieldBase({
 
   const Tag = as === 'textarea' ? 'textarea' : 'input';
   const sharedProps = {
-    ref: fieldRef,
+    ref: setMergedFieldRef,
     ...(as === 'input' ? { type: rest.type || 'text' } : {}),
     ...rest,
     value: strValue,
@@ -225,14 +239,14 @@ function EmojiFieldBase({
       )}
     </div>
   );
-}
+});
 
-export function EmojiInput(props) {
-  return <EmojiFieldBase as="input" {...props} />;
-}
+export const EmojiInput = React.forwardRef(function EmojiInput(props, ref) {
+  return <EmojiFieldBase ref={ref} as="input" {...props} />;
+});
 
-export function EmojiTextarea(props) {
-  return <EmojiFieldBase as="textarea" {...props} />;
-}
+export const EmojiTextarea = React.forwardRef(function EmojiTextarea(props, ref) {
+  return <EmojiFieldBase ref={ref} as="textarea" {...props} />;
+});
 
 export default EmojiInput;

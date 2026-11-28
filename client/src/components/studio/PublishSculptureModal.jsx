@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import {
   buildSculptureShareUrl,
@@ -9,6 +9,8 @@ import { isWebAuthnSupported } from '../../utils/passkeyClient.js';
 import { useSafeBackdropClose } from '../../utils/modalBackdropGuard.js';
 import { projectVoxelsToIsoCubes } from '../../utils/sculptureThumbnailRenderer.js';
 import { EmojiInput, EmojiTextarea } from '../EmojiField.jsx';
+import EthAddressBadge from '../EthAddressBadge.jsx';
+import InfoTip from '../InfoTip.jsx';
 import { GlobalNotificationBell } from '../NotificationCenter.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
@@ -69,6 +71,38 @@ export default function PublishSculptureModal({
   const targetLandFrozen = Boolean(activeTargetLand?.isFrozen);
   const backdropCloseProps = useSafeBackdropClose(onClose);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const modalCardRef = useRef(null);
+  const titleInputRef = useRef(null);
+
+  // Always start publish sheet at top with focus cleanly on Title (never Description!)
+  useEffect(() => {
+    if (mintReceipt) return undefined;
+    if (modalCardRef.current) {
+      modalCardRef.current.scrollTop = 0;
+    }
+    const focusTitle = () => {
+      const el = titleInputRef.current;
+      if (el && typeof el.focus === 'function') {
+        try {
+          el.focus({ preventScroll: false });
+        } catch {
+          el.focus();
+        }
+      }
+    };
+    focusTitle();
+    const rafId =
+      typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame(focusTitle)
+        : 0;
+    return () => {
+      if (rafId && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [mintReceipt]);
+
+  const recipientWallet = user?.activeMintRecipient || user?.walletAddress || '';
 
   const isolatedPreviewUrl = mintReceipt
     ? mintReceipt.sculpture?.previewDataUrl || artPreviewUrl || ''
@@ -163,18 +197,39 @@ export default function PublishSculptureModal({
       data-publish-isolated="true"
       {...backdropCloseProps}
     >
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalCardRef}
+        className="modal-card"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
-          <h3 className="modal-title">
+          <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             {activeTargetLand && !mintReceipt ? (
               <>
-                <XeroIcon emoji={targetLandFrozen ? '❄️' : '🎨'} size={22} />{' '}
-                {targetLandFrozen ? `Frozen Land: ${targetLandName}` : `Add Art to ${targetLandName}`}
+                <XeroIcon emoji={targetLandFrozen ? '❄️' : '🎨'} size={20} />
+                <span>
+                  {targetLandFrozen ? `Frozen: ${targetLandName}` : `Add Art to ${targetLandName}`}
+                </span>
               </>
             ) : (
               <>
-                <XeroIcon emoji="🚀" size={22} /> Publish to IPFS &amp; Robinhood Chain
+                <XeroIcon emoji="🚀" size={20} />
+                <span>Publish Art</span>
               </>
+            )}
+            {!mintReceipt && (
+              <InfoTip title="Publish & Chain Details" mode="inline">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div>Mints gas-free on IPFS &amp; Robinhood Chain (5% resale royalty).</div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {safeVoxels.length} voxels · {polStats?.frames ?? 0} frames / {polStats?.flow ?? 0}% flow
+                    {location?.altitude != null ? ` · ${Math.round(location.altitude)}m alt` : ''}
+                    {orbStatus?.features >= 12
+                      ? ` · ${orbStatus.keyframes}/3 ORB angles (${orbStatus.features} pts)`
+                      : ''}
+                  </div>
+                </div>
+              </InfoTip>
             )}
           </h3>
           <div className="modal-header-actions">
@@ -221,7 +276,7 @@ export default function PublishSculptureModal({
                   )}" & minted NFT!`
                 : 'Minted directly to your wallet!'}
             </div>
-            <div className="card" style={{ fontSize: 12 }}>
+            <div className="card" style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 5 }}>
               <div><strong>Title:</strong> {mintReceipt.sculpture.title}</div>
               <div>
                 <strong>Virtual Land:</strong>{' '}
@@ -238,12 +293,30 @@ export default function PublishSculptureModal({
               </div>
               <div><strong>Token ID:</strong> <span className="mono">#{mintReceipt.mint.tokenId}</span></div>
               <div><strong>Resale Fee:</strong> 5% (ERC-2981)</div>
-              <div style={{ wordBreak: 'break-all' }}>
-                <strong>IPFS CID:</strong> <span className="mono">{mintReceipt.ipfs.metadataCid}</span>
-              </div>
-              <div style={{ wordBreak: 'break-all' }}>
-                <strong>Tx Hash:</strong> <span className="mono">{mintReceipt.mint.txHash}</span>
-              </div>
+              {mintReceipt.ipfs?.metadataCid && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <strong>IPFS CID:</strong>{' '}
+                  <EthAddressBadge
+                    address={mintReceipt.ipfs.metadataCid}
+                    prefixChars={8}
+                    suffixChars={6}
+                    testId="publish-receipt-cid"
+                    copyTestId="publish-receipt-cid-copy-btn"
+                    onCopied={(ok) => onShowHint?.(ok ? 'Copied IPFS CID!' : 'Copy unavailable')}
+                  />
+                </div>
+              )}
+              {mintReceipt.mint?.txHash && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <strong>Tx Hash:</strong>{' '}
+                  <EthAddressBadge
+                    address={mintReceipt.mint.txHash}
+                    testId="publish-receipt-tx-hash"
+                    copyTestId="publish-receipt-tx-copy-btn"
+                    onCopied={(ok) => onShowHint?.(ok ? 'Copied tx hash!' : 'Copy unavailable')}
+                  />
+                </div>
+              )}
             </div>
             {mintReceipt.awakening && (
               <div
@@ -296,55 +369,42 @@ export default function PublishSculptureModal({
             </div>
           </div>
         ) : (
-          <form onSubmit={onSubmitPublish} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <form onSubmit={onSubmitPublish} style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {isolatedArtPreviewBlock}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {placedCatalogItem && (
-                <span className="badge gold" data-testid="publish-catalog-item-badge">
-                  <XeroIcon emoji="🧊" size={13} /> {placedCatalogItem.title} ({placedCatalogItem.sourceName || '.GLB'})
-                </span>
-              )}
-              {(safeVoxels.length > 0 || !placedCatalogItem) && (
-                <span className="badge teal">
-                  <XeroIcon emoji="🧱" size={13} /> {safeVoxels.length} voxels
-                </span>
-              )}
-              <span className="badge gold">
-                <XeroIcon emoji="📷" size={13} /> {polStats.frames} frames / {polStats.flow}% flow
-              </span>
-              {location?.altitude != null && (
-                <span className="badge teal">
-                  <XeroIcon emoji="⛰️" size={13} /> {Math.round(location.altitude)}m alt
-                </span>
-              )}
-              <span className="badge">
-                <XeroIcon emoji="🪙" size={13} /> Gas Free · 5% Resale Fee
-              </span>
-              {orbStatus.features >= 12 && (
-                <span className="badge teal">
-                  <XeroIcon emoji="📡" size={13} /> {orbStatus.keyframes}/3 ORB Angles ({orbStatus.features} pts)
-                </span>
-              )}
-              {user && isWebAuthnSupported() && (
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ fontSize: 11, padding: '3px 9px' }}
-                  disabled={passkeyBusy}
-                  onClick={async () => {
-                    setPublishError('');
-                    try {
-                      await onEnrollPasskey();
-                    } catch (err) {
-                      setPublishError(err.message || 'Passkey registration failed');
-                    }
-                  }}
-                >
-                  <XeroIcon emoji="🛡️" size={12} />{' '}
-                  {passkeyCount > 0 ? `Passkey Ready (${passkeyCount})` : 'Enroll Biometric Passkey'}
-                </button>
-              )}
-            </div>
+
+            {(placedCatalogItem || safeVoxels.length > 0 || (user && isWebAuthnSupported())) && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {placedCatalogItem && (
+                  <span className="badge gold" data-testid="publish-catalog-item-badge">
+                    <XeroIcon emoji="🧊" size={13} /> {placedCatalogItem.title}
+                  </span>
+                )}
+                {(safeVoxels.length > 0 || !placedCatalogItem) && (
+                  <span className="badge teal">
+                    <XeroIcon emoji="🧱" size={13} /> {safeVoxels.length} blocks
+                  </span>
+                )}
+                {user && isWebAuthnSupported() && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ fontSize: 11, padding: '3px 9px' }}
+                    disabled={passkeyBusy}
+                    onClick={async () => {
+                      setPublishError('');
+                      try {
+                        await onEnrollPasskey();
+                      } catch (err) {
+                        setPublishError(err.message || 'Passkey registration failed');
+                      }
+                    }}
+                  >
+                    <XeroIcon emoji="🛡️" size={12} />{' '}
+                    {passkeyCount > 0 ? `Passkey (${passkeyCount})` : 'Add Passkey'}
+                  </button>
+                )}
+              </div>
+            )}
 
             {activeTargetLand && (
               <div
@@ -352,7 +412,7 @@ export default function PublishSculptureModal({
                 data-testid="publish-target-land-banner"
                 data-parcel-id={activeTargetLand.parcelId || ''}
                 style={{
-                  padding: '10px 12px',
+                  padding: '8px 11px',
                   fontSize: 12,
                   borderColor: targetLandFrozen
                     ? 'rgba(255, 92, 138, 0.72)'
@@ -368,7 +428,8 @@ export default function PublishSculptureModal({
                     color: targetLandFrozen ? '#ffb3c1' : '#ffd166',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 6
+                    gap: 6,
+                    flexWrap: 'wrap'
                   }}
                 >
                   <XeroIcon emoji={targetLandFrozen ? '❄️' : '🎨'} size={14} />
@@ -377,11 +438,11 @@ export default function PublishSculptureModal({
                       ? `${targetLandName} is frozen`
                       : `Adding Art to: ${targetLandName}`}
                   </span>
-                </div>
-                <div style={{ color: 'var(--muted)', marginTop: 4 }}>
-                  {targetLandFrozen
-                    ? 'This land is frozen by its owner — new art cannot be added here.'
-                    : 'You are inside this existing land. Publishing attaches your art here and will not mint a new land.'}
+                  <InfoTip title={targetLandFrozen ? 'Frozen Land' : 'Adding to Existing Land'}>
+                    {targetLandFrozen
+                      ? 'This land is frozen by its owner — new art cannot be added here.'
+                      : 'You are inside this existing land. Publishing attaches your art here and will not mint a new land.'}
+                  </InfoTip>
                 </div>
               </div>
             )}
@@ -390,71 +451,101 @@ export default function PublishSculptureModal({
               <div
                 className="card"
                 style={{
-                  padding: 10,
+                  padding: '8px 11px',
                   fontSize: 12,
                   borderColor: activeQuest.firstSparkBoost
                     ? 'rgba(255, 107, 53, 0.7)'
                     : 'rgba(0, 245, 212, 0.45)'
                 }}
               >
-                <div style={{ fontWeight: 700, color: activeQuest.firstSparkBoost ? '#ff9f1c' : 'var(--accent)' }}>
-                  {activeQuest.badgeLabel || '🎨 Quest Active on This Land'} · {activeQuest.title}
-                </div>
-                <div style={{ color: 'var(--muted)', marginTop: 3 }}>
-                  {selectedPlinthSlot
-                    ? `Snapped to plinth "${selectedPlinthSlot.label}". `
-                    : ''}
-                  {voxels.length >= 3
-                    ? '✅ 3+ voxels verified — qualifies for 2% Contributor Pool & quest rewards!'
-                    : `⚠️ Add at least ${3 - voxels.length} more voxel(s) to unlock the 2% Contributor Pool & awaken dormant land!`}
+                <div
+                  style={{
+                    fontWeight: 700,
+                    color: activeQuest.firstSparkBoost ? '#ff9f1c' : 'var(--accent)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    flexWrap: 'wrap'
+                  }}
+                >
+                  <span>{activeQuest.badgeLabel || '🎨 Quest Active'} · {activeQuest.title}</span>
+                  <InfoTip title="Quest Details">
+                    {selectedPlinthSlot ? `Snapped to plinth "${selectedPlinthSlot.label}". ` : ''}
+                    {safeVoxels.length >= 3
+                      ? '3+ blocks verified — qualifies for the 2% Contributor Pool & quest rewards.'
+                      : `Add at least ${3 - safeVoxels.length} more block(s) to unlock the 2% Contributor Pool & awaken dormant land.`}
+                  </InfoTip>
                 </div>
               </div>
             )}
 
             <div>
               <div className="field-label">
-                <span>Title</span>
+                <span className="publish-field-label-group">
+                  <span>Title</span>
+                  <InfoTip title="Title">
+                    Give your piece a short name (up to {policy?.titleMax || 48} characters). Type{' '}
+                    <code>:</code> for emoji shortcuts.
+                  </InfoTip>
+                </span>
                 <span className="mono">{title.length}/{policy?.titleMax || 48}</span>
               </div>
               <EmojiInput
+                ref={titleInputRef}
                 className="input"
+                data-testid="publish-title-input"
+                autoFocus
                 required
                 maxLength={policy?.titleMax || 48}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Name your 3D street sculpture (type : for emojis)"
+                placeholder="Name your art"
               />
             </div>
 
             <div>
               <div className="field-label">
-                <span>Description (Limited Terms)</span>
-                <span className="mono">
-                  {description.length}/{policy?.descriptionMax || 240} chars · {wordCount}/{policy?.descriptionMaxWords || 45} words
+                <span className="publish-field-label-group">
+                  <span>Description</span>
+                  <InfoTip title="Description">
+                    Optional short story or note (Limited Terms: up to {policy?.descriptionMax || 240}{' '}
+                    characters and {policy?.descriptionMaxWords || 45} words — currently {wordCount}/
+                    {policy?.descriptionMaxWords || 45} words). Type <code>:</code> for emoji shortcuts.
+                  </InfoTip>
                 </span>
+                <span className="mono">{description.length}/{policy?.descriptionMax || 240}</span>
               </div>
               <EmojiTextarea
                 className="textarea"
+                data-testid="publish-description-input"
                 rows={3}
                 required
                 maxLength={policy?.descriptionMax || 240}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Short story or inspiration for this piece (type : for emojis)..."
+                placeholder="Short note about this piece..."
               />
             </div>
 
             <div>
               <div className="field-label">
-                <span>Optional On-Site Chat Clue (24/7 Solo Unlock)</span>
-                <span className="mono">E2EE · PBKDF2</span>
+                <span className="publish-field-label-group">
+                  <span>Chat Clue</span>
+                  <InfoTip title="On-Site Chat Clue (Optional)">
+                    Optional 24/7 solo unlock clue for visitors at this spot. Protected with E2EE ·
+                    PBKDF2 on your device; your answer is never sent to the server. Leave blank for
+                    peer-only unlock.
+                  </InfoTip>
+                </span>
+                <span className="mono" style={{ opacity: 0.72 }}>Optional</span>
               </div>
               <EmojiInput
                 className="input"
+                data-testid="publish-clue-prompt-input"
                 maxLength={140}
                 value={cluePrompt}
                 onChange={(e) => setCluePrompt(e.target.value)}
-                placeholder="Question visible at this spot (leave blank for peer-only)"
+                placeholder="Question visible at this spot"
               />
               {cluePrompt.trim() && (
                 <input
@@ -462,46 +553,60 @@ export default function PublishSculptureModal({
                   style={{ marginTop: 6 }}
                   value={clueAnswer}
                   onChange={(e) => setClueAnswer(e.target.value)}
-                  placeholder="Answer visible in person (never sent to server)"
+                  placeholder="Secret answer"
                   required
                 />
               )}
             </div>
 
-            {user && (
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                Minted NFT Recipient ({user.email}):
-                <div className="mono" style={{ color: 'var(--accent)', wordBreak: 'break-all' }}>
-                  {user.activeMintRecipient}
-                </div>
+            {user && recipientWallet && (
+              <div className="publish-wallet-row">
+                <span className="publish-field-label-group" style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  <span>Wallet</span>
+                  <InfoTip title="NFT Recipient Wallet">
+                    Minted NFT recipient address on Robinhood Chain. Tap the copy icon to copy the
+                    full wallet address.
+                  </InfoTip>
+                </span>
+                <EthAddressBadge
+                  address={recipientWallet}
+                  testId="publish-recipient-wallet"
+                  copyTestId="publish-wallet-copy-btn"
+                  onCopied={(ok) => onShowHint?.(ok ? 'Copied wallet address!' : 'Copy unavailable')}
+                />
               </div>
             )}
 
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={termsAccepted}
-                onChange={(e) => setTermsAccepted(e.target.checked)}
-              />
-              <span>
-                I accept the{' '}
-                <button
-                  type="button"
-                  onClick={onOpenInfo}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--accent)',
-                    padding: 0,
-                    textDecoration: 'underline',
-                    cursor: 'pointer'
-                  }}
-                >
-                  SPRAY.LAND Terms &amp; Virtual Land Policy
-                </button>
-                , confirm real physical presence, and acknowledge the 5% Robinhood resale royalty.
-              </span>
-            </label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
+              <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                />
+                <span>
+                  I accept the{' '}
+                  <button
+                    type="button"
+                    onClick={onOpenInfo}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent)',
+                      padding: 0,
+                      textDecoration: 'underline',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    SPRAY.LAND Terms
+                  </button>
+                </span>
+              </label>
+              <InfoTip title="Terms & Virtual Land Policy">
+                Confirms real physical presence at this location, acceptance of the SPRAY.LAND Terms
+                &amp; Virtual Land Policy, and the 5% Robinhood resale royalty.
+              </InfoTip>
+            </div>
 
             {publishError && (
               <div style={{ color: '#ffb3c1', fontSize: 12 }}>
@@ -510,15 +615,25 @@ export default function PublishSculptureModal({
             )}
 
             {mcpPairingsState.mcpActive && mcpPairingsState.activePairing && (
-              <div className="card" style={{ padding: 10, fontSize: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span className="badge teal">
-                    <XeroIcon emoji="🔑" size={12} /> Agent Keys Connected ({mcpPairingsState.activePairing.code})
-                  </span>
-                  <span style={{ color: 'var(--muted)' }}>
-                    Sign here on mobile OR delegate signing to your agent
-                  </span>
-                </div>
+              <div
+                className="card"
+                style={{
+                  padding: '8px 10px',
+                  fontSize: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 6,
+                  flexWrap: 'wrap'
+                }}
+              >
+                <span className="badge teal">
+                  <XeroIcon emoji="🔑" size={12} /> Agent Connected
+                </span>
+                <InfoTip title="Paired AI Agent">
+                  Pairing code <code>{mcpPairingsState.activePairing.code}</code>. Sign here on
+                  mobile or delegate signing to your paired agent.
+                </InfoTip>
               </div>
             )}
 
@@ -541,12 +656,12 @@ export default function PublishSculptureModal({
                 >
                   <XeroIcon emoji={activeTargetLand ? '🎨' : '🚀'} size={16} />
                   {publishing
-                    ? 'Verifying PoL, Pinning IPFS & Minting...'
+                    ? 'Publishing...'
                     : targetLandFrozen
                     ? 'Land Frozen'
                     : activeTargetLand
                     ? `Add Art to ${targetLandName}`
-                    : 'Sign & Publish on Mobile'}
+                    : 'Sign & Publish'}
                 </button>
               )}
               {mcpPairingsState.mcpActive && (
@@ -557,7 +672,7 @@ export default function PublishSculptureModal({
                   disabled={publishing || !hasPublishableArt || targetLandFrozen}
                   onClick={onCopyAgentPublishPrompt}
                 >
-                  <XeroIcon emoji="🤖" size={15} /> Copy Agent Sign &amp; Publish Prompt
+                  <XeroIcon emoji="🤖" size={15} /> Copy Agent Publish Prompt
                 </button>
               )}
               <button
@@ -575,7 +690,7 @@ export default function PublishSculptureModal({
               <div className="card" style={{ padding: 10, fontSize: 12, borderColor: 'rgba(0, 245, 212, 0.45)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                   <strong style={{ color: 'var(--accent)' }}>
-                    ⏳ Waiting for Agent Signature ({agentPublishPrompt.requestId.slice(0, 14)}...)
+                    ⏳ Waiting for Agent ({agentPublishPrompt.requestId.slice(0, 10)}…)
                   </strong>
                   <button
                     type="button"
@@ -583,7 +698,7 @@ export default function PublishSculptureModal({
                     style={{ padding: '4px 8px', fontSize: 11 }}
                     onClick={() => copyToClipboard(agentPublishPrompt.promptText)}
                   >
-                    📋 Re-copy Prompt
+                    📋 Copy
                   </button>
                 </div>
                 <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 10, maxHeight: 140, overflowY: 'auto', color: 'var(--muted)' }}>
@@ -593,8 +708,7 @@ export default function PublishSculptureModal({
             )}
 
             {!mcpPairingsState.mcpActive && (
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                Want your AI agent to sign on your behalf? Pair a robust <code>GLP-...</code> code under{' '}
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   type="button"
                   onClick={onOpenPair}
@@ -604,18 +718,22 @@ export default function PublishSculptureModal({
                     color: 'var(--accent)',
                     padding: 0,
                     textDecoration: 'underline',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    fontSize: 11.5
                   }}
                 >
-                  Pair Desktop &amp; MCP Agent
+                  Pair AI Agent
                 </button>
-                .
+                <InfoTip title="AI Agent Signing">
+                  Pair a <code>GLP-...</code> code under Pair Desktop &amp; MCP Agent to let your AI
+                  agent sign and publish on your behalf.
+                </InfoTip>
               </div>
             )}
 
             {draftStatusText && (
               <div className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
-                <XeroIcon emoji="💾" size={12} /> Auto-draft: {draftStatusText}
+                <XeroIcon emoji="💾" size={12} /> {draftStatusText}
               </div>
             )}
           </form>

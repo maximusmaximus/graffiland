@@ -75,6 +75,7 @@ import ARLandGuidanceOverlay from './studio/ARLandGuidanceOverlay.jsx';
 import ARLandInspectorPanel, {
   evaluateArLandActionProximity
 } from './studio/ARLandInspectorPanel.jsx';
+import ARModeSwitchToggle from './studio/ARModeSwitchToggle.jsx';
 import ARViewportCanvas from './studio/ARViewportCanvas.jsx';
 import CameraFirstToolsPrompt from './studio/CameraFirstToolsPrompt.jsx';
 import DrawVolumeMeter from './studio/DrawVolumeMeter.jsx';
@@ -682,11 +683,48 @@ export default function MobileStudio({
     isolatePublishArt: preIsolatePublishArt,
     atmosphericTintRef,
     orientationFusionRef: pol.orientationFusionRef,
-    walkingApproachRef
+    walkingApproachRef,
+    webxrActiveRef: pol.webxrActiveRef
   });
 
   const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
   const isTransformMode = brush.mode === 'transform';
+  const [lastSelectedToolId, setLastSelectedToolId] = useState('brush');
+  useEffect(() => {
+    if (brush.activeKeyTool && brush.activeKeyTool !== 'preview') {
+      setLastSelectedToolId(brush.activeKeyTool);
+    }
+  }, [brush.activeKeyTool]);
+
+  const handleRightToggleSelectTool = useCallback(
+    (toolId) => {
+      const target =
+        toolId && toolId !== 'preview'
+          ? toolId
+          : lastSelectedToolId && lastSelectedToolId !== 'preview'
+          ? lastSelectedToolId
+          : brush.tool || 'brush';
+      brush.stopBrushPainting();
+      brush.selectKeyTool(target, { silent: false });
+      if (brush.modeRef.current === 'preview') {
+        brush.setMode(target === 'transform' ? 'transform' : 'draw');
+      }
+    },
+    [brush, lastSelectedToolId]
+  );
+
+  const handleRightToggleSelectReview = useCallback(() => {
+    brush.stopBrushPainting();
+    if (brush.modeRef.current === 'transform') {
+      brush.commitTransformAndExit('preview');
+      return;
+    }
+    if (brush.toolAvailability?.preview?.usable) {
+      brush.selectKeyTool('preview', { silent: true });
+    } else {
+      brush.setMode('preview');
+    }
+  }, [brush]);
   const isArViewOnly = Boolean(
     arViewSession || isInteractingWithLand || brush.mode === 'preview'
   );
@@ -1162,25 +1200,29 @@ export default function MobileStudio({
   const handleStartWebxr = useCallback(async () => {
     const ctrl = webxrControllerRef.current;
     if (!ctrl) {
-      showTemporaryHint('6-DoF ARCore is not available on this device.');
+      showTemporaryHint('Enhanced AR is not available on this device.');
       return false;
     }
     if (pol.webxrActiveRef?.current) return true;
     setWebxrStarting(true);
     try {
+      // Release getUserMedia rear camera stream FIRST so Android Camera2 HAL hands
+      // exclusive hardware access cleanly to ARCore passthrough (prevents black screen!)
+      await pol.releaseCameraForWebXr?.();
       await ctrl.start();
       setWebxrPromptDismissed(true);
-      showTemporaryHint('✨ 6-DoF ARCore active — quick sweep to lock calibration!');
+      showTemporaryHint('✨ Enhanced AR active — look around to line up your space!');
       return true;
     } catch (err) {
+      pol.cancelWebXrCameraHold?.();
       showTemporaryHint(
-        err?.message || '6-DoF ARCore could not start — continuing with standard calibration.'
+        err?.message || 'Enhanced AR could not start — continuing with standard camera.'
       );
       return false;
     } finally {
       setWebxrStarting(false);
     }
-  }, [pol.webxrActiveRef, showTemporaryHint]);
+  }, [pol, showTemporaryHint]);
 
   const handleStopWebxr = useCallback(async () => {
     const ctrl = webxrControllerRef.current;
@@ -2533,6 +2575,25 @@ export default function MobileStudio({
             tool={brush.tool}
           />
         )}
+
+        {!isInteractingWithLand &&
+          !hasFullscreenOverlay &&
+          !catalogSearchOpen &&
+          !drafts.agentOpen &&
+          brush.mode !== 'publish' &&
+          !arViewSession &&
+          !dockOpen && (
+            <ARModeSwitchToggle
+              mode={brush.mode}
+              selectedToolId={
+                brush.activeKeyTool && brush.activeKeyTool !== 'preview'
+                  ? brush.activeKeyTool
+                  : lastSelectedToolId
+              }
+              onSelectTool={handleRightToggleSelectTool}
+              onSelectReview={handleRightToggleSelectReview}
+            />
+          )}
 
         {!isInteractingWithLand && (
           <ToolCarouselBar

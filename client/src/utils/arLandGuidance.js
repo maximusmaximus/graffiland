@@ -234,6 +234,25 @@ export function computeArLandCameraGuidance({
     }
   }
 
+  // Never emit off-screen directional guidance when the user is already standing inside the land
+  if (isInside) {
+    return {
+      inView: true,
+      isInside: true,
+      isBehind: false,
+      edge: 'center',
+      dirX: 0,
+      dirY: 0,
+      angleDeg: 0,
+      yawDeg,
+      pitchDeg,
+      turnDegrees: 0,
+      instruction: 'Inside land',
+      screenX: 0.5,
+      screenY: 0.34
+    };
+  }
+
   const closeEnoughForCornerLock = isInside || Number(distanceMeters) <= 8;
   const closeFacingAhead =
     (isInside || Number(distanceMeters) <= 6) &&

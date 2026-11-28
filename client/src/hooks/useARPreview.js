@@ -42,6 +42,7 @@ import {
   meetsClientInitialCalibrationGate,
   unwrapOrbPackCacheEntry
 } from '../utils/orbMatcher.js';
+import { resolveStableArWorldAnchor } from '../utils/arWalkingApproach.js';
 
 /**
  * Manages nearby AR sculptures & 3D holographic land volumes rendering (in BOTH draw and
@@ -73,11 +74,13 @@ export function useARPreview({
   isolatePublishArt = false,
   atmosphericTintRef = null,
   orientationFusionRef = null,
-  walkingApproachRef = null
+  walkingApproachRef = null,
+  webxrActiveRef = null
 }) {
   const hydratedSculptureMapRef = useRef(new Map());
   const arSculptureEntriesRef = useRef(new Map());
   const arPrismNodesRef = useRef([]);
+  const worldAnchorRef = useRef(null);
   const arSelectedLandIdRef = useRef('');
   const arTargetedIdRef = useRef('');
   const orbHeadingCorrectionRadRef = useRef(0);
@@ -477,12 +480,23 @@ export function useARPreview({
 
     group.visible = true;
 
-    // Always refresh lightweight land prism wireframes cheaply for the latest GPS position
+    // Anchor all AR sculptures & land prisms to a stabilized GPS world origin so
+    // stationary GPS multipath jitter NEVER causes items inside a land to slip around!
+    const stableAnchor = resolveStableArWorldAnchor(worldAnchorRef.current, location, {
+      webxrActive: Boolean(webxrActiveRef?.current),
+      isWalking: Boolean(walkingApproachRef?.current?.isWalking)
+    });
+    worldAnchorRef.current = stableAnchor || location;
+    const anchorLoc = worldAnchorRef.current || location;
+
+    // Always refresh lightweight land prism wireframes cheaply for the stable world anchor
     clearAllPrisms();
 
     const viewerElev =
-      location.altitude !== null && location.altitude !== undefined && Number.isFinite(location.altitude)
-        ? location.altitude
+      anchorLoc.altitude !== null &&
+      anchorLoc.altitude !== undefined &&
+      Number.isFinite(anchorLoc.altitude)
+        ? anchorLoc.altitude
         : null;
 
     const cleanFocusedLandId = String(focusedLandId || '').trim();
@@ -538,7 +552,7 @@ export function useARPreview({
 
       const parentLand = sc?.parcelId ? landByParcelId.get(sc.parcelId) || null : null;
       const isOnSelectedLand = Boolean(arSelectedLandId && sc?.parcelId === arSelectedLandId);
-      const offset = latLngOffsetMeters(location.lat, location.lng, sc.lat, sc.lng);
+      const offset = latLngOffsetMeters(anchorLoc.lat, anchorLoc.lng, sc.lat, sc.lng);
       const ax = Number(sc.anchorOffset?.dx || 0);
       const az = Number(sc.anchorOffset?.dz || 0);
       const parentRotDeg = Number(parentLand?.volume?.rotationDeg || 0);
@@ -929,7 +943,7 @@ export function useARPreview({
         continue;
       }
       const prism = computeArLandPrismLocalGeometry({
-        location,
+        location: anchorLoc,
         volume: land.volume,
         baseY: -1.15,
         enclosingLocalBox: parcelRenderedBoxes.get(land.parcelId) || null,
@@ -1053,7 +1067,9 @@ export function useARPreview({
     editingSculptureId,
     fadeOtherItems,
     isolatePublishArt,
-    atmosphericTintRef
+    atmosphericTintRef,
+    walkingApproachRef,
+    webxrActiveRef
   ]);
 
   // Live off-thread ORB visual landmark relocalization & background calibration loop

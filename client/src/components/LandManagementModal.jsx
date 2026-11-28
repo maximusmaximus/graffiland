@@ -21,6 +21,7 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { isWebAuthnSupported, registerHardwarePasskey } from '../utils/passkeyClient.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
 import { EmojiInput, EmojiTextarea } from './EmojiField.jsx';
+import EthAddressBadge from './EthAddressBadge.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandDeedPanel from './LandDeedPanel.jsx';
 import LandIsometricPreview from './LandIsometricPreview.jsx';
@@ -1480,12 +1481,12 @@ export default function LandManagementModal({
                                 size="xs"
                               />
                               {w.walletAddress && (
-                                <span
-                                  className="mono"
-                                  style={{ fontSize: 10.5, color: 'var(--muted)' }}
-                                >
-                                  {w.walletAddress.slice(0, 10)}…
-                                </span>
+                                <EthAddressBadge
+                                  address={w.walletAddress}
+                                  style={{ fontSize: 10.5 }}
+                                  testId="land-whitelist-wallet"
+                                  copyTestId="land-whitelist-wallet-copy-btn"
+                                />
                               )}
                             </div>
                             <button
@@ -1559,12 +1560,14 @@ export default function LandManagementModal({
                               <span className="badge" style={{ fontSize: 9.5 }}>
                                 {vis.isArtContributor ? '🎨 Art' : '📍 IRL'}
                               </span>
-                              <span
-                                className="mono"
-                                style={{ fontSize: 10.5, color: 'var(--muted)' }}
-                              >
-                                {vis.walletAddress ? vis.walletAddress.slice(0, 10) : ''}
-                              </span>
+                              {vis.walletAddress && (
+                                <EthAddressBadge
+                                  address={vis.walletAddress}
+                                  style={{ fontSize: 10.5 }}
+                                  testId="land-visitor-wallet"
+                                  copyTestId="land-visitor-wallet-copy-btn"
+                                />
+                              )}
                             </div>
                             {alreadyAdded ? (
                               <span className="badge teal" style={{ fontSize: 10 }}>
@@ -1633,12 +1636,12 @@ export default function LandManagementModal({
                               size="xs"
                             />
                             {c.walletAddress && (
-                              <span
-                                className="mono"
-                                style={{ fontSize: 10.5, color: 'var(--muted)' }}
-                              >
-                                {c.walletAddress.slice(0, 10)}…
-                              </span>
+                              <EthAddressBadge
+                                address={c.walletAddress}
+                                style={{ fontSize: 10.5 }}
+                                testId="land-contributor-wallet"
+                                copyTestId="land-contributor-wallet-copy-btn"
+                              />
                             )}
                           </div>
                           <button

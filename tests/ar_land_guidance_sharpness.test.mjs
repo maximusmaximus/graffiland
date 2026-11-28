@@ -412,7 +412,7 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       viewportSrc,
-      /\{!isArViewOnly && !isTransformMode &&(?:\s*!isPublishIsolated &&)? occlusionEnabled && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/
+      /\{(?:!webxrActive &&\s*)?!isArViewOnly && !isTransformMode &&(?:\s*!isPublishIsolated &&)? occlusionEnabled && \(\s*<canvas[\s\S]*?className="occlusion-overlay"/
     );
     assert.match(viewportSrc, /grid\.visible = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
     assert.match(viewportSrc, /shadowCatcher\.visible = !arViewOnly(?: && !isPublishIsolatedFrame)?;/);
@@ -431,11 +431,11 @@ describe('AR Land Guidance Overlay, Map Entry & High-Clarity Land Loading (React
     );
     assert.match(
       viewportSrc,
-      /if \(\s*!arViewOnly &&\s*!isTransform &&\s*occlusionEnabledRef\.current &&\s*now - lastOcclusionPush > 110/
+      /if \(\s*(?:!activeXrSession &&\s*)?!arViewOnly &&\s*!isTransform &&\s*occlusionEnabledRef\.current &&\s*now - lastOcclusionPush > 110/
     );
     assert.match(
       viewportSrc,
-      /const shouldRefreshEnv =\s*!arViewOnly &&\s*!isTransform &&\s*!paintingRef\.current &&\s*\(!isSceneLocked \|\| !hasCapturedEnvRef\.current\);/
+      /const shouldRefreshEnv =\s*(?:!activeXrSession &&\s*)?!arViewOnly &&\s*!isTransform &&\s*!paintingRef\.current &&\s*\(!isSceneLocked \|\| !hasCapturedEnvRef\.current\);/
     );
   });
 

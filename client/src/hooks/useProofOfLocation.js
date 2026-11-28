@@ -70,6 +70,7 @@ export function useProofOfLocation({
   const spatialDrawTrackerRef = useRef(new ArSpatialDrawTracker());
   const orientationDetachRef = useRef(null);
   const webxrActiveRef = useRef(false);
+  const webxrStartingRef = useRef(false);
   const fallbackEulerRef = useRef({ yaw: 0, pitch: 0 });
   const cameraStreamRef = useRef(null);
   const locationRef = useRef(null);
@@ -545,8 +546,8 @@ export function useProofOfLocation({
   const refreshCamera = useCallback(
     async ({ reason = 'manual', force = false, isWatchdog = false } = {}) => {
       if (unmountedRef.current) return false;
-      // While WebXR immersive-ar owns the hardware rear camera, never fight ARCore with getUserMedia
-      if (webxrActiveRef.current && reason !== 'webxr_ended') {
+      // While WebXR immersive-ar owns (or is acquiring) the hardware rear camera, never fight ARCore with getUserMedia
+      if ((webxrActiveRef.current || webxrStartingRef.current) && reason !== 'webxr_ended' && reason !== 'webxr_start_failed') {
         setCameraReady(true);
         cameraReadyRef.current = true;
         setCameraRecovering(false);
@@ -728,7 +729,7 @@ export function useProofOfLocation({
   const ensureCameraLive = useCallback(
     async ({ reason = 'health_check', allowRestart = true } = {}) => {
       if (unmountedRef.current || inFlightCameraRef.current) return false;
-      if (webxrActiveRef.current) {
+      if (webxrActiveRef.current || webxrStartingRef.current) {
         if (!cameraReadyRef.current) {
           setCameraReady(true);
           cameraReadyRef.current = true;
@@ -1193,7 +1194,7 @@ export function useProofOfLocation({
     };
 
     const recoverCameraAfterViewportTransition = (reason = 'fullscreen_change') => {
-      if (unmountedRef.current || webxrActiveRef.current) return;
+      if (unmountedRef.current || webxrActiveRef.current || webxrStartingRef.current) return;
       if (cameraSuspendedBridgeRef.current?.current) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         needsRefreshOnVisibleRef.current = true;
@@ -1702,11 +1703,42 @@ export function useProofOfLocation({
     syncSensorStatus();
   }, [syncSensorStatus]);
 
+  const releaseCameraForWebXr = useCallback(async () => {
+    webxrStartingRef.current = true;
+    cameraOpIdRef.current += 1;
+    clearRetryTimer();
+    clearGestureResume();
+    clearRvfcWatcher();
+    tearingDownCameraRef.current = true;
+    detachTrackListeners();
+    const oldStream = cameraStreamRef.current;
+    cameraStreamRef.current = null;
+    const videoEl = videoRef.current;
+    const attachedStream = videoEl?.srcObject || null;
+    stopMediaStreamTracks(oldStream);
+    if (attachedStream && attachedStream !== oldStream) {
+      stopMediaStreamTracks(attachedStream);
+    }
+    flushVideoElement(videoEl);
+    tearingDownCameraRef.current = false;
+    // Give Android Camera2 HAL a brief moment to release the exclusive rear camera handle
+    // before ARCore / WebXR immersive-ar opens its passthrough camera session.
+    await new Promise((resolve) => setTimeout(resolve, 90));
+  }, [clearGestureResume, clearRetryTimer, clearRvfcWatcher, detachTrackListeners]);
+
+  const cancelWebXrCameraHold = useCallback(() => {
+    webxrStartingRef.current = false;
+    if (!webxrActiveRef.current && !cameraSuspendedBridgeRef.current?.current) {
+      refreshCameraRef.current?.({ reason: 'webxr_start_failed', force: true });
+    }
+  }, []);
+
   const setWebxrState = useCallback(
     (active) => {
       const wasActive = webxrActiveRef.current;
       const next = Boolean(active);
       webxrActiveRef.current = next;
+      webxrStartingRef.current = false;
       polRef.current.setWebxrActive(next);
       setWebxrActive(next);
       setSceneScan(polRef.current.getSceneCoverage());
@@ -1714,14 +1746,19 @@ export function useProofOfLocation({
         cameraReadyRef.current = true;
         setCameraReady(true);
         setCameraRecovering(false);
+        // Ensure no lingering getUserMedia camera track fights Android Camera2 ARCore passthrough
+        tearingDownCameraRef.current = true;
+        detachTrackListeners();
+        const lingeringStream = cameraStreamRef.current;
+        cameraStreamRef.current = null;
         const videoEl = videoRef.current;
-        if (videoEl && typeof videoEl.pause === 'function' && !videoEl.paused) {
-          try {
-            videoEl.pause();
-          } catch {
-            // ignore pause error while WebXR owns camera
-          }
+        const attachedStream = videoEl?.srcObject || null;
+        stopMediaStreamTracks(lingeringStream);
+        if (attachedStream && attachedStream !== lingeringStream) {
+          stopMediaStreamTracks(attachedStream);
         }
+        flushVideoElement(videoEl);
+        tearingDownCameraRef.current = false;
       } else if (wasActive) {
         if (calibrationStateRef.current === 'calibrated' && orbKeyframesRef.current.size > 0) {
           calibrationHealthRef.current.relocalizingSinceMs = Date.now();
@@ -1736,7 +1773,7 @@ export function useProofOfLocation({
       }
       syncSensorStatus();
     },
-    [syncSensorStatus]
+    [detachTrackListeners, syncSensorStatus]
   );
 
   const resetOrbKeyframes = useCallback(() => {
@@ -2033,6 +2070,8 @@ export function useProofOfLocation({
     webxrSupported,
     webxrActive,
     webxrActiveRef,
+    releaseCameraForWebXr,
+    cancelWebXrCameraHold,
     setWebxrState,
     locationRef,
     cameraReadyRef,
