@@ -187,6 +187,14 @@ export default function MobileStudio({
   const drawReturnSessionRef = useRef(null);
   const isArViewOnlyRef = useRef(false);
   const mappingPausedRef = useRef(false);
+  const backgroundCalibrationActiveRef = useRef(false);
+  const walkingApproachRef = useRef({
+    isWalking: false,
+    walkingSpeedMps: 0,
+    primaryApproachingParcelId: '',
+    hasUnsavedDraft: false,
+    updatedAt: 0
+  });
   const cameraSuspendedRef = useRef(false);
   const editingSculptureIdRef = useRef('');
   const fadeOtherItemsRef = useRef(false);
@@ -259,7 +267,9 @@ export default function MobileStudio({
     onCameraRefreshed: (meta) => onCameraRefreshedBridgeRef.current?.(meta),
     onNetworkReconnect: () => onNetworkReconnectBridgeRef.current?.(),
     mappingPausedRef,
-    cameraSuspendedRef
+    cameraSuspendedRef,
+    backgroundCalibrationActiveRef,
+    walkingApproachRef
   });
 
   useEffect(() => {
@@ -670,7 +680,8 @@ export default function MobileStudio({
     fadeOtherItems: autoFadeDrawTool,
     isolatePublishArt: preIsolatePublishArt,
     atmosphericTintRef,
-    orientationFusionRef: pol.orientationFusionRef
+    orientationFusionRef: pol.orientationFusionRef,
+    walkingApproachRef
   });
 
   const isInteractingWithLand = Boolean(ar.activeArLand || focusedArLandId);
@@ -1540,6 +1551,11 @@ export default function MobileStudio({
   mappingPausedRef.current = Boolean(
     isAwayFromMappingView || pol.mappingRestartPrompt || showWebXrPreCalPrompt
   );
+  // Keep silent background calibration running in EVERY camera-open mode (draw, transform,
+  // preview, View in AR, Inspecting a Land) whenever no fullscreen overlay is covering the camera.
+  backgroundCalibrationActiveRef.current = Boolean(
+    !hasFullscreenOverlay && !catalogSearchOpen && !drafts.agentOpen && brush.mode !== 'publish'
+  );
 
   const mobileActiveViewKey = loginOpen
     ? 'login'
@@ -2333,6 +2349,8 @@ export default function MobileStudio({
         lastUnmappedMaskRef={pol.lastUnmappedMaskRef}
         mappingCompletedNoticeShownRef={pol.mappingCompletedNoticeShownRef}
         mappingPausedRef={mappingPausedRef}
+        backgroundCalibrationActiveRef={backgroundCalibrationActiveRef}
+        walkingApproachRef={walkingApproachRef}
         mappingRestartRequired={Boolean(pol.mappingRestartPrompt)}
         setSceneScan={pol.setSceneScan}
         setUnmappedGrid={pol.setUnmappedGrid}
