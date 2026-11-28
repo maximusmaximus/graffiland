@@ -124,6 +124,7 @@ export function useVoxelBrush({
   onRequireCalibration = null,
   polRef,
   rawOrientationRef,
+  webxrActiveRef = null,
   fallbackEulerRef,
   enterFullscreen,
   setSensorBanner,
@@ -791,7 +792,7 @@ export function useVoxelBrush({
               (anchor.y - origin.y) * normal.y +
               (anchor.z - origin.z) * normal.z) /
             denom;
-          if (t >= 0.35 && t <= 60.0) {
+          if (t >= 0.35 && t <= 12.0) {
             const hitPt = origin
               .clone()
               .addScaledVector(dir, t)
@@ -1673,6 +1674,8 @@ export function useVoxelBrush({
     resetArtTransformState();
     onResetSpatialOriginRef.current?.();
     onClearCatalogItemRef.current?.();
+    surfaceAnchorRef.current = null;
+    setSurfaceAnchor(null);
     setVoxels([]);
     if (toolRef.current === 'erase' || toolRef.current === 'stack') {
       setTool('brush');
@@ -2332,17 +2335,31 @@ export function useVoxelBrush({
     stopBrushPainting();
   }, [stopBrushPainting]);
 
+  const unlockSurfaceAnchor = useCallback(
+    ({ silent = false } = {}) => {
+      const hadLock = Boolean(surfaceAnchorRef.current?.locked);
+      surfaceAnchorRef.current = null;
+      setSurfaceAnchor(null);
+      if (hadLock && !silent) {
+        showTemporaryHint('Draw location unlocked — aim & hold circle to lock a new spot');
+      }
+      return hadLock;
+    },
+    [showTemporaryHint]
+  );
+
   const selectSurfaceAtScreenPoint = useCallback(
-    (clientX, clientY) => {
+    (clientX, clientY, { silent = false } = {}) => {
       if (!calibrationReadyRef.current) {
         onRequireCalibrationRef.current?.();
         showTemporaryHint(calibrationBlockReasonRef.current);
-        return;
+        return null;
       }
       const host = canvasHostRef.current;
       const cam = cameraRef.current;
-      if (!host || !cam) return;
+      if (!host || !cam) return null;
 
+      cam.updateMatrixWorld?.(true);
       const rect = host.getBoundingClientRect();
       const px = clientX ?? rect.left + rect.width * 0.5;
       const py = clientY ?? rect.top + rect.height * 0.5;
@@ -2368,28 +2385,34 @@ export function useVoxelBrush({
           hit.distance > 12
             ? origin.clone().addScaledVector(dir, depthM)
             : hit.point;
-        setReachMeters(Number(depthM.toFixed(2)));
-        setSurfaceAnchor({
+        const roundedDepth = Number(depthM.toFixed(2));
+        const nextAnchor = {
           x: anchorPt.x,
           y: anchorPt.y,
           z: anchorPt.z,
           nx: worldNormal.x,
           ny: worldNormal.y,
           nz: worldNormal.z,
-          depthM: Number(depthM.toFixed(2)),
+          depthM: roundedDepth,
           label: 'Sculpture Face',
           source: 'voxel',
           sharpnessScore: 1,
           locked: true
-        });
+        };
+        reachRef.current = roundedDepth;
+        setReachMeters(roundedDepth);
+        surfaceAnchorRef.current = nextAnchor;
+        setSurfaceAnchor(nextAnchor);
         if (!lastDrawAtRef.current) {
           markDrawActivity({ preserveTimestamp: true, forceState: true });
         }
-        showTemporaryHint(`Start locked to sculpture face (${depthM.toFixed(1)}m)`);
-        return;
+        if (!silent) {
+          showTemporaryHint(`Locked to sculpture face (${depthM.toFixed(1)}m)`);
+        }
+        return nextAnchor;
       }
 
-      const patch = polRef.current.analyzeSurfacePatch(normX, normY);
+      const patch = polRef.current?.analyzeSurfacePatch?.(normX, normY);
       const sharpness = patch ? patch.sharpnessScore : 0.35;
       let label = 'Mid-Air Spot';
       let depthM = reachRef.current;
@@ -2427,24 +2450,31 @@ export function useVoxelBrush({
       }
 
       const pt = origin.addScaledVector(dir, depthM);
-      setReachMeters(Number(depthM.toFixed(2)));
-      setSurfaceAnchor({
+      const roundedDepth = Number(depthM.toFixed(2));
+      const nextAnchor = {
         x: pt.x,
         y: pt.y,
         z: pt.z,
         nx,
         ny,
         nz,
-        depthM: Number(depthM.toFixed(2)),
+        depthM: roundedDepth,
         label,
         source: 'surface',
         sharpnessScore: Number(sharpness.toFixed(2)),
         locked: true
-      });
+      };
+      reachRef.current = roundedDepth;
+      setReachMeters(roundedDepth);
+      surfaceAnchorRef.current = nextAnchor;
+      setSurfaceAnchor(nextAnchor);
       if (!lastDrawAtRef.current) {
         markDrawActivity({ preserveTimestamp: true, forceState: true });
       }
-      showTemporaryHint(`Start surface set: ${label} (${depthM.toFixed(1)}m)`);
+      if (!silent) {
+        showTemporaryHint(`Locked at ${label} (${depthM.toFixed(1)}m)`);
+      }
+      return nextAnchor;
     },
     [
       cameraRef,
@@ -2555,7 +2585,7 @@ export function useVoxelBrush({
         modeRef.current === 'draw' &&
         toolRef.current === 'brush' &&
         !isInteractingWithLandRef?.current &&
-        rawOrientationRef.current &&
+        (rawOrientationRef.current || webxrActiveRef?.current) &&
         activeCanvasPointersRef.current.size === 1
       ) {
         if (canvasSprayTimerRef.current) clearTimeout(canvasSprayTimerRef.current);
@@ -2572,6 +2602,7 @@ export function useVoxelBrush({
       canvasHostRef,
       isInteractingWithLandRef,
       rawOrientationRef,
+      webxrActiveRef,
       startContinuousHoldTool,
       transformBoxRef
     ]
@@ -2905,6 +2936,7 @@ export function useVoxelBrush({
     handleKeyPointerUp,
     handleKeyPointerCancel,
     selectSurfaceAtScreenPoint,
+    unlockSurfaceAnchor,
     seedVoxelAtAnchor,
     drawAtCenter,
     handleCanvasPointerDown,

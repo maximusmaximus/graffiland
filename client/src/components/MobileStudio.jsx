@@ -396,6 +396,7 @@ export default function MobileStudio({
     onRequireCalibration: () => pol.setScanBoxCollapsed(false),
     polRef: pol.polRef,
     rawOrientationRef: pol.rawOrientationRef,
+    webxrActiveRef: pol.webxrActiveRef,
     fallbackEulerRef: pol.fallbackEulerRef,
     enterFullscreen: pol.enterFullscreen,
     setSensorBanner: pol.setSensorBanner,
@@ -2167,7 +2168,10 @@ export default function MobileStudio({
       onApprovalResolved={handleMobileApprovalResolved}
       onAction={handleMobileNotificationAction}
     >
-    <div className="mobile-fullscreen">
+    <div
+      className={`mobile-fullscreen${pol.webxrActive ? ' is-webxr-active' : ''}`}
+      data-webxr-active={pol.webxrActive ? 'true' : 'false'}
+    >
       <ARViewportCanvas
         videoRef={pol.videoRef}
         occlusionCanvasRef={occlusionCanvasRef}
@@ -2204,6 +2208,7 @@ export default function MobileStudio({
         positionFilterRef={pol.positionFilterRef}
         spatialDrawTrackerRef={pol.spatialDrawTrackerRef}
         reachRef={brush.reachRef}
+        webxrActive={pol.webxrActive}
         webxrControllerRef={webxrControllerRef}
         onWebxrStateChange={pol.setWebxrState}
         fallbackEulerRef={pol.fallbackEulerRef}
@@ -2279,7 +2284,8 @@ export default function MobileStudio({
         onCanvasPointerMove={brush.handleCanvasPointerMove}
         onCanvasPointerUp={brush.handleCanvasPointerUp}
         onCanvasPointerCancel={brush.handleCanvasPointerCancel}
-        onSetCenterSurface={() => brush.selectSurfaceAtScreenPoint()}
+        onSetCenterSurface={(opts) => brush.selectSurfaceAtScreenPoint(undefined, undefined, opts)}
+        onUnlockCenterSurface={() => brush.unlockSurfaceAnchor()}
         onDrawAtCenter={brush.drawAtCenter}
         onStartCenterBrushHold={() => brush.startContinuousHoldTool('brush')}
         onStopCenterBrushHold={brush.stopBrushPainting}
@@ -2333,14 +2339,6 @@ export default function MobileStudio({
             lands.setEditingSculpture(null);
             brush.setVoxels([]);
           }}
-          surfaceAnchor={brush.surfaceAnchor}
-          onToggleSurfaceLock={() =>
-            brush.setSurfaceAnchor((prev) => (prev ? { ...prev, locked: !prev.locked } : prev))
-          }
-          brushUsable={brush.toolAvailability.brush.usable}
-          brushUnavailableReason={brush.toolAvailability.brush.reason}
-          onSeedVoxelAtAnchor={brush.seedVoxelAtAnchor}
-          onClearSurfaceAnchor={() => brush.setSurfaceAnchor(null)}
           needsGyroTap={pol.needsGyroTap}
           calibrationOverlayVisible={
             !isArViewOnly &&

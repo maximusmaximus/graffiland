@@ -125,12 +125,13 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     assert.ok(nearM.diameterPx > farM.diameterPx, 'Closer surface depth must render a larger projected diameter');
   });
 
-  test('2. ToolCenterReticle displays tool/block diameter circle, sets surface on first click, then draws at center', async () => {
-    const { default: ToolCenterReticle } = await loadJsxModule(
+  test('2. ToolCenterReticle displays tool/block diameter circle, locks & draws on hold, and unlocks on tap to change location', async () => {
+    const { default: ToolCenterReticle, RETICLE_HOLD_LOCK_DRAW_MS } = await loadJsxModule(
       'client/src/components/studio/ToolCenterReticle.jsx'
     );
 
     let setSurfaceCalls = 0;
+    let unlockSurfaceCalls = 0;
     let drawCenterCalls = 0;
     let holdStartCalls = 0;
     let holdStopCalls = 0;
@@ -146,16 +147,20 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     assert.ok(stackView.container.querySelector('.reticle'));
     cleanup();
 
-    // 2b) Pencil with no surface yet -> first click sets surface, does NOT draw
+    // 2b) Unlocked Brush -> click & hold locks surface and immediately starts drawing at that location
     const view = RTL.render(
       React.createElement(ToolCenterReticle, {
-        tool: 'pencil',
+        tool: 'brush',
         blockSize: 0.5,
         color: '#ef4444',
         reachMeters: 1.4,
         surfaceAnchor: null,
         onSetCenterSurface: () => {
           setSurfaceCalls += 1;
+          return { x: 0, y: 0, z: -1.4, nx: 0, ny: 0, nz: 1, depthM: 1.4, locked: true };
+        },
+        onUnlockCenterSurface: () => {
+          unlockSurfaceCalls += 1;
         },
         onDrawAtCenter: () => {
           drawCenterCalls += 1;
@@ -173,16 +178,20 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     const ring = view.getByTestId('tool-reticle-ring');
     const smallDiameter = Number(reticle.getAttribute('data-diameter-px'));
     assert.equal(reticle.getAttribute('data-surface-set'), 'false');
-    assert.match(view.getByTestId('tool-reticle-caption').textContent, /Tap circle to set surface/i);
+    assert.equal(reticle.getAttribute('data-surface-locked'), 'false');
+    assert.match(view.getByTestId('tool-reticle-caption').textContent, /Hold to lock & draw/i);
     assert.equal(ring.style.width, `${smallDiameter}px`);
 
-    // First tap inside circle sets the surface location
+    // Hold inside unlocked circle -> locks & starts spraying immediately
     RTL.fireEvent.pointerDown(reticle, { button: 0, pointerId: 1 });
+    await new Promise((r) => setTimeout(r, RETICLE_HOLD_LOCK_DRAW_MS + 40));
+    assert.equal(setSurfaceCalls, 1, 'Holding unlocked circle must lock the drawing surface');
+    assert.equal(holdStartCalls, 1, 'Holding unlocked Brush circle must start spraying immediately');
     RTL.fireEvent.pointerUp(reticle, { button: 0, pointerId: 1 });
-    assert.equal(setSurfaceCalls, 1, 'First click in circle must set surface');
-    assert.equal(drawCenterCalls, 0, 'First click must set surface before drawing');
+    assert.equal(holdStopCalls, 1, 'Releasing circle hold must stop spraying while keeping lock');
+    assert.equal(unlockSurfaceCalls, 0, 'Releasing a hold stroke must NOT unlock the surface');
 
-    // 2c) Rerender with XL block & locked surface -> circle grows & click draws at center!
+    // 2c) Rerender with XL block & locked surface -> circle grows, shows lock dot, tap unlocks to change location
     view.rerender(
       React.createElement(ToolCenterReticle, {
         tool: 'pencil',
@@ -192,6 +201,10 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
         surfaceAnchor: { x: 0, y: 0, z: -1.4, nx: 0, ny: 0, nz: 1, depthM: 1.4, locked: true },
         onSetCenterSurface: () => {
           setSurfaceCalls += 1;
+          return { x: 0, y: 0, z: -1.4, nx: 0, ny: 0, nz: 1, depthM: 1.4, locked: true };
+        },
+        onUnlockCenterSurface: () => {
+          unlockSurfaceCalls += 1;
         },
         onDrawAtCenter: () => {
           drawCenterCalls += 1;
@@ -208,13 +221,17 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     const xlDiameter = Number(view.getByTestId('tool-center-reticle').getAttribute('data-diameter-px'));
     assert.ok(xlDiameter > smallDiameter, 'Selecting XL block must increase center circle diameter');
     assert.equal(view.getByTestId('tool-center-reticle').getAttribute('data-surface-set'), 'true');
+    assert.ok(view.getByTestId('tool-reticle-lock-dot'), 'Locked circle must show subtle lock dot');
 
+    // Quick tap on locked circle unlocks so user can change location (and synthetic click does NOT re-lock!)
     RTL.fireEvent.pointerDown(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 2 });
     RTL.fireEvent.pointerUp(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 2 });
-    assert.equal(setSurfaceCalls, 1, 'Subsequent click must not re-set surface');
-    assert.equal(drawCenterCalls, 1, 'Subsequent click in circle must draw at center location');
+    RTL.fireEvent.click(view.getByTestId('tool-center-reticle'));
+    assert.equal(unlockSurfaceCalls, 1, 'Clicking locked circle again must unlock to change location');
+    assert.equal(setSurfaceCalls, 1, 'Synthetic click after pointerUp must NOT re-lock');
+    assert.equal(drawCenterCalls, 0, 'Unlocking click must NOT place an unwanted stray block');
 
-    // 2d) Brush mode hold inside circle starts & stops continuous spray
+    // 2d) Holding an already-locked circle in Brush mode keeps lock & sprays on that surface
     view.rerender(
       React.createElement(ToolCenterReticle, {
         tool: 'brush',
@@ -224,6 +241,9 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
         surfaceAnchor: { x: 0, y: 0, z: -1.4, nx: 0, ny: 0, nz: 1, depthM: 1.4, locked: true },
         onSetCenterSurface: () => {
           setSurfaceCalls += 1;
+        },
+        onUnlockCenterSurface: () => {
+          unlockSurfaceCalls += 1;
         },
         onDrawAtCenter: () => {
           drawCenterCalls += 1;
@@ -243,15 +263,17 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     assert.ok(brushXlDiameter > xlDiameter, 'Brush diameter should exceed Pencil for the same XL block');
 
     RTL.fireEvent.pointerDown(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 3 });
-    await new Promise((r) => setTimeout(r, 120));
-    assert.equal(holdStartCalls, 1, 'Holding inside circle in Brush mode must start continuous spray');
+    await new Promise((r) => setTimeout(r, RETICLE_HOLD_LOCK_DRAW_MS + 40));
+    assert.equal(setSurfaceCalls, 1, 'Holding already-locked circle must keep existing surface lock');
+    assert.equal(holdStartCalls, 2, 'Holding locked circle in Brush mode must start continuous spray');
     RTL.fireEvent.pointerUp(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 3 });
-    assert.equal(holdStopCalls, 1, 'Releasing circle hold must stop continuous spray');
+    assert.equal(holdStopCalls, 2, 'Releasing circle hold must stop continuous spray');
+    assert.equal(unlockSurfaceCalls, 1, 'Releasing hold must NOT unlock');
     cleanup();
   });
 
-  test('3. End-to-end with useVoxelBrush: first circle click sets surfaceAnchor, second draws voxel at locked location', async () => {
-    const { default: ToolCenterReticle } = await loadJsxModule(
+  test('3. End-to-end with useVoxelBrush: hold circle locks & draws voxel synchronously; tap circle again unlocks to change location', async () => {
+    const { default: ToolCenterReticle, RETICLE_HOLD_LOCK_DRAW_MS } = await loadJsxModule(
       'client/src/components/studio/ToolCenterReticle.jsx'
     );
     const { useVoxelBrush } = await loadJsxModule('client/src/hooks/useVoxelBrush.js');
@@ -320,7 +342,7 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
         React.createElement(
           'div',
           { 'data-testid': 'surface-label' },
-          brush.surfaceAnchor?.label || 'none'
+          brush.surfaceAnchor?.locked ? brush.surfaceAnchor.label : 'unlocked'
         ),
         React.createElement(ToolCenterReticle, {
           tool: brush.tool,
@@ -329,7 +351,8 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
           reachMeters: brush.reachMeters,
           surfaceAnchor: brush.surfaceAnchor,
           painting: brush.painting,
-          onSetCenterSurface: () => brush.selectSurfaceAtScreenPoint(),
+          onSetCenterSurface: (opts) => brush.selectSurfaceAtScreenPoint(undefined, undefined, opts),
+          onUnlockCenterSurface: () => brush.unlockSurfaceAnchor(),
           onDrawAtCenter: brush.drawAtCenter,
           onStartCenterBrushHold: () => brush.startContinuousHoldTool('brush'),
           onStopCenterBrushHold: brush.stopBrushPainting
@@ -338,16 +361,26 @@ describe('Center Tool & Block-Diameter Reticle Circle (Brush & Pencil)', () => {
     }
 
     const view = RTL.render(React.createElement(CenterCircleDrawHarness));
-    assert.equal(view.getByTestId('surface-label').textContent, 'none');
+    assert.equal(view.getByTestId('surface-label').textContent, 'unlocked');
     assert.equal(view.getByTestId('voxel-count').textContent, '0');
 
-    // First click in circle sets surface at center location
-    RTL.fireEvent.click(view.getByTestId('tool-center-reticle'));
-    assert.notEqual(view.getByTestId('surface-label').textContent, 'none');
-    assert.equal(view.getByTestId('voxel-count').textContent, '0');
+    // Click & hold on circle locks surface synchronously AND draws immediately at that location!
+    await RTL.act(async () => {
+      RTL.fireEvent.pointerDown(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 10 });
+      await new Promise((r) => setTimeout(r, RETICLE_HOLD_LOCK_DRAW_MS + 40));
+      RTL.fireEvent.pointerUp(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 10 });
+    });
 
-    // Second click in circle draws at that specific locked location!
-    RTL.fireEvent.click(view.getByTestId('tool-center-reticle'));
+    assert.notEqual(view.getByTestId('surface-label').textContent, 'unlocked');
+    assert.equal(view.getByTestId('voxel-count').textContent, '1');
+
+    // Clicking the circle again unlocks so user can change draw location without placing a stray block!
+    await RTL.act(async () => {
+      RTL.fireEvent.pointerDown(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 11 });
+      RTL.fireEvent.pointerUp(view.getByTestId('tool-center-reticle'), { button: 0, pointerId: 11 });
+      RTL.fireEvent.click(view.getByTestId('tool-center-reticle'));
+    });
+    assert.equal(view.getByTestId('surface-label').textContent, 'unlocked');
     assert.equal(view.getByTestId('voxel-count').textContent, '1');
     cleanup();
   });

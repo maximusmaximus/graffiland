@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const _xrPos = new THREE.Vector3();
+const _xrAnchorOrigin = new THREE.Vector3();
 const _xrQuat = new THREE.Quaternion();
 const _xrFwd = new THREE.Vector3();
 const _rotY = new THREE.Quaternion();
@@ -9,7 +10,9 @@ const _rotY = new THREE.Quaternion();
 /**
  * Pure helper mapping a WebXR 6-DoF viewer pose (`position`, `orientation`) relative to
  * the session's initial anchor into our True-North ENU world coordinate frame
- * (`+X = East, +Y = Up, -Z = True North`).
+ * (`+X = East, +Y = Up, -Z = True North`), plus the exact parent rig transform
+ * (`rigPosition`, `rigQuaternion`) so Three.js's `WebXRManager` renders the XR camera at
+ * the exact same world coordinates as our raycasting/drawing `camera`.
  *
  * When the session starts, `seedTrueHeadingDeg` aligns the initial WebXR horizontal
  * forward direction to the phone's fused True-North compass heading so all GPS-anchored
@@ -32,6 +35,25 @@ export function mapWebXrPoseToTrueNorthWorld({
 }) {
   _rotY.setFromAxisAngle(UP_AXIS, anchorYawOffsetRad);
 
+  const bx = Number(baseCameraPos?.x) || 0;
+  const by = Number(baseCameraPos?.y) || 0.4;
+  const bz = Number(baseCameraPos?.z) || 2.2;
+
+  _xrAnchorOrigin
+    .set(
+      Number(anchorOriginXrPos?.x) || 0,
+      Number(anchorOriginXrPos?.y) || 0,
+      Number(anchorOriginXrPos?.z) || 0
+    )
+    .applyQuaternion(_rotY);
+
+  const rigPosition = new THREE.Vector3(
+    bx - _xrAnchorOrigin.x,
+    by - _xrAnchorOrigin.y,
+    bz - _xrAnchorOrigin.z
+  );
+  const rigQuaternion = _rotY.clone();
+
   _xrPos.set(
     (Number(xrPos?.x) || 0) - (Number(anchorOriginXrPos?.x) || 0),
     (Number(xrPos?.y) || 0) - (Number(anchorOriginXrPos?.y) || 0),
@@ -48,12 +70,10 @@ export function mapWebXrPoseToTrueNorthWorld({
   _xrQuat.premultiply(_rotY).normalize();
 
   return {
-    position: new THREE.Vector3(
-      (Number(baseCameraPos?.x) || 0) + _xrPos.x,
-      (Number(baseCameraPos?.y) || 0.4) + _xrPos.y,
-      (Number(baseCameraPos?.z) || 2.2) + _xrPos.z
-    ),
-    quaternion: _xrQuat.clone()
+    position: new THREE.Vector3(bx + _xrPos.x, by + _xrPos.y, bz + _xrPos.z),
+    quaternion: _xrQuat.clone(),
+    rigPosition,
+    rigQuaternion
   };
 }
 
@@ -124,6 +144,8 @@ export async function startWebXrArSession({
   }
 
   const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+  renderer.setClearColor?.(0x000000, 0);
+  renderer.clear?.();
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(session);
@@ -164,8 +186,16 @@ export async function startWebXrArSession({
         anchorOriginXrPos,
         baseCameraPos
       });
-      onPose?.(worldPose);
-      return worldPose;
+      const primaryView = pose.views?.[0] || null;
+      const projectionMatrix = primaryView?.projectionMatrix
+        ? Array.from(primaryView.projectionMatrix)
+        : null;
+      const enrichedPose = {
+        ...worldPose,
+        projectionMatrix
+      };
+      onPose?.(enrichedPose);
+      return enrichedPose;
     },
     async stop() {
       session.removeEventListener('end', handleEnd);

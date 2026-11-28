@@ -214,18 +214,17 @@ describe('Remove HUD Question Mark Icon & Clean Up Unified Help Guide', () => {
     const mobileGuide = view.getByTestId('info-guide-mobile');
     assert.ok(mobileGuide.textContent.includes('Aim, Scan & Lock Surface'));
     assert.ok(mobileGuide.textContent.includes('100%'));
-    assert.ok(mobileGuide.textContent.includes('Seed'));
-    assert.ok(mobileGuide.textContent.includes('center reticle'));
+    assert.ok(mobileGuide.textContent.includes('center circle'));
     assert.ok(mobileGuide.textContent.includes('Copy Agent Prompt'));
     assert.ok(mobileGuide.textContent.includes('IPFS'));
     assert.ok(mobileGuide.textContent.includes('pinned notes'));
 
-    // Open Step 1 InfoTip to verify 100% scan box, Proof of Location & + Seed details
+    // Open Step 1 InfoTip to verify 100% scan box, Proof of Location & hold center circle details
     RTL.fireEvent.click(
       view.getByRole('button', { name: /Info: Surface Scan, Calibration & Multi-Sensor AR/i })
     );
     assert.ok(view.container.textContent.includes('Proof of Location'));
-    assert.ok(view.container.textContent.includes('+ Seed'));
+    assert.ok(view.container.textContent.includes('hold the center circle'));
 
     // Open Step 2 InfoTip to verify spray can, 3D bars, Stack hold-to-build, auto-fade & Copy Agent Prompt
     RTL.fireEvent.click(

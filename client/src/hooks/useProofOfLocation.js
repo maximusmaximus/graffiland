@@ -533,6 +533,13 @@ export function useProofOfLocation({
   const refreshCamera = useCallback(
     async ({ reason = 'manual', force = false, isWatchdog = false } = {}) => {
       if (unmountedRef.current) return false;
+      // While WebXR immersive-ar owns the hardware rear camera, never fight ARCore with getUserMedia
+      if (webxrActiveRef.current && reason !== 'webxr_ended') {
+        setCameraReady(true);
+        cameraReadyRef.current = true;
+        setCameraRecovering(false);
+        return true;
+      }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setSensorBanner(describeHttpsRequiredError());
@@ -709,6 +716,13 @@ export function useProofOfLocation({
   const ensureCameraLive = useCallback(
     async ({ reason = 'health_check', allowRestart = true } = {}) => {
       if (unmountedRef.current || inFlightCameraRef.current) return false;
+      if (webxrActiveRef.current) {
+        if (!cameraReadyRef.current) {
+          setCameraReady(true);
+          cameraReadyRef.current = true;
+        }
+        return true;
+      }
       if (cameraSuspendedBridgeRef.current?.current) return false;
       if (permissionBlockedRef.current) return false;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
@@ -1551,13 +1565,28 @@ export function useProofOfLocation({
       polRef.current.setWebxrActive(next);
       setWebxrActive(next);
       setSceneScan(polRef.current.getSceneCoverage());
-      if (wasActive && !next && calibrationStateRef.current === 'calibrated') {
-        if (orbKeyframesRef.current.size > 0) {
+      if (next) {
+        cameraReadyRef.current = true;
+        setCameraReady(true);
+        setCameraRecovering(false);
+        const videoEl = videoRef.current;
+        if (videoEl && typeof videoEl.pause === 'function' && !videoEl.paused) {
+          try {
+            videoEl.pause();
+          } catch {
+            // ignore pause error while WebXR owns camera
+          }
+        }
+      } else if (wasActive) {
+        if (calibrationStateRef.current === 'calibrated' && orbKeyframesRef.current.size > 0) {
           calibrationHealthRef.current.relocalizingSinceMs = Date.now();
           calibrationHealthRef.current.relocalizingReason = 'webxr_lost';
           calibrationHealthRef.current.relocalizingMeta = {};
           calibrationStateRef.current = 'relocalizing';
           setCalibrationState('relocalizing');
+        }
+        if (!cameraSuspendedBridgeRef.current?.current) {
+          refreshCameraRef.current?.({ reason: 'webxr_ended', force: true });
         }
       }
       syncSensorStatus();

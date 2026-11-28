@@ -1,16 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { computeCenterToolReticleMetrics } from '../../utils/toolReticleSizing.js';
 
-const BRUSH_HOLD_DELAY_MS = 90;
+export const RETICLE_HOLD_LOCK_DRAW_MS = 180;
+const POINTER_CLICK_DEDUPE_MS = 400;
 
 /**
  * Interactive center-screen reticle circle for Brush and Pencil tools.
  *
  * - Renders a center circle dynamically sized to the selected tool (Brush vs Pencil)
  *   and block size (S / M / L / XL) at the active surface or reach depth.
- * - First click/tap inside the circle sets & locks the surface at that center location.
- * - Subsequent taps (Pencil or quick Brush dab) draw right at that location, and holding
- *   inside the circle in Brush mode continuously spray-paints from the center aim.
+ * - Click & hold on the circle locks the drawing surface at that center location and
+ *   immediately draws (continuous spray for Brush, block placement for Pencil).
+ * - While locked, holding the circle again draws on that locked surface; clicking/tapping
+ *   the circle again unlocks it so the user can move and lock a new location.
  */
 export default function ToolCenterReticle({
   tool = 'brush',
@@ -21,6 +23,7 @@ export default function ToolCenterReticle({
   painting = false,
   vFovDeg = 65,
   onSetCenterSurface = null,
+  onUnlockCenterSurface = null,
   onDrawAtCenter = null,
   onStartCenterBrushHold = null,
   onStopCenterBrushHold = null
@@ -30,37 +33,59 @@ export default function ToolCenterReticle({
   );
 
   const holdTimerRef = useRef(null);
-  const holdingSprayRef = useRef(false);
-  const pendingTapActionRef = useRef('');
-  const handledPointerUpRef = useRef(false);
+  const activePointerIdRef = useRef(null);
+  const holdTriggeredRef = useRef(false);
+  const holdingBrushSprayRef = useRef(false);
+  const wasLockedOnDownRef = useRef(false);
+  const lastPointerHandledAtRef = useRef(0);
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const syncH = () => setViewportH(window.innerHeight || 844);
-    window.addEventListener('resize', syncH, { passive: true });
-    return () => window.removeEventListener('resize', syncH);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (holdTimerRef.current) {
-        clearTimeout(holdTimerRef.current);
-        holdTimerRef.current = null;
-      }
-      if (holdingSprayRef.current) {
-        holdingSprayRef.current = false;
+    const handleWindowBlur = () => {
+      clearHoldTimer();
+      activePointerIdRef.current = null;
+      holdTriggeredRef.current = false;
+      if (holdingBrushSprayRef.current) {
+        holdingBrushSprayRef.current = false;
         onStopCenterBrushHold?.();
       }
     };
+    window.addEventListener('resize', syncH, { passive: true });
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('resize', syncH);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
   }, [onStopCenterBrushHold]);
+
+  // Clean up timers & active hold spray on unmount or tool switch
+  useEffect(() => {
+    return () => {
+      clearHoldTimer();
+      activePointerIdRef.current = null;
+      holdTriggeredRef.current = false;
+      if (holdingBrushSprayRef.current) {
+        holdingBrushSprayRef.current = false;
+        onStopCenterBrushHold?.();
+      }
+    };
+  }, [tool, onStopCenterBrushHold]);
 
   if (tool !== 'brush' && tool !== 'pencil') {
     return <div className="reticle" />;
   }
 
-  const hasSurfaceAnchor = Boolean(surfaceAnchor);
+  const isSurfaceLocked = Boolean(surfaceAnchor?.locked);
   const activeDepthM =
-    surfaceAnchor?.locked && Number(surfaceAnchor.depthM) > 0
+    isSurfaceLocked && Number(surfaceAnchor.depthM) > 0
       ? Number(surfaceAnchor.depthM)
       : Number(reachMeters) || 1.8;
 
@@ -72,44 +97,51 @@ export default function ToolCenterReticle({
     viewportHeightPx: viewportH
   });
 
-  const clearHoldTimer = () => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-  };
-
   const handlePointerDown = (e) => {
     if (e.button && e.button !== 0) return;
     e.stopPropagation();
-    handledPointerUpRef.current = false;
+    // Ignore secondary multi-touch pointers while a primary hold/tap owns the circle
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+      return;
+    }
+    activePointerIdRef.current = e.pointerId;
+    holdTriggeredRef.current = false;
+    holdingBrushSprayRef.current = false;
+    wasLockedOnDownRef.current = isSurfaceLocked;
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
     } catch {
       // ignore synthetic pointers
     }
     clearHoldTimer();
-    holdingSprayRef.current = false;
 
-    if (!hasSurfaceAnchor) {
-      pendingTapActionRef.current = 'set-surface';
-      return;
-    }
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      if (activePointerIdRef.current === null) return;
+      holdTriggeredRef.current = true;
 
-    pendingTapActionRef.current = 'draw-center';
-    if (tool === 'brush') {
-      holdTimerRef.current = setTimeout(() => {
-        holdTimerRef.current = null;
-        if (pendingTapActionRef.current !== 'draw-center') return;
-        holdingSprayRef.current = true;
-        pendingTapActionRef.current = '';
+      if (!wasLockedOnDownRef.current) {
+        const lockedResult = onSetCenterSurface?.({ silent: true });
+        if (lockedResult === null || lockedResult === false) {
+          return;
+        }
+      }
+
+      navigator.vibrate?.(8);
+      if (tool === 'brush') {
+        holdingBrushSprayRef.current = true;
         onStartCenterBrushHold?.();
-      }, BRUSH_HOLD_DELAY_MS);
-    }
+      } else {
+        onDrawAtCenter?.();
+      }
+    }, RETICLE_HOLD_LOCK_DRAW_MS);
   };
 
   const handlePointerUp = (e) => {
     e.stopPropagation();
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+      return;
+    }
     clearHoldTimer();
     try {
       e.currentTarget.releasePointerCapture?.(e.pointerId);
@@ -117,59 +149,75 @@ export default function ToolCenterReticle({
       // ignore
     }
 
-    const action = pendingTapActionRef.current;
-    pendingTapActionRef.current = '';
+    const hadActivePointer = activePointerIdRef.current !== null;
+    activePointerIdRef.current = null;
+    lastPointerHandledAtRef.current = performance.now();
 
-    if (holdingSprayRef.current) {
-      holdingSprayRef.current = false;
-      handledPointerUpRef.current = true;
+    const wasHold = holdTriggeredRef.current;
+    holdTriggeredRef.current = false;
+
+    if (holdingBrushSprayRef.current) {
+      holdingBrushSprayRef.current = false;
       onStopCenterBrushHold?.();
       return;
     }
 
-    if (action === 'set-surface') {
-      handledPointerUpRef.current = true;
-      onSetCenterSurface?.();
-    } else if (action === 'draw-center') {
-      handledPointerUpRef.current = true;
-      onDrawAtCenter?.();
+    if (wasHold || !hadActivePointer) {
+      return;
+    }
+
+    // Quick click/tap: if already locked -> unlock so user can change draw location;
+    // if unlocked -> lock at current center location (and place block on Pencil).
+    if (wasLockedOnDownRef.current) {
+      navigator.vibrate?.(6);
+      onUnlockCenterSurface?.();
+    } else {
+      const lockedResult = onSetCenterSurface?.();
+      if (lockedResult !== null && lockedResult !== false && tool === 'pencil') {
+        onDrawAtCenter?.();
+      }
     }
   };
 
   const handlePointerCancel = (e) => {
     e.stopPropagation();
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+      return;
+    }
     clearHoldTimer();
-    pendingTapActionRef.current = '';
-    if (holdingSprayRef.current) {
-      holdingSprayRef.current = false;
+    activePointerIdRef.current = null;
+    holdTriggeredRef.current = false;
+    lastPointerHandledAtRef.current = performance.now();
+    if (holdingBrushSprayRef.current) {
+      holdingBrushSprayRef.current = false;
       onStopCenterBrushHold?.();
     }
   };
 
   const handleClick = (e) => {
     e.stopPropagation();
-    if (handledPointerUpRef.current) {
-      handledPointerUpRef.current = false;
+    if (performance.now() - lastPointerHandledAtRef.current < POINTER_CLICK_DEDUPE_MS) {
       return;
     }
-    if (!hasSurfaceAnchor) {
-      onSetCenterSurface?.();
+    if (isSurfaceLocked) {
+      onUnlockCenterSurface?.();
     } else {
-      onDrawAtCenter?.();
+      const lockedResult = onSetCenterSurface?.();
+      if (lockedResult !== null && lockedResult !== false && tool === 'pencil') {
+        onDrawAtCenter?.();
+      }
     }
   };
 
-  const ariaLabel = !hasSurfaceAnchor
-    ? `Set drawing surface at center (${tool === 'brush' ? 'Brush' : 'Pencil'}, size ${metrics.sizePresetLabel})`
-    : tool === 'brush'
-    ? `Paint at center with Brush (size ${metrics.sizePresetLabel})`
-    : `Draw block at center with Pencil (size ${metrics.sizePresetLabel})`;
+  const ariaLabel = isSurfaceLocked
+    ? `Location locked (${tool === 'brush' ? 'Brush' : 'Pencil'}, size ${metrics.sizePresetLabel}) — hold to draw here or click to change location`
+    : `Hold circle to lock and draw here (${tool === 'brush' ? 'Brush' : 'Pencil'}, size ${metrics.sizePresetLabel})`;
 
   return (
     <button
       type="button"
       className={`reticle is-tool-circle is-tool-${tool} ${
-        hasSurfaceAnchor ? 'is-surface-set' : 'needs-surface'
+        isSurfaceLocked ? 'is-surface-set is-surface-locked' : 'needs-surface'
       } ${painting ? 'is-painting' : ''}`}
       data-testid="tool-center-reticle"
       data-tool={tool}
@@ -177,7 +225,8 @@ export default function ToolCenterReticle({
       data-size-label={metrics.sizePresetLabel}
       data-diameter-px={String(metrics.diameterPx)}
       data-block-diameter-px={String(metrics.blockDiameterPx)}
-      data-surface-set={hasSurfaceAnchor ? 'true' : 'false'}
+      data-surface-set={isSurfaceLocked ? 'true' : 'false'}
+      data-surface-locked={isSurfaceLocked ? 'true' : 'false'}
       style={{
         width: `${metrics.hitDiameterPx}px`,
         height: `${metrics.hitDiameterPx}px`,
@@ -200,6 +249,15 @@ export default function ToolCenterReticle({
         }}
         aria-hidden="true"
       >
+        {isSurfaceLocked && (
+          <span
+            className="tool-reticle-lock-dot"
+            data-testid="tool-reticle-lock-dot"
+            aria-hidden="true"
+          >
+            🔒
+          </span>
+        )}
         {tool === 'brush' ? (
           <span
             className="tool-reticle-inner-block is-brush-core"
@@ -221,13 +279,13 @@ export default function ToolCenterReticle({
       </span>
       {!painting && (
         <span
-          className={`tool-reticle-caption ${hasSurfaceAnchor ? 'is-locked' : 'is-prompt'}`}
+          className={`tool-reticle-caption ${isSurfaceLocked ? 'is-locked' : 'is-prompt'}`}
           data-testid="tool-reticle-caption"
           aria-hidden="true"
         >
-          {!hasSurfaceAnchor
-            ? 'Tap circle to set surface'
-            : `${metrics.sizePresetLabel} · ${tool === 'brush' ? 'Hold/tap' : 'Tap'}`}
+          {isSurfaceLocked
+            ? `${metrics.sizePresetLabel} · Hold draw · Tap to move`
+            : `${metrics.sizePresetLabel} · Hold to lock & draw`}
         </span>
       )}
     </button>
