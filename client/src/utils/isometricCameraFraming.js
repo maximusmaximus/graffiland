@@ -7,6 +7,7 @@
 export const ISOMETRIC_AZIMUTH_DEG = 45;
 export const ISOMETRIC_ELEVATION_DEG = 35.264;
 export const ISOMETRIC_PREVIEW_FOV_DEG = 36;
+export const GHOST_SELECT_VIEWPORT_AREA_FRACTION = 0.25;
 
 function clampPositive(value, fallback) {
   const n = Number(value);
@@ -129,6 +130,7 @@ export function computeInsideLandModelFraming({
   fovDeg = 46,
   aspect = 1.45,
   fillRatio = 0.84,
+  targetViewportAreaFraction = null,
   azimuthDeg = ISOMETRIC_AZIMUTH_DEG,
   elevationDeg = 22
 } = {}) {
@@ -147,31 +149,79 @@ export function computeInsideLandModelFraming({
     elevationDeg
   });
 
-  // Step slightly closer inside the land so organic/sculpted 3D models genuinely fill the viewport
-  const tighterDistance = Math.max(0.55, baseFraming.distance * 0.84);
+  const safeW = clampPositive(modelWidth, 1.4);
+  const safeH = clampPositive(modelHeight, 1.4);
+  const safeD = clampPositive(modelDepth, 1.4);
+  const safeAspect = Math.max(0.55, clampPositive(aspect, 1.45));
+  const safeFov = baseFraming.fov;
+  const az = (Number(azimuthDeg) * Math.PI) / 180;
+  const el = (Number(elevationDeg) * Math.PI) / 180;
+  const cosEl = Math.cos(el);
+  const sinEl = Math.sin(el);
+  const sinAz = Math.sin(az);
+  const cosAz = Math.cos(az);
+  const hw = safeW / 2;
+  const hh = safeH / 2;
+  const hd = safeD / 2;
+  const projHalfW = hw * Math.abs(cosAz) + hd * Math.abs(sinAz);
+  const projHalfH =
+    hw * Math.abs(-sinEl * sinAz) + hh * Math.abs(cosEl) + hd * Math.abs(-sinEl * cosAz);
+  const projHalfDepth =
+    hw * Math.abs(cosEl * sinAz) + hh * Math.abs(sinEl) + hd * Math.abs(cosEl * cosAz);
+  const tanHalfV = Math.tan(((safeFov * Math.PI) / 180) / 2);
+  const tanHalfH = tanHalfV * safeAspect;
+
+  let chosenDistance;
+  const requestedArea = Number(targetViewportAreaFraction);
+  if (
+    targetViewportAreaFraction !== null &&
+    targetViewportAreaFraction !== undefined &&
+    Number.isFinite(requestedArea) &&
+    requestedArea > 0
+  ) {
+    // Frame the model so its projected screen box occupies the target fraction (e.g. 25%)
+    // of the working viewport window, while never clipping extreme aspect-ratio shapes.
+    const safeAreaFrac = Math.max(0.08, Math.min(0.65, requestedArea));
+    const dArea = Math.sqrt((projHalfW * projHalfH) / (safeAreaFrac * tanHalfH * tanHalfV));
+    const dFitV = projHalfH / (tanHalfV * 0.78) + projHalfDepth * 0.35;
+    const dFitH = projHalfW / (tanHalfH * 0.78) + projHalfDepth * 0.35;
+    const dNearSafe = projHalfDepth * 1.55;
+    chosenDistance = Math.max(0.55, dArea, dFitV, dFitH, dNearSafe);
+  } else {
+    // Step slightly closer inside the land so organic/sculpted 3D models genuinely fill the viewport
+    chosenDistance = Math.max(0.55, baseFraming.distance * 0.84);
+  }
+
   const dx = baseFraming.position[0] - baseFraming.target[0];
   const dy = baseFraming.position[1] - baseFraming.target[1];
   const dz = baseFraming.position[2] - baseFraming.target[2];
-  const scaleFactor = baseFraming.distance > 1e-6 ? tighterDistance / baseFraming.distance : 1;
+  const scaleFactor = baseFraming.distance > 1e-6 ? chosenDistance / baseFraming.distance : 1;
   const position = [
     baseFraming.target[0] + dx * scaleFactor,
     baseFraming.target[1] + dy * scaleFactor,
     baseFraming.target[2] + dz * scaleFactor
   ];
 
+  const projectedWidthFraction = projHalfW / (chosenDistance * tanHalfH);
+  const projectedHeightFraction = projHalfH / (chosenDistance * tanHalfV);
+  const projectedAreaFraction = projectedWidthFraction * projectedHeightFraction;
+
   const landMaxSpan = Math.max(
     clampPositive(volW, 10),
     clampPositive(volH, 10),
     clampPositive(volD, 10),
-    Math.max(clampPositive(modelWidth, 1.4), clampPositive(modelHeight, 1.4), clampPositive(modelDepth, 1.4))
+    Math.max(safeW, safeH, safeD)
   );
   const maxDistance = Math.max(baseFraming.maxDistance, landMaxSpan * 4.5, 24);
   return {
     ...baseFraming,
-    distance: tighterDistance,
+    distance: chosenDistance,
     position,
     maxDistance,
-    far: Math.max(600, maxDistance * 4)
+    far: Math.max(600, maxDistance * 4),
+    projectedWidthFraction,
+    projectedHeightFraction,
+    projectedAreaFraction
   };
 }
 

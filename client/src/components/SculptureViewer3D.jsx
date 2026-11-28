@@ -23,6 +23,13 @@ import {
   ISOMETRIC_PREVIEW_FOV_DEG
 } from '../utils/isometricCameraFraming.js';
 import {
+  GIZMO_BOX_FACES,
+  computeFaceDragPlaneSpec,
+  computeFaceDragTransform,
+  computeFaceWorldNormal,
+  isFaceFacingCamera
+} from '../utils/gizmoFaceDrag.js';
+import {
   createDepthFadedThreeBoxWireframe,
   updateThreeWireframeDepthFade
 } from '../utils/prismDepthFade.js';
@@ -135,6 +142,7 @@ export default function SculptureViewer3D({
   autoRotate = true,
   isometricFocus = false,
   cameraFocus = 'model', // 'model' | 'land'
+  targetViewportAreaFraction = null,
   resetViewTick = 0,
   liveCursor = null,
   liveQuaternion = null,
@@ -167,6 +175,12 @@ export default function SculptureViewer3D({
   const siblingHitMeshesRef = useRef([]);
   const gizmoOverlayRef = useRef(null);
   const gizmoHitMeshesRef = useRef([]);
+  const gizmoFaceMeshesRef = useRef([]);
+  const hoveredFaceIdRef = useRef('');
+  const activeFaceIdRef = useRef('');
+  const isDraggingGizmoRef = useRef(false);
+  const gizmoYawRadRef = useRef(0);
+  const gizmoHandleFrontTolRef = useRef(0.22);
   const cursorRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
@@ -176,7 +190,6 @@ export default function SculptureViewer3D({
   const maxAnisotropyRef = useRef(8);
   const modelBaseSizeRef = useRef({ width: 1.4, height: 1.4, depth: 1.4 });
   const framedModeKeyRef = useRef('');
-  const prevModelCenterRef = useRef(null);
   const resizeCanvasRef = useRef(null);
   const heightRef = useRef(height);
   heightRef.current = height;
@@ -367,10 +380,63 @@ export default function SculptureViewer3D({
 
     const getGizmoCursor = (role) => {
       if (role === 'scale') return 'nwse-resize';
-      if (role === 'move') return 'move';
+      if (role === 'move' || role === 'face') return 'move';
       if (role === 'rotate') return 'grab';
       if (role === 'height') return 'ns-resize';
       return '';
+    };
+
+    const syncFaceHighlightOpacity = () => {
+      const faceMeshes = gizmoFaceMeshesRef.current;
+      if (!faceMeshes || faceMeshes.length === 0) return;
+      const activeId = activeFaceIdRef.current;
+      const hoverId = hoveredFaceIdRef.current;
+      for (const mesh of faceMeshes) {
+        const fid = mesh?.userData?.gizmoFace?.id || '';
+        if (!mesh?.material) continue;
+        mesh.material.opacity =
+          activeId && fid === activeId ? 0.24 : hoverId && fid === hoverId ? 0.14 : 0;
+      }
+    };
+
+    const pickGizmoFaceHit = () => {
+      const faceTargets = gizmoFaceMeshesRef.current;
+      if (!faceTargets || faceTargets.length === 0) return null;
+      const faceHits = raycaster.intersectObjects(faceTargets, false);
+      const yawRad = gizmoYawRadRef.current || 0;
+      for (const hit of faceHits) {
+        const face = hit?.object?.userData?.gizmoFace;
+        if (!face) continue;
+        const worldNormal = computeFaceWorldNormal(face.localNormal, yawRad);
+        if (isFaceFacingCamera(worldNormal, hit.point, camera.position)) {
+          return { hit, face, worldNormal };
+        }
+      }
+      return null;
+    };
+
+    const pickGizmoInteraction = () => {
+      const targets = gizmoHitMeshesRef.current;
+      const handleHits = targets && targets.length > 0 ? raycaster.intersectObjects(targets, false) : [];
+      const handleHit = handleHits?.[0] || null;
+      const handleRole = handleHit?.object?.userData?.gizmoRole || '';
+      const faceHit = onTransformChangeRef.current ? pickGizmoFaceHit() : null;
+
+      if (handleRole && faceHit) {
+        // Front/edge handles take priority; occluded back-side handles behind a front face do NOT bleed through
+        const frontTol = Math.max(0.08, Number(gizmoHandleFrontTolRef.current || 0.22));
+        if (handleHit.distance <= faceHit.hit.distance + frontTol) {
+          return { kind: 'handle', role: handleRole, hit: handleHit };
+        }
+        return { kind: 'face', faceHit };
+      }
+      if (handleRole) {
+        return { kind: 'handle', role: handleRole, hit: handleHit };
+      }
+      if (faceHit) {
+        return { kind: 'face', faceHit };
+      }
+      return null;
     };
 
     const pickSiblingGhostHit = () => {
@@ -401,94 +467,161 @@ export default function SculptureViewer3D({
 
     const onPointerDown = (evt) => {
       pendingGhostClick = null;
+      if (evt.pointerType !== 'touch' && evt.button !== 0) return;
       if (!toNdc(evt)) return;
       raycaster.setFromCamera(pointerNdc, camera);
 
-      // 1) Gizmo handles always take priority over ghost clicking
+      // 1) Gizmo handles (front/visible) & 6 draggable box faces take top priority over OrbitControls
       if (showEditGizmoRef.current && onTransformChangeRef.current) {
-        const targets = gizmoHitMeshesRef.current;
-        if (targets && targets.length > 0) {
-          const hits = raycaster.intersectObjects(targets, false);
-          const hit = hits?.[0];
-          const role = hit?.object?.userData?.gizmoRole;
-          if (role) {
-            evt.stopPropagation();
-            onTransformStartRef.current?.(role);
-            const lt = liveTransformRef.current || {};
-            const startDx = Number(lt.dx || 0);
-            const startDy = Math.max(0, Number(lt.dy || 0));
-            const startDz = Number(lt.dz || 0);
-            const startYaw = Number(lt.yaw || 0);
-            const startScale = Math.max(
-              0.001,
-              Number(lt.scale ?? extractSculptureScale(sculptureRef.current) ?? 1)
+        const picked = pickGizmoInteraction();
+        if (picked?.kind === 'handle') {
+          const hit = picked.hit;
+          const role = picked.role;
+          evt.preventDefault();
+          evt.stopImmediatePropagation();
+          evt.stopPropagation();
+          onTransformStartRef.current?.(role);
+          const lt = liveTransformRef.current || {};
+          const startDx = Number(lt.dx || 0);
+          const startDy = Math.max(0, Number(lt.dy || 0));
+          const startDz = Number(lt.dz || 0);
+          const startYaw = Number(lt.yaw || 0);
+          const startScale = Math.max(
+            0.001,
+            Number(lt.scale ?? extractSculptureScale(sculptureRef.current) ?? 1)
+          );
+          const baseX = showLandBoundsRef.current ? Number(lt.baseX || 0) : 0;
+          const baseZ = showLandBoundsRef.current ? Number(lt.baseZ || 0) : 0;
+          const pivotX = showLandBoundsRef.current ? baseX + startDx : 0;
+          const pivotY = showLandBoundsRef.current ? startDy : 0;
+          const pivotZ = showLandBoundsRef.current ? baseZ + startDz : 0;
+
+          if (role === 'height') {
+            const camDir = new THREE.Vector3();
+            camera.getWorldDirection(camDir);
+            camDir.y = 0;
+            if (camDir.lengthSq() < 1e-4) camDir.set(0, 0, 1);
+            camDir.normalize();
+            dragPlane.setFromNormalAndCoplanarPoint(
+              camDir,
+              new THREE.Vector3(pivotX, hit.point.y, pivotZ)
             );
-            const baseX = showLandBoundsRef.current ? Number(lt.baseX || 0) : 0;
-            const baseZ = showLandBoundsRef.current ? Number(lt.baseZ || 0) : 0;
-            const pivotX = showLandBoundsRef.current ? baseX + startDx : 0;
-            const pivotY = showLandBoundsRef.current ? startDy : 0;
-            const pivotZ = showLandBoundsRef.current ? baseZ + startDz : 0;
-
-            if (role === 'height') {
-              const camDir = new THREE.Vector3();
-              camera.getWorldDirection(camDir);
-              camDir.y = 0;
-              if (camDir.lengthSq() < 1e-4) camDir.set(0, 0, 1);
-              camDir.normalize();
-              dragPlane.setFromNormalAndCoplanarPoint(
-                camDir,
-                new THREE.Vector3(pivotX, hit.point.y, pivotZ)
-              );
-            } else {
-              dragPlane.setFromNormalAndCoplanarPoint(
-                new THREE.Vector3(0, 1, 0),
-                new THREE.Vector3(pivotX, pivotY, pivotZ)
-              );
-            }
-
-            const startPt = new THREE.Vector3();
-            if (!raycaster.ray.intersectPlane(dragPlane, startPt)) {
-              startPt.copy(hit.point);
-            }
-
-            const startDist = Math.hypot(startPt.x - pivotX, startPt.z - pivotZ);
-            const startAngle = Math.atan2(startPt.x - pivotX, startPt.z - pivotZ);
-
-            dragState = {
-              pointerId: evt.pointerId,
-              role,
-              startDx,
-              startDy,
-              startDz,
-              startYaw,
-              startScale,
-              pivotX,
-              pivotY,
-              pivotZ,
-              startPt: startPt.clone(),
-              startDist: Math.max(0.15, startDist),
-              startAngle
-            };
-
-            controls.enabled = false;
-            controls.autoRotate = false;
-            try {
-              renderer.domElement.setPointerCapture(evt.pointerId);
-            } catch {
-              // ignore if unsupported in headless env
-            }
-            renderer.domElement.style.cursor = role === 'rotate' ? 'grabbing' : getGizmoCursor(role);
-            setGizmoStatusText(
-              role === 'scale'
-                ? `Scaling: ${startScale.toFixed(2)}×`
-                : role === 'move'
-                ? `Moving: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
-                : role === 'rotate'
-                ? `Rotating: ${Math.round(startYaw)}°`
-                : `Height: ${startDy.toFixed(2)}m`
+          } else {
+            dragPlane.setFromNormalAndCoplanarPoint(
+              new THREE.Vector3(0, 1, 0),
+              new THREE.Vector3(pivotX, role === 'move' ? hit.point.y : pivotY, pivotZ)
             );
-            return;
           }
+
+          const startPt = new THREE.Vector3();
+          if (!raycaster.ray.intersectPlane(dragPlane, startPt)) {
+            startPt.copy(hit.point);
+          }
+
+          const startDist = Math.hypot(startPt.x - pivotX, startPt.z - pivotZ);
+          const startAngle = Math.atan2(startPt.x - pivotX, startPt.z - pivotZ);
+
+          dragState = {
+            pointerId: evt.pointerId,
+            role,
+            startDx,
+            startDy,
+            startDz,
+            startYaw,
+            startScale,
+            pivotX,
+            pivotY,
+            pivotZ,
+            startPt: startPt.clone(),
+            startDist: Math.max(0.15, startDist),
+            startAngle
+          };
+
+          isDraggingGizmoRef.current = true;
+          activeFaceIdRef.current = '';
+          hoveredFaceIdRef.current = '';
+          syncFaceHighlightOpacity();
+          controls.enabled = false;
+          controls.autoRotate = false;
+          try {
+            renderer.domElement.setPointerCapture(evt.pointerId);
+          } catch {
+            // ignore if unsupported in headless env
+          }
+          renderer.domElement.style.cursor = role === 'rotate' ? 'grabbing' : getGizmoCursor(role);
+          setGizmoStatusText(
+            role === 'scale'
+              ? `Scaling: ${startScale.toFixed(2)}×`
+              : role === 'move'
+              ? `Moving: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
+              : role === 'rotate'
+              ? `Rotating: ${Math.round(startYaw)}°`
+              : `Height: ${startDy.toFixed(2)}m`
+          );
+          return;
+        }
+
+        // 1b) Direct dragging on any of the 6 box faces/planes moves the model itself (not the camera/scene)
+        if (picked?.kind === 'face') {
+          const faceHit = picked.faceHit;
+          evt.preventDefault();
+          evt.stopImmediatePropagation();
+          evt.stopPropagation();
+          onTransformStartRef.current?.('face');
+          const lt = liveTransformRef.current || {};
+          const startDx = Number(lt.dx || 0);
+          const startDy = Math.max(0, Number(lt.dy || 0));
+          const startDz = Number(lt.dz || 0);
+          const camDir = new THREE.Vector3();
+          camera.getWorldDirection(camDir);
+
+          const planeSpec = computeFaceDragPlaneSpec({
+            face: faceHit.face,
+            yawRad: gizmoYawRadRef.current || 0,
+            hitPoint: faceHit.hit.point,
+            cameraDir: camDir
+          });
+          dragPlane.setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(planeSpec.normal[0], planeSpec.normal[1], planeSpec.normal[2]),
+            new THREE.Vector3(planeSpec.point[0], planeSpec.point[1], planeSpec.point[2])
+          );
+
+          const startPt = new THREE.Vector3();
+          if (!raycaster.ray.intersectPlane(dragPlane, startPt)) {
+            startPt.copy(faceHit.hit.point);
+          }
+
+          dragState = {
+            pointerId: evt.pointerId,
+            role: 'face',
+            faceId: faceHit.face.id,
+            faceAxis: planeSpec.axis,
+            faceLabel: faceHit.face.label,
+            startDx,
+            startDy,
+            startDz,
+            startPt: startPt.clone()
+          };
+
+          isDraggingGizmoRef.current = true;
+          activeFaceIdRef.current = faceHit.face.id;
+          hoveredFaceIdRef.current = faceHit.face.id;
+          syncFaceHighlightOpacity();
+          updateHoveredSibling(null);
+          controls.enabled = false;
+          controls.autoRotate = false;
+          try {
+            renderer.domElement.setPointerCapture(evt.pointerId);
+          } catch {
+            // ignore if unsupported in headless env
+          }
+          renderer.domElement.style.cursor = 'grabbing';
+          setGizmoStatusText(
+            planeSpec.axis === 'vertical'
+              ? `Dragging ${faceHit.face.label}: X ${startDx.toFixed(1)}m · Y ${startDy.toFixed(2)}m · Z ${startDz.toFixed(1)}m`
+              : `Dragging ${faceHit.face.label}: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
+          );
+          return;
         }
       }
 
@@ -519,16 +652,29 @@ export default function SculptureViewer3D({
           if (moved >= 6) pendingGhostClick = null;
         }
         if (showEditGizmoRef.current) {
-          const targets = gizmoHitMeshesRef.current;
-          if (targets && targets.length > 0) {
-            const hits = raycaster.intersectObjects(targets, false);
-            const role = hits?.[0]?.object?.userData?.gizmoRole || '';
-            if (role) {
-              updateHoveredSibling(null);
-              renderer.domElement.style.cursor = getGizmoCursor(role);
-              return;
+          const picked = pickGizmoInteraction();
+          if (picked?.kind === 'handle') {
+            if (hoveredFaceIdRef.current) {
+              hoveredFaceIdRef.current = '';
+              syncFaceHighlightOpacity();
             }
+            updateHoveredSibling(null);
+            renderer.domElement.style.cursor = getGizmoCursor(picked.role);
+            return;
           }
+          if (picked?.kind === 'face') {
+            if (hoveredFaceIdRef.current !== picked.faceHit.face.id) {
+              hoveredFaceIdRef.current = picked.faceHit.face.id;
+              syncFaceHighlightOpacity();
+            }
+            updateHoveredSibling(null);
+            renderer.domElement.style.cursor = 'move';
+            return;
+          }
+        }
+        if (hoveredFaceIdRef.current) {
+          hoveredFaceIdRef.current = '';
+          syncFaceHighlightOpacity();
         }
         const ghostHit = pickSiblingGhostHit();
         updateHoveredSibling(ghostHit);
@@ -562,6 +708,22 @@ export default function SculptureViewer3D({
         }
         setGizmoStatusText(`Moving: X ${nextDx.toFixed(1)}m · Z ${nextDz.toFixed(1)}m`);
         onTransformChangeRef.current?.({ dx: nextDx, dz: nextDz });
+      } else if (dragState.role === 'face') {
+        const patch = computeFaceDragTransform({
+          axis: dragState.faceAxis,
+          startDx: dragState.startDx,
+          startDy: dragState.startDy,
+          startDz: dragState.startDz,
+          startPt: dragState.startPt,
+          hitPoint,
+          moveRanges: ranges
+        });
+        setGizmoStatusText(
+          dragState.faceAxis === 'vertical'
+            ? `Dragging ${dragState.faceLabel}: X ${patch.dx.toFixed(1)}m · Y ${patch.dy.toFixed(2)}m · Z ${patch.dz.toFixed(1)}m`
+            : `Dragging ${dragState.faceLabel}: X ${patch.dx.toFixed(1)}m · Z ${patch.dz.toFixed(1)}m`
+        );
+        onTransformChangeRef.current?.(patch);
       } else if (dragState.role === 'rotate') {
         const curAngle = Math.atan2(hitPoint.x - dragState.pivotX, hitPoint.z - dragState.pivotZ);
         const deltaDeg = ((curAngle - dragState.startAngle) * 180) / Math.PI;
@@ -601,6 +763,9 @@ export default function SculptureViewer3D({
         // ignore
       }
       dragState = null;
+      isDraggingGizmoRef.current = false;
+      activeFaceIdRef.current = '';
+      syncFaceHighlightOpacity();
       controls.enabled = true;
       renderer.domElement.style.cursor = '';
       setGizmoStatusText('');
@@ -609,6 +774,10 @@ export default function SculptureViewer3D({
     const onPointerLeave = () => {
       pendingGhostClick = null;
       updateHoveredSibling(null);
+      if (hoveredFaceIdRef.current) {
+        hoveredFaceIdRef.current = '';
+        syncFaceHighlightOpacity();
+      }
       if (!dragState) renderer.domElement.style.cursor = '';
     };
 
@@ -624,7 +793,8 @@ export default function SculptureViewer3D({
       setDblClickFocusTick((t) => t + 1);
     };
 
-    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    // Register pointerdown in capture phase so gizmo handle & face drags intercept BEFORE OrbitControls
+    renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', endDrag);
     renderer.domElement.addEventListener('pointercancel', endDrag);
@@ -662,7 +832,7 @@ export default function SculptureViewer3D({
       resizeCanvasRef.current = null;
       window.removeEventListener('resize', handleResize);
       resizeObs?.disconnect();
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown, true);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', endDrag);
       renderer.domElement.removeEventListener('pointercancel', endDrag);
@@ -676,6 +846,10 @@ export default function SculptureViewer3D({
       siblingHitMeshesRef.current = [];
       clearGroup(gizmoOverlay);
       gizmoHitMeshesRef.current = [];
+      gizmoFaceMeshesRef.current = [];
+      hoveredFaceIdRef.current = '';
+      activeFaceIdRef.current = '';
+      isDraggingGizmoRef.current = false;
       controls.dispose();
       envRT.dispose();
       pmremGenerator.dispose();
@@ -711,6 +885,9 @@ export default function SculptureViewer3D({
     if (!content) return undefined;
     clearGroup(content);
     framedModeKeyRef.current = '';
+    const cachedGhostDims = scId ? siblingGhostEntriesRef.current.get(scId)?.baseSize : null;
+    modelBaseSizeRef.current =
+      cachedGhostDims || extractSculptureBaseDimensions(sculpture) || { width: 1.4, height: 1.4, depth: 1.4 };
 
     if (scFormat && sculpture) {
       let cancelled = false;
@@ -968,7 +1145,9 @@ export default function SculptureViewer3D({
     clearGroup(siblingOverlay);
     clearGroup(gizmoOverlay);
     gizmoHitMeshesRef.current = [];
+    gizmoFaceMeshesRef.current = [];
     siblingHitMeshesRef.current = [];
+    gizmoYawRadRef.current = yawRad;
 
     const hasLand =
       showLandBounds &&
@@ -1008,6 +1187,7 @@ export default function SculptureViewer3D({
       const knobR = Math.max(0.055, Math.min(0.24, maxSpan * 0.055));
       const barR = Math.max(0.022, Math.min(0.08, knobR * 0.42));
       const hitPad = Math.max(0.12, knobR * 2.1);
+      gizmoHandleFrontTolRef.current = Math.min(0.28, Math.max(0.08, hitPad * 0.75));
 
       const frameColor = placementBlocked ? 0xff4d6d : 0x00f5d4;
       const frameLine = createDepthFadedThreeBoxWireframe(footW, footH, footD, frameColor, {
@@ -1161,8 +1341,71 @@ export default function SculptureViewer3D({
       );
       gizmoRoot.add(rulerLines);
 
+      // (F) 6 Interactive Draggable Box Faces / Planes (drag directly on any face to move the model)
+      const faceList = [];
+      const facePad = 0.003;
+      const faceGeometries = {
+        top: {
+          w: footW,
+          h: footD,
+          pos: [0, footH + facePad, 0],
+          rot: [-Math.PI / 2, 0, 0]
+        },
+        bottom: {
+          w: footW,
+          h: footD,
+          pos: [0, 0.004, 0],
+          rot: [Math.PI / 2, 0, 0]
+        },
+        front: {
+          w: footW,
+          h: footH,
+          pos: [0, footH / 2, hd + facePad],
+          rot: [0, 0, 0]
+        },
+        back: {
+          w: footW,
+          h: footH,
+          pos: [0, footH / 2, -hd - facePad],
+          rot: [0, Math.PI, 0]
+        },
+        right: {
+          w: footD,
+          h: footH,
+          pos: [hw + facePad, footH / 2, 0],
+          rot: [0, Math.PI / 2, 0]
+        },
+        left: {
+          w: footD,
+          h: footH,
+          pos: [-hw - facePad, footH / 2, 0],
+          rot: [0, -Math.PI / 2, 0]
+        }
+      };
+      for (const face of GIZMO_BOX_FACES) {
+        const spec = faceGeometries[face.id];
+        if (!spec) continue;
+        const isActiveFace = activeFaceIdRef.current === face.id;
+        const isHoverFace = hoveredFaceIdRef.current === face.id;
+        const faceMat = new THREE.MeshBasicMaterial({
+          color: frameColor,
+          transparent: true,
+          opacity: isActiveFace ? 0.24 : isHoverFace ? 0.14 : 0,
+          depthWrite: false,
+          side: THREE.FrontSide
+        });
+        const faceMesh = new THREE.Mesh(new THREE.PlaneGeometry(spec.w, spec.h), faceMat);
+        faceMesh.position.set(spec.pos[0], spec.pos[1], spec.pos[2]);
+        faceMesh.rotation.set(spec.rot[0], spec.rot[1], spec.rot[2]);
+        faceMesh.renderOrder = 3;
+        faceMesh.userData = { gizmoRole: 'face', gizmoFace: face };
+        gizmoRoot.add(faceMesh);
+        faceList.push(faceMesh);
+      }
+
       gizmoOverlay.add(gizmoRoot);
       gizmoHitMeshesRef.current = hitList;
+      gizmoFaceMeshesRef.current = faceList;
     }
 
     if (!hasLand) {
@@ -1233,7 +1476,6 @@ export default function SculptureViewer3D({
       const soloKey = `${isometricFocus ? 'iso' : 'solo'}:${scId}:${modelBoundsVersion}:${resetViewTick}:${dblClickFocusTick}`;
       if (!liveCursor && framedModeKeyRef.current !== soloKey && controlsRef.current && cameraRef.current) {
         framedModeKeyRef.current = soloKey;
-        prevModelCenterRef.current = { x: framing.target[0], y: framing.target[1], z: framing.target[2] };
         const cam = cameraRef.current;
         if (Math.abs(cam.fov - framing.fov) > 0.05 || Math.abs(cam.near - framing.near) > 0.005) {
           cam.fov = framing.fov;
@@ -1502,8 +1744,20 @@ export default function SculptureViewer3D({
     }
 
     const effectiveFocus = cameraFocus === 'land' ? 'land' : 'model';
-    const landKey = `${effectiveFocus}:${scId}:${modelBoundsVersion}:${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}:${resetViewTick}:${dblClickFocusTick}`;
-    if (framedModeKeyRef.current !== landKey && controlsRef.current && cameraRef.current) {
+    const areaKey =
+      targetViewportAreaFraction !== null &&
+      targetViewportAreaFraction !== undefined &&
+      Number.isFinite(Number(targetViewportAreaFraction)) &&
+      Number(targetViewportAreaFraction) > 0
+        ? Number(targetViewportAreaFraction).toFixed(3)
+        : 'default';
+    const landKey = `${effectiveFocus}:${scId}:${modelBoundsVersion}:${volW.toFixed(1)}x${volD.toFixed(1)}x${volH.toFixed(1)}:${areaKey}:${resetViewTick}:${dblClickFocusTick}`;
+    if (
+      !isDraggingGizmoRef.current &&
+      framedModeKeyRef.current !== landKey &&
+      controlsRef.current &&
+      cameraRef.current
+    ) {
       framedModeKeyRef.current = landKey;
       const cam = cameraRef.current;
       const framing =
@@ -1529,7 +1783,8 @@ export default function SculptureViewer3D({
               volD,
               fovDeg: 46,
               aspect: cam.aspect || 1.5,
-              fillRatio: 0.84
+              fillRatio: 0.84,
+              targetViewportAreaFraction
             });
       cam.fov = framing.fov;
       cam.near = framing.near;
@@ -1540,30 +1795,11 @@ export default function SculptureViewer3D({
       controlsRef.current.target.set(framing.target[0], framing.target[1], framing.target[2]);
       cam.position.set(framing.position[0], framing.position[1], framing.position[2]);
       controlsRef.current.update();
-      prevModelCenterRef.current = { x: modelCx, y: modelCy, z: modelCz };
-    } else if (
-      effectiveFocus === 'model' &&
-      prevModelCenterRef.current &&
-      controlsRef.current &&
-      cameraRef.current
-    ) {
-      // Smoothly pan camera & target along with the model when moving X/Y/Z inside the land
-      const deltaX = modelCx - prevModelCenterRef.current.x;
-      const deltaY = modelCy - prevModelCenterRef.current.y;
-      const deltaZ = modelCz - prevModelCenterRef.current.z;
-      if (Math.abs(deltaX) > 1e-4 || Math.abs(deltaY) > 1e-4 || Math.abs(deltaZ) > 1e-4) {
-        controlsRef.current.target.x += deltaX;
-        controlsRef.current.target.y += deltaY;
-        controlsRef.current.target.z += deltaZ;
-        cameraRef.current.position.x += deltaX;
-        cameraRef.current.position.y += deltaY;
-        cameraRef.current.position.z += deltaZ;
-        controlsRef.current.update();
-      }
-      // Keep close-up zoom bounds responsive as the model is scaled larger or smaller
+    } else if (controlsRef.current) {
+      // Keep the camera & scene completely stationary while moving the model so the model itself
+      // visibly glides through the land; only update close-up minDistance as scale changes.
       const minSpan = Math.max(0.12, Math.min(modelW, modelH, modelD));
       controlsRef.current.minDistance = Math.max(0.12, minSpan * 0.3);
-      prevModelCenterRef.current = { x: modelCx, y: modelCy, z: modelCz };
     }
   }, [
     scId,
@@ -1577,6 +1813,7 @@ export default function SculptureViewer3D({
     autoRotate,
     isometricFocus,
     cameraFocus,
+    targetViewportAreaFraction,
     resetViewTick,
     dblClickFocusTick,
     liveCursor,
@@ -1638,6 +1875,9 @@ export default function SculptureViewer3D({
       data-testid="sculpture-viewer-3d"
       data-camera-mode={resolvedCameraMode}
       data-camera-focus={cameraFocus}
+      data-target-viewport-area={
+        targetViewportAreaFraction ? String(targetViewportAreaFraction) : ''
+      }
       data-land-bounds-preview={showLandBounds ? 'on' : 'off'}
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
       data-model-status={modelStatus}
@@ -1789,7 +2029,7 @@ export default function SculptureViewer3D({
             ? hoveredSibling.canEdit && onSelectSibling
               ? `👻 Click to save & edit "${hoveredSibling.title}"`
               : `👻 "${hoveredSibling.title}" (view-only ghost)`
-            : '● Corners: Scale · ▬ Sides: Move · ┃ Bars: Rotate · ▲ Top: Height'}
+            : '◻ Faces: Drag · ● Corners: Scale · ▬ Sides: Move · ┃ Bars: Rotate · ▲ Top: Height'}
         </div>
       )}
     </div>
