@@ -688,11 +688,32 @@ export default function StudioHudTopBar({
             parcelId: targetSc.parcelId,
             displayName: targetLandLabel,
             edgeDistanceMeters: arTargetedSculpture.distanceM,
-            isInside: Number(arTargetedSculpture.distanceM) <= 1.5
+            isInside: Number(arTargetedSculpture.distanceM) <= 1.5,
+            chatAccessMode:
+              nearbyCameraLand?.parcelId === targetSc.parcelId
+                ? nearbyCameraLand.chatAccessMode
+                : undefined,
+            ownerSub:
+              nearbyCameraLand?.parcelId === targetSc.parcelId
+                ? nearbyCameraLand.ownerSub
+                : targetSc.creatorSub,
+            contributorSubs:
+              nearbyCameraLand?.parcelId === targetSc.parcelId
+                ? nearbyCameraLand.contributorSubs
+                : undefined,
+            chatWhitelistSubs:
+              nearbyCameraLand?.parcelId === targetSc.parcelId
+                ? nearbyCameraLand.chatWhitelistSubs
+                : undefined,
+            sculptures:
+              nearbyCameraLand?.parcelId === targetSc.parcelId
+                ? nearbyCameraLand.sculptures
+                : [targetSc]
           },
           displayName: targetLandLabel,
           isDesktop: false,
           isSignedIn: Boolean(user),
+          userId: user?.id || '',
           cameraReady: cameraReady !== false,
           hasLocation: Boolean(location),
           unitSystem

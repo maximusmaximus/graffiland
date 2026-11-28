@@ -305,6 +305,15 @@ export function describeSignatureAction({
     if (p.requireApproval !== undefined) {
       flags.push(p.requireApproval ? 'Require approval for guests' : 'Allow anyone to add art');
     }
+    if (p.chatAccessMode !== undefined) {
+      const chatLabels = {
+        contributors: 'Land Chat: Contributors (default)',
+        open: 'Land Chat: Everyone on site',
+        whitelist: 'Land Chat: Whitelist only',
+        off: 'Land Chat: Off'
+      };
+      flags.push(chatLabels[p.chatAccessMode] || `Land Chat: ${p.chatAccessMode}`);
+    }
     return {
       summaryTitle: p.frozen === true ? 'Freeze Land' : p.frozen === false ? 'Unfreeze Land' : 'Update Land Settings',
       summaryDescription: `${flags.length ? flags.join(' · ') : 'Modify access settings'} on ${target}.`

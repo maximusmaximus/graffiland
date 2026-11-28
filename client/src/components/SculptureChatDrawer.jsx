@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { formatLandChatAccessModeLabel } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import {
   resolveAuthorHandleForStorage,
@@ -1131,6 +1132,26 @@ export default function SculptureChatDrawer({
                   {isUnlocked ? '🔓 Unlocked on Device' : '🔒 Awaiting Unlock'}
                 </strong>
               </div>
+              <div className="chat-access-stat" data-testid="chat-access-policy-stat">
+                <span className="chat-access-label">Chat Access</span>
+                <strong className="chat-access-val">
+                  {formatLandChatAccessModeLabel(entered?.chatAccessMode)}
+                </strong>
+              </div>
+              {entered?.viewerChatRole && (
+                <div className="chat-access-stat" data-testid="chat-access-role-stat">
+                  <span className="chat-access-label">Your Access</span>
+                  <strong className="chat-access-val">
+                    {entered.viewerChatRole === 'land_holder'
+                      ? '👑 Land Holder'
+                      : entered.viewerChatRole === 'contributor'
+                      ? '🎨 Land Contributor'
+                      : entered.viewerChatRole === 'whitelisted'
+                      ? '✅ Whitelisted'
+                      : '📍 On-Site Visitor'}
+                  </strong>
+                </div>
+              )}
               {identity && (
                 <div className="chat-access-stat">
                   <span className="chat-access-label">Device Fingerprint</span>
@@ -1170,7 +1191,9 @@ export default function SculptureChatDrawer({
               </form>
             )}
 
-            {user && entered?.board?.creatorSub === user.id && roomKeyB64 && (
+            {user &&
+              (entered?.board?.creatorSub === user.id || entered?.isLandHolder) &&
+              roomKeyB64 && (
               <div className="chat-pin-card">
                 <div className="chat-board-section-head" style={{ marginBottom: 6 }}>
                   <strong>

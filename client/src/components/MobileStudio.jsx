@@ -1246,6 +1246,7 @@ export default function MobileStudio({
     const opts = {
       isDesktop: false,
       isSignedIn: Boolean(user),
+      userId: user?.id || '',
       cameraReady: Boolean(pol.cameraReady),
       hasLocation: Boolean(pol.location),
       unitSystem
@@ -2100,6 +2101,7 @@ export default function MobileStudio({
         displayName: targetLand.displayName || '',
         isDesktop: false,
         isSignedIn: Boolean(user),
+        userId: user?.id || '',
         cameraReady: Boolean(pol.cameraReady),
         hasLocation: Boolean(pol.location),
         unitSystem
@@ -2726,6 +2728,7 @@ export default function MobileStudio({
             }}
             isDesktop={false}
             isSignedIn={Boolean(user)}
+            userId={user?.id || ''}
             cameraReady={Boolean(pol.cameraReady)}
             hasLocation={Boolean(pol.location)}
             onOpenLandChat={(targetLand, canonicalTarget) => {

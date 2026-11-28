@@ -1,5 +1,9 @@
 import { ethers } from 'ethers';
 import {
+  DEFAULT_LAND_CHAT_ACCESS_MODE,
+  normalizeLandChatAccessMode
+} from '../chatPolicy.mjs';
+import {
   HUMAN_MAX_DRAW_SPAN_FEET,
   HUMAN_MAX_DRAW_SPAN_METERS,
   POLICY
@@ -89,7 +93,9 @@ export async function listLandsWithCurations(db) {
           WHERE m.sculpture_id = s.parcel_id OR (ms.parcel_id = s.parcel_id AND ms.hidden = 0)) AS chat_message_count,
         COALESCE((SELECT SUM(pb.pin_count) FROM sculpture_pin_batches pb
           LEFT JOIN sculptures ps ON ps.id = pb.sculpture_id
-          WHERE pb.sculpture_id = s.parcel_id OR (ps.parcel_id = s.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count
+          WHERE pb.sculpture_id = s.parcel_id OR (ps.parcel_id = s.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count,
+        (SELECT GROUP_CONCAT(lc.contributor_sub) FROM land_contributors lc WHERE lc.parcel_id = s.parcel_id) AS contributor_subs_csv,
+        (SELECT GROUP_CONCAT(w.user_sub) FROM land_chat_whitelist w WHERE w.parcel_id = s.parcel_id) AS chat_whitelist_subs_csv
        FROM sculptures s
        WHERE s.hidden = 0
        GROUP BY s.parcel_id, s.geohash`
@@ -118,7 +124,9 @@ export async function listLandsWithCurations(db) {
           WHERE m.sculpture_id = lp.parcel_id OR (ms.parcel_id = lp.parcel_id AND ms.hidden = 0)) AS chat_message_count,
         COALESCE((SELECT SUM(pb.pin_count) FROM sculpture_pin_batches pb
           LEFT JOIN sculptures ps ON ps.id = pb.sculpture_id
-          WHERE pb.sculpture_id = lp.parcel_id OR (ps.parcel_id = lp.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count
+          WHERE pb.sculpture_id = lp.parcel_id OR (ps.parcel_id = lp.parcel_id AND ps.hidden = 0)), 0) AS chat_pin_count,
+        (SELECT GROUP_CONCAT(lc.contributor_sub) FROM land_contributors lc WHERE lc.parcel_id = lp.parcel_id) AS contributor_subs_csv,
+        (SELECT GROUP_CONCAT(w.user_sub) FROM land_chat_whitelist w WHERE w.parcel_id = lp.parcel_id) AS chat_whitelist_subs_csv
        FROM land_parcels lp
        ORDER BY lp.updated_at DESC`
     )
@@ -377,6 +385,9 @@ export async function listLandsWithCurations(db) {
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
       requireApproval: Boolean(settingsMap.get(parcelId)?.require_approval),
+      chatAccessMode: normalizeLandChatAccessMode(
+        settingsMap.get(parcelId)?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+      ),
       settings: {
         allowAgentErase: settingsMap.has(parcelId)
           ? Boolean(settingsMap.get(parcelId).allow_agent_erase)
@@ -385,8 +396,27 @@ export async function listLandsWithCurations(db) {
           ? Boolean(settingsMap.get(parcelId).allow_contributor_edits)
           : true,
         requireApproval: Boolean(settingsMap.get(parcelId)?.require_approval),
-        frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements)
+        frozen: Boolean(settingsMap.get(parcelId)?.freeze_placements),
+        chatAccessMode: normalizeLandChatAccessMode(
+          settingsMap.get(parcelId)?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+        )
       },
+      contributorSubs: [
+        ...new Set(
+          `${lp?.contributor_subs_csv || ''},${sc?.contributor_subs_csv || ''}`
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
+      ],
+      chatWhitelistSubs: [
+        ...new Set(
+          `${lp?.chat_whitelist_subs_csv || ''},${sc?.chat_whitelist_subs_csv || ''}`
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        )
+      ],
       pageViews: viewCountsMap.get(parcelId)?.pageViews || 0,
       inPersonViews: viewCountsMap.get(parcelId)?.inPersonViews || 0,
       chatInitialized: Boolean(lp?.chat_initialized || sc?.chat_initialized),
@@ -586,7 +616,35 @@ export async function getLandSettingsInternal(db, parcelId) {
     allowContributorEdits: row ? Boolean(row.allow_contributor_edits) : true,
     requireApproval: row ? Boolean(row.require_approval) : false,
     frozen: row ? Boolean(row.freeze_placements) : false,
+    chatAccessMode: normalizeLandChatAccessMode(
+      row?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+    ),
     updatedAt: row?.updated_at || ''
+  };
+}
+
+function formatChatWhitelistRow(row) {
+  const username = String(row.user_username || row.username || '').trim();
+  const avatarImage = resolveSafeUserAvatar(row.user_avatar || row.avatar_image || '');
+  return {
+    id: row.id,
+    parcelId: row.parcel_id,
+    userSub: row.user_sub,
+    email: row.email || '',
+    username,
+    avatarImage,
+    name: resolvePublicUserHandle(
+      {
+        id: row.user_sub,
+        username,
+        name: row.user_name || '',
+        userNumber: Number(row.user_number || 0)
+      },
+      { fallback: 'Artist', includeAt: true }
+    ),
+    walletAddress: row.wallet_address || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 
@@ -611,16 +669,64 @@ function formatContributorRow(row) {
   };
 }
 
+async function resolveUserAccountByIdentifier(db, body = {}) {
+  const targetUserId = String(body?.contributorUserId || body?.userId || body?.userSub || '').trim();
+  const rawQuery = String(body?.identifier || body?.handle || body?.username || '').trim();
+  let targetUsername = rawQuery.replace(/^@+/, '').trim().toLowerCase();
+  let targetEmail = String(body?.email || '').trim().toLowerCase();
+  let targetAddress = String(body?.walletAddress || '').trim().toLowerCase();
+
+  // Support smart single-input parsing (e.g. '@alice', 'alice@example.com', or '0x...')
+  if (!targetEmail && rawQuery.includes('@') && rawQuery.indexOf('@') > 0) {
+    targetEmail = rawQuery.toLowerCase();
+    targetUsername = '';
+  } else if (!targetAddress && /^0x[a-f0-9]{40}$/i.test(rawQuery)) {
+    targetAddress = rawQuery.toLowerCase();
+    targetUsername = '';
+  }
+  if (targetEmail && targetEmail.startsWith('@') && !targetEmail.slice(1).includes('@')) {
+    targetUsername = targetEmail.slice(1).trim().toLowerCase();
+    targetEmail = '';
+  }
+
+  if (!targetUserId && !targetUsername && !targetEmail && !targetAddress) {
+    return { candidate: null, missingInput: true };
+  }
+
+  let candidate = null;
+  if (targetUserId) {
+    candidate = await db.get('SELECT * FROM users WHERE id = ?', [targetUserId]);
+  } else if (targetUsername) {
+    candidate = await db.get('SELECT * FROM users WHERE LOWER(username) = ?', [targetUsername]);
+  } else if (targetEmail) {
+    candidate = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [targetEmail]);
+  } else if (targetAddress) {
+    candidate = await db.get(
+      'SELECT * FROM users WHERE LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?',
+      [targetAddress, targetAddress]
+    );
+  }
+  return { candidate: candidate || null, missingInput: false };
+}
+
 async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
   const cleanId = normalizeParcelId(parcelId);
   const rows = await db.all(
     `SELECT DISTINCT u.id AS userId, u.email, u.username, u.avatar_image AS avatarImage,
             u.user_number AS userNumber, u.wallet_address AS walletAddress,
-            u.custom_payout_address AS customPayoutAddress
+            u.custom_payout_address AS customPayoutAddress,
+            EXISTS (
+              SELECT 1 FROM sculptures sc
+              WHERE sc.parcel_id = ? AND sc.creator_sub = u.id AND sc.hidden = 0
+            ) AS isArtContributor
      FROM users u
      WHERE u.id != ?
        AND (
          EXISTS (
+           SELECT 1 FROM sculptures sc
+           WHERE sc.parcel_id = ? AND sc.creator_sub = u.id AND sc.hidden = 0
+         )
+         OR EXISTS (
            SELECT 1 FROM sculpture_chat_grants g
            LEFT JOIN sculptures s ON s.id = g.sculpture_id
            WHERE (g.sculpture_id = ? OR s.parcel_id = ?) AND g.requester_sub = u.id AND g.status = 'granted'
@@ -635,8 +741,8 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
            WHERE p.parcel_id = ? AND p.user_id = u.id AND p.consumed = 1
          )
        )
-     ORDER BY u.username ASC, u.created_at ASC`,
-    [ownerSub, cleanId, cleanId, cleanId, cleanId, cleanId]
+     ORDER BY isArtContributor DESC, u.username ASC, u.created_at ASC`,
+    [cleanId, ownerSub, cleanId, cleanId, cleanId, cleanId, cleanId, cleanId]
   );
   return (rows || []).map((r) => {
     const username = String(r.username || '').trim();
@@ -649,7 +755,8 @@ async function findEligibleParcelVisitors(db, { parcelId, ownerSub = '' }) {
         { id: r.userId, username, userNumber: r.userNumber },
         { fallback: 'Visitor', includeAt: true }
       ),
-      walletAddress: r.customPayoutAddress || r.walletAddress || ''
+      walletAddress: r.customPayoutAddress || r.walletAddress || '',
+      isArtContributor: Boolean(r.isArtContributor)
     };
   });
 }
@@ -660,47 +767,43 @@ async function findEligibleParcelVisitorsMap(db, { parcelIds = [], ownerSub = ''
   if (cleanIds.length === 0) return out;
   const placeholders = cleanIds.map(() => '?').join(', ');
 
-  const pairs = new Map(cleanIds.map((pid) => [pid, new Set()]));
-  const addPair = (pid, uid) => {
+  const pairs = new Map(cleanIds.map((pid) => [pid, new Map()]));
+  const addPair = (pid, uid, isArt = false) => {
     const cleanPid = normalizeParcelId(pid);
     if (!uid || uid === ownerSub || !pairs.has(cleanPid)) return;
-    pairs.get(cleanPid).add(uid);
+    const prev = pairs.get(cleanPid).get(uid) || false;
+    pairs.get(cleanPid).set(uid, prev || Boolean(isArt));
   };
 
-  const [grantRows, msgRows, presenceRows] = await Promise.all([
-    db
-      .all(
-        `SELECT COALESCE(s.parcel_id, g.sculpture_id) AS parcel_id, g.requester_sub AS uid
-         FROM sculpture_chat_grants g
-         LEFT JOIN sculptures s ON s.id = g.sculpture_id
-         WHERE g.status = 'granted'
-           AND (g.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders}))`,
-        [...cleanIds, ...cleanIds]
-      )
-      .catch(() => []),
-    db
-      .all(
-        `SELECT COALESCE(s.parcel_id, m.sculpture_id) AS parcel_id, m.sender_sub AS uid
-         FROM sculpture_chat_messages m
-         LEFT JOIN sculptures s ON s.id = m.sculpture_id
-         WHERE m.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders})`,
-        [...cleanIds, ...cleanIds]
-      )
-      .catch(() => []),
-    db
-      .all(
-        `SELECT parcel_id, user_id AS uid
-         FROM parcel_presence_challenges
-         WHERE consumed = 1 AND parcel_id IN (${placeholders})`,
-        cleanIds
-      )
-      .catch(() => [])
-  ]);
+  // Single combined UNION query keeps D1 query budget O(1) and includes art contributors + IRL visitors
+  const unionRows = await db
+    .all(
+      `SELECT parcel_id, creator_sub AS uid, 1 AS is_art
+       FROM sculptures
+       WHERE hidden = 0 AND parcel_id IN (${placeholders})
+       UNION
+       SELECT COALESCE(s.parcel_id, g.sculpture_id) AS parcel_id, g.requester_sub AS uid, 0 AS is_art
+       FROM sculpture_chat_grants g
+       LEFT JOIN sculptures s ON s.id = g.sculpture_id
+       WHERE g.status = 'granted'
+         AND (g.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders}))
+       UNION
+       SELECT COALESCE(s.parcel_id, m.sculpture_id) AS parcel_id, m.sender_sub AS uid, 0 AS is_art
+       FROM sculpture_chat_messages m
+       LEFT JOIN sculptures s ON s.id = m.sculpture_id
+       WHERE m.sculpture_id IN (${placeholders}) OR s.parcel_id IN (${placeholders})
+       UNION
+       SELECT parcel_id, user_id AS uid, 0 AS is_art
+       FROM parcel_presence_challenges
+       WHERE consumed = 1 AND parcel_id IN (${placeholders})`,
+      [...cleanIds, ...cleanIds, ...cleanIds, ...cleanIds, ...cleanIds, ...cleanIds]
+    )
+    .catch(() => []);
 
   const allUserIds = new Set();
-  for (const r of [...(grantRows || []), ...(msgRows || []), ...(presenceRows || [])]) {
+  for (const r of unionRows || []) {
     if (r?.parcel_id && r?.uid && r.uid !== ownerSub) {
-      addPair(r.parcel_id, r.uid);
+      addPair(r.parcel_id, r.uid, Boolean(r.is_art));
       if (pairs.has(normalizeParcelId(r.parcel_id))) allUserIds.add(r.uid);
     }
   }
@@ -735,11 +838,14 @@ async function findEligibleParcelVisitorsMap(db, { parcelIds = [], ownerSub = ''
   });
 
   for (const pid of cleanIds) {
-    const allowedSet = pairs.get(pid);
-    if (!allowedSet || allowedSet.size === 0) continue;
+    const allowedMap = pairs.get(pid);
+    if (!allowedMap || allowedMap.size === 0) continue;
     out.set(
       pid,
-      formattedUsers.filter((u) => allowedSet.has(u.userId))
+      formattedUsers
+        .filter((u) => allowedMap.has(u.userId))
+        .map((u) => ({ ...u, isArtContributor: Boolean(allowedMap.get(u.userId)) }))
+        .sort((a, b) => Number(b.isArtContributor) - Number(a.isArtContributor))
     );
   }
   return out;
@@ -893,6 +999,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
   const [
     settingsRows,
     allContribRows,
+    allChatWhitelistRows,
     allSecPolicyRows,
     allLandmarkRows,
     eligibleVisitorsMap
@@ -917,6 +1024,19 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
             .catch(() => []),
           db
             .all(
+              `SELECT w.*, COALESCE(u.username, w.username, '') AS user_username,
+                      COALESCE(u.avatar_image, '') AS user_avatar,
+                      COALESCE(u.name, '') AS user_name,
+                      COALESCE(u.user_number, 0) AS user_number
+               FROM land_chat_whitelist w
+               LEFT JOIN users u ON u.id = w.user_sub
+               WHERE w.parcel_id IN (${ownedPlaceholders})
+               ORDER BY w.created_at DESC`,
+              ownedParcelIds
+            )
+            .catch(() => []),
+          db
+            .all(
               `SELECT * FROM land_security_policies WHERE parcel_id IN (${ownedPlaceholders})`,
               ownedParcelIds
             )
@@ -934,7 +1054,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
             ownerSub: ownerUser.id
           })
         ])
-      : [[], [], [], [], new Map()];
+      : [[], [], [], [], [], new Map()];
 
   const settingsByParcel = new Map((settingsRows || []).map((r) => [r.parcel_id, r]));
   const contribsByParcel = new Map();
@@ -944,6 +1064,16 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
     if (!bucket) {
       bucket = [];
       contribsByParcel.set(r.parcel_id, bucket);
+    }
+    bucket.push(r);
+  }
+  const chatWhitelistByParcel = new Map();
+  for (const r of allChatWhitelistRows || []) {
+    if (!r?.parcel_id) continue;
+    let bucket = chatWhitelistByParcel.get(r.parcel_id);
+    if (!bucket) {
+      bucket = [];
+      chatWhitelistByParcel.set(r.parcel_id, bucket);
     }
     bucket.push(r);
   }
@@ -974,9 +1104,13 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       allowContributorEdits: sRow ? Boolean(sRow.allow_contributor_edits) : true,
       requireApproval: sRow ? Boolean(sRow.require_approval) : false,
       frozen: sRow ? Boolean(sRow.freeze_placements) : false,
+      chatAccessMode: normalizeLandChatAccessMode(
+        sRow?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+      ),
       updatedAt: sRow?.updated_at || ''
     };
     const contribRows = contribsByParcel.get(pid) || [];
+    const chatWhitelistRows = chatWhitelistByParcel.get(pid) || [];
     const eligibleVisitors = eligibleVisitorsMap.get(normalizeParcelId(pid)) || [];
     const spRow = secPolicyByParcel.get(pid);
     const landmarkAnchor = landmarkByParcel.get(pid) || null;
@@ -1088,6 +1222,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
       lastSignedTxHash: cur?.last_signed_tx_hash || '',
       frozen: Boolean(settings.frozen),
       requireApproval: Boolean(settings.requireApproval),
+      chatAccessMode: settings.chatAccessMode,
       settings,
       securityPolicy,
       landmarkAnchor: landmarkAnchor
@@ -1102,6 +1237,7 @@ export async function listOwnerLandsAndSculptures(db, ownerUser) {
           }
         : { hasLandmark: false, keyframeCount: 0, featureCount: 0, lightingSlots: [] },
       contributors: (contribRows || []).map(formatContributorRow),
+      chatWhitelist: (chatWhitelistRows || []).map(formatChatWhitelistRow),
       eligibleVisitors,
       sculptureCount: visibleCount,
       hiddenSculptureCount: onLand.length - visibleCount,
@@ -2413,6 +2549,7 @@ export async function applyEraseLand(db, { parcelCtx, ownerAddress, reason = '',
 
   if (preservedHumanWorks === 0) {
     await db.run('DELETE FROM land_contributors WHERE parcel_id = ?', [parcelCtx.parcelId]);
+    await db.run('DELETE FROM land_chat_whitelist WHERE parcel_id = ?', [parcelCtx.parcelId]).catch(() => {});
     await db.run('DELETE FROM land_settings WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM parcel_landmark_anchors WHERE parcel_id = ?', [parcelCtx.parcelId]);
     await db.run('DELETE FROM land_security_policies WHERE parcel_id = ?', [parcelCtx.parcelId]);
@@ -3158,13 +3295,27 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       ? body.freezePlacements
       : body?.freeze_placements;
   const frozen = frozenInput !== undefined ? Boolean(frozenInput) : current.frozen;
+  const chatAccessInput =
+    body?.chatAccessMode !== undefined
+      ? body.chatAccessMode
+      : body?.chat_access_mode !== undefined
+      ? body.chat_access_mode
+      : body?.chatEnabled === false
+      ? 'off'
+      : body?.chatEnabled === true && current.chatAccessMode === 'off'
+      ? 'contributors'
+      : undefined;
+  const chatAccessMode =
+    chatAccessInput !== undefined
+      ? normalizeLandChatAccessMode(chatAccessInput)
+      : current.chatAccessMode;
   const now = new Date().toISOString();
   const ownerAddress = resolvePreferredOwnerWallet(user);
 
   await db.run(
     `INSERT INTO land_settings (
-      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      parcel_id, owner_sub, owner_address, allow_agent_erase, allow_contributor_edits, freeze_placements, require_approval, chat_access_mode, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(parcel_id) DO UPDATE SET
       owner_sub = excluded.owner_sub,
       owner_address = excluded.owner_address,
@@ -3172,6 +3323,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       allow_contributor_edits = excluded.allow_contributor_edits,
       freeze_placements = excluded.freeze_placements,
       require_approval = excluded.require_approval,
+      chat_access_mode = excluded.chat_access_mode,
       updated_at = excluded.updated_at`,
     [
       parcelCtx.parcelId,
@@ -3181,6 +3333,7 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
       allowContributorEdits ? 1 : 0,
       frozen ? 1 : 0,
       requireApproval ? 1 : 0,
+      chatAccessMode,
       now
     ]
   );
@@ -3188,11 +3341,117 @@ export async function updateLandSettings(db, { parcelId, user, body }) {
   return { settings: await getLandSettingsInternal(db, parcelCtx.parcelId) };
 }
 
+export async function listLandChatWhitelist(db, { parcelId, user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const [rows, eligibleVisitors, settings] = await Promise.all([
+    db
+      .all(
+        `SELECT w.*, COALESCE(u.username, w.username, '') AS user_username,
+                COALESCE(u.avatar_image, '') AS user_avatar,
+                COALESCE(u.name, '') AS user_name,
+                COALESCE(u.user_number, 0) AS user_number
+         FROM land_chat_whitelist w
+         LEFT JOIN users u ON u.id = w.user_sub
+         WHERE w.parcel_id = ?
+         ORDER BY w.created_at DESC`,
+        [parcelCtx.parcelId]
+      )
+      .catch(() => []),
+    findEligibleParcelVisitors(db, {
+      parcelId: parcelCtx.parcelId,
+      ownerSub: user.id
+    }),
+    getLandSettingsInternal(db, parcelCtx.parcelId)
+  ]);
+  return {
+    parcelId: parcelCtx.parcelId,
+    chatAccessMode: settings.chatAccessMode,
+    whitelist: (rows || []).map(formatChatWhitelistRow),
+    eligibleVisitors,
+    settings
+  };
+}
+
+export async function addLandChatWhitelistMember(db, { parcelId, user, body }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const { candidate, missingInput } = await resolveUserAccountByIdentifier(db, body);
+  if (missingInput) {
+    throw new McpServiceError(
+      'Enter a @username, email, or 0x wallet address (or pick a visitor/contributor).',
+      400
+    );
+  }
+  if (!candidate) throw new McpServiceError('Target user account was not found.', 404);
+  if (candidate.id === user.id) {
+    throw new McpServiceError('Land holder already has full chat access on this land.', 400);
+  }
+
+  const now = new Date().toISOString();
+  const id = globalThis.crypto.randomUUID();
+  const candidateAddr = candidate.custom_payout_address || candidate.wallet_address || '';
+
+  await db.run(
+    `INSERT INTO land_chat_whitelist (
+      id, parcel_id, user_sub, username, email, wallet_address, added_by_sub, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(parcel_id, user_sub) DO UPDATE SET
+      username = excluded.username,
+      email = excluded.email,
+      wallet_address = excluded.wallet_address,
+      updated_at = excluded.updated_at`,
+    [
+      id,
+      parcelCtx.parcelId,
+      candidate.id,
+      candidate.username || '',
+      candidate.email || '',
+      candidateAddr,
+      user.id,
+      now,
+      now
+    ]
+  );
+
+  const listRes = await listLandChatWhitelist(db, {
+    parcelId: parcelCtx.parcelId,
+    user
+  });
+  return {
+    ok: true,
+    member: listRes.whitelist.find((m) => m.userSub === candidate.id) || null,
+    ...listRes
+  };
+}
+
+export async function removeLandChatWhitelistMember(db, { parcelId, userSub, user }) {
+  if (!user) throw new McpServiceError('Google sign-in required.', 401);
+  const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
+  const cleanSub = String(userSub || '').trim();
+  if (!cleanSub) throw new McpServiceError('userSub is required.', 400);
+
+  await db.run('DELETE FROM land_chat_whitelist WHERE parcel_id = ? AND user_sub = ?', [
+    parcelCtx.parcelId,
+    cleanSub
+  ]);
+
+  const listRes = await listLandChatWhitelist(db, {
+    parcelId: parcelCtx.parcelId,
+    user
+  });
+  return { ok: true, removedSub: cleanSub, ...listRes };
+}
+
 export async function listLandContributorsAndEligible(db, { parcelId, user }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
   const rows = await db.all(
-    'SELECT * FROM land_contributors WHERE parcel_id = ? ORDER BY created_at DESC',
+    `SELECT lc.*, COALESCE(u.username, '') AS contributor_username, COALESCE(u.avatar_image, '') AS contributor_avatar
+     FROM land_contributors lc
+     LEFT JOIN users u ON u.id = lc.contributor_sub
+     WHERE lc.parcel_id = ?
+     ORDER BY lc.created_at DESC`,
     [parcelCtx.parcelId]
   );
   const eligibleVisitors = await findEligibleParcelVisitors(db, {
@@ -3212,29 +3471,13 @@ export async function addLandContributor(db, { parcelId, user, body }) {
   if (!user) throw new McpServiceError('Google sign-in required.', 401);
   const parcelCtx = await checkParcelOwnership(db, { parcelId, user });
 
-  const targetUserId = String(body?.contributorUserId || body?.userId || '').trim();
-  const targetEmail = String(body?.email || '').trim().toLowerCase();
-  const targetAddress = String(body?.walletAddress || '').trim().toLowerCase();
-
-  if (!targetUserId && !targetEmail && !targetAddress) {
+  const { candidate, missingInput } = await resolveUserAccountByIdentifier(db, body);
+  if (missingInput) {
     throw new McpServiceError(
-      'Select an IRL visitor or enter contributor email / wallet address.',
+      'Select an art contributor / IRL visitor or enter @username, email, or 0x wallet address.',
       400
     );
   }
-
-  let candidate = null;
-  if (targetUserId) {
-    candidate = await db.get('SELECT * FROM users WHERE id = ?', [targetUserId]);
-  } else if (targetEmail) {
-    candidate = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [targetEmail]);
-  } else if (targetAddress) {
-    candidate = await db.get(
-      'SELECT * FROM users WHERE LOWER(wallet_address) = ? OR LOWER(custom_payout_address) = ?',
-      [targetAddress, targetAddress]
-    );
-  }
-
   if (!candidate) throw new McpServiceError('Target user account was not found.', 404);
   if (candidate.id === user.id) {
     throw new McpServiceError('Land holder already holds full ownership on this parcel.', 400);
@@ -3247,7 +3490,7 @@ export async function addLandContributor(db, { parcelId, user, body }) {
   if (!eligibleVisitors.some((v) => v.userId === candidate.id)) {
     const landLabel = await getLatestParcelDisplayName(db, parcelCtx.parcelId);
     throw new McpServiceError(
-      `Only accounts that visited Virtual Land "${landLabel}" in person and can chat on this land can be added as Contributors.`,
+      `Only accounts that contributed art to or visited Virtual Land "${landLabel}" in person can be added as Contributors.`,
       403
     );
   }

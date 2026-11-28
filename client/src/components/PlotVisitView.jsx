@@ -673,6 +673,7 @@ export default function PlotVisitView({
         displayName: landDisplayName,
         isDesktop,
         isSignedIn: Boolean(user),
+        userId: user?.id || '',
         cameraReady: isDesktop ? false : Boolean(cameraReady),
         hasLocation: Boolean(userLocation),
         unitSystem

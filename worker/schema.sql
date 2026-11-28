@@ -320,8 +320,25 @@ CREATE TABLE IF NOT EXISTS land_settings (
   allow_contributor_edits INTEGER NOT NULL DEFAULT 1,
   freeze_placements INTEGER NOT NULL DEFAULT 0,
   require_approval INTEGER NOT NULL DEFAULT 0,
+  chat_access_mode TEXT NOT NULL DEFAULT 'contributors',
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS land_chat_whitelist (
+  id TEXT PRIMARY KEY,
+  parcel_id TEXT NOT NULL,
+  user_sub TEXT NOT NULL,
+  username TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  wallet_address TEXT DEFAULT '',
+  added_by_sub TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(parcel_id, user_sub)
+);
+
+CREATE INDEX IF NOT EXISTS idx_land_chat_whitelist_parcel
+  ON land_chat_whitelist (parcel_id, user_sub);
 
 CREATE TABLE IF NOT EXISTS land_contributors (
   id TEXT PRIMARY KEY,

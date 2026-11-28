@@ -2,7 +2,9 @@ import {
   CHAT_CLUE_PROMPT_MAX,
   CHAT_MSG_MAX_CIPHERTEXT_LEN,
   ChatHttpError,
+  DEFAULT_LAND_CHAT_ACCESS_MODE,
   looksMobileRequest,
+  normalizeLandChatAccessMode,
   verifyCameraSightProof
 } from './chatPolicy.mjs';
 import { recordInPersonHumanInteraction } from './landArchiveService.mjs';
@@ -229,8 +231,170 @@ async function resolveLandChatContext(db, requestedId) {
   };
 }
 
+/**
+ * Evaluates per-land chat access permissions for a user.
+ *
+ * Modes (`land_settings.chat_access_mode`):
+ * - `'contributors'` (default): Land holder + anyone who has contributed visible art to this
+ *   land, is an added Land Contributor, or is on the Land Chat Whitelist.
+ * - `'open'`: Any signed-in mobile visitor physically on site (<= 75m).
+ * - `'whitelist'`: Land holder + only users explicitly on the Land Chat Whitelist.
+ * - `'off'`: Land Chat is disabled on this land.
+ */
+export async function evaluateUserLandChatPermission(db, { parcelId, sculpture = null, user }) {
+  const cleanParcelId = normalizeParcelId(parcelId || sculpture?.parcel_id || '');
+  const settingsRow = cleanParcelId
+    ? await db
+        .get('SELECT chat_access_mode FROM land_settings WHERE parcel_id = ?', [cleanParcelId])
+        .catch(() => null)
+    : null;
+  const chatAccessMode = normalizeLandChatAccessMode(
+    settingsRow?.chat_access_mode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+  );
+  const isLandHolder = user
+    ? await isUserLandHolder(db, { sculpture, user }).catch(() => false)
+    : false;
+
+  if (chatAccessMode === 'off') {
+    return {
+      allowed: false,
+      code: 'chat_disabled',
+      chatAccessMode: 'off',
+      isLandHolder,
+      role: isLandHolder ? 'land_holder' : 'visitor',
+      reason: 'Land Chat has been turned off by the land holder on this land.'
+    };
+  }
+
+  if (!user?.id) {
+    return {
+      allowed: false,
+      code: 'signed_out',
+      chatAccessMode,
+      isLandHolder: false,
+      role: 'visitor',
+      reason: 'Sign in with your account to join Land Chat.'
+    };
+  }
+
+  if (isLandHolder) {
+    return {
+      allowed: true,
+      code: 'land_holder',
+      chatAccessMode,
+      isLandHolder: true,
+      role: 'land_holder',
+      reason: ''
+    };
+  }
+
+  const whitelistRow = cleanParcelId
+    ? await db
+        .get(
+          'SELECT 1 AS ok FROM land_chat_whitelist WHERE parcel_id = ? AND user_sub = ? LIMIT 1',
+          [cleanParcelId, user.id]
+        )
+        .catch(() => null)
+    : null;
+  const isWhitelisted = Boolean(whitelistRow?.ok);
+
+  if (chatAccessMode === 'whitelist') {
+    if (isWhitelisted) {
+      return {
+        allowed: true,
+        code: 'whitelisted',
+        chatAccessMode: 'whitelist',
+        isLandHolder: false,
+        role: 'whitelisted',
+        reason: ''
+      };
+    }
+    return {
+      allowed: false,
+      code: 'chat_whitelist_only',
+      chatAccessMode: 'whitelist',
+      isLandHolder: false,
+      role: 'visitor',
+      reason:
+        'Land Chat on this land is whitelist-only — ask the land holder to add you to the chat whitelist.'
+    };
+  }
+
+  if (chatAccessMode === 'open') {
+    return {
+      allowed: true,
+      code: 'open',
+      chatAccessMode: 'open',
+      isLandHolder: false,
+      role: isWhitelisted ? 'whitelisted' : 'visitor',
+      reason: ''
+    };
+  }
+
+  // Default: 'contributors' — any artwork contributor, added contributor, or whitelisted user
+  if (isWhitelisted) {
+    return {
+      allowed: true,
+      code: 'whitelisted',
+      chatAccessMode: 'contributors',
+      isLandHolder: false,
+      role: 'whitelisted',
+      reason: ''
+    };
+  }
+
+  const [artContribRow, addedContribRow] = cleanParcelId
+    ? await Promise.all([
+        db
+          .get(
+            'SELECT 1 AS ok FROM sculptures WHERE parcel_id = ? AND creator_sub = ? AND hidden = 0 LIMIT 1',
+            [cleanParcelId, user.id]
+          )
+          .catch(() => null),
+        db
+          .get(
+            'SELECT 1 AS ok FROM land_contributors WHERE parcel_id = ? AND contributor_sub = ? LIMIT 1',
+            [cleanParcelId, user.id]
+          )
+          .catch(() => null)
+      ])
+    : [null, null];
+
+  if (artContribRow?.ok || addedContribRow?.ok || sculpture?.creator_sub === user.id) {
+    return {
+      allowed: true,
+      code: 'contributor',
+      chatAccessMode: 'contributors',
+      isLandHolder: false,
+      role: 'contributor',
+      reason: ''
+    };
+  }
+
+  return {
+    allowed: false,
+    code: 'chat_contributors_only',
+    chatAccessMode: 'contributors',
+    isLandHolder: false,
+    role: 'visitor',
+    reason:
+      'Land Chat on this land is open to the land holder and contributors by default. Add artwork to this land (or ask the land holder to whitelist you) to unlock chat.'
+  };
+}
+
+async function assertUserCanAccessLandChat(db, { parcelId, sculpture, user }) {
+  const perm = await evaluateUserLandChatPermission(db, { parcelId, sculpture, user });
+  if (!perm.allowed) {
+    throw new ChatHttpError(403, perm.reason, {
+      code: perm.code,
+      chatAccessMode: perm.chatAccessMode
+    });
+  }
+  return perm;
+}
+
 export async function initChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
-  const { target: sculpture, board: existing, boardId } = await resolveLandChatContext(
+  const { target: sculpture, parcelId, board: existing, boardId } = await resolveLandChatContext(
     db,
     sculptureId
   );
@@ -239,12 +403,19 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
     throw new ChatHttpError(403, 'Initializing an AR chat board requires a mobile device.');
   }
 
+  const chatPerm = await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
+
   if (existing) {
-    return { initialized: true, boardId: existing.sculpture_id, board: sanitizeBoardRow(existing) };
+    return {
+      initialized: true,
+      boardId: existing.sculpture_id,
+      board: sanitizeBoardRow(existing),
+      chatAccessMode: chatPerm.chatAccessMode
+    };
   }
 
   // Only the sculpture/land creator can initialize right after minting, OR an in-person camera viewer
-  const landHolder = await isUserLandHolder(db, { sculpture, user });
+  const landHolder = chatPerm.isLandHolder;
   if (sculpture.creator_sub !== user.id && !landHolder) {
     verifyCameraSightProof({
       sightProof: body?.sightProof,
@@ -313,7 +484,12 @@ export async function initChatBoard(db, { sculptureId, user, body, userAgent = '
     );
   }
 
-  return { initialized: true, boardId, board: sanitizeBoardRow(board) };
+  return {
+    initialized: true,
+    boardId,
+    board: sanitizeBoardRow(board),
+    chatAccessMode: chatPerm.chatAccessMode
+  };
 }
 
 export async function updateBoardClue(db, { sculptureId, user, body, userAgent = '' }) {
@@ -339,13 +515,17 @@ export async function updateBoardClue(db, { sculptureId, user, body, userAgent =
 }
 
 export async function enterChatBoard(db, { sculptureId, user, body, userAgent = '' }) {
-  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
+  const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
     userAgent,
     sculpture
   });
+  const chatPerm = await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
   if (sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
@@ -356,20 +536,20 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     }).catch(() => {});
   }
 
-  const [isLandHolder, pinMetaResult] = await Promise.all([
-    isUserLandHolder(db, { sculpture, user }),
-    sculpture.isParcelOnly
-      ? Promise.resolve({ meta: formatPinBatchMeta(null, sculpture.parcel_id) })
-      : getPinnedBatchMeta(db, { sculptureId: sculpture.id }).catch(() => ({
-          meta: formatPinBatchMeta(null, sculpture.parcel_id)
-        }))
-  ]);
+  const isLandHolder = chatPerm.isLandHolder;
+  const pinMetaResult = sculpture.isParcelOnly
+    ? { meta: formatPinBatchMeta(null, sculpture.parcel_id) }
+    : await getPinnedBatchMeta(db, { sculptureId: sculpture.id }).catch(() => ({
+        meta: formatPinBatchMeta(null, sculpture.parcel_id)
+      }));
 
   if (!board) {
     return {
       initialized: false,
       boardId,
       isLandHolder,
+      chatAccessMode: chatPerm.chatAccessMode,
+      viewerChatRole: chatPerm.role,
       pinMeta: pinMetaResult.meta,
       sight,
       board: null,
@@ -418,6 +598,8 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
     initialized: true,
     boardId,
     isLandHolder,
+    chatAccessMode: chatPerm.chatAccessMode,
+    viewerChatRole: chatPerm.role,
     pinMeta: pinMetaResult.meta,
     sight,
     board: sanitizeBoardRow(board),
@@ -428,13 +610,17 @@ export async function enterChatBoard(db, { sculptureId, user, body, userAgent = 
 }
 
 export async function requestChatGrant(db, { sculptureId, user, body, userAgent = '' }) {
-  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
+  const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
     userAgent,
     sculpture
   });
+  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
   if (sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
@@ -511,13 +697,17 @@ export async function requestChatGrant(db, { sculptureId, user, body, userAgent 
  * to an admitted member/peer grantor.
  */
 export async function claimClueUnlockedGrant(db, { sculptureId, user, body, userAgent = '' }) {
-  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
+  const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
   const sight = verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
     userAgent,
     sculpture
   });
+  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
   if (sculpture?.parcel_id) {
     await recordInPersonHumanInteraction(db, {
@@ -647,11 +837,27 @@ export async function listPendingGrantsForGrantor(db, { user, sculptureId = null
         [user.id]
       );
 
-  return { grants: (rows || []).map(formatGrantRow) };
+  const allowedGrants = [];
+  for (const row of rows || []) {
+    const ctx = await resolveLandChatContext(db, row.sculpture_id).catch(() => null);
+    if (!ctx) continue;
+    const perm = await evaluateUserLandChatPermission(db, {
+      parcelId: ctx.parcelId,
+      sculpture: ctx.target,
+      user: { id: row.requester_sub }
+    });
+    if (perm.allowed) {
+      allowedGrants.push(formatGrantRow(row));
+    }
+  }
+  return { grants: allowedGrants };
 }
 
 export async function submitPeerGrant(db, { sculptureId, user, body }) {
-  const { board, boardId } = await resolveLandChatContext(db, sculptureId);
+  const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
   if (!board) throw new ChatHttpError(404, 'Land chat board not found.');
 
   const keyEpoch = Number(board.key_epoch);
@@ -672,6 +878,13 @@ export async function submitPeerGrant(db, { sculptureId, user, body }) {
     [targetGrantId, boardId, keyEpoch]
   );
   if (!target) throw new ChatHttpError(404, 'Target key request not found.');
+
+  // Verify the recipient is permitted under the parcel's current Land Chat access policy
+  await assertUserCanAccessLandChat(db, {
+    parcelId,
+    sculpture,
+    user: { id: target.requester_sub }
+  });
 
   const wrappedKeyJson = sanitizeWrappedKeyEnvelope(body?.wrappedKeyJson);
   const grantorEcdhPubJwk = sanitizePublicEcJwk(body?.grantorEcdhPubJwk);
@@ -714,13 +927,17 @@ export async function postEncryptedChatMessage(db, { sculptureId, user, body, us
     );
   }
 
-  const { target: sculpture, board, boardId } = await resolveLandChatContext(db, sculptureId);
+  const { target: sculpture, parcelId, board, boardId } = await resolveLandChatContext(
+    db,
+    sculptureId
+  );
   verifyCameraSightProof({
     sightProof: body?.sightProof,
     deviceProfile: body?.deviceProfile,
     userAgent,
     sculpture
   });
+  await assertUserCanAccessLandChat(db, { parcelId, sculpture, user });
 
   if (!board) throw new ChatHttpError(404, 'Land chat board is not initialized.');
 

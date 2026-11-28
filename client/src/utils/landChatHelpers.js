@@ -1,10 +1,19 @@
 import {
   CHAT_SIGHT_MAX_DISTANCE_M,
-  PIN_PARCEL_MAX_DISTANCE_M
+  DEFAULT_LAND_CHAT_ACCESS_MODE,
+  PIN_PARCEL_MAX_DISTANCE_M,
+  formatLandChatAccessModeLabel,
+  normalizeLandChatAccessMode
 } from '../../../shared/chatPolicy.mjs';
 import { AR_MAX_VISIBLE_DISTANCE_METERS } from '../../../shared/constants.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { formatDistanceMeters } from './landMapHelpers.js';
+
+export {
+  DEFAULT_LAND_CHAT_ACCESS_MODE,
+  formatLandChatAccessModeLabel,
+  normalizeLandChatAccessMode
+};
 
 function parseFiniteMetric(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -151,6 +160,8 @@ export function evaluateLandChatAvailability({
   proximity = null,
   isDesktop = false,
   isSignedIn = true,
+  userId = '',
+  user = null,
   cameraReady = true,
   hasLocation = true,
   unitSystem = 'metric'
@@ -166,11 +177,26 @@ export function evaluateLandChatAvailability({
     'this land';
   const gate = proximity || evaluateArLandActionProximity(land);
   const withinLabel = formatDistanceMeters(CHAT_SIGHT_MAX_DISTANCE_M, unitSystem) || '75m';
+  const chatAccessMode = normalizeLandChatAccessMode(
+    land?.chatAccessMode ?? land?.settings?.chatAccessMode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+  );
+  const uid = String(userId || user?.id || '').trim();
+
+  if (chatAccessMode === 'off') {
+    return {
+      canChat: false,
+      code: 'chat_disabled',
+      chatAccessMode: 'off',
+      title: 'Land Chat is turned off',
+      reason: `The land holder has turned off Land Chat on ${label}.`
+    };
+  }
 
   if (isDesktop) {
     return {
       canChat: false,
       code: 'desktop_only',
+      chatAccessMode,
       title: 'Why Land Chat is locked',
       reason: `Land Chat is mobile in-person only — visit ${label} on your phone within ${withinLabel} with live AR camera to join encrypted chat.`
     };
@@ -180,6 +206,7 @@ export function evaluateLandChatAvailability({
     return {
       canChat: false,
       code: 'no_gps',
+      chatAccessMode,
       title: 'Why Land Chat is locked',
       reason: `Enable GPS location and stand within ${withinLabel} of ${label} to verify your presence and unlock encrypted Land Chat.`
     };
@@ -191,6 +218,7 @@ export function evaluateLandChatAvailability({
       return {
         canChat: false,
         code: 'out_of_range',
+        chatAccessMode,
         title: 'Why Land Chat is locked',
         reason: `You're ${distLabel} away — walk within ${withinLabel} of ${label} in person with live AR camera to unlock encrypted Land Chat.`
       };
@@ -198,6 +226,7 @@ export function evaluateLandChatAvailability({
     return {
       canChat: false,
       code: 'no_gps',
+      chatAccessMode,
       title: 'Why Land Chat is locked',
       reason: `Enable GPS location and visit ${label} in person (within ${withinLabel}) to unlock encrypted Land Chat.`
     };
@@ -207,6 +236,7 @@ export function evaluateLandChatAvailability({
     return {
       canChat: false,
       code: 'no_camera',
+      chatAccessMode,
       title: 'Why Land Chat is locked',
       reason: `Enable your live mobile AR camera at ${label} to verify Proof of Sight and unlock encrypted Land Chat.`
     };
@@ -216,14 +246,56 @@ export function evaluateLandChatAvailability({
     return {
       canChat: false,
       code: 'signed_out',
+      chatAccessMode,
       title: 'Why Land Chat is locked',
       reason: `Sign in with your account while on site at ${label} to unlock your encrypted chat key and join Land Chat.`
     };
   }
 
+  // Enforce per-land access mode when viewer identity is known
+  if (uid) {
+    const isLandHolder = Boolean(
+      land?.isOwned || land?.ownerSub === uid || land?.stewardSub === uid
+    );
+    const isWhitelisted = Boolean(
+      Array.isArray(land?.chatWhitelistSubs) && land.chatWhitelistSubs.includes(uid)
+    );
+    const isArtContributor = sculptures.some((s) => !s?.hidden && s?.creatorSub === uid);
+    const isAddedContributor = Boolean(
+      Array.isArray(land?.contributorSubs) && land.contributorSubs.includes(uid)
+    );
+
+    if (chatAccessMode === 'whitelist' && !isLandHolder && !isWhitelisted) {
+      return {
+        canChat: false,
+        code: 'chat_whitelist_only',
+        chatAccessMode: 'whitelist',
+        title: 'Whitelist-Only Land Chat',
+        reason: `Land Chat on ${label} is whitelist-only — ask the land holder to add you to the chat whitelist.`
+      };
+    }
+
+    if (
+      chatAccessMode === 'contributors' &&
+      !isLandHolder &&
+      !isArtContributor &&
+      !isAddedContributor &&
+      !isWhitelisted
+    ) {
+      return {
+        canChat: false,
+        code: 'chat_contributors_only',
+        chatAccessMode: 'contributors',
+        title: 'Contributors Land Chat',
+        reason: `Land Chat on ${label} is open to the land holder and contributors by default — add artwork to this land (or ask the land holder to whitelist you) to unlock chat.`
+      };
+    }
+  }
+
   return {
     canChat: true,
     code: 'ready',
+    chatAccessMode,
     title: '',
     reason: ''
   };
@@ -238,12 +310,19 @@ export function buildLiveLandChatNotification(
   {
     isDesktop = false,
     isSignedIn = true,
+    userId = '',
+    user = null,
     cameraReady = true,
     hasLocation = true,
     unitSystem = 'metric'
   } = {}
 ) {
   if (!land?.parcelId || !land.isInside) return null;
+  const chatAccessMode = normalizeLandChatAccessMode(
+    land?.chatAccessMode ?? land?.settings?.chatAccessMode ?? DEFAULT_LAND_CHAT_ACCESS_MODE
+  );
+  if (chatAccessMode === 'off') return null;
+
   const summary = getLandChatLiveSummary(land);
   if (!summary.hasLiveChat) return null;
 
@@ -263,6 +342,8 @@ export function buildLiveLandChatNotification(
     displayName,
     isDesktop,
     isSignedIn,
+    userId,
+    user,
     cameraReady,
     hasLocation,
     unitSystem

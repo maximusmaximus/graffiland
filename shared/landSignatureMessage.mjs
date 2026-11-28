@@ -140,7 +140,8 @@ export function buildPropertyOwnerPrompt({
     '- Call MCP tool `rollback_sculpture_revision` with `{ "sculptureId", "revNum", "signature?": "0x..." }` to restore any immutable prior revision and emit `MetadataUpdate`',
     '- Call MCP tool `update_land_parcel` with `{ "parcelId", "customName?", "description?", "curationNote?", "featuredSculptureId?", "signature?": "0x..." }` to update land name, description, and shareable slug',
     '- Call MCP tool `update_land_volume` with `{ "parcelId", "widthMeters?", "depthMeters?", "heightMeters?", "zScale?", "rotationDeg?" }` to resize/rotate 3D land bounds',
-    '- Call MCP tool `update_land_settings` with `{ "parcelId", "frozen?": true | false, "allowContributorEdits?", "allowAgentErase?" }` to freeze/unfreeze new placements',
+    '- Call MCP tool `update_land_settings` with `{ "parcelId", "frozen?": true | false, "requireApproval?": true | false, "allowContributorEdits?", "allowAgentErase?", "chatAccessMode?": "contributors" | "open" | "whitelist" | "off" }` to freeze/unfreeze new placements or configure Land Chat access (default `"contributors"` lets the land holder + any contributor to that land chat; `"whitelist"` restricts chat to whitelisted users; `"off"` disables chat)',
+    '- Call MCP tool `manage_land_chat_whitelist` with `{ "parcelId", "action": "list" | "add" | "remove", "username?", "email?", "walletAddress?", "userId?" }` to inspect or update the Land Chat whitelist',
     '- Call MCP tool `get_parcel_share_link` with `{ "parcelId" }` to retrieve the shareable slug link and mobile AR / Directions URL',
     '- Call MCP tool `delete_land_sculpture` with `{ "sculptureId", "signature?": "0x..." }`',
     '- Call MCP tool `erase_land` to erase all sculptures and curations on an existing owned land parcel when permitted by the landholder (`allowAgentErase`): `{ "parcelId", "confirmParcelId": "GLAND-...", "reason?", "signature?": "0x..." }`',
@@ -484,7 +485,7 @@ export function buildLandAdd3DItemAgentPrompt({
     `- Resize or rotate 3D bounds: call \`update_land_volume\` with \`{ "parcelId": "${parcelId}", "widthMeters": ${w}, "depthMeters": ${d}, "heightMeters": ${h}, "rotationDeg": ${rot} }\`.`,
     '- Modify ANY artwork placed on this land (yours or visitors): call `update_land_sculpture` with `{ "sculptureId", "title?", "description?", "voxels?", "modelFormat?", "modelBase64?"/"modelUrl?", "anchorOffset?": { "dx", "dy", "dz", "yaw" } }`.',
     '- Hide or restore an artwork on this land: call `set_sculpture_visibility` with `{ "sculptureId", "hidden": true | false, "reason": "Curated by land owner" }`.',
-    `- Freeze or unfreeze land (blocks all new placements when frozen): call \`update_land_settings\` with \`{ "parcelId": "${parcelId}", "frozen": true | false }\`.`,
+    `- Freeze land or configure Land Chat access (\`"contributors"\` default, \`"open"\`, \`"whitelist"\`, or \`"off"\`): call \`update_land_settings\` with \`{ "parcelId": "${parcelId}", "frozen?": true | false, "chatAccessMode?": "contributors" | "open" | "whitelist" | "off" }\` (and \`manage_land_chat_whitelist\` to manage whitelisted chat users).`,
     `- Get shareable visit link for mobile AR / Directions: call \`get_parcel_share_link\` with \`{ "parcelId": "${parcelId}" }\`.`
   ].join('\n');
 }

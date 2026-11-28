@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { normalizeLandChatAccessMode } from '../../../shared/chatPolicy.mjs';
 import { buildPropertyOwnerPrompt } from '../../../shared/landSignatureMessage.mjs';
 import {
   buildParcelShareUrl,
@@ -72,6 +73,7 @@ export default function LandManagementModal({
   const [allowContributorEdits, setAllowContributorEdits] = useState(true);
   const [requireApproval, setRequireApproval] = useState(false);
   const [frozen, setFrozen] = useState(false);
+  const [chatAccessMode, setChatAccessMode] = useState('contributors');
   const [requirePasskeyUnlock, setRequirePasskeyUnlock] = useState(false);
   const [requireOrbUnlock, setRequireOrbUnlock] = useState(false);
   const [useAutoOrb, setUseAutoOrb] = useState(true);
@@ -81,6 +83,7 @@ export default function LandManagementModal({
   const [passkeys, setPasskeys] = useState([]);
   const [expandedRevIds, setExpandedRevIds] = useState({});
   const [manualContribInput, setManualContribInput] = useState('');
+  const [whitelistInput, setWhitelistInput] = useState('');
   const [eraseConfirmInput, setEraseConfirmInput] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
@@ -131,6 +134,9 @@ export default function LandManagementModal({
         setAllowContributorEdits(picked.settings?.allowContributorEdits !== false);
         setRequireApproval(Boolean(picked.settings?.requireApproval || picked.requireApproval));
         setFrozen(Boolean(picked.settings?.frozen || picked.frozen));
+        setChatAccessMode(
+          normalizeLandChatAccessMode(picked.settings?.chatAccessMode ?? picked.chatAccessMode)
+        );
         setRequirePasskeyUnlock(Boolean(picked.securityPolicy?.requirePasskeyUnlock));
         setRequireOrbUnlock(Boolean(picked.securityPolicy?.requireOrbUnlock));
         setUseAutoOrb(
@@ -214,6 +220,10 @@ export default function LandManagementModal({
     setAllowContributorEdits(p.settings?.allowContributorEdits !== false);
     setRequireApproval(Boolean(p.settings?.requireApproval || p.requireApproval));
     setFrozen(Boolean(p.settings?.frozen || p.frozen));
+    setChatAccessMode(
+      normalizeLandChatAccessMode(p.settings?.chatAccessMode ?? p.chatAccessMode)
+    );
+    setWhitelistInput('');
     setRequirePasskeyUnlock(Boolean(p.securityPolicy?.requirePasskeyUnlock));
     setRequireOrbUnlock(Boolean(p.securityPolicy?.requireOrbUnlock));
     setUseAutoOrb(
@@ -372,7 +382,8 @@ export default function LandManagementModal({
         allowAgentErase,
         allowContributorEdits,
         requireApproval,
-        frozen
+        frozen,
+        chatAccessMode
       });
       await api.updateLandSecurityPolicy(activeParcel.parcelId, {
         requirePasskeyUnlock,
@@ -411,7 +422,28 @@ export default function LandManagementModal({
     try {
       const res = await api.addLandContributor(activeParcel.parcelId, payload);
       setManualContribInput('');
-      await loadWorkspace();
+      if (Array.isArray(res?.contributors)) {
+        setWorkspace((prev) =>
+          prev
+            ? {
+                ...prev,
+                parcels: (prev.parcels || []).map((p) =>
+                  p.parcelId === activeParcel.parcelId
+                    ? {
+                        ...p,
+                        contributors: res.contributors,
+                        ...(Array.isArray(res.eligibleVisitors)
+                          ? { eligibleVisitors: res.eligibleVisitors }
+                          : {})
+                      }
+                    : p
+                )
+              }
+            : prev
+        );
+      } else {
+        await loadWorkspace();
+      }
       onWorkspaceChanged?.();
       setNotice(
         `Added ${res?.contributor?.name || res?.contributor?.email || 'visitor'} as Contributor.`
@@ -429,8 +461,29 @@ export default function LandManagementModal({
     setNotice('');
     setErrorMsg('');
     try {
-      await api.removeLandContributor(activeParcel.parcelId, contributorSub);
-      await loadWorkspace();
+      const res = await api.removeLandContributor(activeParcel.parcelId, contributorSub);
+      if (Array.isArray(res?.contributors)) {
+        setWorkspace((prev) =>
+          prev
+            ? {
+                ...prev,
+                parcels: (prev.parcels || []).map((p) =>
+                  p.parcelId === activeParcel.parcelId
+                    ? {
+                        ...p,
+                        contributors: res.contributors,
+                        ...(Array.isArray(res.eligibleVisitors)
+                          ? { eligibleVisitors: res.eligibleVisitors }
+                          : {})
+                      }
+                    : p
+                )
+              }
+            : prev
+        );
+      } else {
+        await loadWorkspace();
+      }
       onWorkspaceChanged?.();
       const activeLandLabel = resolveLandDisplayName(
         { ...activeParcel, customName: customName || activeParcel.customName },
@@ -439,6 +492,88 @@ export default function LandManagementModal({
       setNotice(`Removed contributor from "${activeLandLabel}".`);
     } catch (err) {
       setErrorMsg(err.message || 'Could not remove contributor');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleAddWhitelistMember(payload) {
+    if (!activeParcel) return;
+    setBusy('whitelist');
+    setNotice('');
+    setErrorMsg('');
+    try {
+      const res = await api.addLandChatWhitelistMember(activeParcel.parcelId, payload);
+      setWhitelistInput('');
+      if (Array.isArray(res?.whitelist)) {
+        setWorkspace((prev) =>
+          prev
+            ? {
+                ...prev,
+                parcels: (prev.parcels || []).map((p) =>
+                  p.parcelId === activeParcel.parcelId
+                    ? {
+                        ...p,
+                        chatWhitelist: res.whitelist,
+                        ...(Array.isArray(res.eligibleVisitors)
+                          ? { eligibleVisitors: res.eligibleVisitors }
+                          : {})
+                      }
+                    : p
+                )
+              }
+            : prev
+        );
+      } else {
+        await loadWorkspace();
+      }
+      onWorkspaceChanged?.();
+      const addedLabel = res?.member?.name || res?.member?.username || 'user';
+      const msg = `Whitelisted ${addedLabel} for Land Chat.`;
+      setNotice(msg);
+      notifySettingsSaved(msg);
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not add user to chat whitelist');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleRemoveWhitelistMember(userSub) {
+    if (!activeParcel) return;
+    setBusy('whitelist');
+    setNotice('');
+    setErrorMsg('');
+    try {
+      const res = await api.removeLandChatWhitelistMember(activeParcel.parcelId, userSub);
+      if (Array.isArray(res?.whitelist)) {
+        setWorkspace((prev) =>
+          prev
+            ? {
+                ...prev,
+                parcels: (prev.parcels || []).map((p) =>
+                  p.parcelId === activeParcel.parcelId
+                    ? {
+                        ...p,
+                        chatWhitelist: res.whitelist,
+                        ...(Array.isArray(res.eligibleVisitors)
+                          ? { eligibleVisitors: res.eligibleVisitors }
+                          : {})
+                      }
+                    : p
+                )
+              }
+            : prev
+        );
+      } else {
+        await loadWorkspace();
+      }
+      onWorkspaceChanged?.();
+      const msg = 'Removed user from Land Chat whitelist.';
+      setNotice(msg);
+      notifySettingsSaved(msg);
+    } catch (err) {
+      setErrorMsg(err.message || 'Could not remove user from chat whitelist');
     } finally {
       setBusy('');
     }
@@ -864,6 +999,40 @@ export default function LandManagementModal({
                     </div>
                   </div>
 
+                  {/* Land Chat Access Policy */}
+                  <div className="land-mgmt-chat-policy-box" data-testid="land-chat-policy-box">
+                    <div className="land-mgmt-heading">
+                      <XeroIcon emoji="💬" size={14} />
+                      <strong style={{ fontSize: 12.5 }}>Land Chat Access</strong>
+                      <InfoTip title="Who Can Chat on This Land">
+                        <strong>Contributors (Default):</strong> You (land holder) + any user who
+                        contributed art to this land (or is in Contributors / Chat Whitelist) can
+                        chat in person within 75m.
+                        <br />
+                        <strong>Everyone On Site:</strong> Any signed-in mobile visitor within 75m
+                        can join chat.
+                        <br />
+                        <strong>Whitelist Only:</strong> Only you and accounts you add to the Chat
+                        Whitelist below can chat (turns off open contributor chat).
+                        <br />
+                        <strong>Off (Disabled):</strong> Turns Land Chat off completely on this
+                        land.
+                      </InfoTip>
+                    </div>
+                    <select
+                      className="input land-chat-access-select"
+                      aria-label="Land Chat Access"
+                      data-testid="land-chat-access-select"
+                      value={chatAccessMode}
+                      onChange={(e) => setChatAccessMode(normalizeLandChatAccessMode(e.target.value))}
+                    >
+                      <option value="contributors">🤝 Contributors (Default)</option>
+                      <option value="open">🌐 Everyone On Site (75m)</option>
+                      <option value="whitelist">📋 Whitelist Only</option>
+                      <option value="off">🔇 Off (Disabled)</option>
+                    </select>
+                  </div>
+
                   {/* Compact Pin-Unlock & ORB Security Sub-Panel */}
                   {(() => {
                     const secPol = activeParcel.securityPolicy || {};
@@ -1118,18 +1287,175 @@ export default function LandManagementModal({
                   </div>
                 </form>
 
-                {/* 2) Contributors */}
-                <div className="card land-mgmt-section">
+                {/* 2) Land Chat Whitelist */}
+                {chatAccessMode !== 'off' && (
+                  <div className="card land-mgmt-section" data-testid="land-chat-whitelist-section">
+                    <div className="land-mgmt-section-head">
+                      <div className="land-mgmt-heading">
+                        <XeroIcon emoji="💬" size={14} />
+                        <strong>
+                          Chat Whitelist ({activeParcel.chatWhitelist?.length || 0})
+                        </strong>
+                        {chatAccessMode === 'whitelist' && (
+                          <span className="badge gold" style={{ fontSize: 10 }}>
+                            Whitelist Only Active
+                          </span>
+                        )}
+                        <InfoTip title="Land Chat Whitelist">
+                          Add specific accounts by <strong>@username</strong>, email, or{' '}
+                          <code>0x</code> wallet so they can chat on this land. In{' '}
+                          <strong>Whitelist Only</strong> mode, only you and accounts listed here
+                          can join Land Chat. In default <strong>Contributors</strong> mode, art
+                          contributors can already chat automatically and whitelisted users are also
+                          admitted.
+                        </InfoTip>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="input"
+                        data-testid="chat-whitelist-input"
+                        value={whitelistInput}
+                        onChange={(e) => setWhitelistInput(e.target.value)}
+                        placeholder="@username, email, or 0x wallet…"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        data-testid="chat-whitelist-add-btn"
+                        disabled={busy !== '' || !whitelistInput.trim()}
+                        onClick={() =>
+                          handleAddWhitelistMember({ identifier: whitelistInput.trim() })
+                        }
+                      >
+                        + Whitelist
+                      </button>
+                    </div>
+
+                    {activeParcel.eligibleVisitors?.some(
+                      (vis) => !activeParcel.chatWhitelist?.some((w) => w.userSub === vis.userId)
+                    ) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                          Quick-add from art contributors &amp; IRL visitors:
+                        </div>
+                        {activeParcel.eligibleVisitors
+                          .filter(
+                            (vis) =>
+                              !activeParcel.chatWhitelist?.some((w) => w.userSub === vis.userId)
+                          )
+                          .map((vis) => (
+                            <div key={vis.userId} className="land-mgmt-row">
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  flexWrap: 'wrap'
+                                }}
+                              >
+                                <UserHandleBadge
+                                  user={{
+                                    id: vis.userId,
+                                    username: vis.username,
+                                    avatarImage: vis.avatarImage,
+                                    name: vis.name
+                                  }}
+                                  fallback="Visitor"
+                                  size="xs"
+                                />
+                                <span className="badge" style={{ fontSize: 9.5 }}>
+                                  {vis.isArtContributor ? '🎨 Art' : '📍 IRL'}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-xs"
+                                data-testid={`chat-whitelist-quick-add-${vis.userId}`}
+                                disabled={busy !== ''}
+                                onClick={() => handleAddWhitelistMember({ userId: vis.userId })}
+                              >
+                                + Whitelist
+                              </button>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
+                    {activeParcel.chatWhitelist?.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {activeParcel.chatWhitelist.map((w) => (
+                          <div
+                            key={w.userSub}
+                            className="land-mgmt-row is-active"
+                            data-testid="chat-whitelist-member-row"
+                          >
+                            <div
+                              style={{
+                                fontSize: 12,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                flexWrap: 'wrap'
+                              }}
+                            >
+                              <UserHandleBadge
+                                user={{
+                                  id: w.userSub,
+                                  username: w.username,
+                                  avatarImage: w.avatarImage,
+                                  name: w.name
+                                }}
+                                fallback="Artist"
+                                size="xs"
+                              />
+                              {w.walletAddress && (
+                                <span
+                                  className="mono"
+                                  style={{ fontSize: 10.5, color: 'var(--muted)' }}
+                                >
+                                  {w.walletAddress.slice(0, 10)}…
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-danger"
+                              data-testid="chat-whitelist-remove-btn"
+                              disabled={busy !== ''}
+                              onClick={() => handleRemoveWhitelistMember(w.userSub)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                        {chatAccessMode === 'whitelist'
+                          ? 'Whitelist is empty — only you (the land holder) can chat until you add someone.'
+                          : 'No custom chat whitelist entries yet.'}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 3) Artwork Contributors (Edit Access) */}
+                <div className="card land-mgmt-section" data-testid="land-contributors-section">
                   <div className="land-mgmt-section-head">
                     <div className="land-mgmt-heading">
                       <XeroIcon emoji="🤝" size={14} />
                       <strong>
-                        Contributors ({activeParcel.contributors?.length || 0})
+                        Artwork Contributors ({activeParcel.contributors?.length || 0})
                       </strong>
                       <InfoTip title="How Contributors Work">
-                        Only accounts that physically visited this parcel and joined its AR chat can
-                        be added as Contributors to modify artworks here. Enter a visitor&apos;s
-                        email or 0x wallet, or click + Add next to eligible IRL visitors.
+                        Anyone who places artwork on this land automatically gets Land Chat access
+                        under the default <strong>Contributors</strong> chat setting. Add art
+                        contributors or accounts that physically visited this parcel in person here
+                        to also grant artwork editing access (when <strong>Contributor Edits</strong>{' '}
+                        is checked above).
                       </InfoTip>
                     </div>
                   </div>
@@ -1142,7 +1468,15 @@ export default function LandManagementModal({
                         );
                         return (
                           <div key={vis.userId} className="land-mgmt-row">
-                            <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <div
+                              style={{
+                                fontSize: 12,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                flexWrap: 'wrap'
+                              }}
+                            >
                               <UserHandleBadge
                                 user={{
                                   id: vis.userId,
@@ -1153,12 +1487,20 @@ export default function LandManagementModal({
                                 fallback="Visitor"
                                 size="xs"
                               />
-                              <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                              <span className="badge" style={{ fontSize: 9.5 }}>
+                                {vis.isArtContributor ? '🎨 Art' : '📍 IRL'}
+                              </span>
+                              <span
+                                className="mono"
+                                style={{ fontSize: 10.5, color: 'var(--muted)' }}
+                              >
                                 {vis.walletAddress ? vis.walletAddress.slice(0, 10) : ''}
                               </span>
                             </div>
                             {alreadyAdded ? (
-                              <span className="badge teal" style={{ fontSize: 10 }}>Active</span>
+                              <span className="badge teal" style={{ fontSize: 10 }}>
+                                Active
+                              </span>
                             ) : (
                               <button
                                 type="button"
@@ -1175,7 +1517,7 @@ export default function LandManagementModal({
                     </div>
                   ) : (
                     <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      No eligible IRL visitors yet.
+                      No art contributors or IRL visitors yet.
                     </div>
                   )}
 
@@ -1184,20 +1526,15 @@ export default function LandManagementModal({
                       className="input"
                       value={manualContribInput}
                       onChange={(e) => setManualContribInput(e.target.value)}
-                      placeholder="Visitor email or 0x wallet…"
+                      placeholder="@username, email, or 0x wallet…"
                     />
                     <button
                       type="button"
                       className="btn btn-sm"
                       disabled={busy !== '' || !manualContribInput.trim()}
-                      onClick={() => {
-                        const val = manualContribInput.trim();
-                        if (val.startsWith('0x') && val.length >= 40) {
-                          handleAddContributor({ walletAddress: val });
-                        } else {
-                          handleAddContributor({ email: val });
-                        }
-                      }}
+                      onClick={() =>
+                        handleAddContributor({ identifier: manualContribInput.trim() })
+                      }
                     >
                       Add
                     </button>
@@ -1207,7 +1544,15 @@ export default function LandManagementModal({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                       {activeParcel.contributors.map((c) => (
                         <div key={c.contributorSub} className="land-mgmt-row is-active">
-                          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              flexWrap: 'wrap'
+                            }}
+                          >
                             <UserHandleBadge
                               user={{
                                 id: c.contributorSub,
@@ -1219,7 +1564,10 @@ export default function LandManagementModal({
                               size="xs"
                             />
                             {c.walletAddress && (
-                              <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+                              <span
+                                className="mono"
+                                style={{ fontSize: 10.5, color: 'var(--muted)' }}
+                              >
                                 {c.walletAddress.slice(0, 10)}…
                               </span>
                             )}
