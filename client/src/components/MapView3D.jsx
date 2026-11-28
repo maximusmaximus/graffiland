@@ -969,6 +969,22 @@ export default function MapView3D({
         pillEl.classList.toggle('is-focused', isFocusedPin);
         pillEl.dataset.focused = isFocusedPin ? 'true' : 'false';
       }
+      const badgeEl = el.querySelector('[data-testid="map3d-land-label"]');
+      if (badgeEl) {
+        const labelLandName = badgeEl.dataset.landName || 'Virtual Land';
+        const labelTheme = badgeEl.dataset.landThemeLabel || '';
+        const themeSuffix = labelTheme ? ` (${labelTheme})` : '';
+        badgeEl.dataset.focused = isFocusedPin ? 'true' : 'false';
+        badgeEl.setAttribute(
+          'aria-label',
+          isFocusedPin
+            ? `Open detailed view for ${labelLandName}`
+            : `Zoom and select ${labelLandName}`
+        );
+        badgeEl.title = isFocusedPin
+          ? `${labelLandName}${themeSuffix} — click again to open detailed view`
+          : `${labelLandName}${themeSuffix} — click to zoom & select, click again for details`;
+      }
       if (el.dataset.landAccent !== entry.outerColor) {
         el.dataset.landAccent = entry.outerColor;
         el.style.setProperty('--land-tag-accent', entry.outerColor);
@@ -1894,6 +1910,36 @@ export default function MapView3D({
   }, [drawMode, draftParcels.length, draftCanvasDragMode, drawWireframes]);
 
   useEffect(() => {
+    const selectedUpper = String(selectedParcelId || '').toUpperCase();
+    for (const [pid, pin] of floatingPinMapRef.current.entries()) {
+      const el = pin?.el;
+      if (!el) continue;
+      const isFocusedPin = Boolean(selectedUpper && selectedUpper === pid);
+      el.classList.toggle('is-focused', isFocusedPin);
+      el.dataset.focused = isFocusedPin ? 'true' : 'false';
+      el.style.zIndex = isFocusedPin ? '24' : '';
+      const pillEl = el.querySelector('.map3d-land-label-pill');
+      if (pillEl) {
+        pillEl.classList.toggle('is-focused', isFocusedPin);
+        pillEl.dataset.focused = isFocusedPin ? 'true' : 'false';
+      }
+      const badgeEl = el.querySelector('[data-testid="map3d-land-label"]');
+      if (badgeEl) {
+        const labelLandName = badgeEl.dataset.landName || 'Virtual Land';
+        const labelTheme = badgeEl.dataset.landThemeLabel || '';
+        const themeSuffix = labelTheme ? ` (${labelTheme})` : '';
+        badgeEl.dataset.focused = isFocusedPin ? 'true' : 'false';
+        badgeEl.setAttribute(
+          'aria-label',
+          isFocusedPin
+            ? `Open detailed view for ${labelLandName}`
+            : `Zoom and select ${labelLandName}`
+        );
+        badgeEl.title = isFocusedPin
+          ? `${labelLandName}${themeSuffix} — click again to open detailed view`
+          : `${labelLandName}${themeSuffix} — click to zoom & select, click again for details`;
+      }
+    }
     drawWireframes();
   }, [selectedParcelId, drawWireframes]);
 
@@ -2316,9 +2362,17 @@ export default function MapView3D({
       badge.className = 'map3d-owned-plus-tag map3d-ui-stop';
       badge.dataset.testid = 'map3d-land-label';
       badge.dataset.parcelId = pid;
+      badge.dataset.focused = isFocusedLand ? 'true' : 'false';
+      badge.dataset.landName = landName;
+      badge.dataset.landThemeLabel = landTheme.label;
       badge.textContent = formatSimpleLandLabel(p, null, { maxLength: 30 });
-      badge.setAttribute('aria-label', `Open detailed view for ${landName}`);
-      badge.title = `${landName} (${landTheme.label}) — click to open detailed view`;
+      badge.setAttribute(
+        'aria-label',
+        isFocusedLand ? `Open detailed view for ${landName}` : `Zoom and select ${landName}`
+      );
+      badge.title = isFocusedLand
+        ? `${landName} (${landTheme.label}) — click again to open detailed view`
+        : `${landName} (${landTheme.label}) — click to zoom & select, click again for details`;
       badge.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       badge.addEventListener('click', (ev) => {
         ev.stopPropagation();

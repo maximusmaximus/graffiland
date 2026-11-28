@@ -172,6 +172,13 @@ export default function DesktopHub({
       : 'land'
   ); // 'land' | 'sculptures'
   const [selectedLandParcelId, setSelectedLandParcelId] = useState('');
+  const selectedLandParcelIdRef = useRef(selectedLandParcelId);
+  selectedLandParcelIdRef.current = selectedLandParcelId;
+  const updateSelectedLandParcelId = useCallback((nextParcelId) => {
+    const normalized = String(nextParcelId || '');
+    selectedLandParcelIdRef.current = normalized;
+    setSelectedLandParcelId(normalized);
+  }, []);
   const [sidebarTab, setSidebarTab] = useState('list'); // 'list' | 'land' | 'gallery' | 'market' | 'leaders'
   const [drawMode, setDrawMode] = useState(false);
   const [viewMode, setViewMode] = useState('isometric'); // 'isometric' | '3d' | '2d'
@@ -360,7 +367,7 @@ export default function DesktopHub({
       if (selectedLandParcelId) {
         const prevLandId =
           previousKey && previousKey.startsWith('land:') ? previousKey.slice('land:'.length) : '';
-        setSelectedLandParcelId(prevLandId && prevLandId !== selectedLandParcelId ? prevLandId : '');
+        updateSelectedLandParcelId(prevLandId && prevLandId !== selectedLandParcelId ? prevLandId : '');
         return true;
       }
       return false;
@@ -510,7 +517,7 @@ export default function DesktopHub({
             setSelected(sc);
             setLastSculpture(sc);
             if (sc.parcelId) {
-              setSelectedLandParcelId(sc.parcelId);
+              updateSelectedLandParcelId(sc.parcelId);
             }
             const b = sc.parcelBounds;
             const cLat =
@@ -536,7 +543,7 @@ export default function DesktopHub({
         })
         .catch(() => {});
     }
-  }, [refreshData, refreshMyLands]);
+  }, [refreshData, refreshMyLands, updateSelectedLandParcelId]);
 
   const activeVisitedParcelId = visitedParcel?.parcel?.parcelId || '';
   const refreshVisitedParcelDetail = useCallback(
@@ -768,7 +775,7 @@ export default function DesktopHub({
 
     const resolvedParcelId = matchedParcel?.parcelId || sc.parcelId || '';
     if (resolvedParcelId) {
-      setSelectedLandParcelId(resolvedParcelId);
+      updateSelectedLandParcelId(resolvedParcelId);
     }
 
     const vol = matchedParcel ? resolveParcelVolume(matchedParcel) : null;
@@ -1051,7 +1058,7 @@ export default function DesktopHub({
 
   function focusLandOnMap(land) {
     if (!land?.parcelId) return;
-    setSelectedLandParcelId(land.parcelId);
+    updateSelectedLandParcelId(land.parcelId);
     const vol = resolveParcelVolume(land);
     const isoFit = vol
       ? computeIsometricCameraFit(vol, {
@@ -1099,6 +1106,17 @@ export default function DesktopHub({
         volume: land.volume || null
       }
     });
+  }
+
+  function handleLandNameActivate(land) {
+    if (!land?.parcelId) return;
+    const targetId = String(land.parcelId).toUpperCase();
+    const currentId = String(selectedLandParcelIdRef.current || '').toUpperCase();
+    if (currentId && currentId === targetId) {
+      openLandShowcase(land);
+      return;
+    }
+    focusLandOnMap(land);
   }
 
   function openLandShowcase(land) {
@@ -2392,7 +2410,7 @@ export default function DesktopHub({
               onViewportChange={handleViewportChange}
               config={config}
               onSelectSculpture={openSculpture}
-              onSelectParcel={openLandShowcase}
+              onSelectParcel={handleLandNameActivate}
               onNavigateParcel={focusLandOnMap}
               onNavigateSculpture={(sc) => {
                 if (!sc) return;
@@ -2866,11 +2884,16 @@ export default function DesktopHub({
                         data-parcel-id={land.parcelId}
                         data-selected={isSelectedLand ? 'true' : 'false'}
                         data-owned={isOwned ? 'true' : 'false'}
-                        onClick={() => focusLandOnMap(land)}
+                        title={
+                          isSelectedLand
+                            ? `Click again to open details for ${liveTitle}`
+                            : `Click to zoom to & select ${liveTitle}`
+                        }
+                        onClick={() => handleLandNameActivate(land)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
-                            focusLandOnMap(land);
+                            handleLandNameActivate(land);
                           }
                         }}
                       >

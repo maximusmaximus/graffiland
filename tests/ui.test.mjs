@@ -7323,11 +7323,22 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         })
       );
 
-      // Click the minted land label directly on the map -> opens detailed PlotVisitView!
+      // 1st click on the minted land label directly on the map zooms & selects it (does not open PlotVisitView yet)
       await RTL.waitFor(() => {
         const lbl = view.getByTestId('map3d-land-label');
         assert.equal(lbl.tagName, 'BUTTON');
       });
+      RTL.fireEvent.click(view.getByTestId('map3d-land-label'));
+      await RTL.waitFor(() => {
+        assert.equal(
+          view.container.querySelector('.map3d-stage')?.getAttribute('data-selected-parcel-id'),
+          'GLAND-DET001'
+        );
+        assert.equal(view.getByTestId('map3d-land-label').getAttribute('data-focused'), 'true');
+      });
+      assert.equal(view.queryByTestId('desktop-plot-visit-view'), null);
+
+      // 2nd click on the selected land label opens detailed PlotVisitView!
       RTL.fireEvent.click(view.getByTestId('map3d-land-label'));
       await RTL.waitFor(() => {
         const detail = view.getByTestId('desktop-plot-visit-view');

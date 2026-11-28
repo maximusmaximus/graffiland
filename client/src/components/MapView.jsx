@@ -462,13 +462,18 @@ export default function MapView({
               landTitle
             )}" title="Open to public — Search &amp; add 3D items">${searchIconHtml}</button>`
           : '';
+        const landLabelTitle = isSelectedParcel
+          ? `${landTitle} — click again to open detailed view`
+          : `${landTitle} — click to zoom & select, click again for details`;
         const labelIcon = L.divIcon({
           className: 'map-land-simple-label-marker',
           html: `<span class="map-land-simple-label ${stateCls} ${
             isEmptyLand ? 'is-empty-land' : ''
           }" data-testid="map-land-label" data-parcel-id="${escapeHtml(
             p.parcelId
-          )}" data-focused="${isSelectedParcel ? 'true' : 'false'}" data-public-add="${canPublicAdd ? 'true' : 'false'}"><span class="map-land-simple-label-text">${escapeHtml(
+          )}" data-focused="${isSelectedParcel ? 'true' : 'false'}" data-public-add="${canPublicAdd ? 'true' : 'false'}" title="${escapeHtml(
+            landLabelTitle
+          )}"><span class="map-land-simple-label-text">${escapeHtml(
             simpleLabel
           )}</span>${searchBtnHtml}<button type="button" class="map-land-label-copy-btn" data-testid="map-land-copy-btn" data-parcel-id="${escapeHtml(
             p.parcelId
