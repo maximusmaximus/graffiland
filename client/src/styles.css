@@ -16645,6 +16645,318 @@ html.mobile-portrait-locked .catalog-results-carousel.is-touch-swipe {
   font-family: var(--font-mono);
 }
 
+/* ================= SQUARE SCULPTURE PREVIEWS ================= */
+
+.gallery-thumb-frame.is-square {
+  aspect-ratio: 1 / 1;
+  border-radius: 9px;
+  border: 1px solid rgba(0, 245, 212, 0.24);
+  background: radial-gradient(circle at 50% 45%, rgba(22, 36, 66, 0.96), rgba(7, 11, 22, 0.98));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+}
+
+.desktop-sculpture-item-row {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 10px !important;
+  text-align: left;
+}
+
+.desktop-sculpture-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.plot-selector-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plot-tab-square-thumb {
+  border-radius: 5px !important;
+  border-color: rgba(0, 245, 212, 0.32) !important;
+}
+
+.plot-artwork-head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.mobile-land-sculpture-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ar-land-sc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ================= LOW-ANGLE ISOMETRIC LAND PREVIEW CARD BACKGROUNDS ================= */
+
+.desktop-land-item.has-preview-bg,
+.mobile-land-card.has-preview-bg {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.desktop-land-card-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.desktop-land-card-bg-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 58%;
+  display: block;
+  opacity: 0.72;
+  transform: scale(1.03);
+  transition: transform 280ms ease, opacity 220ms ease;
+}
+
+.desktop-land-item.has-preview-bg:hover .desktop-land-card-bg-img,
+.desktop-land-item.has-preview-bg.is-selected .desktop-land-card-bg-img {
+  opacity: 0.86;
+  transform: scale(1.07);
+}
+
+.desktop-land-card-bg-logo-only {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 48%, rgba(16, 28, 56, 0.94), rgba(6, 10, 20, 0.98));
+  opacity: 0.34;
+}
+
+.desktop-land-card-bg-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 10, 20, 0.78) 0%,
+    rgba(6, 10, 20, 0.52) 48%,
+    rgba(6, 10, 20, 0.86) 100%
+  );
+}
+
+.desktop-land-item.has-preview-bg.is-selected .desktop-land-card-bg-scrim {
+  background: linear-gradient(
+    180deg,
+    rgba(10, 14, 24, 0.72) 0%,
+    rgba(18, 22, 34, 0.44) 48%,
+    rgba(6, 10, 20, 0.84) 100%
+  );
+}
+
+.desktop-land-item-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.mobile-land-card.has-preview-bg > *:not(.desktop-land-card-bg) {
+  position: relative;
+  z-index: 1;
+}
+
+/* ================= LIVE LAND OG SHARE PREVIEW CARD (X / FACEBOOK) ================= */
+
+.land-og-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+  border-radius: 12px;
+  background: rgba(8, 14, 28, 0.88);
+  border: 1px solid rgba(0, 245, 212, 0.24);
+  margin-top: 8px;
+}
+
+.land-og-preview-card.is-compact {
+  margin-top: 10px;
+  padding: 9px 10px;
+}
+
+.land-og-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.land-og-preview-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.land-og-preview-share-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.land-og-preview-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1200 / 630;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(145deg, #060a14 0%, #0e1833 55%, #060a14 100%);
+}
+
+.land-og-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.land-og-logo-backdrop {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 28% 34%, rgba(0, 245, 212, 0.16), transparent 48%),
+    radial-gradient(circle at 74% 68%, rgba(255, 62, 127, 0.15), transparent 46%),
+    linear-gradient(145deg, #060a14 0%, #0d1730 55%, #060a14 100%);
+}
+
+.land-og-centered-logo-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(6, 10, 20, 0.46) 0%, rgba(6, 10, 20, 0.08) 62%);
+}
+
+.land-og-dims-pill {
+  position: absolute;
+  bottom: 7px;
+  right: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(6, 10, 20, 0.78);
+  border: 1px solid rgba(0, 245, 212, 0.34);
+  color: #cffafe;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.land-og-card-meta-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.land-og-domain {
+  font-size: 10px;
+  color: var(--accent);
+  text-transform: lowercase;
+}
+
+.land-og-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.land-og-card-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.land-og-owner-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.land-og-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.land-og-toggle-row input[type='checkbox'] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.land-og-toggle-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.land-og-toggle-row small {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.land-og-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.land-og-suggested-dims {
+  font-size: 10px;
+  color: #93c5fd;
+}
+
+.land-og-error {
+  font-size: 11px;
+  color: #fca5a5;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.32);
+}
+
 /* Respect the OS "reduce motion" setting. */
 @media (prefers-reduced-motion: reduce) {
   *,

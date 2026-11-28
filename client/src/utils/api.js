@@ -275,6 +275,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  updateLandOgSettings: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/og-settings`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  uploadSculptureOgPreview: (sculptureId, payload) =>
+    request(`/api/sculptures/${encodeURIComponent(sculptureId)}/og-preview`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   listLandContributors: (parcelId) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/contributors`),
   addLandContributor: (parcelId, payload) =>

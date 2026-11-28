@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS sculptures (
   pol_json TEXT NOT NULL,
   proof_hash TEXT NOT NULL,
   preview_data_url TEXT DEFAULT '',
+  og_preview_url TEXT DEFAULT '',
   ipfs_metadata_cid TEXT NOT NULL,
   ipfs_model_cid TEXT NOT NULL,
   ipfs_image_cid TEXT NOT NULL,
@@ -322,6 +323,11 @@ CREATE TABLE IF NOT EXISTS land_settings (
   require_approval INTEGER NOT NULL DEFAULT 0,
   chat_access_mode TEXT NOT NULL DEFAULT 'open',
   chat_allow_agents INTEGER NOT NULL DEFAULT 1,
+  og_image_mode TEXT NOT NULL DEFAULT 'auto',
+  og_custom_image_url TEXT NOT NULL DEFAULT '',
+  og_preview_image_url TEXT NOT NULL DEFAULT '',
+  og_preview_sig TEXT NOT NULL DEFAULT '',
+  og_preview_updated_at TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
 

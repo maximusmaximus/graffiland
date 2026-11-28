@@ -15,6 +15,7 @@ import { parseProfileParamFromLocation } from '../../../shared/profileRules.mjs'
 import { api, API_BASE } from '../utils/api.js';
 import { useInAppBackHistory } from '../utils/inAppHistory.js';
 import {
+  buildLandOgShareUrl,
   buildSculptureShareUrl,
   buildShareToXUrl,
   copyToClipboard
@@ -60,6 +61,7 @@ import GoogleLoginGate from './GoogleLoginGate.jsx';
 import InfoTermsModal from './InfoTermsModal.jsx';
 import InfoTip from './InfoTip.jsx';
 import LandArchiveModal from './LandArchiveModal.jsx';
+import LandCardBackground from './LandCardBackground.jsx';
 import LandManagementModal from './LandManagementModal.jsx';
 import MapView3D from './MapView3D.jsx';
 import NotificationCenter, {
@@ -2167,13 +2169,19 @@ export default function DesktopHub({
 
   const handleCopyParcelShareLink = useCallback(async (parcel) => {
     if (!parcel?.parcelId) return;
-    const shareUrl = buildParcelShareUrl({
-      origin: window.location.origin,
-      pathname: window.location.pathname,
-      parcelId: parcel.parcelId,
-      customName: parcel.customName || '',
-      compact: true
-    });
+    const shareUrl =
+      buildLandOgShareUrl({
+        parcelId: parcel.parcelId,
+        customName: parcel.customName || '',
+        landName: parcel.displayName || ''
+      }) ||
+      buildParcelShareUrl({
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        parcelId: parcel.parcelId,
+        customName: parcel.customName || '',
+        compact: true
+      });
     const ok = await copyToClipboard(shareUrl);
     setLandStatus({
       text: ok
@@ -2877,7 +2885,7 @@ export default function DesktopHub({
                         key={land.parcelId}
                         role="button"
                         tabIndex={0}
-                        className={`desktop-nearby-item desktop-land-item ${
+                        className={`desktop-nearby-item desktop-land-item has-preview-bg ${
                           isSelectedLand ? 'is-selected' : ''
                         } ${isOwned ? 'is-owned' : ''}`}
                         data-testid="desktop-land-item"
@@ -2897,6 +2905,8 @@ export default function DesktopHub({
                           }
                         }}
                       >
+                        <LandCardBackground land={land} sculptures={land.sculptures} />
+                        <div className="desktop-land-item-content">
                         <div className="desktop-land-item-top">
                           <div className="desktop-land-item-title-wrap">
                             <strong className="desktop-land-item-title">{liveTitle}</strong>
@@ -3004,6 +3014,7 @@ export default function DesktopHub({
                             </button>
                           )}
                         </div>
+                        </div>
                       </div>
                     );
                   })
@@ -3022,27 +3033,37 @@ export default function DesktopHub({
                     <button
                       key={sc.id}
                       type="button"
-                      className={`desktop-nearby-item ${isActive ? 'is-selected' : ''}`}
+                      className={`desktop-nearby-item desktop-sculpture-item-row ${isActive ? 'is-selected' : ''}`}
+                      data-testid="desktop-sculpture-item"
                       onClick={() => openSculpture(sc)}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
-                        <strong style={{ fontSize: 13, textAlign: 'left' }}>{sc.title}</strong>
-                        {sc.distanceMeters !== null && (
-                          <span className="badge teal" style={{ fontSize: 10 }}>
-                            {formatDistanceLabel(sc.distanceMeters, unitSystem)}
+                      <SculptureThumbnail
+                        sculpture={sc}
+                        variant="square"
+                        size={52}
+                        hideBadge
+                        testId="desktop-sculpture-square-thumb"
+                      />
+                      <div className="desktop-sculpture-item-info">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, width: '100%' }}>
+                          <strong style={{ fontSize: 13, textAlign: 'left' }}>{sc.title}</strong>
+                          {sc.distanceMeters !== null && (
+                            <span className="badge teal" style={{ fontSize: 10 }}>
+                              {formatDistanceLabel(sc.distanceMeters, unitSystem)}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span className="badge" style={{ fontSize: 10 }}>
+                            {getLiveLandName(sc)}
                           </span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <span className="badge" style={{ fontSize: 10 }}>
-                          {getLiveLandName(sc)}
-                        </span>
-                        <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-                          {sc.modelType === 'custom-3d'
-                            ? `${String(sc.customModel?.format || '3D').toUpperCase()} Model`
-                            : `${sc.voxelCount || sc.voxels?.length || 0} blocks`}{' '}
-                          · PoL {sc.polScore}
-                        </span>
+                          <span className="mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
+                            {sc.modelType === 'custom-3d'
+                              ? `${String(sc.customModel?.format || '3D').toUpperCase()} Model`
+                              : `${sc.voxelCount || sc.voxels?.length || 0} blocks`}{' '}
+                            · PoL {sc.polScore}
+                          </span>
+                        </div>
                       </div>
                     </button>
                   );

@@ -57,6 +57,7 @@ export function getDb() {
       pol_json TEXT NOT NULL,
       proof_hash TEXT NOT NULL,
       preview_data_url TEXT DEFAULT '',
+      og_preview_url TEXT DEFAULT '',
       ipfs_metadata_cid TEXT NOT NULL,
       ipfs_model_cid TEXT NOT NULL,
       ipfs_image_cid TEXT NOT NULL,
@@ -329,6 +330,11 @@ export function getDb() {
       require_approval INTEGER NOT NULL DEFAULT 0,
       chat_access_mode TEXT NOT NULL DEFAULT 'open',
       chat_allow_agents INTEGER NOT NULL DEFAULT 1,
+      og_image_mode TEXT NOT NULL DEFAULT 'auto',
+      og_custom_image_url TEXT NOT NULL DEFAULT '',
+      og_preview_image_url TEXT NOT NULL DEFAULT '',
+      og_preview_sig TEXT NOT NULL DEFAULT '',
+      og_preview_updated_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL
     );
 
@@ -877,6 +883,12 @@ export function getDb() {
     'ALTER TABLE land_steward_state ADD COLUMN had_human_interaction INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE land_settings ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE land_settings ADD COLUMN chat_access_mode TEXT NOT NULL DEFAULT 'open'",
+    "ALTER TABLE land_settings ADD COLUMN og_image_mode TEXT NOT NULL DEFAULT 'auto'",
+    "ALTER TABLE land_settings ADD COLUMN og_custom_image_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_settings ADD COLUMN og_preview_image_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_settings ADD COLUMN og_preview_sig TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE land_settings ADD COLUMN og_preview_updated_at TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sculptures ADD COLUMN og_preview_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE land_security_policies ADD COLUMN origin_source TEXT NOT NULL DEFAULT 'unknown'",
     "ALTER TABLE land_security_policies ADD COLUMN env_tier TEXT NOT NULL DEFAULT 'unknown'",
     'ALTER TABLE land_security_policies ADD COLUMN auto_min_orb_inliers INTEGER',

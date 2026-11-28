@@ -80,7 +80,9 @@ import {
   preflightUpdateSculpture,
   removeLandChatWhitelistMember,
   removeLandContributor,
+  updateLandOgSettings,
   updateLandSettings,
+  updateSculptureOgPreview,
   upsertSculptureModelRow
 } from './mcp/landMutations.mjs';
 import {
@@ -191,7 +193,9 @@ export {
   resolveUserWalletAddresses,
   signRequestByAgent,
   signRequestByMobile,
+  updateLandOgSettings,
   updateLandSettings,
+  updateSculptureOgPreview,
   upsertAnchorAndRevision,
   upsertSculptureModelRow
 };

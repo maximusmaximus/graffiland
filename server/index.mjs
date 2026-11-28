@@ -40,7 +40,17 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../shared/notificationService.mjs';
-import { buildLandSharePageHtml, renderLandOgPng } from '../shared/landOgImage.mjs';
+import {
+  buildLandSharePageHtml,
+  buildSculptureSharePageHtml,
+  computeLandOgContentSig,
+  computeSculptureOgContentSig,
+  decodeOgImageDataUrl,
+  normalizeLandOgImageMode,
+  renderBrandLogoOgPng,
+  renderLandOgPng,
+  renderSculptureOgPng
+} from '../shared/landOgImage.mjs';
 import {
   buildObjectFittedLandVolume,
   centerVoxelsHorizontally,
@@ -182,7 +192,9 @@ import {
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
+  updateLandOgSettings,
   updateLandSettings,
+  updateSculptureOgPreview,
   upsertAnchorAndRevision,
   upsertSculptureModelRow
 } from '../shared/mcpService.mjs';
@@ -1890,14 +1902,66 @@ export function createAppServer(serverOptions = {}) {
       } catch {
         detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
       }
-      const pngBytes = await renderLandOgPng({
-        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
-        sculptures: detail?.sculptures || []
-      });
-      res.set('Content-Type', 'image/png');
-      res.set('Cache-Control', 'public, max-age=300');
+      const parcelObj = detail?.parcel || { parcelId: rawId, customName: slugHint };
+      const parcelSculptures = detail?.sculptures || [];
+      const liveSig = computeLandOgContentSig({ parcel: parcelObj, sculptures: parcelSculptures });
+      const ogMode = normalizeLandOgImageMode(
+        parcelObj?.ogImageMode ?? parcelObj?.settings?.ogImageMode
+      );
+      const customUrl = String(
+        parcelObj?.ogCustomImageUrl ?? parcelObj?.settings?.ogCustomImageUrl ?? ''
+      ).trim();
+      const autoUrl = String(
+        parcelObj?.ogPreviewImageUrl ?? parcelObj?.settings?.ogPreviewImageUrl ?? ''
+      ).trim();
+      const autoSig = String(
+        parcelObj?.ogPreviewSig ?? parcelObj?.settings?.ogPreviewSig ?? ''
+      ).trim();
+
+      let outBytes = null;
+      let outMime = 'image/png';
+      let ogSource = 'dynamic-isometric';
+
+      if (ogMode === 'logo') {
+        outBytes = await renderBrandLogoOgPng();
+        ogSource = 'brand-logo';
+      } else if (ogMode === 'custom' && customUrl) {
+        const stored = decodeOgImageDataUrl(customUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'custom-owner';
+        } else {
+          outBytes = await renderBrandLogoOgPng();
+          ogSource = 'brand-logo-fallback';
+        }
+      } else if (ogMode === 'auto' && autoUrl && autoSig && autoSig === liveSig) {
+        const stored = decodeOgImageDataUrl(autoUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'auto-3d-fresh';
+        }
+      }
+
+      if (!outBytes) {
+        outBytes = await renderLandOgPng({
+          parcel: parcelObj,
+          sculptures: parcelSculptures,
+          mode: ogMode === 'logo' ? 'logo' : 'auto'
+        });
+        ogSource = ogMode === 'logo' ? 'brand-logo' : 'dynamic-isometric';
+      }
+
+      res.set('Content-Type', outMime);
+      res.set(
+        'Cache-Control',
+        req.query?.v ? 'public, max-age=300' : 'public, max-age=60, must-revalidate'
+      );
       res.set('X-Content-Type-Options', 'nosniff');
-      res.send(Buffer.from(pngBytes));
+      res.set('X-OG-Source', ogSource);
+      res.set('X-OG-Content-Sig', liveSig);
+      res.send(Buffer.from(outBytes));
     } catch (err) {
       res.status(500).json({ error: err?.message || 'Failed to render land OG image' });
     }
@@ -1922,10 +1986,101 @@ export function createAppServer(serverOptions = {}) {
         publicUrl: process.env.PUBLIC_URL || origin
       });
       res.set('Content-Type', 'text/html; charset=utf-8');
-      res.set('Cache-Control', 'public, max-age=180');
+      res.set('Cache-Control', 'public, max-age=60');
       res.send(html);
     } catch (err) {
       res.status(500).send(err?.message || 'Failed to build share page');
+    }
+  });
+
+  app.get('/api/og/sculpture/:sculptureId', async (req, res) => {
+    try {
+      const rawId = String(req.params.sculptureId || '').replace(/\.png$/i, '').trim();
+      const row = db
+        .prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ? AND s.hidden = 0`)
+        .get(rawId);
+      const sculptureObj = row
+        ? serializeSculptureRow(row, { includeVoxels: true })
+        : { id: rawId, title: '3D Artwork', voxels: [] };
+      let parcelObj = null;
+      if (sculptureObj?.parcelId) {
+        try {
+          const pDetail = await getPublicParcelDetail(chatDb, {
+            parcelOrSlug: sculptureObj.parcelId
+          });
+          parcelObj = pDetail?.parcel || null;
+        } catch {
+          parcelObj = null;
+        }
+      }
+      const liveSig = computeSculptureOgContentSig({
+        sculpture: sculptureObj,
+        parcel: parcelObj
+      });
+      let outBytes = null;
+      let outMime = 'image/png';
+      let ogSource = 'dynamic-sculpture';
+      if (sculptureObj?.ogPreviewUrl) {
+        const stored = decodeOgImageDataUrl(sculptureObj.ogPreviewUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'sculpture-3d-og';
+        }
+      }
+      if (!outBytes) {
+        outBytes = await renderSculptureOgPng({
+          sculpture: sculptureObj,
+          parcel: parcelObj
+        });
+      }
+      res.set('Content-Type', outMime);
+      res.set(
+        'Cache-Control',
+        req.query?.v ? 'public, max-age=300' : 'public, max-age=60, must-revalidate'
+      );
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.set('X-OG-Source', ogSource);
+      res.set('X-OG-Content-Sig', liveSig);
+      res.send(Buffer.from(outBytes));
+    } catch (err) {
+      res.status(500).json({ error: err?.message || 'Failed to render sculpture OG image' });
+    }
+  });
+
+  app.get('/share/sculpture/:sculptureId', async (req, res) => {
+    try {
+      const rawId = String(req.params.sculptureId || '').trim();
+      const row = db
+        .prepare(`${SCULPTURE_SELECT_SQL} WHERE s.id = ? AND s.hidden = 0`)
+        .get(rawId);
+      const sculptureObj = row
+        ? serializeSculptureRow(row, { includeVoxels: false })
+        : { id: rawId, title: '3D Artwork' };
+      let parcelObj = null;
+      if (sculptureObj?.parcelId) {
+        try {
+          const pDetail = await getPublicParcelDetail(chatDb, {
+            parcelOrSlug: sculptureObj.parcelId
+          });
+          parcelObj = pDetail?.parcel || null;
+        } catch {
+          parcelObj = null;
+        }
+      }
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const html = buildSculptureSharePageHtml({
+        sculptureId: rawId,
+        sculpture: sculptureObj,
+        parcel: parcelObj,
+        apiOrigin: origin,
+        publicUrl: process.env.PUBLIC_URL || origin
+      });
+      res.set('Content-Type', 'text/html; charset=utf-8');
+      res.set('Cache-Control', 'public, max-age=60');
+      res.send(html);
+    } catch (err) {
+      res.status(500).send(err?.message || 'Failed to build sculpture share page');
     }
   });
 
@@ -1965,6 +2120,30 @@ export function createAppServer(serverOptions = {}) {
         parcelId: req.params.parcelId,
         user: req.user,
         body: req.body
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/og-settings',
+    requireAuth,
+    handleChatRoute((req) =>
+      updateLandOgSettings(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.post(
+    '/api/sculptures/:id/og-preview',
+    requireAuth,
+    handleChatRoute((req) =>
+      updateSculptureOgPreview(chatDb, {
+        sculptureId: req.params.id,
+        user: req.user,
+        previewDataUrl: req.body?.previewDataUrl || ''
       })
     )
   );

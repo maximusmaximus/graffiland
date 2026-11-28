@@ -309,7 +309,10 @@ describe('UI Toolbar & Module Cleanup (Copy Icons, Save 3D Volume, Refresh, Top 
     await RTL.act(async () => {
       RTL.fireEvent.click(scCopy);
     });
-    assert.ok(copiedTexts.at(-1)?.includes('sculpture=sc-clean-1'));
+    assert.ok(
+      copiedTexts.at(-1)?.includes('/share/sculpture/sc-clean-1') ||
+        copiedTexts.at(-1)?.includes('sculpture=sc-clean-1')
+    );
     cleanup();
 
     // 3b) LandManagementModal

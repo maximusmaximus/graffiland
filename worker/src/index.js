@@ -42,7 +42,17 @@ import {
   markNotificationsRead,
   updateNotificationPreferences
 } from '../../shared/notificationService.mjs';
-import { buildLandSharePageHtml, renderLandOgPng } from '../../shared/landOgImage.mjs';
+import {
+  buildLandSharePageHtml,
+  buildSculptureSharePageHtml,
+  computeLandOgContentSig,
+  computeSculptureOgContentSig,
+  decodeOgImageDataUrl,
+  normalizeLandOgImageMode,
+  renderBrandLogoOgPng,
+  renderLandOgPng,
+  renderSculptureOgPng
+} from '../../shared/landOgImage.mjs';
 import { validateProfileImage } from '../../shared/profileRules.mjs';
 import {
   createWorkerStagedBlobStore,
@@ -171,7 +181,9 @@ import {
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
+  updateLandOgSettings,
   updateLandSettings,
+  updateSculptureOgPreview,
   upsertAnchorAndRevision,
   upsertSculptureModelRow
 } from '../../shared/mcpService.mjs';
@@ -2808,8 +2820,29 @@ export default {
       );
     }
 
+    async function readStoredOgImageBytes(storedUrl) {
+      const raw = String(storedUrl || '').trim();
+      if (!raw) return null;
+      if (raw.startsWith('data:image/')) {
+        return decodeOgImageDataUrl(raw);
+      }
+      const mediaMatch = raw.match(/\/api\/media\/((?:previews|profiles)\/[a-zA-Z0-9/_.-]{3,200})$/);
+      if (mediaMatch && env?.MEDIA_BUCKET) {
+        const key = mediaMatch[1];
+        if (!key.includes('..')) {
+          const obj = await env.MEDIA_BUCKET.get(key).catch(() => null);
+          if (obj) {
+            const buf = await obj.arrayBuffer();
+            const mime = String(obj.httpMetadata?.contentType || 'image/png').toLowerCase();
+            return { bytes: new Uint8Array(buf), mime };
+          }
+        }
+      }
+      return null;
+    }
+
     const landOgMatch = pathname.match(/^\/api\/og\/land\/([^/]+?)(?:\.png)?$/i);
-    if (landOgMatch && request.method === 'GET') {
+    if (landOgMatch && (request.method === 'GET' || request.method === 'HEAD')) {
       const rawId = decodeURIComponent(landOgMatch[1] || '').trim();
       const slugHint = String(url.searchParams.get('slug') || '').replace(/-/g, ' ').trim();
       let detail = null;
@@ -2818,23 +2851,75 @@ export default {
       } catch {
         detail = { parcel: { parcelId: rawId, customName: slugHint }, sculptures: [] };
       }
-      const pngBytes = await renderLandOgPng({
-        parcel: detail?.parcel || { parcelId: rawId, customName: slugHint },
-        sculptures: detail?.sculptures || []
-      });
-      return new Response(pngBytes, {
+      const parcelObj = detail?.parcel || { parcelId: rawId, customName: slugHint };
+      const parcelSculptures = detail?.sculptures || [];
+      const liveSig = computeLandOgContentSig({ parcel: parcelObj, sculptures: parcelSculptures });
+      const ogMode = normalizeLandOgImageMode(
+        parcelObj?.ogImageMode ?? parcelObj?.settings?.ogImageMode
+      );
+      const customUrl = String(
+        parcelObj?.ogCustomImageUrl ?? parcelObj?.settings?.ogCustomImageUrl ?? ''
+      ).trim();
+      const autoUrl = String(
+        parcelObj?.ogPreviewImageUrl ?? parcelObj?.settings?.ogPreviewImageUrl ?? ''
+      ).trim();
+      const autoSig = String(
+        parcelObj?.ogPreviewSig ?? parcelObj?.settings?.ogPreviewSig ?? ''
+      ).trim();
+
+      let outBytes = null;
+      let outMime = 'image/png';
+      let ogSource = 'dynamic-isometric';
+
+      if (ogMode === 'logo') {
+        outBytes = await renderBrandLogoOgPng();
+        ogSource = 'brand-logo';
+      } else if (ogMode === 'custom' && customUrl) {
+        const stored = await readStoredOgImageBytes(customUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'custom-owner';
+        } else {
+          outBytes = await renderBrandLogoOgPng();
+          ogSource = 'brand-logo-fallback';
+        }
+      } else if (ogMode === 'auto' && autoUrl && autoSig && autoSig === liveSig) {
+        const stored = await readStoredOgImageBytes(autoUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'auto-3d-fresh';
+        }
+      }
+
+      if (!outBytes) {
+        outBytes = await renderLandOgPng({
+          parcel: parcelObj,
+          sculptures: parcelSculptures,
+          mode: ogMode === 'logo' ? 'logo' : 'auto'
+        });
+        ogSource = ogMode === 'logo' ? 'brand-logo' : 'dynamic-isometric';
+      }
+
+      const hasVersion = Boolean(url.searchParams.get('v'));
+      return new Response(request.method === 'HEAD' ? null : outBytes, {
         status: 200,
         headers: {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=300, s-maxage=600',
+          'Content-Type': outMime,
+          'Cache-Control': hasVersion
+            ? 'public, max-age=300, s-maxage=600'
+            : 'public, max-age=60, must-revalidate',
           'X-Content-Type-Options': 'nosniff',
+          'X-OG-Source': ogSource,
+          'X-OG-Content-Sig': liveSig,
           ...corsHeaders(request)
         }
       });
     }
 
     const landShareMatch = pathname.match(/^\/share\/land\/([^/]+)$/i);
-    if (landShareMatch && request.method === 'GET') {
+    if (landShareMatch && (request.method === 'GET' || request.method === 'HEAD')) {
       const rawId = decodeURIComponent(landShareMatch[1] || '').trim();
       const slugHint = String(url.searchParams.get('slug') || '').replace(/-/g, ' ').trim();
       let detail = null;
@@ -2850,11 +2935,107 @@ export default {
         apiOrigin: url.origin,
         publicUrl: String(env.PUBLIC_URL || 'https://spray.land').replace(/\/+$/, '')
       });
-      return new Response(html, {
+      return new Response(request.method === 'HEAD' ? null : html, {
         status: 200,
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=180, s-maxage=300'
+          'Cache-Control': 'public, max-age=60, s-maxage=120'
+        }
+      });
+    }
+
+    const sculptureOgMatch = pathname.match(/^\/api\/og\/sculpture\/([^/]+?)(?:\.png)?$/i);
+    if (sculptureOgMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+      const rawId = decodeURIComponent(sculptureOgMatch[1] || '').trim();
+      const row = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ? AND s.hidden = 0`)
+        .bind(rawId)
+        .first()
+        .catch(() => null);
+      const sculptureObj = row
+        ? serializeSculptureRow(row, { includeVoxels: true })
+        : { id: rawId, title: '3D Artwork', voxels: [] };
+      let parcelObj = null;
+      if (sculptureObj?.parcelId) {
+        try {
+          const pDetail = await getPublicParcelDetail(d1Adapter, {
+            parcelOrSlug: sculptureObj.parcelId
+          });
+          parcelObj = pDetail?.parcel || null;
+        } catch {
+          parcelObj = null;
+        }
+      }
+      const liveSig = computeSculptureOgContentSig({
+        sculpture: sculptureObj,
+        parcel: parcelObj
+      });
+      let outBytes = null;
+      let outMime = 'image/png';
+      let ogSource = 'dynamic-sculpture';
+
+      if (sculptureObj?.ogPreviewUrl) {
+        const stored = await readStoredOgImageBytes(sculptureObj.ogPreviewUrl);
+        if (stored?.bytes?.length) {
+          outBytes = stored.bytes;
+          outMime = stored.mime || 'image/png';
+          ogSource = 'sculpture-3d-og';
+        }
+      }
+      if (!outBytes) {
+        outBytes = await renderSculptureOgPng({
+          sculpture: sculptureObj,
+          parcel: parcelObj
+        });
+      }
+      const hasVersion = Boolean(url.searchParams.get('v'));
+      return new Response(request.method === 'HEAD' ? null : outBytes, {
+        status: 200,
+        headers: {
+          'Content-Type': outMime,
+          'Cache-Control': hasVersion
+            ? 'public, max-age=300, s-maxage=600'
+            : 'public, max-age=60, must-revalidate',
+          'X-Content-Type-Options': 'nosniff',
+          'X-OG-Source': ogSource,
+          'X-OG-Content-Sig': liveSig,
+          ...corsHeaders(request)
+        }
+      });
+    }
+
+    const sculptureShareMatch = pathname.match(/^\/share\/sculpture\/([^/]+)$/i);
+    if (sculptureShareMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+      const rawId = decodeURIComponent(sculptureShareMatch[1] || '').trim();
+      const row = await env.DB.prepare(`${WORKER_SCULPTURE_SELECT_SQL} WHERE s.id = ? AND s.hidden = 0`)
+        .bind(rawId)
+        .first()
+        .catch(() => null);
+      const sculptureObj = row
+        ? serializeSculptureRow(row, { includeVoxels: false })
+        : { id: rawId, title: '3D Artwork' };
+      let parcelObj = null;
+      if (sculptureObj?.parcelId) {
+        try {
+          const pDetail = await getPublicParcelDetail(d1Adapter, {
+            parcelOrSlug: sculptureObj.parcelId
+          });
+          parcelObj = pDetail?.parcel || null;
+        } catch {
+          parcelObj = null;
+        }
+      }
+      const html = buildSculptureSharePageHtml({
+        sculptureId: rawId,
+        sculpture: sculptureObj,
+        parcel: parcelObj,
+        apiOrigin: url.origin,
+        publicUrl: String(env.PUBLIC_URL || 'https://spray.land').replace(/\/+$/, '')
+      });
+      return new Response(request.method === 'HEAD' ? null : html, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=60, s-maxage=120'
         }
       });
     }
@@ -2921,6 +3102,52 @@ export default {
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Settings update failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landOgSettingsMatch = pathname.match(/^\/api\/lands\/([^/]+)\/og-settings$/);
+    if (landOgSettingsMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await updateLandOgSettings(d1Adapter, {
+          parcelId: decodeURIComponent(landOgSettingsMatch[1]),
+          user,
+          body,
+          offloadImageFn: ({ dataUrl, prefix, id }) =>
+            offloadDataUrlToR2(env, { dataUrl, prefix, id, origin: url.origin })
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'OG preview settings update failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const sculptureOgUploadMatch = pathname.match(/^\/api\/sculptures\/([^/]+)\/og-preview$/);
+    if (sculptureOgUploadMatch && request.method === 'POST') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const out = await updateSculptureOgPreview(d1Adapter, {
+          sculptureId: decodeURIComponent(sculptureOgUploadMatch[1]),
+          user,
+          previewDataUrl: body?.previewDataUrl || '',
+          offloadImageFn: ({ dataUrl, prefix, id }) =>
+            offloadDataUrlToR2(env, { dataUrl, prefix, id, origin: url.origin })
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Sculpture OG preview upload failed' },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 
