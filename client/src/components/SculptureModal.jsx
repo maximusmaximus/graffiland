@@ -44,8 +44,14 @@ import {
   resolveSafeUserAvatar
 } from '../../../shared/userDisplay.mjs';
 import {
+  formatDimensionTriple,
   formatDistance,
+  formatOffsetTriple,
+  formatSculptureDimensionTriple,
   formatShortLength,
+  getLengthUnitSuffix,
+  metersToUnitLength,
+  unitLengthToMeters,
   useMeasurementUnits
 } from '../utils/measurementUnits.js';
 import { notifySettingsSaved } from '../utils/toastNotice.js';
@@ -142,6 +148,8 @@ export default function SculptureModal({
       ? { lat: Number(sculpture.lat), lng: Number(sculpture.lng) }
       : null;
   const { unitSystem } = useMeasurementUnits(userLocation, scFallbackCoords);
+  const lengthUnit = getLengthUnitSuffix(unitSystem);
+  const moveSliderStep = unitSystem === 'imperial' ? 0.25 : 0.1;
   const landMapHostRef = useRef(null);
   const [toAddress, setToAddress] = useState('');
   const [busyAction, setBusyAction] = useState('');
@@ -1694,6 +1702,34 @@ export default function SculptureModal({
         )} × ${formatShortLength(activeScaleDims.d, unitSystem)}`
       : '';
 
+  const minDxDisplay = metersToUnitLength(moveRanges.minDx, unitSystem, { decimals: 2 });
+  const maxDxDisplay = metersToUnitLength(moveRanges.maxDx, unitSystem, { decimals: 2 });
+  const minDzDisplay = metersToUnitLength(moveRanges.minDz, unitSystem, { decimals: 2 });
+  const maxDzDisplay = metersToUnitLength(moveRanges.maxDz, unitSystem, { decimals: 2 });
+  const maxDyDisplay = metersToUnitLength(Math.max(0.5, moveRanges.maxDy), unitSystem, { decimals: 2 });
+  const dxDisplay = metersToUnitLength(editOffset.dx || 0, unitSystem, { decimals: 2 });
+  const dzDisplay = metersToUnitLength(editOffset.dz || 0, unitSystem, { decimals: 2 });
+  const dyDisplay = metersToUnitLength(editOffset.dy || 0, unitSystem, { decimals: 2 });
+  const livePlacementErrorText =
+    livePlacement && !livePlacement.ok
+      ? livePlacement.reason === 'exceeds_land_bounds'
+        ? `Scale ${Number(editScale || 1).toFixed(2)}× (${formatSculptureDimensionTriple(
+            activeScaleDims.w,
+            activeScaleDims.h,
+            activeScaleDims.d,
+            unitSystem
+          )}) exceeds the ${formatDimensionTriple(
+            placementVolume.widthMeters,
+            placementVolume.depthMeters,
+            placementVolume.heightMeters,
+            unitSystem,
+            { compact: true }
+          )} land bounds (max ${Number(
+            livePlacement.maxScaleForLand || maxScaleForLand || 1
+          ).toFixed(2)}×).`
+        : livePlacement.message
+      : '';
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -1832,12 +1868,23 @@ export default function SculptureModal({
                     </span>
                     {canModifySculpture ? (
                       <span className="viewer-corner-pill mono" data-testid="sculpture-corner-transform-pill">
-                        {Number(editScale || 1).toFixed(2)}× · {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m · Yaw{' '}
-                        {Math.round(Number(editOffset.yaw || 0))}°
+                        {Number(editScale || 1).toFixed(2)}× ·{' '}
+                        {formatSculptureDimensionTriple(
+                          activeScaleDims.w,
+                          activeScaleDims.h,
+                          activeScaleDims.d,
+                          unitSystem
+                        )}{' '}
+                        · Yaw {Math.round(Number(editOffset.yaw || 0))}°
                       </span>
                     ) : (
                       <span className="viewer-corner-pill mono">
-                        {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m
+                        {formatSculptureDimensionTriple(
+                          activeScaleDims.w,
+                          activeScaleDims.h,
+                          activeScaleDims.d,
+                          unitSystem
+                        )}
                       </span>
                     )}
                   </div>
@@ -1888,8 +1935,14 @@ export default function SculptureModal({
                       sculpture.anchorOffset?.dy ||
                       sculpture.anchorOffset?.dz ||
                       sculpture.anchorOffset?.yaw) ? (
-                      <span className="viewer-corner-pill mono">
-                        📌 {sculpture.anchorOffset.dx}, {sculpture.anchorOffset.dy}, {sculpture.anchorOffset.dz}m
+                      <span className="viewer-corner-pill mono" data-testid="sculpture-corner-offset-pill">
+                        📌{' '}
+                        {formatOffsetTriple(
+                          sculpture.anchorOffset.dx,
+                          sculpture.anchorOffset.dy,
+                          sculpture.anchorOffset.dz,
+                          unitSystem
+                        )}
                       </span>
                     ) : null}
                     {sculpture.hidden && (
@@ -2139,7 +2192,11 @@ export default function SculptureModal({
         <>
         {/* Immediate Logged-In Artwork Studio (Modify, Scale, Move, Rotate, Hide & Remove) */}
         {canModifySculpture ? (
-          <div className="card sculpture-transform-studio" data-testid="sculpture-transform-studio">
+          <div
+            className="card sculpture-transform-studio"
+            data-testid="sculpture-transform-studio"
+            data-unit-system={unitSystem}
+          >
             <div className="sculpture-studio-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <strong style={{ fontSize: 13.5, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -2207,12 +2264,22 @@ export default function SculptureModal({
                     <label htmlFor="sculpture-scale-slider" style={{ fontWeight: 700, fontSize: 12 }}>
                       📐 Scale ({Number(editScale || 1).toFixed(2)}×)
                     </label>
-                    <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      {activeScaleDims.w}×{activeScaleDims.h}×{activeScaleDims.d}m inside{' '}
-                      {Math.round(placementVolume.widthMeters * 10) / 10}×
-                      {Math.round(placementVolume.depthMeters * 10) / 10}×
-                      {Math.round(placementVolume.heightMeters * 10) / 10}m land (max safe{' '}
-                      {maxSafeScale.toFixed(2)}×)
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }} data-testid="sculpture-scale-dims-summary">
+                      {formatSculptureDimensionTriple(
+                        activeScaleDims.w,
+                        activeScaleDims.h,
+                        activeScaleDims.d,
+                        unitSystem
+                      )}{' '}
+                      inside{' '}
+                      {formatDimensionTriple(
+                        placementVolume.widthMeters,
+                        placementVolume.depthMeters,
+                        placementVolume.heightMeters,
+                        unitSystem,
+                        { compact: true }
+                      )}{' '}
+                      land (max safe {maxSafeScale.toFixed(2)}×)
                     </span>
                   </div>
                   <div className="sculpture-slider-line">
@@ -2280,21 +2347,23 @@ export default function SculptureModal({
                   <label className="sculpture-axis-control">
                     <div className="sculpture-axis-label">
                       <span>↔ Move X (East/West)</span>
-                      <span className="mono">{Number(editOffset.dx || 0).toFixed(2)} m</span>
+                      <span className="mono" data-testid="sculpture-move-dx-readout">
+                        {dxDisplay.toFixed(2)} {lengthUnit}
+                      </span>
                     </div>
                     <div className="sculpture-slider-line">
                       <input
                         type="range"
                         data-testid="sculpture-move-dx"
                         aria-label="Move X East West"
-                        min={moveRanges.minDx}
-                        max={moveRanges.maxDx}
-                        step="0.1"
-                        value={Math.min(moveRanges.maxDx, Math.max(moveRanges.minDx, Number(editOffset.dx || 0)))}
+                        min={minDxDisplay}
+                        max={maxDxDisplay}
+                        step={moveSliderStep}
+                        value={Math.min(maxDxDisplay, Math.max(minDxDisplay, dxDisplay))}
                         onPointerDown={() => beginEditGesture('dx', 'Move X')}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dx: Number(e.target.value) },
+                            { dx: unitLengthToMeters(Number(e.target.value), unitSystem) },
                             { label: 'Move X', coalesceKey: 'dx' }
                           )
                         }
@@ -2302,12 +2371,13 @@ export default function SculptureModal({
                       <input
                         type="number"
                         className="input mono sculpture-num-input"
-                        aria-label="dx (m)"
+                        data-testid="sculpture-move-dx-input"
+                        aria-label={`dx (${lengthUnit})`}
                         step="any"
-                        value={editOffset.dx}
+                        value={dxDisplay}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dx: Number(e.target.value || 0) },
+                            { dx: unitLengthToMeters(Number(e.target.value || 0), unitSystem) },
                             { label: 'Move X', coalesceKey: 'dx-input' }
                           )
                         }
@@ -2318,21 +2388,23 @@ export default function SculptureModal({
                   <label className="sculpture-axis-control">
                     <div className="sculpture-axis-label">
                       <span>↕ Move Z (North/South)</span>
-                      <span className="mono">{Number(editOffset.dz || 0).toFixed(2)} m</span>
+                      <span className="mono" data-testid="sculpture-move-dz-readout">
+                        {dzDisplay.toFixed(2)} {lengthUnit}
+                      </span>
                     </div>
                     <div className="sculpture-slider-line">
                       <input
                         type="range"
                         data-testid="sculpture-move-dz"
                         aria-label="Move Z North South"
-                        min={moveRanges.minDz}
-                        max={moveRanges.maxDz}
-                        step="0.1"
-                        value={Math.min(moveRanges.maxDz, Math.max(moveRanges.minDz, Number(editOffset.dz || 0)))}
+                        min={minDzDisplay}
+                        max={maxDzDisplay}
+                        step={moveSliderStep}
+                        value={Math.min(maxDzDisplay, Math.max(minDzDisplay, dzDisplay))}
                         onPointerDown={() => beginEditGesture('dz', 'Move Z')}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dz: Number(e.target.value) },
+                            { dz: unitLengthToMeters(Number(e.target.value), unitSystem) },
                             { label: 'Move Z', coalesceKey: 'dz' }
                           )
                         }
@@ -2340,12 +2412,13 @@ export default function SculptureModal({
                       <input
                         type="number"
                         className="input mono sculpture-num-input"
-                        aria-label="dz (m)"
+                        data-testid="sculpture-move-dz-input"
+                        aria-label={`dz (${lengthUnit})`}
                         step="any"
-                        value={editOffset.dz}
+                        value={dzDisplay}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dz: Number(e.target.value || 0) },
+                            { dz: unitLengthToMeters(Number(e.target.value || 0), unitSystem) },
                             { label: 'Move Z', coalesceKey: 'dz-input' }
                           )
                         }
@@ -2356,7 +2429,9 @@ export default function SculptureModal({
                   <label className="sculpture-axis-control">
                     <div className="sculpture-axis-label">
                       <span>⬆️ Height Y (Elevation)</span>
-                      <span className="mono">{Number(editOffset.dy || 0).toFixed(2)} m</span>
+                      <span className="mono" data-testid="sculpture-move-dy-readout">
+                        {dyDisplay.toFixed(2)} {lengthUnit}
+                      </span>
                     </div>
                     <div className="sculpture-slider-line">
                       <input
@@ -2364,13 +2439,13 @@ export default function SculptureModal({
                         data-testid="sculpture-move-dy"
                         aria-label="Move Y Height"
                         min={0}
-                        max={Math.max(0.5, moveRanges.maxDy)}
-                        step="0.1"
-                        value={Math.min(Math.max(0.5, moveRanges.maxDy), Math.max(0, Number(editOffset.dy || 0)))}
+                        max={maxDyDisplay}
+                        step={moveSliderStep}
+                        value={Math.min(maxDyDisplay, Math.max(0, dyDisplay))}
                         onPointerDown={() => beginEditGesture('dy', 'Height Y')}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dy: Number(e.target.value) },
+                            { dy: unitLengthToMeters(Number(e.target.value), unitSystem) },
                             { label: 'Height Y', coalesceKey: 'dy' }
                           )
                         }
@@ -2378,12 +2453,13 @@ export default function SculptureModal({
                       <input
                         type="number"
                         className="input mono sculpture-num-input"
-                        aria-label="dy (m)"
+                        data-testid="sculpture-move-dy-input"
+                        aria-label={`dy (${lengthUnit})`}
                         step="any"
-                        value={editOffset.dy}
+                        value={dyDisplay}
                         onChange={(e) =>
                           updateEditOffset(
-                            { dy: Number(e.target.value || 0) },
+                            { dy: unitLengthToMeters(Number(e.target.value || 0), unitSystem) },
                             { label: 'Height Y', coalesceKey: 'dy-input' }
                           )
                         }
@@ -2525,8 +2601,10 @@ export default function SculptureModal({
                       </span>
                     </strong>
                     <span className="mono sculpture-vertical-dims-sub">
-                      ({activeScaleDims.w}m W × {activeScaleDims.h}m H × {activeScaleDims.d}m D ·
-                      ceiling {formatShortLength(placementVolume.heightMeters, unitSystem)})
+                      ({formatShortLength(activeScaleDims.w, unitSystem)} W ×{' '}
+                      {formatShortLength(activeScaleDims.h, unitSystem)} H ×{' '}
+                      {formatShortLength(activeScaleDims.d, unitSystem)} D · ceiling{' '}
+                      {formatShortLength(placementVolume.heightMeters, unitSystem)})
                     </span>
                   </div>
                   <div className="sculpture-vertical-presets">
@@ -2600,7 +2678,7 @@ export default function SculptureModal({
                   >
                     {!livePlacement.ok ? (
                       <>
-                        <span>⛔ {livePlacement.message}</span>
+                        <span>⛔ {livePlacementErrorText}</span>
                         <button
                           type="button"
                           className="btn btn-xs btn-primary"
@@ -2879,14 +2957,14 @@ export default function SculptureModal({
                     <th>Elevation / Span</th>
                     <td className="mono">
                       {elevation.terrainElevationMeters != null
-                        ? `${Math.round(elevation.terrainElevationMeters)}m ground`
+                        ? `${formatShortLength(elevation.terrainElevationMeters, unitSystem, { decimals: 0, compact: true })} ground`
                         : elevation.altitudeSource || 'sensor'}
                       {elevation.heightAboveGroundMeters != null
-                        ? ` · ${elevation.heightAboveGroundMeters >= 0 ? '+' : ''}${elevation.heightAboveGroundMeters}m AGL`
+                        ? ` · ${elevation.heightAboveGroundMeters >= 0 ? '+' : ''}${formatShortLength(elevation.heightAboveGroundMeters, unitSystem, { decimals: 1, compact: true })} AGL`
                         : ''}
                       {Number.isFinite(elevation.sculptureVerticalMinM) &&
                       Number.isFinite(elevation.sculptureVerticalMaxM)
-                        ? ` · ${elevation.sculptureVerticalMinM}m..${elevation.sculptureVerticalMaxM}m Y`
+                        ? ` · ${formatShortLength(elevation.sculptureVerticalMinM, unitSystem, { decimals: 1, compact: true })}..${formatShortLength(elevation.sculptureVerticalMaxM, unitSystem, { decimals: 1, compact: true })} Y`
                         : ''}
                     </td>
                   </tr>

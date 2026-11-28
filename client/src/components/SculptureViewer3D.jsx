@@ -229,6 +229,8 @@ export default function SculptureViewer3D({
   moveRangesRef.current = moveRanges;
   const sculptureRef = useRef(sculpture);
   sculptureRef.current = sculpture;
+  const unitSystemRef = useRef(unitSystem);
+  unitSystemRef.current = unitSystem;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -549,14 +551,15 @@ export default function SculptureViewer3D({
             // ignore if unsupported in headless env
           }
           renderer.domElement.style.cursor = role === 'rotate' ? 'grabbing' : getGizmoCursor(role);
+          const uSys = unitSystemRef.current;
           setGizmoStatusText(
             role === 'scale'
               ? `Scaling: ${startScale.toFixed(2)}×`
               : role === 'move'
-              ? `Moving: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
+              ? `Moving: X ${formatShortLength(startDx, uSys, { decimals: 1 })} · Z ${formatShortLength(startDz, uSys, { decimals: 1 })}`
               : role === 'rotate'
               ? `Rotating: ${Math.round(startYaw)}°`
-              : `Height: ${startDy.toFixed(2)}m`
+              : `Height: ${formatShortLength(startDy, uSys, { decimals: 2 })}`
           );
           return;
         }
@@ -616,10 +619,11 @@ export default function SculptureViewer3D({
             // ignore if unsupported in headless env
           }
           renderer.domElement.style.cursor = 'grabbing';
+          const uSys = unitSystemRef.current;
           setGizmoStatusText(
             planeSpec.axis === 'vertical'
-              ? `Dragging ${faceHit.face.label}: X ${startDx.toFixed(1)}m · Y ${startDy.toFixed(2)}m · Z ${startDz.toFixed(1)}m`
-              : `Dragging ${faceHit.face.label}: X ${startDx.toFixed(1)}m · Z ${startDz.toFixed(1)}m`
+              ? `Dragging ${faceHit.face.label}: X ${formatShortLength(startDx, uSys, { decimals: 1 })} · Y ${formatShortLength(startDy, uSys, { decimals: 2 })} · Z ${formatShortLength(startDz, uSys, { decimals: 1 })}`
+              : `Dragging ${faceHit.face.label}: X ${formatShortLength(startDx, uSys, { decimals: 1 })} · Z ${formatShortLength(startDz, uSys, { decimals: 1 })}`
           );
           return;
         }
@@ -706,7 +710,10 @@ export default function SculptureViewer3D({
           nextDx = Math.max(ranges.minDx, Math.min(ranges.maxDx, nextDx));
           nextDz = Math.max(ranges.minDz, Math.min(ranges.maxDz, nextDz));
         }
-        setGizmoStatusText(`Moving: X ${nextDx.toFixed(1)}m · Z ${nextDz.toFixed(1)}m`);
+        const uSys = unitSystemRef.current;
+        setGizmoStatusText(
+          `Moving: X ${formatShortLength(nextDx, uSys, { decimals: 1 })} · Z ${formatShortLength(nextDz, uSys, { decimals: 1 })}`
+        );
         onTransformChangeRef.current?.({ dx: nextDx, dz: nextDz });
       } else if (dragState.role === 'face') {
         const patch = computeFaceDragTransform({
@@ -718,10 +725,11 @@ export default function SculptureViewer3D({
           hitPoint,
           moveRanges: ranges
         });
+        const uSys = unitSystemRef.current;
         setGizmoStatusText(
           dragState.faceAxis === 'vertical'
-            ? `Dragging ${dragState.faceLabel}: X ${patch.dx.toFixed(1)}m · Y ${patch.dy.toFixed(2)}m · Z ${patch.dz.toFixed(1)}m`
-            : `Dragging ${dragState.faceLabel}: X ${patch.dx.toFixed(1)}m · Z ${patch.dz.toFixed(1)}m`
+            ? `Dragging ${dragState.faceLabel}: X ${formatShortLength(patch.dx, uSys, { decimals: 1 })} · Y ${formatShortLength(patch.dy, uSys, { decimals: 2 })} · Z ${formatShortLength(patch.dz, uSys, { decimals: 1 })}`
+            : `Dragging ${dragState.faceLabel}: X ${formatShortLength(patch.dx, uSys, { decimals: 1 })} · Z ${formatShortLength(patch.dz, uSys, { decimals: 1 })}`
         );
         onTransformChangeRef.current?.(patch);
       } else if (dragState.role === 'rotate') {
@@ -737,7 +745,9 @@ export default function SculptureViewer3D({
           0,
           Math.min(maxDy, Math.round((dragState.startDy + deltaY) * 100) / 100)
         );
-        setGizmoStatusText(`Height: ${nextDy.toFixed(2)}m`);
+        setGizmoStatusText(
+          `Height: ${formatShortLength(nextDy, unitSystemRef.current, { decimals: 2 })}`
+        );
         onTransformChangeRef.current?.({ dy: nextDy });
       }
     };
@@ -1882,6 +1892,7 @@ export default function SculptureViewer3D({
       data-edit-gizmo={showEditGizmo ? 'on' : 'off'}
       data-model-status={modelStatus}
       data-model-format={scFormat || 'voxel'}
+      data-unit-system={unitSystem}
       data-measured-height-m={hudDims.effH.toFixed(3)}
       data-ghost-count={showLandBounds ? (siblingBoxes || []).length : 0}
       style={{
