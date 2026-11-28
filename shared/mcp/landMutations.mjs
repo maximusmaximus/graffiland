@@ -168,6 +168,7 @@ export async function listLandsWithCurations(db) {
       `SELECT s.parcel_id, s.geohash, s.lat, s.lng, s.voxels_json,
               s.recipient_address, s.creator_name, s.creator_sub, s.title, s.place_name, s.created_at,
               a.dx AS anchor_dx, a.dy AS anchor_dy, a.dz AS anchor_dz, a.yaw AS anchor_yaw,
+              a.mesh_stats_json AS mesh_stats_json,
               m.scale AS custom_model_scale
        FROM sculptures s
        LEFT JOIN sculpture_anchors a ON a.sculpture_id = s.id
