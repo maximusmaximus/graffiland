@@ -590,6 +590,7 @@ export async function archiveAndDestroyParcel(
     'land_parcels',
     'land_volumes',
     'land_settings',
+    'land_chat_whitelist',
     'land_contributors',
     'land_security_policies',
     'parcel_landmark_anchors'

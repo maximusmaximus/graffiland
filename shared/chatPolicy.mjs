@@ -11,11 +11,42 @@ export const CHAT_MSG_MAX_CIPHERTEXT_LEN = 12000;
 export const CHAT_CLUE_PROMPT_MAX = 140;
 export const CHAT_CLUE_PBKDF2_ITERATIONS = 210000;
 
+export const LAND_CHAT_ACCESS_MODES = ['contributors', 'open', 'whitelist', 'off'];
+export const DEFAULT_LAND_CHAT_ACCESS_MODE = 'contributors';
+
+export function normalizeLandChatAccessMode(raw) {
+  const clean = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (!clean || clean === 'default' || clean === 'contributors' || clean === 'contributors_only') {
+    return 'contributors';
+  }
+  if (clean === 'open' || clean === 'everyone' || clean === 'all' || clean === 'public') {
+    return 'open';
+  }
+  if (clean === 'whitelist' || clean === 'whitelist_only' || clean === 'allowlist') {
+    return 'whitelist';
+  }
+  if (clean === 'off' || clean === 'disabled' || clean === 'none' || clean === 'false') {
+    return 'off';
+  }
+  return DEFAULT_LAND_CHAT_ACCESS_MODE;
+}
+
+export function formatLandChatAccessModeLabel(mode) {
+  const normalized = normalizeLandChatAccessMode(mode);
+  if (normalized === 'open') return 'Everyone On Site';
+  if (normalized === 'whitelist') return 'Whitelist Only';
+  if (normalized === 'off') return 'Off (Disabled)';
+  return 'Contributors (Default)';
+}
+
 export class ChatHttpError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, extra = {}) {
     super(message);
     this.name = 'ChatHttpError';
     this.statusCode = statusCode;
+    this.extra = extra && typeof extra === 'object' ? extra : {};
   }
 }
 

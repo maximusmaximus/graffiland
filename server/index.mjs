@@ -148,6 +148,7 @@ import {
 import {
   DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
+  addLandChatWhitelistMember,
   addLandContributor,
   connectMcpPairing,
   createMcpPairing,
@@ -169,6 +170,7 @@ import {
   handleMcpJsonRpc,
   isUserLandOwner,
   isUserParcelContributor,
+  listLandChatWhitelist,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listMcpPairings,
@@ -176,6 +178,7 @@ import {
   listSculptureRevisions,
   listSignatureHistoryForUser,
   rejectSignatureRequest,
+  removeLandChatWhitelistMember,
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
@@ -1996,6 +1999,41 @@ export function createAppServer(serverOptions = {}) {
       removeLandContributor(chatDb, {
         parcelId: req.params.parcelId,
         contributorSub: req.params.contributorSub,
+        user: req.user
+      })
+    )
+  );
+
+  app.get(
+    '/api/lands/:parcelId/chat-whitelist',
+    requireAuth,
+    handleChatRoute((req) =>
+      listLandChatWhitelist(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user
+      })
+    )
+  );
+
+  app.post(
+    '/api/lands/:parcelId/chat-whitelist',
+    requireAuth,
+    handleChatRoute((req) =>
+      addLandChatWhitelistMember(chatDb, {
+        parcelId: req.params.parcelId,
+        user: req.user,
+        body: req.body
+      })
+    )
+  );
+
+  app.delete(
+    '/api/lands/:parcelId/chat-whitelist/:userSub',
+    requireAuth,
+    handleChatRoute((req) =>
+      removeLandChatWhitelistMember(chatDb, {
+        parcelId: req.params.parcelId,
+        userSub: req.params.userSub,
         user: req.user
       })
     )

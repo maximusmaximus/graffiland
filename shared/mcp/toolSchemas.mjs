@@ -276,7 +276,7 @@ export const MCP_TOOLS = [
   {
     name: 'update_land_settings',
     description:
-      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks any new sculptures from being placed there), requireApproval (default false — when true, non-owner guest submissions require land holder approval before minting), allowContributorEdits, and allowAgentErase.',
+      'Update Virtual Land settings on an owned parcel, including freezing/unfreezing the land (frozen: true blocks new placements), requireApproval (default false), allowContributorEdits, allowAgentErase, and chatAccessMode ("contributors" default so any contributor to that land can chat, "open" for anyone on site within 75m, "whitelist" for land holder + explicitly whitelisted users only, or "off" to disable Land Chat).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -285,9 +285,32 @@ export const MCP_TOOLS = [
         requireApproval: { type: 'boolean' },
         allowContributorEdits: { type: 'boolean' },
         allowAgentErase: { type: 'boolean' },
+        chatAccessMode: {
+          type: 'string',
+          enum: ['contributors', 'open', 'whitelist', 'off'],
+          description:
+            'Who can join encrypted Land Chat on this parcel: "contributors" (default — land holder + art/land contributors + whitelist), "open" (everyone on site within 75m), "whitelist" (land holder + whitelisted users only), or "off" (disabled).'
+        },
         signature: { type: 'string' }
       },
       required: ['parcelId']
+    }
+  },
+  {
+    name: 'manage_land_chat_whitelist',
+    description:
+      'List, add, or remove users on a Virtual Land chat whitelist (owned parcel). Identify users by @username, email, 0x walletAddress, or userId. Used with chatAccessMode="whitelist" (or to pre-approve non-contributors in default "contributors" mode).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parcelId: { type: 'string' },
+        action: { type: 'string', enum: ['list', 'add', 'remove'] },
+        username: { type: 'string' },
+        email: { type: 'string' },
+        walletAddress: { type: 'string' },
+        userId: { type: 'string' }
+      },
+      required: ['parcelId', 'action']
     }
   },
   {

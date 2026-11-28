@@ -136,6 +136,7 @@ import {
 import {
   DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
+  addLandChatWhitelistMember,
   addLandContributor,
   compactSignatureRequestsMaintenance,
   connectMcpPairing,
@@ -158,6 +159,7 @@ import {
   inspectParcelFitForModel,
   isUserLandOwner,
   isUserParcelContributor,
+  listLandChatWhitelist,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listMcpPairings,
@@ -165,6 +167,7 @@ import {
   listSculptureRevisions,
   listSignatureHistoryForUser,
   rejectSignatureRequest,
+  removeLandChatWhitelistMember,
   removeLandContributor,
   signRequestByAgent,
   signRequestByMobile,
@@ -2961,6 +2964,59 @@ export default {
         return jsonResponse(out, 200, request);
       } catch (err) {
         return jsonResponse({ error: err.message || 'Remove contributor failed' }, err?.statusCode || 400, request);
+      }
+    }
+
+    const landChatWhitelistMatch = pathname.match(/^\/api\/lands\/([^/]+)\/chat-whitelist$/);
+    if (landChatWhitelistMatch) {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      const parcelId = decodeURIComponent(landChatWhitelistMatch[1]);
+      try {
+        if (request.method === 'GET') {
+          return jsonResponse(
+            await listLandChatWhitelist(d1Adapter, { parcelId, user }),
+            200,
+            request
+          );
+        }
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          return jsonResponse(
+            await addLandChatWhitelistMember(d1Adapter, { parcelId, user, body }),
+            200,
+            request
+          );
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Chat whitelist request failed' },
+          err?.statusCode || 400,
+          request
+        );
+      }
+    }
+
+    const landChatWhitelistDelMatch = pathname.match(
+      /^\/api\/lands\/([^/]+)\/chat-whitelist\/([^/]+)$/
+    );
+    if (landChatWhitelistDelMatch && request.method === 'DELETE') {
+      const user = await getAuthUser(request, env, cfg);
+      if (!user) return jsonResponse({ error: 'Google sign-in required' }, 401, request);
+      try {
+        const out = await removeLandChatWhitelistMember(d1Adapter, {
+          parcelId: decodeURIComponent(landChatWhitelistDelMatch[1]),
+          userSub: decodeURIComponent(landChatWhitelistDelMatch[2]),
+          user
+        });
+        return jsonResponse(out, 200, request);
+      } catch (err) {
+        return jsonResponse(
+          { error: err.message || 'Remove whitelist member failed' },
+          err?.statusCode || 400,
+          request
+        );
       }
     }
 

@@ -489,6 +489,7 @@ describe('On-Land Live Chat Bell Notification, Top GPS Tag Removal & Locked Land
         id: 'sc-cheese',
         title: 'Big cheese',
         parcelId: 'GLAND-STIBBLEZ',
+        creatorSub: 'u1',
         lat: 39.728,
         lng: -121.838,
         chatSummary: { initialized: true, messageCount: 5 }

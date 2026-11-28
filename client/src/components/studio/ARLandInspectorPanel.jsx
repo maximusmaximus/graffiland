@@ -47,6 +47,7 @@ export default function ARLandInspectorPanel({
   onShowHint = null,
   isDesktop = false,
   isSignedIn = true,
+  userId = '',
   cameraReady = true,
   hasLocation = true,
   expanded = undefined,
@@ -134,6 +135,7 @@ export default function ARLandInspectorPanel({
     proximity,
     isDesktop,
     isSignedIn,
+    userId,
     cameraReady,
     hasLocation,
     unitSystem

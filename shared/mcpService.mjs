@@ -51,6 +51,7 @@ import {
   requireActiveMcpPairing
 } from './mcp/pairingService.mjs';
 import {
+  addLandChatWhitelistMember,
   addLandContributor,
   applyCreateSculptureOnLand,
   directOwnerDeleteSculpture,
@@ -63,12 +64,14 @@ import {
   getMyLandsWorkspace,
   getPublicParcelDetail,
   inspectParcelFitForModel,
+  listLandChatWhitelist,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listOwnerLandsAndSculptures,
   listSculptureRevisions,
   preflightCreateSculptureOnLand,
   preflightUpdateSculpture,
+  removeLandChatWhitelistMember,
   removeLandContributor,
   updateLandSettings,
   upsertSculptureModelRow
@@ -137,6 +140,7 @@ export {
   DEFAULT_MCP_PAIRING_TTL_HOURS,
   MCP_TOOLS,
   McpServiceError,
+  addLandChatWhitelistMember,
   addLandContributor,
   checkParcelOwnership,
   checkSculptureEditPermission,
@@ -164,6 +168,7 @@ export {
   inspectParcelFitForModel,
   isUserLandOwner,
   isUserParcelContributor,
+  listLandChatWhitelist,
   listLandContributorsAndEligible,
   listLandsWithCurations,
   listMcpPairings,
@@ -171,6 +176,7 @@ export {
   listSculptureRevisions,
   listSignatureHistoryForUser,
   rejectSignatureRequest,
+  removeLandChatWhitelistMember,
   removeLandContributor,
   requireActiveMcpPairing,
   resolveParcelPlacementAccess,
@@ -776,6 +782,9 @@ export async function handleMcpJsonRpc(
             : {}),
           ...(args.requireApproval !== undefined
             ? { requireApproval: Boolean(args.requireApproval) }
+            : {}),
+          ...(args.chatAccessMode !== undefined
+            ? { chatAccessMode: String(args.chatAccessMode) }
             : {})
         },
         signature: args.signature || '',
@@ -785,6 +794,48 @@ export async function handleMcpJsonRpc(
         mintSculptureFn,
         notifyMobileFn
       });
+    } else if (toolName === 'manage_land_chat_whitelist') {
+      const action = String(args.action || 'list').trim().toLowerCase();
+      if (action === 'add') {
+        toolResult = await addLandChatWhitelistMember(db, {
+          parcelId: args.parcelId,
+          user: ownerUser,
+          body: {
+            userId: args.userId,
+            username: args.username,
+            email: args.email,
+            walletAddress: args.walletAddress
+          }
+        });
+      } else if (action === 'remove') {
+        let removeSub = String(args.userId || '').trim();
+        if (!removeSub) {
+          const currentList = await listLandChatWhitelist(db, {
+            parcelId: args.parcelId,
+            user: ownerUser
+          });
+          const cleanHandle = String(args.username || '').replace(/^@+/, '').trim().toLowerCase();
+          const cleanEmail = String(args.email || '').trim().toLowerCase();
+          const cleanWallet = String(args.walletAddress || '').trim().toLowerCase();
+          const match = (currentList.whitelist || []).find(
+            (m) =>
+              (cleanHandle && m.username?.toLowerCase() === cleanHandle) ||
+              (cleanEmail && m.email?.toLowerCase() === cleanEmail) ||
+              (cleanWallet && m.walletAddress?.toLowerCase() === cleanWallet)
+          );
+          removeSub = match?.userSub || '';
+        }
+        toolResult = await removeLandChatWhitelistMember(db, {
+          parcelId: args.parcelId,
+          userSub: removeSub,
+          user: ownerUser
+        });
+      } else {
+        toolResult = await listLandChatWhitelist(db, {
+          parcelId: args.parcelId,
+          user: ownerUser
+        });
+      }
     } else if (toolName === 'rollback_sculpture_revision') {
       const perm = await checkSculptureOrLandOwnership(db, {
         sculptureId: args.sculptureId,

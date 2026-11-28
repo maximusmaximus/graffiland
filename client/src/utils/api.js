@@ -287,6 +287,18 @@ export const api = {
       `/api/lands/${encodeURIComponent(parcelId)}/contributors/${encodeURIComponent(contributorSub)}`,
       { method: 'DELETE' }
     ),
+  listLandChatWhitelist: (parcelId) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/chat-whitelist`),
+  addLandChatWhitelistMember: (parcelId, payload) =>
+    request(`/api/lands/${encodeURIComponent(parcelId)}/chat-whitelist`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  removeLandChatWhitelistMember: (parcelId, userSub) =>
+    request(
+      `/api/lands/${encodeURIComponent(parcelId)}/chat-whitelist/${encodeURIComponent(userSub)}`,
+      { method: 'DELETE' }
+    ),
   eraseLand: (parcelId, payload = {}) =>
     request(`/api/lands/${encodeURIComponent(parcelId)}/erase`, {
       method: 'POST',
