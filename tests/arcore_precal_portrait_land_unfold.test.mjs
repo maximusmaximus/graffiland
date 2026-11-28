@@ -472,7 +472,8 @@ describe('Align AR Removal, Land Management Ordered Unfold, Portrait-Only Lock &
     assert.equal(startedXr, 1);
     assert.equal(skippedXr, 1);
 
-    // Once 6-DoF ARCore is active, standard calibration proceeds with ✓ 6-DoF chip visible
+    // Once 6-DoF ARCore is active, standard calibration proceeds cleanly without main-view jargon,
+    // and tapping the "i" technical info button reveals the ✓ 6-DoF telemetry chip!
     calView.rerender(
       React.createElement(SceneCoverageWidget, {
         sceneScan: { scannedCount: 2, targetCount: 4, coveragePct: 50, optimal: false },
@@ -487,6 +488,10 @@ describe('Align AR Removal, Land Management Ordered Unfold, Portrait-Only Lock &
       })
     );
     assert.equal(calView.queryByTestId('webxr-precalibration-prompt'), null);
+    assert.equal(calView.queryByTestId('cal-chip-webxr'), null, 'Technical 6-DoF jargon belongs inside the "i" info popover');
+    const techInfoBtn = calView.getByTestId('calibration-tech-info-tip').querySelector('button');
+    assert.ok(techInfoBtn, 'Calibration view must expose an "i" info button for technical details');
+    RTL.fireEvent.click(techInfoBtn);
     assert.ok(calView.getByTestId('cal-chip-webxr').textContent.includes('6-DoF'));
     calView.unmount();
 

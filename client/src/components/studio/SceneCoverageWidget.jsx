@@ -1,5 +1,7 @@
 import React from 'react';
 import { formatShortLength, useMeasurementUnits } from '../../utils/measurementUnits.js';
+import BrandLogo from '../BrandLogo.jsx';
+import InfoTip from '../InfoTip.jsx';
 import XeroIcon from '../XeroIcon.jsx';
 
 export default function SceneCoverageWidget({
@@ -49,6 +51,15 @@ export default function SceneCoverageWidget({
   const orbTarget = calibrationReadiness?.orbTarget || 2;
   const orbKeyframes = Number(orbStatus?.keyframes || 0);
   const checks = calibrationReadiness?.checks || null;
+  const gpsAccuracyM = checks?.gpsAccuracyM ?? sensorStatus?.gpsAccuracyM ?? null;
+  const hasGps = Boolean(checks?.gps || gpsAccuracyM !== null);
+
+  const rawSectors =
+    Array.isArray(sceneScan?.sectors) && sceneScan.sectors.length === 12
+      ? sceneScan.sectors
+      : Array.from({ length: 12 }, (_, idx) => idx < Number(sceneScan?.scannedCount || 0));
+  const logoComplete = Boolean(isCalibrated || progressPct >= 100);
+  const revealedTileCount = logoComplete ? rawSectors.length : rawSectors.filter(Boolean).length;
 
   const handleManualRestart = (e) => {
     e?.stopPropagation?.();
@@ -60,6 +71,70 @@ export default function SceneCoverageWidget({
   const handleStartFreshClick = () => {
     onStartFresh?.();
   };
+
+  const renderTechnicalInfoTip = ({ preCal = false } = {}) => (
+    <span className="calibration-info-tip" data-testid="calibration-tech-info-tip">
+      <InfoTip
+        title={preCal ? 'Enhanced AR Tracking Details' : 'How AR Calibration Works'}
+        mode="popover"
+        align="right"
+      >
+        <div className="calibration-tech-info-body" data-testid="calibration-tech-info-body">
+          {preCal ? (
+            <p className="calibration-tech-info-copy">
+              <strong>6-DoF ARCore (WebXR)</strong> fuses hardware visual-inertial odometry with
+              compass &amp; ORB landmark anchors for centimeter-level world lock. Standard Scan uses
+              cross-browser Gyro + ORB visual matching.
+            </p>
+          ) : (
+            <p className="calibration-tech-info-copy">
+              Moving your phone captures multi-angle <strong>ORB visual landmarks</strong> and fuses
+              camera frames with <strong>gyroscope/compass</strong> and <strong>GPS</strong> so your
+              3D art stays anchored in real space.
+            </p>
+          )}
+          <div className="calibration-signal-chips">
+            {webxrActive && (
+              <span className="cal-chip ok" data-testid="cal-chip-webxr">
+                ✓ 6-DoF
+              </span>
+            )}
+            <span
+              className={`cal-chip ${cameraReady && !calibrationReadiness?.lensOccluded ? 'ok' : 'warn'}`}
+            >
+              {cameraReady ? '✓' : '·'} Cam
+            </span>
+            <span className={`cal-chip ${checks?.motion !== false && !needsGyroTap ? 'ok' : 'warn'}`}>
+              {checks?.motion !== false && !needsGyroTap ? '✓' : '·'} Motion
+            </span>
+            <span className={`cal-chip ${checks?.orb || orbKeyframes >= orbTarget ? 'ok' : ''}`}>
+              {checks?.orb || orbKeyframes >= orbTarget ? '✓' : '·'} ORB {Math.min(orbKeyframes, 3)}/
+              {orbTarget}
+            </span>
+            <span className={`cal-chip ${hasGps ? 'ok' : 'muted'}`}>
+              {hasGps && gpsAccuracyM !== null
+                ? `GPS ±${Math.round(gpsAccuracyM)}m`
+                : hasGps
+                ? '✓ GPS'
+                : 'GPS…'}
+            </span>
+          </div>
+          <div className="scene-scan-precision mono">
+            ±
+            {formatShortLength(sceneScan?.precisionMeters ?? 2.4, unitSystem, {
+              decimals: 2,
+              compact: true
+            })}{' '}
+            · {orbStatus?.engine || 'Gyro+ORB'} ({orbKeyframes}/3)
+            {orbStatus?.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
+            {orbStatus?.packStatus === 'no_pack'
+              ? ' · Scan space on mobile to calibrate Visual Match'
+              : ''}
+          </div>
+        </div>
+      </InfoTip>
+    </span>
+  );
 
   // Minimized icon docked right above the side-scroll tool selector caption when calibrated
   if (!isCenteredOverlay && scanBoxCollapsed) {
@@ -89,13 +164,13 @@ export default function SceneCoverageWidget({
           onClick={onToggleCollapse}
           aria-label={
             isRelocalizing
-              ? 'Verifying AR calibration'
-              : 'AR calibrated — tap for calibration details'
+              ? 'Checking AR alignment'
+              : 'Space lined up — tap for setup details'
           }
           title={
             isRelocalizing
-              ? 'Verifying AR visual lock…'
-              : 'AR Calibrated (100%) — tap for details'
+              ? 'Checking AR alignment…'
+              : 'Ready to draw (100%) — tap for details'
           }
         >
           <span className={`calibration-dot ${isRelocalizing ? 'pulsing' : 'locked'}`} />
@@ -107,8 +182,8 @@ export default function SceneCoverageWidget({
             className="scene-scan-refresh calibration-mini-refresh"
             data-testid="scene-scan-refresh-btn"
             onClick={handleManualRestart}
-            aria-label="Restart scene mapping"
-            title="Recalibrate AR space"
+            aria-label="Restart setup scan"
+            title="Scan your space again"
           >
             <XeroIcon emoji="🔄" size={11} />
           </button>
@@ -117,7 +192,7 @@ export default function SceneCoverageWidget({
     );
   }
 
-  // Default pre-calibration 6-DoF ARCore prompt shown FIRST on ARCore-capable devices
+  // Default pre-calibration prompt shown FIRST on ARCore-capable devices
   // before standard sweep calibration (configurable on/off in Profile ⚙️ Settings).
   if (isWebXrPreCal) {
     return (
@@ -131,19 +206,19 @@ export default function SceneCoverageWidget({
         data-calibration-phase="webxr-precalibration"
         data-needs-restart="false"
         role="dialog"
-        aria-label="Enable 6-DoF ARCore for calibration"
+        aria-label="Enable Enhanced AR for setup"
       >
         <div className="scene-scan-header" data-testid="webxr-precalibration-prompt">
           <div className="scene-scan-title">
             <XeroIcon emoji="✨" size={15} />
-            <span className="calibration-card-heading">6-DoF ARCore Ready</span>
-            <span className="scene-scan-tag">6-DoF</span>
+            <span className="calibration-card-heading">Enhanced AR Ready</span>
           </div>
+          <div className="scene-scan-header-actions">{renderTechnicalInfoTip({ preCal: true })}</div>
         </div>
         <div className="webxr-precal-body">
           <p className="webxr-precal-copy">
-            Your device supports <strong>6-DoF ARCore</strong> for faster calibration and tighter
-            real-world tracking. Turn it on first before calibrating your space.
+            Your phone supports smoother, steadier AR tracking. Turn it on before looking around
+            your space.
           </p>
           <div className="webxr-precal-actions">
             <button
@@ -154,7 +229,7 @@ export default function SceneCoverageWidget({
               onClick={() => onStartWebXrPreCal?.()}
             >
               <XeroIcon emoji="✨" size={14} />{' '}
-              {webxrStarting ? 'Starting 6-DoF ARCore…' : 'Enable 6-DoF ARCore & Calibrate'}
+              {webxrStarting ? 'Starting Enhanced AR…' : 'Turn On Enhanced AR'}
             </button>
             <button
               type="button"
@@ -163,11 +238,11 @@ export default function SceneCoverageWidget({
               disabled={webxrStarting}
               onClick={() => onSkipWebXrPreCal?.()}
             >
-              Use Standard Calibration
+              Use Standard Scan
             </button>
           </div>
           <div className="calibration-gate-note">
-            Manage 6-DoF ARCore anytime in Profile ⚙️ Settings.
+            Change this anytime in Profile ⚙️ Settings.
           </div>
         </div>
       </div>
@@ -175,27 +250,26 @@ export default function SceneCoverageWidget({
   }
 
   // Front-and-center calibration card (initial calibration or lost calibration)
-  // OR expanded bottom-right diagnostics popover when user taps the minimized icon
+  // OR expanded diagnostics popover when user taps the minimized icon
   const statusTag = needsRestart
     ? activeLoss?.movedSubstantially
       ? 'MOVED'
-      : 'RE-LOCK'
+      : 'RESET'
     : isRelocalizing
-      ? 'RELOCK'
+      ? 'SYNCING'
       : isCalibrated
-        ? 'LOCKED'
-        : `${sceneScan?.scannedCount ?? 0}/${sweepTarget}`;
+        ? 'READY'
+        : `${Math.min(sceneScan?.scannedCount ?? 0, sweepTarget)}/${sweepTarget}`;
 
   const centerHeadline = needsRestart
-    ? activeLoss?.title || 'Calibration Lost'
-    : calibrationReadiness?.headline || 'Calibrating AR Space';
+    ? activeLoss?.title || 'Line Up Your Space'
+    : calibrationReadiness?.headline || 'Look Around to Set Up';
 
   const activeHint = needsRestart
-    ? activeLoss?.summary || 'Tracking lost — pan slowly to re-lock AR.'
-    : calibrationReadiness?.subHint || sceneScan?.hint || 'Pan phone slowly around your space';
-
-  const gpsAccuracyM = checks?.gpsAccuracyM ?? sensorStatus?.gpsAccuracyM ?? null;
-  const hasGps = Boolean(checks?.gps || gpsAccuracyM !== null);
+    ? activeLoss?.summary || 'Move your phone slowly around you to line things back up.'
+    : calibrationReadiness?.subHint ||
+      sceneScan?.hint ||
+      'Move your phone slowly around you to reveal the logo';
 
   return (
     <div
@@ -215,7 +289,7 @@ export default function SceneCoverageWidget({
       data-calibration-state={resolvedState}
       data-needs-restart={needsRestart ? 'true' : 'false'}
       role={isCenteredOverlay ? 'dialog' : 'region'}
-      aria-label={isCenteredOverlay ? 'AR space calibration required' : 'AR calibration details'}
+      aria-label={isCenteredOverlay ? 'Space setup required' : 'AR setup details'}
     >
       <div
         className="scene-scan-header"
@@ -223,7 +297,7 @@ export default function SceneCoverageWidget({
       >
         <div className="scene-scan-title">
           <XeroIcon
-            emoji={needsRestart ? '⚠️' : isCalibrated ? '✅' : '📡'}
+            emoji={needsRestart ? '⚠️' : isCalibrated ? '✅' : '✨'}
             size={isCenteredOverlay ? 15 : 12}
           />
           {isCenteredOverlay ? (
@@ -237,6 +311,7 @@ export default function SceneCoverageWidget({
           {isCenteredOverlay && !needsRestart && (
             <span className="mono calibration-pct-badge">{progressPct}%</span>
           )}
+          {renderTechnicalInfoTip({ preCal: false })}
           {onRestartMapping && (
             <button
               type="button"
@@ -244,7 +319,7 @@ export default function SceneCoverageWidget({
               data-testid="scene-scan-refresh-btn"
               onClick={handleManualRestart}
               aria-label="Restart scene mapping"
-              title="Restart scene mapping"
+              title="Scan your space again"
             >
               <XeroIcon emoji="🔄" size={11} />
             </button>
@@ -293,7 +368,7 @@ export default function SceneCoverageWidget({
                 data-testid="scene-scan-restart-btn"
                 onClick={handlePromptRestart}
               >
-                <XeroIcon emoji="🔄" size={12} /> Recalibrate
+                <XeroIcon emoji="🔄" size={12} /> Scan Again
               </button>
             )}
             {Boolean(activeLoss?.canStartFresh || activeLoss?.movedSubstantially) &&
@@ -329,23 +404,60 @@ export default function SceneCoverageWidget({
               data-testid="calibration-enable-motion-btn"
               onClick={() => onEnableIosGyro()}
             >
-              <XeroIcon emoji="🧭" size={14} /> Enable Motion & Compass
+              <XeroIcon emoji="🧭" size={14} /> Allow Motion Access
             </button>
           )}
 
-          <div className={`scene-scan-window ${isCenteredOverlay ? 'is-large' : ''}`} aria-hidden="true">
-            <div className="scene-scan-grid">
-              {(sceneScan?.sectors || Array(12).fill(false)).map((lit, i) => (
-                <span key={i} className={`scene-scan-cell ${lit ? 'scanned' : ''}`} />
-              ))}
+          {/* Interactive 4x3 tile grid that reveals the SPRAY.LAND site logo as you scan around */}
+          <div
+            className={`scene-scan-window is-logo-reveal ${isCenteredOverlay ? 'is-large' : ''} ${
+              logoComplete ? 'is-logo-complete' : ''
+            }`}
+            data-testid="calibration-logo-reveal"
+            data-revealed-tiles={revealedTileCount}
+            data-total-tiles={rawSectors.length}
+            data-logo-complete={logoComplete ? 'true' : 'false'}
+            aria-hidden="true"
+          >
+            <div className="scene-scan-logo-layer is-ghost">
+              <BrandLogo
+                variant="lockup"
+                tone="dark"
+                decorative
+                height={isCenteredOverlay ? 44 : 26}
+                className="scene-scan-logo-img"
+              />
             </div>
-            <span
-              className="scene-scan-dot"
-              style={{
-                left: `${(sceneScan?.cursorX ?? 0.5) * 100}%`,
-                top: `${(sceneScan?.cursorY ?? 0.5) * 100}%`
-              }}
-            />
+            <div className="scene-scan-logo-layer is-vibrant">
+              <BrandLogo
+                variant="lockup"
+                tone="dark"
+                decorative
+                height={isCenteredOverlay ? 44 : 26}
+                className="scene-scan-logo-img"
+              />
+            </div>
+            <div className="scene-scan-grid">
+              {rawSectors.map((lit, i) => {
+                const revealed = Boolean(lit || logoComplete);
+                return (
+                  <span
+                    key={i}
+                    className={`scene-scan-cell ${revealed ? 'scanned' : ''}`}
+                    data-revealed={revealed ? 'true' : 'false'}
+                  />
+                );
+              })}
+            </div>
+            {!logoComplete && (
+              <span
+                className="scene-scan-dot"
+                style={{
+                  left: `${(sceneScan?.cursorX ?? 0.5) * 100}%`,
+                  top: `${(sceneScan?.cursorY ?? 0.5) * 100}%`
+                }}
+              />
+            )}
           </div>
 
           <div className="scene-scan-bar">
@@ -353,32 +465,6 @@ export default function SceneCoverageWidget({
           </div>
 
           <div className="scene-scan-hint">{activeHint}</div>
-
-          <div className="calibration-signal-chips">
-            {webxrActive && (
-              <span className="cal-chip ok" data-testid="cal-chip-webxr">
-                ✓ 6-DoF
-              </span>
-            )}
-            <span className={`cal-chip ${cameraReady && !calibrationReadiness?.lensOccluded ? 'ok' : 'warn'}`}>
-              {cameraReady ? '✓' : '·'} Cam
-            </span>
-            <span className={`cal-chip ${checks?.motion !== false && !needsGyroTap ? 'ok' : 'warn'}`}>
-              {checks?.motion !== false && !needsGyroTap ? '✓' : '·'} Motion
-            </span>
-            <span className={`cal-chip ${checks?.orb || orbKeyframes >= orbTarget ? 'ok' : ''}`}>
-              {checks?.orb || orbKeyframes >= orbTarget ? '✓' : '·'} ORB {Math.min(orbKeyframes, 3)}/{orbTarget}
-            </span>
-            <span className={`cal-chip ${hasGps ? 'ok' : 'muted'}`}>
-              {hasGps && gpsAccuracyM !== null ? `GPS ±${Math.round(gpsAccuracyM)}m` : hasGps ? '✓ GPS' : 'GPS…'}
-            </span>
-          </div>
-
-          <div className="scene-scan-precision mono">
-            ±{formatShortLength(sceneScan?.precisionMeters ?? 2.4, unitSystem, { decimals: 2, compact: true })} · {orbStatus?.engine || 'Gyro+ORB'} ({orbKeyframes}/3)
-            {orbStatus?.relocalizedInliers > 0 ? ` · ${orbStatus.relocalizedInliers} pts` : ''}
-            {orbStatus?.packStatus === 'no_pack' ? ' · Scan space on mobile to calibrate Visual Match' : ''}
-          </div>
 
           {isCenteredOverlay && (
             <div className="calibration-gate-note">
@@ -393,7 +479,7 @@ export default function SceneCoverageWidget({
               style={{ width: '100%', padding: '3px 6px', fontSize: 10, marginTop: 4 }}
               onClick={onRefreshOrbRescan}
             >
-              <XeroIcon emoji="🔄" size={10} /> Re-scan ORB View
+              <XeroIcon emoji="🔄" size={10} /> Re-scan View
             </button>
           )}
         </>

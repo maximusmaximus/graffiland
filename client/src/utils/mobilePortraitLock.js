@@ -168,17 +168,20 @@ export function syncMobileViewportDimensions(
   const vvW = Number(vv?.width || 0);
   const vvH = Number(vv?.height || 0);
   const editingInput = isEditableElementFocused(doc);
+  const inDomFullscreen = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
 
   let visibleH = innerH;
   if (!editingInput && vvH > 0) {
-    visibleH = innerH > 0 ? Math.min(vvH, innerH) : vvH;
+    // During browser/DOM fullscreen transitions visualViewport can briefly lag behind
+    // window.innerHeight — use max() in fullscreen so camera & HUD fill 100% of the screen.
+    visibleH = innerH > 0 ? (inDomFullscreen ? Math.max(vvH, innerH) : Math.min(vvH, innerH)) : vvH;
   } else if (visibleH <= 0 && vvH > 0) {
     visibleH = vvH;
   }
 
   let visibleW = innerW;
   if (!editingInput && vvW > 0) {
-    visibleW = innerW > 0 ? Math.min(vvW, innerW) : vvW;
+    visibleW = innerW > 0 ? (inDomFullscreen ? Math.max(vvW, innerW) : Math.min(vvW, innerW)) : vvW;
   } else if (visibleW <= 0 && vvW > 0) {
     visibleW = vvW;
   }

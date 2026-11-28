@@ -17,6 +17,7 @@ import {
   isAutoplayBlockedError,
   isPermissionDeniedError,
   isTransientHardwareError,
+  resumeVideoElementPlayback,
   stopMediaStreamTracks
 } from '../utils/cameraRecovery.js';
 import {
@@ -277,15 +278,12 @@ export function useProofOfLocation({
   }, []);
   refreshLocationNowRef.current = refreshLocationNow;
 
+  // Never forcibly hijack mobile browsers into DOM requestFullscreen() on routine AR taps:
+  // Android Chrome / Chromium frequently locks or pauses hardware <video> camera surfaces
+  // and drops pointer capture during DOM fullscreen transitions. Keep portrait orientation
+  // synced safely and recover the camera cleanly whenever the user enters/exits browser fullscreen.
   const enterFullscreen = useCallback(() => {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && el.requestFullscreen) {
-      el.requestFullscreen()
-        .then(() => tryLockPortraitOrientation())
-        .catch(() => {});
-    } else {
-      tryLockPortraitOrientation();
-    }
+    tryLockPortraitOrientation();
   }, []);
 
   const clearRetryTimer = useCallback(() => {
@@ -1188,6 +1186,68 @@ export function useProofOfLocation({
       onNetworkReconnectRef.current?.();
     };
 
+    const fullscreenSettleTimers = new Set();
+    const clearFullscreenSettleTimers = () => {
+      for (const id of fullscreenSettleTimers) clearTimeout(id);
+      fullscreenSettleTimers.clear();
+    };
+
+    const recoverCameraAfterViewportTransition = (reason = 'fullscreen_change') => {
+      if (unmountedRef.current || webxrActiveRef.current) return;
+      if (cameraSuspendedBridgeRef.current?.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        needsRefreshOnVisibleRef.current = true;
+        return;
+      }
+      watchdogRestartCountRef.current = 0;
+      const videoEl = videoRef.current;
+      const stream = cameraStreamRef.current;
+      if (videoEl && stream) {
+        resumeVideoElementPlayback(videoEl, stream).then((playing) => {
+          if (!unmountedRef.current && playing) {
+            setCameraReady(true);
+            cameraReadyRef.current = true;
+            setCameraRecovering(false);
+          }
+        });
+      }
+      ensureCameraLiveRef.current?.({ reason, allowRestart: true });
+      clearFullscreenSettleTimers();
+      for (const delayMs of [180, 550]) {
+        const tid = setTimeout(() => {
+          fullscreenSettleTimers.delete(tid);
+          if (unmountedRef.current || webxrActiveRef.current) return;
+          if (cameraSuspendedBridgeRef.current?.current) return;
+          const vEl = videoRef.current;
+          const curStream = cameraStreamRef.current;
+          const stalled =
+            !vEl ||
+            !curStream ||
+            vEl.paused ||
+            vEl.readyState < 2 ||
+            vEl.videoWidth <= 0 ||
+            vEl.videoHeight <= 0;
+          if (stalled && delayMs >= 500) {
+            refreshCameraRef.current?.({ reason: `${reason}_recover`, force: true });
+          } else {
+            if (vEl && curStream) {
+              resumeVideoElementPlayback(vEl, curStream).catch(() => {});
+            }
+            ensureCameraLiveRef.current?.({ reason: `${reason}_settle`, allowRestart: true });
+          }
+        }, delayMs);
+        fullscreenSettleTimers.add(tid);
+      }
+    };
+
+    const onFullscreenChange = () => {
+      recoverCameraAfterViewportTransition('fullscreen_change');
+    };
+
+    const onOrientationChange = () => {
+      recoverCameraAfterViewportTransition('orientation_change');
+    };
+
     const onDeviceChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         needsRefreshOnVisibleRef.current = true;
@@ -1199,12 +1259,15 @@ export function useProofOfLocation({
 
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange);
+      document.addEventListener('fullscreenchange', onFullscreenChange);
+      document.addEventListener('webkitfullscreenchange', onFullscreenChange);
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('pageshow', onPageShow);
       window.addEventListener('focus', onFocus);
       window.addEventListener('offline', onOffline);
       window.addEventListener('online', onOnline);
+      window.addEventListener('orientationchange', onOrientationChange);
     }
     navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
 
@@ -1213,6 +1276,7 @@ export function useProofOfLocation({
       cameraOpIdRef.current += 1;
       clearInterval(samplerId);
       clearInterval(watchdogId);
+      clearFullscreenSettleTimers();
       clearRetryTimer();
       clearGestureResume();
       clearRvfcWatcher();
@@ -1221,12 +1285,15 @@ export function useProofOfLocation({
       detachVideoListeners();
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibilityChange);
+        document.removeEventListener('fullscreenchange', onFullscreenChange);
+        document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
       }
       if (typeof window !== 'undefined') {
         window.removeEventListener('pageshow', onPageShow);
         window.removeEventListener('focus', onFocus);
         window.removeEventListener('offline', onOffline);
         window.removeEventListener('online', onOnline);
+        window.removeEventListener('orientationchange', onOrientationChange);
       }
       navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
       tearingDownCameraRef.current = true;

@@ -188,10 +188,11 @@ export default function ARLandInspectorPanel({
       return;
     }
     if (!canonicalChatTarget) return;
+    const onLandDist = land.isInside ? 0 : (edgeDistM ?? land.distanceMeters ?? 0);
     if (typeof onOpenLandChat === 'function') {
       onOpenLandChat(land, canonicalChatTarget);
     } else if (typeof onOpenSculptureChat === 'function') {
-      onOpenSculptureChat(canonicalChatTarget, land.distanceMeters ?? 0);
+      onOpenSculptureChat(canonicalChatTarget, onLandDist);
     }
   };
   const currentIdx = nearbyLands.findIndex((item) => item?.parcelId === land.parcelId);
@@ -342,7 +343,18 @@ export default function ARLandInspectorPanel({
                 </button>
               </div>
             )}
-            {!land.isInside && land.googleMapsUrl ? (
+            {land.isInside && canOpenLandChat && isChatUnlocked ? (
+              <button
+                type="button"
+                className="btn btn-xs btn-primary ar-land-compact-cta"
+                data-testid="ar-land-compact-chat-btn"
+                aria-label={`Open chat for ${displayName}`}
+                onClick={handleOpenLandChat}
+              >
+                <XeroIcon emoji="💬" size={13} />
+                <span>Chat</span>
+              </button>
+            ) : !land.isInside && land.googleMapsUrl ? (
               <a
                 className="btn btn-xs ar-land-compact-cta"
                 href={land.googleMapsUrl}

@@ -78,36 +78,44 @@ export function evaluateArLandActionProximity(land) {
  */
 export function resolveLandChatTarget(land, displayName = '') {
   if (!land) return null;
-  const sculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const rawSculptures = Array.isArray(land.sculptures) ? land.sculptures : [];
+  const sculptures = rawSculptures.filter((s) => s && !s.hidden && !s.isPendingApproval);
   const label =
     displayName ||
     resolveLandDisplayName({
       customName: String(land.customName || '').trim(),
       displayName: land.displayName || '',
-      firstSculptureTitle: sculptures[0]?.title || ''
+      firstSculptureTitle: sculptures[0]?.title || rawSculptures[0]?.title || ''
     });
+  const landLat = land.centerLat ?? land.volume?.centerLat ?? null;
+  const landLng = land.centerLng ?? land.volume?.centerLng ?? null;
 
   if (sculptures.length > 0) {
     const initialized = sculptures.find((s) => s?.chatSummary?.initialized);
     const chosen = initialized || sculptures[0];
+    const resolvedLat = chosen.lat ?? landLat;
+    const resolvedLng = chosen.lng ?? landLng;
     return {
       ...chosen,
       parcelId: chosen.parcelId || land.parcelId,
-      parcelName: chosen.parcelName || land.customName || label
+      parcelName: chosen.parcelName || land.customName || label,
+      customName: chosen.customName || land.customName || '',
+      landDisplayName: label,
+      lat: Number.isFinite(Number(resolvedLat)) ? Number(resolvedLat) : chosen.lat,
+      lng: Number.isFinite(Number(resolvedLng)) ? Number(resolvedLng) : chosen.lng
     };
   }
 
   if (!land.parcelId) return null;
-  const lat = land.centerLat ?? land.volume?.centerLat ?? null;
-  const lng = land.centerLng ?? land.volume?.centerLng ?? null;
   return {
     id: land.parcelId,
     parcelId: land.parcelId,
     parcelName: label,
     customName: land.customName || '',
+    landDisplayName: label,
     title: label,
-    lat: Number.isFinite(Number(lat)) ? Number(lat) : null,
-    lng: Number.isFinite(Number(lng)) ? Number(lng) : null,
+    lat: Number.isFinite(Number(landLat)) ? Number(landLat) : null,
+    lng: Number.isFinite(Number(landLng)) ? Number(landLng) : null,
     creatorSub: land.ownerSub || land.stewardSub || '',
     creatorUsername: land.stewardUsername || '',
     creatorName: land.stewardName || '',

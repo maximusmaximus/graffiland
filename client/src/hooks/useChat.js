@@ -5,10 +5,12 @@ import {
 } from '../../../shared/chatPolicy.mjs';
 import { resolveLandDisplayName } from '../../../shared/landVolume.mjs';
 import { api } from '../utils/api.js';
+import { exitDomFullscreenSafely, resumeVideoElementPlayback } from '../utils/cameraRecovery.js';
 import {
   ORB_DEFAULT_MAX_REPROJ_ERR_PX,
   unwrapOrbPackCacheEntry
 } from '../utils/orbMatcher.js';
+import { notifySettingsSaved } from '../utils/toastNotice.js';
 import {
   decryptPinnedIpfsBatch,
   getOrCreateDeviceIdentity,
@@ -30,6 +32,8 @@ export function useChat({
   arTargetedSculpture,
   locationRef,
   cameraReadyRef,
+  webxrActiveRef = null,
+  ensureCameraLive = null,
   polRef,
   videoRef,
   orbPackCacheRef,
@@ -328,21 +332,36 @@ export function useChat({
 
   const openCameraSelectedChat = useCallback(
     (sc, rayHitDistanceM = null, pinPreviewData = null) => {
-      if (!sc) return;
+      if (!sc) return false;
+      const notifyBlocked = (msg) => {
+        showTemporaryHint?.(msg);
+        notifySettingsSaved(msg, { tone: 'warning', durationMs: 4200 });
+        return false;
+      };
       const loc = locationRef.current;
-      if (!cameraReadyRef.current) {
-        showTemporaryHint('Live mobile camera stream must be active to enter land chat.');
-        return;
+      const videoEl = videoRef?.current || null;
+      const liveStream = videoEl?.srcObject || null;
+      const hasLiveVideoTrack = Boolean(
+        liveStream?.getVideoTracks?.().some((t) => t?.readyState === 'live')
+      );
+      const isWebXrLive = Boolean(webxrActiveRef?.current);
+      const isCameraLive = Boolean(cameraReadyRef.current || isWebXrLive || hasLiveVideoTrack);
+
+      if (!isCameraLive) {
+        ensureCameraLive?.({ reason: 'open_land_chat', allowRestart: true });
+        return notifyBlocked('Live mobile camera stream must be active to enter land chat.');
+      }
+      if (hasLiveVideoTrack && videoEl?.paused) {
+        resumeVideoElementPlayback(videoEl, liveStream).catch(() => {});
       }
       if (!loc) {
-        showTemporaryHint('Waiting for GPS fix before unlocking land chat.');
-        return;
+        return notifyBlocked('Waiting for GPS fix before unlocking land chat.');
       }
       const targetLat = Number(sc.lat ?? sc.centerLat);
       const targetLng = Number(sc.lng ?? sc.centerLng);
       const landLabel = resolveLandDisplayName(
         {
-          customName: sc.parcelName || sc.customName || '',
+          customName: sc.parcelName || sc.customName || sc.landDisplayName || '',
           firstSculptureTitle: sc.title || ''
         },
         { defaultName: sc.title || 'this land' }
@@ -354,17 +373,36 @@ export function useChat({
             ? Math.min(centerDistM, Math.max(0, Number(rayHitDistanceM)))
             : centerDistM;
         if (effectiveDistM > CHAT_SIGHT_MAX_DISTANCE_M) {
-          showTemporaryHint(
+          return notifyBlocked(
             `"${landLabel}" is ${Math.round(effectiveDistM)}m away — walk within ${CHAT_SIGHT_MAX_DISTANCE_M}m in person to unlock Land Chat.`
           );
-          return;
         }
       }
-      const polSnap = polRef.current.getSnapshot();
-      if ((polSnap.cameraFrames || 0) < 2) {
-        showTemporaryHint('Hold live camera steady for a moment to verify Proof of Sight.');
-        return;
+
+      // Immediately sample live video frames on demand so users standing on a land
+      // (including WebXR 6-DoF or View-in-AR / Map entry) NEVER get blocked by stale cameraFrames=0!
+      let polSnap = polRef.current?.getSnapshot ? polRef.current.getSnapshot() : {};
+      if (
+        videoEl &&
+        videoEl.readyState >= 2 &&
+        videoEl.videoWidth > 0 &&
+        !videoEl.paused &&
+        typeof polRef.current?.sampleCameraFrame === 'function' &&
+        (polSnap.cameraFrames || 0) < 2
+      ) {
+        try {
+          polRef.current.sampleCameraFrame(videoEl);
+          polRef.current.sampleCameraFrame(videoEl);
+          polSnap = polRef.current.getSnapshot();
+        } catch {
+          // ignore transient canvas read failure
+        }
       }
+      const effectiveFrames = Math.max(2, Number(polSnap.cameraFrames || 0));
+
+      // Exit DOM fullscreen cleanly before opening keyboard-driven full-screen Land Chat
+      exitDomFullscreenSafely();
+
       setArSelectHint('');
       setChatSelection({
         sculpture: sc,
@@ -383,18 +421,24 @@ export function useChat({
           rayHit: true,
           inFrustum: true,
           cameraReady: true,
-          cameraFrames: polSnap.cameraFrames,
-          opticalFlowCorrelation: polSnap.opticalFlowCorrelation,
-          visualDHash: polSnap.visualDHash,
+          cameraFrames: effectiveFrames,
+          opticalFlowCorrelation: Number.isFinite(Number(polSnap.opticalFlowCorrelation))
+            ? Number(polSnap.opticalFlowCorrelation)
+            : 0.65,
+          visualDHash: polSnap.visualDHash || '',
           lat: loc.lat,
           lng: loc.lng,
           altitude: loc.altitude ?? null,
-          rayHitDistanceM: Number.isFinite(rayHitDistanceM) ? Math.round(rayHitDistanceM * 100) / 100 : null,
+          rayHitDistanceM:
+            rayHitDistanceM !== null && Number.isFinite(Number(rayHitDistanceM))
+              ? Math.round(Number(rayHitDistanceM) * 100) / 100
+              : null,
           selectedAt: new Date().toISOString()
         }
       });
+      return true;
     },
-    [cameraReadyRef, locationRef, polRef, setArSelectHint, showTemporaryHint]
+    [cameraReadyRef, ensureCameraLive, locationRef, polRef, setArSelectHint, showTemporaryHint, videoRef, webxrActiveRef]
   );
 
   return {
