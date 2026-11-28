@@ -556,7 +556,11 @@ describe('Desktop Placement Auto-Edit, Scene Ghost Switching, Undo/Redo & Esc Ex
       assert.equal(putCalls.length, 1, 'Should auto-save sculpture A via PUT before switching');
       assert.equal(putCalls[0].id, 'sc-a');
       assert.equal(putCalls[0].body.scale, 2.4);
-      assert.equal(putCalls[0].body.anchorOffset.dx, -2.5);
+      // US parcel defaults to Imperial (feet): -2.5 ft converts cleanly to -0.762 m on save
+      assert.ok(
+        Math.abs(putCalls[0].body.anchorOffset.dx - -0.762) < 0.002,
+        `Expected -2.5 ft -> ~-0.762 m, got ${putCalls[0].body.anchorOffset.dx}`
+      );
       assert.deepEqual(updatedEvents, [{ id: 'sc-a', keepActiveSelection: true }]);
       assert.deepEqual(selectedEvents, ['sc-b']);
 

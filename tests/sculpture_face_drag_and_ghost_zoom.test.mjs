@@ -403,4 +403,131 @@ describe('SculptureModal Ghost Click -> 25% Viewport Zoom Integration (React + j
       cleanup();
     }
   });
+
+  test('5. Modify, Scale & Move Artwork displays feet by default for US/Imperial, saves canonical meters, and live-switches to Metric', async () => {
+    const { default: SculptureModal } = await loadJsxModule(
+      'client/src/components/SculptureModal.jsx'
+    );
+    const { setStoredUnitPreference } = await loadJsxModule(
+      'client/src/utils/measurementUnits.js'
+    );
+
+    const parcel = {
+      parcelId: 'GLAND-STIBBLEZ-FT',
+      customName: 'Stibblez Land',
+      ownerSub: 'u-bigdog',
+      lat: 39.7285,
+      lng: -121.8375,
+      widthMeters: 70.7,
+      depthMeters: 70.7,
+      heightMeters: 11.0,
+      frozen: false
+    };
+    const badFlower = {
+      id: 'sc-flower-ft',
+      title: 'Bad Flower',
+      parcelId: parcel.parcelId,
+      creatorSub: 'u-bigdog',
+      creatorUsername: 'bigdog',
+      lat: parcel.lat,
+      lng: parcel.lng,
+      voxelCount: 467,
+      voxels: [{ x: 0, y: 0, z: 0, color: '#00f5d4' }],
+      anchorOffset: { dx: 3.484, dy: 0, dz: -0.335, yaw: -72, pitch: 0, roll: 0 },
+      baseDimensions: { width: 5.26, height: 7.08, depth: 2.32 }
+    };
+
+    const savedPayloads = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes(`/api/sculptures/${badFlower.id}`) && opts.method === 'PUT') {
+        const body = JSON.parse(opts.body || '{}');
+        savedPayloads.push(body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            sculpture: { ...badFlower, anchorOffset: body.anchorOffset }
+          })
+        };
+      }
+      if (u.includes(`/api/lands/${parcel.parcelId}`)) {
+        return { ok: true, status: 200, json: async () => ({ parcel, sculptures: [badFlower] }) };
+      }
+      if (u.includes(`/api/sculptures/${badFlower.id}`)) {
+        return { ok: true, status: 200, json: async () => ({ sculpture: badFlower }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+
+    setStoredUnitPreference('auto');
+    try {
+      const view = RTL.render(
+        React.createElement(SculptureModal, {
+          sculpture: badFlower,
+          user: { id: 'u-bigdog', username: 'bigdog' },
+          isDesktop: true,
+          allParcels: [parcel],
+          allSculptures: [badFlower],
+          onClose: () => {}
+        })
+      );
+
+      await RTL.waitFor(() => {
+        const studio = view.getByTestId('sculpture-transform-studio');
+        assert.equal(studio.getAttribute('data-unit-system'), 'imperial');
+      });
+
+      // All Modify, Scale & Move Artwork readouts + corner pills show feet (ft), NOT meters
+      assert.ok(view.getByTestId('sculpture-corner-transform-pill').textContent.includes('ft'));
+      assert.ok(!view.getByTestId('sculpture-corner-transform-pill').textContent.includes('m ·'));
+      assert.ok(view.getByTestId('sculpture-corner-offset-pill').textContent.includes('ft'));
+      assert.ok(view.getByTestId('sculpture-scale-dims-summary').textContent.includes('ft inside'));
+      assert.ok(view.getByTestId('sculpture-scale-dims-summary').textContent.includes('ft land'));
+      assert.equal(view.getByTestId('sculpture-move-dx-readout').textContent.trim(), '11.43 ft');
+      assert.equal(view.getByTestId('sculpture-move-dz-readout').textContent.trim(), '-1.10 ft');
+      assert.equal(view.getByTestId('sculpture-move-dy-readout').textContent.trim(), '0.00 ft');
+      assert.equal(view.getByTestId('sculpture-move-dx-input').getAttribute('aria-label'), 'dx (ft)');
+      assert.equal(view.getByTestId('sculpture-move-dz-input').getAttribute('aria-label'), 'dz (ft)');
+      assert.equal(view.getByTestId('sculpture-move-dy-input').getAttribute('aria-label'), 'dy (ft)');
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('ft W'));
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('ft H'));
+
+      // Editing Move X to 10 ft updates readout to 10.00 ft and persists canonical 3.048 m on Save
+      RTL.fireEvent.change(view.getByTestId('sculpture-move-dx-input'), {
+        target: { value: '10' }
+      });
+      assert.equal(view.getByTestId('sculpture-move-dx-readout').textContent.trim(), '10.00 ft');
+      await RTL.act(async () => {
+        RTL.fireEvent.click(view.getByTestId('sculpture-save-transform-btn'));
+      });
+      await RTL.waitFor(() => {
+        assert.equal(savedPayloads.length, 1);
+      });
+      assert.ok(
+        Math.abs(savedPayloads[0].anchorOffset.dx - 3.048) < 0.002,
+        `Expected 10 ft -> 3.048 m, got ${savedPayloads[0].anchorOffset.dx}`
+      );
+
+      // Switching user preference to Metric live-updates all readouts & labels to meters (m)
+      RTL.act(() => {
+        setStoredUnitPreference('metric');
+      });
+      await RTL.waitFor(() => {
+        assert.equal(
+          view.getByTestId('sculpture-transform-studio').getAttribute('data-unit-system'),
+          'metric'
+        );
+      });
+      assert.equal(view.getByTestId('sculpture-move-dx-readout').textContent.trim(), '3.05 m');
+      assert.equal(view.getByTestId('sculpture-move-dx-input').getAttribute('aria-label'), 'dx (m)');
+      assert.ok(view.getByTestId('sculpture-scale-dims-summary').textContent.includes('m inside'));
+    } finally {
+      setStoredUnitPreference('auto');
+      globalThis.fetch = origFetch;
+      cleanup();
+    }
+  });
 });

@@ -402,6 +402,105 @@ export function formatShortLength(
 }
 
 /**
+ * Return the short linear unit label (`'ft'` or `'m'`) for the resolved unit system.
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @returns {'ft' | 'm'}
+ */
+export function getLengthUnitSuffix(unitSystem = 'metric') {
+  return normalizeUnitSystem(unitSystem) === 'imperial' ? 'ft' : 'm';
+}
+
+/**
+ * Convert a canonical length in meters to the display unit (feet or meters).
+ * @param {number | null | undefined} meters
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @param {{ decimals?: number }} [options]
+ * @returns {number}
+ */
+export function metersToUnitLength(meters, unitSystem = 'metric', { decimals = 2 } = {}) {
+  const val = Number(meters);
+  if (!Number.isFinite(val)) return 0;
+  const converted = normalizeUnitSystem(unitSystem) === 'imperial' ? val * FEET_PER_METER : val;
+  const factor = 10 ** Math.max(0, Number(decimals ?? 2));
+  const rounded = Math.round(converted * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+/**
+ * Convert a user-entered length in display units (feet or meters) back to canonical meters.
+ * Uses 4-decimal meter precision by default so every 2-decimal foot input round-trips exactly.
+ * @param {number | null | undefined} displayValue
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @param {{ decimals?: number }} [options]
+ * @returns {number}
+ */
+export function unitLengthToMeters(displayValue, unitSystem = 'metric', { decimals = 4 } = {}) {
+  const val = Number(displayValue);
+  if (!Number.isFinite(val)) return 0;
+  const meters = normalizeUnitSystem(unitSystem) === 'imperial' ? val / FEET_PER_METER : val;
+  const factor = 10 ** Math.max(0, Number(decimals ?? 4));
+  const rounded = Math.round(meters * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+/**
+ * Format artwork W×H×D dimensions in feet or meters with precision matching `formatShortLength`.
+ * @param {number} widthMeters
+ * @param {number} heightMeters
+ * @param {number} depthMeters
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @param {{ decimals?: number, compact?: boolean }} [options]
+ * @returns {string}
+ */
+export function formatSculptureDimensionTriple(
+  widthMeters,
+  heightMeters,
+  depthMeters,
+  unitSystem = 'metric',
+  { decimals = 1, compact = true } = {}
+) {
+  const wM = Number(widthMeters);
+  const hM = Number(heightMeters);
+  const dM = Number(depthMeters);
+  if (!Number.isFinite(wM) || !Number.isFinite(hM) || !Number.isFinite(dM)) return '';
+  const isImp = normalizeUnitSystem(unitSystem) === 'imperial';
+  const mult = isImp ? FEET_PER_METER : 1;
+  const unit = isImp ? 'ft' : 'm';
+  const sep = compact ? '' : ' ';
+  const fmt = (v) => {
+    const scaled = v * mult;
+    const dec = isImp && Math.abs(scaled) >= 100 ? 0 : decimals;
+    return scaled.toFixed(dec);
+  };
+  return `${fmt(wM)}×${fmt(hM)}×${fmt(dM)}${sep}${unit}`;
+}
+
+/**
+ * Format a 3D anchor offset (dx, dy, dz in meters) in feet or meters (e.g. `11.4, 0, -1.1ft`).
+ * @param {number} dxMeters
+ * @param {number} dyMeters
+ * @param {number} dzMeters
+ * @param {'imperial' | 'metric'} [unitSystem='metric']
+ * @param {{ decimals?: number, compact?: boolean }} [options]
+ * @returns {string}
+ */
+export function formatOffsetTriple(
+  dxMeters,
+  dyMeters,
+  dzMeters,
+  unitSystem = 'metric',
+  { decimals = 1, compact = true } = {}
+) {
+  const unit = getLengthUnitSuffix(unitSystem);
+  const sep = compact ? '' : ' ';
+  const fmt = (m) => {
+    const v = metersToUnitLength(Number(m || 0), unitSystem, { decimals });
+    return Number.isInteger(v) ? String(v) : v.toFixed(decimals);
+  };
+  return `${fmt(dxMeters)}, ${fmt(dyMeters)}, ${fmt(dzMeters)}${sep}${unit}`;
+}
+
+/**
  * Format W×D×H (or W×D) parcel dimensions in feet or meters.
  * @param {number} widthMeters
  * @param {number} depthMeters

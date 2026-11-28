@@ -5384,24 +5384,24 @@ describe('SPRAY.LAND React UI Components (jsdom + Testing Library)', () => {
         )
       );
 
-      // Initial flat orientation: height is 0.5m
+      // Initial flat orientation: height is 0.5m (1.6ft on US California parcel)
       await RTL.waitFor(() => {
         assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '0.500');
       });
       assert.ok(view.getByTestId('sculpture-rotate-pitch'));
       assert.ok(view.getByTestId('sculpture-rotate-roll'));
-      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('0.5m H'));
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('1.6ft H'));
 
-      // Click Stand Vertical (+90° X) -> depth (6m) stands vertically!
+      // Click Stand Vertical (+90° X) -> depth (6m / 19.7ft) stands vertically!
       RTL.fireEvent.click(view.getByTestId('sculpture-stand-vertical-x-btn'));
       assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '6.000');
-      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('6m H'));
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('19.7ft H'));
       assert.ok(view.getByTestId('sculpture-vertical-height-badge').textContent.includes('Tilt X 90°'));
 
-      // Click Stand Side (+90° Z) -> width (4m) stands vertically!
+      // Click Stand Side (+90° Z) -> width (4m / 13.1ft) stands vertically!
       RTL.fireEvent.click(view.getByTestId('sculpture-stand-vertical-z-btn'));
       assert.equal(view.getByTestId('sculpture-viewer-3d').getAttribute('data-measured-height-m'), '4.000');
-      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('4m H'));
+      assert.ok(view.getByTestId('sculpture-vertical-measure-readout').textContent.includes('13.1ft H'));
       assert.ok(view.getByTestId('sculpture-vertical-height-badge').textContent.includes('Z 90°'));
 
       // Save artwork changes -> sends roll: 90 and notifies BOTH inline and via global SettingsSavedToast
