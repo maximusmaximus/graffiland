@@ -77,11 +77,13 @@ export default function MobileCatalogSearchModal({
       className="modal-backdrop mobile-catalog-search-backdrop is-fullscreen-sheet"
       data-testid="mobile-catalog-search-modal"
       data-camera-hidden="true"
+      data-full-viewport="true"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
       <div
-        className="modal-card mobile-catalog-search-card"
+        className="modal-card mobile-catalog-search-card is-full-viewport-height"
+        data-testid="mobile-catalog-search-card"
         role="dialog"
         aria-modal="true"
         aria-label="Search 3D items to place in AR"
