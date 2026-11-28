@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { resolveLandDisplayName } from '../../../../shared/landVolume.mjs';
 import {
   formatDistance,
-  formatShortLength,
   useMeasurementUnits
 } from '../../utils/measurementUnits.js';
 import { describeCameraNeededAction } from '../../utils/permissionMessages.js';
@@ -44,12 +43,6 @@ export default function StudioHudTopBar({
   savingCanvasEdit,
   onSaveCanvasModification,
   onCancelCanvasModification,
-  surfaceAnchor,
-  onToggleSurfaceLock,
-  brushUsable,
-  brushUnavailableReason,
-  onSeedVoxelAtAnchor,
-  onClearSurfaceAnchor,
   needsGyroTap,
   calibrationOverlayVisible = false,
   gyroFallbackActive,
@@ -363,16 +356,14 @@ export default function StudioHudTopBar({
         }`}
       >
         {sensorStatus &&
+          !webxrActive &&
           (isInteractingWithLand ||
             mode === 'preview' ||
-            sensorStatus.needsCompassCalibration ||
-            webxrActive) && (
+            sensorStatus.needsCompassCalibration) && (
             <div className="ar-sensor-hud-row hud-interactive">
               <div
                 className={`ar-sensor-status-pill ${
-                  webxrActive
-                    ? 'is-xr'
-                    : sensorStatus.needsCompassCalibration
+                  sensorStatus.needsCompassCalibration
                     ? 'is-warn'
                     : sensorStatus.trueNorthLocked
                     ? 'is-locked'
@@ -383,19 +374,11 @@ export default function StudioHudTopBar({
                 data-true-north={sensorStatus.trueNorthLocked ? 'true' : 'false'}
               >
                 <XeroIcon
-                  emoji={
-                    webxrActive
-                      ? '✨'
-                      : sensorStatus.needsCompassCalibration
-                      ? '⚠️'
-                      : '🧭'
-                  }
+                  emoji={sensorStatus.needsCompassCalibration ? '⚠️' : '🧭'}
                   size={12}
                 />
                 <span>
-                  {webxrActive
-                    ? '6-DoF ARCore Lock'
-                    : sensorStatus.needsCompassCalibration
+                  {sensorStatus.needsCompassCalibration
                     ? sensorStatus.magneticInterference
                       ? 'Magnetic interference · Wave phone in figure-8'
                       : 'Calibrate compass (wave figure-8)'
@@ -524,46 +507,6 @@ export default function StudioHudTopBar({
                 Cancel
               </button>
             </span>
-          </div>
-        )}
-
-        {!isInteractingWithLand && mode === 'draw' && surfaceAnchor && (
-          <div className="surface-pill hud-interactive">
-            <XeroIcon emoji="📌" size={13} />
-            <span className="surface-pill-label">
-              {surfaceAnchor.label} · {formatShortLength(surfaceAnchor.depthM, unitSystem, { decimals: 1, compact: true })}
-            </span>
-            <button
-              type="button"
-              className={`surface-pill-btn ${surfaceAnchor.locked ? 'active' : ''}`}
-              onClick={onToggleSurfaceLock}
-              title="Toggle start surface plane lock vs Free 3D air drawing"
-            >
-              <XeroIcon emoji={surfaceAnchor.locked ? '🔒' : '🌐'} size={12} />
-              <span>{surfaceAnchor.locked ? 'Locked' : 'Free 3D'}</span>
-            </button>
-            <button
-              type="button"
-              className={`surface-pill-btn ${!brushUsable ? 'is-unavailable' : ''}`}
-              aria-disabled={!brushUsable || undefined}
-              onClick={onSeedVoxelAtAnchor}
-              title={
-                brushUsable
-                  ? 'Place first block flush on the selected surface'
-                  : brushUnavailableReason
-              }
-            >
-              + Seed
-            </button>
-            <button
-              type="button"
-              className="surface-pill-btn clear"
-              onClick={onClearSurfaceAnchor}
-              aria-label="Clear start surface"
-              title="Clear start surface"
-            >
-              <XeroIcon emoji="✖️" size={11} />
-            </button>
           </div>
         )}
 

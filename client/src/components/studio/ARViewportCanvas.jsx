@@ -74,6 +74,7 @@ function ARViewportCanvasInner({
   positionFilterRef = null,
   spatialDrawTrackerRef = null,
   reachRef = null,
+  webxrActive = false,
   webxrControllerRef = null,
   onWebxrStateChange = null,
   fallbackEulerRef,
@@ -137,6 +138,7 @@ function ARViewportCanvasInner({
   onCanvasPointerUp,
   onCanvasPointerCancel,
   onSetCenterSurface = null,
+  onUnlockCenterSurface = null,
   onDrawAtCenter = null,
   onStartCenterBrushHold = null,
   onStopCenterBrushHold = null,
@@ -149,6 +151,27 @@ function ARViewportCanvasInner({
   const resumeLoopRef = useRef(null);
   const onRequestContextRecoverRef = useRef(onRequestContextRecover);
   onRequestContextRecoverRef.current = onRequestContextRecover;
+  const webxrActivePropRef = useRef(Boolean(webxrActive));
+  webxrActivePropRef.current = Boolean(webxrActive);
+
+  // Keep html/body transparent while WebXR immersive-ar DOM overlay is active so the
+  // hardware ARCore camera passthrough and Three.js WebXR 3D layer are never covered!
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+    if (webxrActive) {
+      htmlEl?.classList?.add('webxr-ar-active');
+      bodyEl?.classList?.add('webxr-ar-active');
+    } else {
+      htmlEl?.classList?.remove('webxr-ar-active');
+      bodyEl?.classList?.remove('webxr-ar-active');
+    }
+    return () => {
+      htmlEl?.classList?.remove('webxr-ar-active');
+      bodyEl?.classList?.remove('webxr-ar-active');
+    };
+  }, [webxrActive]);
   const isTransformMode = mode === 'transform';
   const isPublishIsolated = Boolean(mode === 'publish' || isolatePublishArt);
   const localIsolatePublishRef = useRef(isPublishIsolated);
@@ -226,6 +249,20 @@ function ARViewportCanvasInner({
       320
     );
     camera.position.set(0, 0.4, 2.2);
+
+    // Dedicated parent rig + render camera for WebXR immersive-ar so Three.js WebXRManager
+    // transforms the raw ARCore viewer pose directly into our True-North world coordinates
+    // without clobbering `camera` (used by raycasting, voxel brush, and land alignment).
+    const xrRig = new THREE.Group();
+    xrRig.name = 'webxr-world-rig';
+    const xrRenderCamera = new THREE.PerspectiveCamera(
+      68,
+      Math.max(1, host.clientWidth) / Math.max(1, host.clientHeight),
+      0.05,
+      320
+    );
+    xrRig.add(xrRenderCamera);
+    scene.add(xrRig);
 
     const renderer = new THREE.WebGLRenderer({
       alpha: true,
@@ -516,8 +553,24 @@ function ARViewportCanvasInner({
       if (activeXrSession && xrFrame) {
         const xrWorldPose = activeXrSession.processFrame(xrFrame, baseCameraPos);
         if (xrWorldPose) {
+          if (xrWorldPose.rigPosition && xrWorldPose.rigQuaternion) {
+            xrRig.position.copy(xrWorldPose.rigPosition);
+            xrRig.quaternion.copy(xrWorldPose.rigQuaternion);
+            xrRig.updateMatrixWorld(true);
+          }
           camera.position.copy(xrWorldPose.position);
           camera.quaternion.copy(xrWorldPose.quaternion);
+          if (
+            Array.isArray(xrWorldPose.projectionMatrix) &&
+            xrWorldPose.projectionMatrix.length === 16
+          ) {
+            camera.projectionMatrix.fromArray(xrWorldPose.projectionMatrix);
+            camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+            const m5 = camera.projectionMatrix.elements[5];
+            if (Number.isFinite(m5) && Math.abs(m5) > 0.001) {
+              camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(1 / Math.abs(m5)));
+            }
+          }
         }
       } else if (orientationFusionRef?.current?.initialized) {
         orientationFusionRef.current.getCameraQuaternion(fusedQuat);
@@ -599,16 +652,19 @@ function ARViewportCanvasInner({
             camera.position.z + subDelta.north
           );
         }
-
-        // Keep ground reference grid snapped to fixed 1m world lines so walking/moving
-        // gives crisp world-space parallax while shadows follow the active drawing area.
-        if (!surfaceAnchorRef.current) {
-          grid.position.set(Math.round(camera.position.x), -0.805, Math.round(camera.position.z));
-          shadowCatcher.position.set(camera.position.x, -0.8, camera.position.z);
-        }
-        dirLight.target.position.set(camera.position.x, 0, camera.position.z - 1.6);
-        dirLight.target.updateMatrixWorld();
       }
+
+      // Ensure camera world matrix is 100% current before raycasting / computeTargetVoxel
+      camera.updateMatrixWorld(true);
+
+      // Keep ground reference grid snapped to fixed 1m world lines and directional shadows
+      // tracking the user's current position in BOTH WebXR 6-DoF and standard AR modes.
+      if (!surfaceAnchorRef.current) {
+        grid.position.set(Math.round(camera.position.x), -0.805, Math.round(camera.position.z));
+        shadowCatcher.position.set(camera.position.x, -0.8, camera.position.z);
+      }
+      dirLight.target.position.set(camera.position.x, 0, camera.position.z - 1.6);
+      dirLight.target.updateMatrixWorld();
 
       const interactingLand = Boolean(isInteractingWithLandRef?.current);
       const arViewOnly = Boolean(
@@ -928,10 +984,11 @@ function ARViewportCanvasInner({
         const yawDeg = (Math.atan2(scanFwdVec.x, -scanFwdVec.z) * 180) / Math.PI;
         const pitchDeg = (Math.asin(Math.max(-1, Math.min(1, scanFwdVec.y))) * 180) / Math.PI;
         const hasLiveCameraFrame = Boolean(
-          videoRef.current &&
-            videoRef.current.readyState >= 2 &&
-            videoRef.current.videoWidth > 0 &&
-            !videoRef.current.paused
+          activeXrSession ||
+            (videoRef.current &&
+              videoRef.current.readyState >= 2 &&
+              videoRef.current.videoWidth > 0 &&
+              !videoRef.current.paused)
         );
         const cov = polRef.current.recordViewPose({
           yawDeg,
@@ -1326,7 +1383,13 @@ function ARViewportCanvasInner({
         );
       }
 
-      renderer.render(scene, camera);
+      if (activeXrSession) {
+        xrRenderCamera.near = camera.near;
+        xrRenderCamera.far = camera.far;
+        renderer.render(scene, xrRenderCamera);
+      } else {
+        renderer.render(scene, camera);
+      }
     };
 
     const animate = () => {
@@ -1366,13 +1429,25 @@ function ARViewportCanvasInner({
               onEnd: () => {
                 activeXrSession = null;
                 renderer.setAnimationLoop(null);
+                xrRig.position.set(0, 0, 0);
+                xrRig.quaternion.identity();
+                xrRig.updateMatrixWorld(true);
                 camera.position.set(baseCameraPos.x, baseCameraPos.y, baseCameraPos.z);
                 nearbyGroup.position.set(baseCameraPos.x, 0, baseCameraPos.z);
+                handleResize();
+                if (typeof document !== 'undefined') {
+                  document.documentElement?.classList?.remove('webxr-ar-active');
+                  document.body?.classList?.remove('webxr-ar-active');
+                }
                 onWebxrStateChange?.(false);
                 startStandardLoop();
               }
             });
             tryLockPortraitOrientation();
+            if (typeof document !== 'undefined') {
+              document.documentElement?.classList?.add('webxr-ar-active');
+              document.body?.classList?.add('webxr-ar-active');
+            }
             activeXrSession = sessionCtrl;
             onWebxrStateChange?.(true);
             renderer.setAnimationLoop((_t, xrFrame) => {
@@ -1382,6 +1457,10 @@ function ARViewportCanvasInner({
           } catch (err) {
             activeXrSession = null;
             renderer.setAnimationLoop(null);
+            if (typeof document !== 'undefined') {
+              document.documentElement?.classList?.remove('webxr-ar-active');
+              document.body?.classList?.remove('webxr-ar-active');
+            }
             onWebxrStateChange?.(false);
             startStandardLoop();
             throw err;
@@ -1535,6 +1614,7 @@ function ARViewportCanvasInner({
     }
     if (wasCameraHiddenRef.current) {
       wasCameraHiddenRef.current = false;
+      if (webxrActivePropRef.current) return;
       onVideoMounted?.();
       if (videoEl && typeof videoEl.play === 'function') {
         const playRes = videoEl.play();
@@ -1577,10 +1657,13 @@ function ARViewportCanvasInner({
     <>
       <video
         ref={videoRef}
-        className={`camera-feed${cameraHidden ? ' is-camera-hidden' : ''}`}
+        className={`camera-feed${cameraHidden ? ' is-camera-hidden' : ''}${
+          webxrActive ? ' is-webxr-hidden' : ''
+        }`}
         data-testid="ar-camera-video"
         data-camera-hidden={cameraHidden ? 'true' : 'false'}
-        aria-hidden={cameraHidden || undefined}
+        data-webxr-hidden={webxrActive ? 'true' : 'false'}
+        aria-hidden={cameraHidden || webxrActive || undefined}
         playsInline
         muted
         autoPlay
@@ -1617,9 +1700,12 @@ function ARViewportCanvasInner({
       )}
       <div
         ref={canvasHostRef}
-        className={`webgl-overlay${cameraHidden ? ' is-camera-hidden' : ''}`}
+        className={`webgl-overlay${cameraHidden ? ' is-camera-hidden' : ''}${
+          webxrActive ? ' is-webxr-active' : ''
+        }`}
         data-testid="ar-webgl-overlay"
         data-camera-hidden={cameraHidden ? 'true' : 'false'}
+        data-webxr-active={webxrActive ? 'true' : 'false'}
         aria-hidden={cameraHidden || undefined}
         data-ar-view-only={isArViewOnly ? 'true' : 'false'}
         data-transform-mode={isTransformMode ? 'true' : 'false'}
@@ -1655,6 +1741,7 @@ function ARViewportCanvasInner({
               painting={painting}
               vFovDeg={cameraRef?.current?.fov || 65}
               onSetCenterSurface={onSetCenterSurface}
+              onUnlockCenterSurface={onUnlockCenterSurface}
               onDrawAtCenter={onDrawAtCenter}
               onStartCenterBrushHold={onStartCenterBrushHold}
               onStopCenterBrushHold={onStopCenterBrushHold}

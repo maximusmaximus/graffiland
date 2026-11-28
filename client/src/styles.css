@@ -63,6 +63,15 @@ select {
   user-select: none;
 }
 
+/* WebXR immersive-ar DOM overlay must be strictly transparent so the hardware ARCore
+   camera passthrough and Three.js WebXR 3D framebuffer render crisply underneath the HUD! */
+html.webxr-ar-active,
+body.webxr-ar-active,
+html.webxr-ar-active #root,
+.mobile-fullscreen.is-webxr-active {
+  background: transparent !important;
+}
+
 .camera-feed {
   position: absolute;
   inset: 0;
@@ -72,6 +81,21 @@ select {
   z-index: 1;
   transform: translateZ(0);
   backface-visibility: hidden;
+}
+
+.mobile-fullscreen.is-webxr-active .camera-feed,
+.camera-feed.is-webxr-hidden {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Hide the stale DOM canvas bitmap during WebXR (WebXR composites directly from XRWebGLLayer)
+   while keeping .webgl-overlay itself interactive for touch/pointer drawing gestures. */
+.mobile-fullscreen.is-webxr-active .webgl-overlay canvas,
+.webgl-overlay.is-webxr-active canvas {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 .mapping-grayscale-grid {
@@ -653,6 +677,24 @@ select {
   border-radius: 50%;
   background: #ffffff;
   box-shadow: 0 0 6px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+}
+
+.tool-reticle-lock-dot {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  line-height: 1;
+  background: rgba(6, 12, 24, 0.92);
+  border: 1.5px solid var(--reticle-color, #00f5d4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   pointer-events: none;
 }
 

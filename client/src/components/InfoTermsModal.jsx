@@ -738,9 +738,10 @@ export default function InfoTermsModal({
                         Allow Camera, GPS, Compass, and Gyroscope. Sweep your phone until the
                         calibration scan reaches <strong>100%</strong> so Proof of Location locks
                         your spot and shrinks into the compact dock right above the bottom tool
-                        selector, then choose Draw, Paint, or Add 3D Model. Your start surface
-                        reconciles automatically as you paint (or tap the center reticle +{' '}
-                        <strong>+ Seed</strong> to lock a specific spot). SPRAY.LAND fuses
+                        selector, then choose Draw, Paint, or Add 3D Model. Press and{' '}
+                        <strong>hold the center circle</strong> to lock your start surface and draw
+                        right at that location; <strong>tap the circle again</strong> anytime to
+                        unlock and move to a new spot. SPRAY.LAND fuses
                         True-North compass (WMM declination), 60Hz gyroscope, Kalman GPS, off-thread
                         ORB landmarks, and automatic 6-DoF ARCore calibration when supported by your
                         device (toggleable anytime in Profile ⚙️ Settings). Pro tip: slipping off
@@ -751,9 +752,8 @@ export default function InfoTermsModal({
                       </InfoTip>
                     </div>
                     <p>
-                      Allow Camera, GPS &amp; Gyroscope — once calibrated to 100%, the dock shrinks
-                      above your tools and surfaces reconcile automatically (or use center reticle +
-                      Seed).
+                      Allow Camera, GPS &amp; Gyroscope — once calibrated to 100%, hold the center
+                      circle to lock &amp; draw at that spot, or tap it again to change location.
                     </p>
                     <div
                       className="guide-calibration-pro-tip"

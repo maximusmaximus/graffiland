@@ -527,15 +527,17 @@ describe('AR Sensor Status Pill, Calibration Prompt & Compass Fine-Align UI (Rea
       view.getByTestId('ar-sensor-status-pill').textContent.includes('figure-8')
     );
 
-    // Rerender in active WebXR 6-DoF state: status telemetry shows lock, still zero on-screen button
+    // Rerender in active WebXR 6-DoF state: top 6-DoF ARCore Lock pill & on-screen button are both hidden
     view.rerender(
       React.createElement(StudioHudTopBar, {
         ...baseProps,
         webxrActive: true
       })
     );
-    assert.ok(
-      view.getByTestId('ar-sensor-status-pill').textContent.includes('6-DoF ARCore Lock')
+    assert.equal(
+      view.queryByTestId('ar-sensor-status-pill'),
+      null,
+      'Top 6-DoF ARCore Lock pill must be removed when WebXR is active'
     );
     assert.equal(view.queryByTestId('ar-webxr-toggle-btn'), null);
     view.unmount();

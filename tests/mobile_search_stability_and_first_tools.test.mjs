@@ -268,12 +268,12 @@ describe('Mobile 3D Search Stability, Camera Hide on Search, and First-Time Came
     );
     assert.match(
       arSrc,
-      /className=\{`camera-feed\$\{cameraHidden \? ' is-camera-hidden' : ''\}`\}/,
+      /className=\{`camera-feed\$\{cameraHidden \? ' is-camera-hidden' : ''\}/,
       'ARViewportCanvas must add is-camera-hidden class to <video> while hidden'
     );
     assert.match(
       arSrc,
-      /className=\{`webgl-overlay\$\{cameraHidden \? ' is-camera-hidden' : ''\}`\}/,
+      /className=\{`webgl-overlay\$\{cameraHidden \? ' is-camera-hidden' : ''\}/,
       'ARViewportCanvas must add is-camera-hidden class to .webgl-overlay while hidden'
     );
   });
